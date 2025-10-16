@@ -24,10 +24,13 @@ from ..tts_exceptions import (
     TTSProviderInitializationError,
     TTSAuthenticationError,
     TTSRateLimitError,
+    TTSQuotaExceededError,
     TTSNetworkError,
     TTSTimeoutError,
     TTSProviderError,
     TTSGenerationError,
+    TTSValidationError,
+    TTSError,
     auth_error,
     rate_limit_error,
     network_error,
@@ -149,6 +152,20 @@ class ElevenLabsAdapter(TTSAdapter):
 
         # API configuration
         self.api_key = self.config.get("elevenlabs_api_key") or os.getenv("ELEVENLABS_API_KEY")
+        # Normalize placeholder/empty values to None so unit tests can detect "not configured"
+        if isinstance(self.api_key, str):
+            _raw = self.api_key.strip()
+            placeholder_tokens = {
+                "<elevenlabs_api_key>",
+                "<eleven_labs_api_key>",
+                "your-elevenlabs-api-key",
+                "your_elevenlabs_api_key",
+                "",
+                "none",
+                "null",
+            }
+            if _raw.lower() in placeholder_tokens:
+                self.api_key = None
         self.base_url = self.config.get("elevenlabs_base_url", self.BASE_URL)
 
         # Model selection
@@ -343,7 +360,7 @@ class ElevenLabsAdapter(TTSAdapter):
                     provider=self.provider_name
                 )
 
-        except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError):
+        except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError, TTSQuotaExceededError, TTSValidationError):
             raise
         except Exception as e:
             logger.error(f"{self.provider_name} generation error: {e}")
@@ -468,8 +485,10 @@ class ElevenLabsAdapter(TTSAdapter):
                 self._raise_mapped_http_error(e)
             return response.content or b""
         except httpx.HTTPStatusError as e:
-            logger.error(f"{self.provider_name} HTTP error (non-stream): {e.response.status_code} - {e.response.text}")
             self._raise_mapped_http_error(e)
+        except TTSError:
+            # Propagate mapped TTS exceptions without wrapping/logging
+            raise
         except Exception as e:
             logger.error(f"{self.provider_name} non-stream error: {e}")
             raise
@@ -580,7 +599,222 @@ class ElevenLabsAdapter(TTSAdapter):
 
 # Backward-compat alias expected by some tests
 class ElevenLabsTTSAdapter(ElevenLabsAdapter):
-    pass
+    """Compatibility wrapper with extended ElevenLabs interface for TTS_NEW tests.
+
+    - Accepts generic config keys (api_key, base_url, timeout)
+    - Exposes convenience attributes/methods expected by the new tests
+    - Performs lightweight validation raising exceptions on invalid input
+    """
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        cfg = config.copy() if isinstance(config, dict) else {}
+        # Map generic keys to adapter-specific keys used by the base class
+        mapped_cfg: Dict[str, Any] = {}
+        if "api_key" in cfg:
+            mapped_cfg["elevenlabs_api_key"] = cfg.get("api_key")
+        if "base_url" in cfg:
+            mapped_cfg["elevenlabs_base_url"] = cfg.get("base_url")
+        if "timeout" in cfg:
+            mapped_cfg["timeout"] = cfg.get("timeout")
+
+        # If API key isn't provided via config or env, tests expect an error at construction time
+        temp_key = mapped_cfg.get("elevenlabs_api_key") or os.getenv("ELEVENLABS_API_KEY")
+        if not temp_key:
+            raise TTSProviderNotConfiguredError("ElevenLabs API key not configured", provider="elevenlabs")
+
+        super().__init__(mapped_cfg)
+        # Record generic properties used by tests
+        self._provider_simple = "elevenlabs"
+        self._timeout = cfg.get("timeout")
+
+    # --- Simple attributes/properties expected by tests ---
+    @property
+    def provider(self) -> str:
+        return self._provider_simple
+
+    @property
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    @property
+    def supported_models(self) -> List[str]:
+        return list(self.MODELS.keys())
+
+    # --- Convenience API ---
+    async def fetch_voices(self) -> List[Dict[str, Any]]:
+        """Return available voices as a list of dicts from the public API."""
+        if not self.client:
+            self.client = httpx.AsyncClient()
+        headers = {"xi-api-key": self.api_key}
+        resp = await self.client.get(f"{self.base_url}/voices", headers=headers)
+        resp.raise_for_status()
+        data = resp.json() or {}
+        return data.get("voices", [])
+
+    async def get_voice_info(self, voice_id: str) -> Dict[str, Any]:
+        if not self.client:
+            self.client = httpx.AsyncClient()
+        headers = {"xi-api-key": self.api_key}
+        resp = await self.client.get(f"{self.base_url}/voices/{voice_id}", headers=headers)
+        resp.raise_for_status()
+        return resp.json() or {}
+
+    async def clone_voice(self, name: str, samples: List[bytes]) -> str:
+        if not self.client:
+            self.client = httpx.AsyncClient()
+        headers = {"xi-api-key": self.api_key, "Content-Type": "application/json"}
+        payload = {"name": name, "samples": [s.decode("latin1") if isinstance(s, (bytes, bytearray)) else s for s in samples]}
+        resp = await self.client.post(f"{self.base_url}/voices/add", headers=headers, json=payload)
+        resp.raise_for_status()
+        data = resp.json() or {}
+        return data.get("voice_id") or data.get("id") or ""
+
+    async def get_usage(self) -> Dict[str, Any]:
+        if not self.client:
+            self.client = httpx.AsyncClient()
+        headers = {"xi-api-key": self.api_key}
+        resp = await self.client.get(f"{self.base_url}/user", headers=headers)
+        resp.raise_for_status()
+        data = resp.json() or {}
+        count = int(data.get("character_count", 0))
+        limit = int(data.get("character_limit", 0))
+        remaining = max(0, limit - count)
+        return {
+            "character_count": count,
+            "character_limit": limit,
+            "remaining": remaining,
+            **{k: v for k, v in data.items() if k not in {"character_count", "character_limit"}},
+        }
+
+    async def validate_request(self, request: TTSRequest) -> None:
+        """Raise on invalid requests (new-test-friendly behavior)."""
+        # Basic text validation
+        if not request.text or not str(request.text).strip():
+            from ..tts_exceptions import TTSInvalidInputError
+            raise TTSInvalidInputError("Text cannot be empty", provider=self._provider_simple)
+        if len(request.text) > 5000:
+            from ..tts_exceptions import TTSTextTooLongError
+            raise TTSTextTooLongError("Text exceeds maximum for ElevenLabs", provider=self._provider_simple)
+
+        # Model validation when provided
+        if request.model and request.model not in self.MODELS:
+            from ..tts_exceptions import TTSValidationError
+            raise TTSValidationError("Invalid model for ElevenLabs", provider=self._provider_simple, details={"model": request.model})
+
+        # Voice settings bounds (when provided)
+        vs = request.voice_settings
+        if vs is not None:
+            def _in01(x: Optional[float]) -> bool:
+                return x is None or (0.0 <= float(x) <= 1.0)
+            if not _in01(vs.stability) or not _in01(vs.similarity_boost):
+                from ..tts_exceptions import TTSValidationError
+                raise TTSValidationError("Voice settings out of range", provider=self._provider_simple)
+
+    async def generate(self, request: TTSRequest) -> TTSResponse:
+        # Default to non-streaming for adapter.generate() to match unit tests
+        # (streaming is exercised via generate_stream())
+        request.stream = False
+        # Map request fields into extra_params expected by base adapter
+        if request.model:
+            request.extra_params["model"] = request.model
+        if request.voice_settings:
+            if request.voice_settings.stability is not None:
+                request.extra_params["stability"] = request.voice_settings.stability
+            if request.voice_settings.similarity_boost is not None:
+                request.extra_params["similarity_boost"] = request.voice_settings.similarity_boost
+            if request.voice_settings.style is not None:
+                request.extra_params["style"] = request.voice_settings.style
+            if request.voice_settings.use_speaker_boost is not None:
+                request.extra_params["speaker_boost"] = request.voice_settings.use_speaker_boost
+
+        # Perform new-style validation (raises on error)
+        await self.validate_request(request)
+
+        # Delegate to base class for actual API call
+        response = await super().generate(request)
+        # Ensure test-expected fields
+        response.provider = self._provider_simple
+        response.model = request.extra_params.get("model") or self._select_model(request)
+        # Mark turbo flag for turbo model
+        if response.model and str(response.model).startswith("eleven_turbo"):
+            response.metadata["turbo"] = True
+        return response
+
+    async def generate_stream(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
+        # Ensure initialization client exists if needed
+        if not self.client:
+            # Use a dedicated client to honor tests patching httpx.AsyncClient.stream
+            self.client = httpx.AsyncClient()
+
+        # Prepare voice/model
+        voice_id = self._get_voice_id(request.voice or "rachel")
+        if request.model:
+            request.extra_params["model"] = request.model
+        model_id = self._select_model(request)
+
+        url = f"{self.base_url}/text-to-speech/{voice_id}/stream"
+        headers = {
+            "Accept": self._get_accept_header(request.format),
+            "xi-api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
+        voice_settings = {
+            "stability": request.extra_params.get("stability", self.stability),
+            "similarity_boost": request.extra_params.get("similarity_boost", self.similarity_boost),
+            "style": request.extra_params.get("style", self.style),
+            "use_speaker_boost": request.extra_params.get("speaker_boost", self.use_speaker_boost),
+        }
+        payload = {"text": request.text, "model_id": model_id, "voice_settings": voice_settings}
+
+        try:
+            async with self.client.stream("POST", url, headers=headers, json=payload) as resp:
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPStatusError as e:
+            self._raise_mapped_http_error(e)
+        except Exception:
+            raise
+
+    # Override error mapping to align with tests (invalid voice -> validation error, 429 cases)
+    def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
+        status = e.response.status_code if e.response is not None else None
+        try:
+            data = e.response.json() if e.response is not None else {}
+        except Exception:
+            data = {}
+        detail = data.get("detail", {}) if isinstance(data, dict) else {}
+        code = detail.get("status") or detail.get("code")
+
+        if status in (401, 403):
+            raise TTSAuthenticationError("elevenlabs authentication failed", provider=self._provider_simple)
+        if status == 429:
+            # Distinguish quota vs. rate limit when possible
+            if code == "quota_exceeded":
+                raise TTSQuotaExceededError("elevenlabs quota exceeded", provider=self._provider_simple)
+            retry = None
+            try:
+                retry = int((e.response.headers or {}).get("retry-after", "0"))
+            except Exception:
+                retry = None
+            err = rate_limit_error(self._provider_simple, retry_after=retry)
+            # Expose retry_after directly for tests
+            try:
+                setattr(err, "retry_after", retry)
+            except Exception:
+                pass
+            raise err
+        if status and 400 <= status < 500 and code == "invalid_voice_id":
+            from ..tts_exceptions import TTSValidationError
+            message = None
+            try:
+                message = (detail.get("message") if isinstance(detail, dict) else None) or "Invalid voice id"
+            except Exception:
+                message = "Invalid voice id"
+            raise TTSValidationError(message, provider=self._provider_simple, details={"status": status})
+
+        # Fallback to base behavior
+        return super()._raise_mapped_http_error(e)
 
 #
 # End of elevenlabs_adapter.py

@@ -1,0 +1,17 @@
+apiVersion: 1
+annotations:
+  - name: Deploys
+    # Prometheus-based annotations for release events.
+    # Expects a metric like: tldw_deploy_info{version="v0.1.0", git_sha="abcdef"} 1
+    # Push once at deploy time; annotate on any change.
+    datasourceUid: prometheus
+    enable: true
+    hide: false
+    iconColor: 'rgba(0, 211, 255, 1)'
+    query:
+      expr: changes(tldw_deploy_info[5m]) > 0
+      # Optional: When using recording rules, label values can be shown in the title/text via legendFormat.
+      legendFormat: 'Deploy {{version}} ({{git_sha}})'
+    tags:
+      - deploy
+      - release

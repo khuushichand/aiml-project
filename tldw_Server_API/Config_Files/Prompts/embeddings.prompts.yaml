@@ -22,3 +22,12 @@ document_outline: |
 document_outline_prompt: |
   Create a concise outline of the document with 5–10 bullets. Each bullet should have a
   short section title followed by a one-sentence summary of that section’s content.
+
+# Qwen3 Embeddings (Transformers) configuration
+# - qwen3_embeddings_instruction: instruction inserted into the <Instruct>: block
+# - qwen3_embeddings_mode: one of "auto" | "document" | "query"
+#   - auto: heuristically formats short question-like inputs as <Query>:, others as <Document>:
+qwen3_embeddings_instruction: |
+  Given a web search query, retrieve relevant passages that answer the query
+qwen3_embeddings_mode: |
+  auto

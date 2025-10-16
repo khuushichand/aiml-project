@@ -1,44 +1,19 @@
-"""
-Integration tests for Prompt Studio projects and prompts basic flows.
-No internal mocks; uses dependency overrides already configured by app.
-"""
+"""Integration tests for Prompt Studio projects and prompts across backends."""
 
-import os
 import pytest
-from fastapi.testclient import TestClient
-
-from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture()
-def client_with_user(tmp_path, monkeypatch):
-    # Isolate Prompt Studio DB per test to avoid cross-run state and locks
-    from tldw_Server_API.app.core import config as cfg
-    monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
-    # Hint endpoints to use deterministic test-mode behavior where applicable
-    monkeypatch.setenv('TEST_MODE', 'true')
-
-    async def override_user():
-        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
-
-    app.dependency_overrides[get_request_user] = override_user
-    with TestClient(app) as client:
-        yield client
-    app.dependency_overrides.clear()
-
-
-def test_import_export_test_cases_json(client_with_user: TestClient):
-    client = client_with_user
+def test_import_export_test_cases_json(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
     # Create project
     cp = client.post(
         "/api/v1/prompt-studio/projects/",
         json={"name": "Proj Import JSON", "description": "", "status": "active", "metadata": {}}
     )
-    assert cp.status_code in (200, 201), cp.text
+    assert cp.status_code in (200, 201), f"{backend_label}: {cp.text}"
     pid = cp.json()["data"]["id"]
 
     # Prepare JSON import payload (raw JSON accepted by import_from_json)
@@ -55,7 +30,7 @@ def test_import_export_test_cases_json(client_with_user: TestClient):
         "auto_generate_names": True
     }
     imp = client.post("/api/v1/prompt-studio/test-cases/import", json=import_payload)
-    assert imp.status_code in (200, 500), imp.text
+    assert imp.status_code in (200, 500), f"{backend_label}: {imp.text}"
     if imp.status_code == 200:
         idata = imp.json()
         assert idata.get("success") is True
@@ -83,15 +58,15 @@ def test_import_export_test_cases_json(client_with_user: TestClient):
         assert ec.get("data", {}).get("format") == "csv"
 
 
-def test_project_crud_list(client_with_user: TestClient):
-    client = client_with_user
+def test_project_crud_list(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Create project
     create = client.post(
         "/api/v1/prompt-studio/projects/",
         json={"name": "Proj A", "description": "Integration project", "status": "active", "metadata": {}}
     )
-    assert create.status_code in (201, 200), create.text
+    assert create.status_code in (201, 200), f"{backend_label}: {create.text}"
     payload = create.json()
     assert payload.get("success") is True
     proj = payload.get("data", {})
@@ -111,14 +86,14 @@ def test_project_crud_list(client_with_user: TestClient):
     assert pdata.get("id") == pid
 
 
-def test_prompt_create_list_under_project(client_with_user: TestClient):
-    client = client_with_user
+def test_prompt_create_list_under_project(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
     # Ensure a project exists
     c = client.post(
         "/api/v1/prompt-studio/projects/",
         json={"name": "Proj B", "description": "For prompts", "status": "active", "metadata": {}}
     )
-    assert c.status_code in (200, 201), c.text
+    assert c.status_code in (200, 201), f"{backend_label}: {c.text}"
     pid = c.json()["data"]["id"]
 
     # Create a prompt under project
@@ -133,21 +108,21 @@ def test_prompt_create_list_under_project(client_with_user: TestClient):
             "metadata": {}
         }
     )
-    assert pr.status_code in (200, 201), pr.text
+    assert pr.status_code in (200, 201), f"{backend_label}: {pr.text}"
 
     # List prompts (endpoint definition depends on app; verify at least one is retrievable via project get)
     gp = client.get(f"/api/v1/prompt-studio/projects/get/{pid}")
     assert gp.status_code == 200
 
 
-def test_test_cases_and_evaluations_flow(client_with_user: TestClient):
-    client = client_with_user
+def test_test_cases_and_evaluations_flow(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
     # Create a project
     cp = client.post(
         "/api/v1/prompt-studio/projects/",
         json={"name": "Proj C", "description": "For test cases", "status": "active", "metadata": {}}
     )
-    assert cp.status_code in (200, 201), cp.text
+    assert cp.status_code in (200, 201), f"{backend_label}: {cp.text}"
     pid = cp.json()["data"]["id"]
 
     # Create a prompt under project
@@ -162,7 +137,7 @@ def test_test_cases_and_evaluations_flow(client_with_user: TestClient):
             "metadata": {}
         }
     )
-    assert pr.status_code in (200, 201), pr.text
+    assert pr.status_code in (200, 201), f"{backend_label}: {pr.text}"
     # Some routes may list prompts via project; ensure project get still works
     assert client.get(f"/api/v1/prompt-studio/projects/get/{pid}").status_code == 200
 
@@ -180,7 +155,7 @@ def test_test_cases_and_evaluations_flow(client_with_user: TestClient):
             "signature_id": None
         }
     )
-    assert tc.status_code in (200, 201), tc.text
+    assert tc.status_code in (200, 201), f"{backend_label}: {tc.text}"
     tdata = tc.json().get("data", {})
     assert tdata.get("id") is not None
 
@@ -219,14 +194,14 @@ def test_test_cases_and_evaluations_flow(client_with_user: TestClient):
         assert ed.status_code == 200
 
 
-def test_test_case_update_delete_and_limit(client_with_user: TestClient):
-    client = client_with_user
+def test_test_case_update_delete_and_limit(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
     # Create a project
     cp = client.post(
         "/api/v1/prompt-studio/projects/",
         json={"name": "Proj D", "description": "Limits", "status": "active", "metadata": {}}
     )
-    assert cp.status_code in (200, 201), cp.text
+    assert cp.status_code in (200, 201), f"{backend_label}: {cp.text}"
     pid = cp.json()["data"]["id"]
 
     # Create a test case
@@ -243,7 +218,7 @@ def test_test_case_update_delete_and_limit(client_with_user: TestClient):
             "signature_id": None
         }
     )
-    assert tc.status_code in (200, 201), tc.text
+    assert tc.status_code in (200, 201), f"{backend_label}: {tc.text}"
     tc_id = tc.json()["data"]["id"]
 
     # Update test case

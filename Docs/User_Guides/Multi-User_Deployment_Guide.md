@@ -40,7 +40,7 @@ This guide covers deploying tldw_server in multi-user mode for teams and organiz
 
 > Reverse Proxy Samples
 >
-> - See `Docs/Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik guidance.
+> - See `../Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik guidance.
 > - Sample configs included in this repo:
 >   - Nginx: `Samples/Nginx/nginx.conf`
 >   - Traefik: `Samples/Traefik/traefik-dynamic.yml`
@@ -890,7 +890,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:14-alpine
+    image: postgres:18-bookworm
     environment:
       POSTGRES_DB: tldw_multiuser
       POSTGRES_USER: tldw_user

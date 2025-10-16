@@ -8,6 +8,8 @@ import pytest
 pytestmark = pytest.mark.integration
 import asyncio
 from datetime import datetime, timedelta
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 
 
 class TestAuthEndpointsIntegration:
@@ -130,7 +132,25 @@ class TestAuthEndpointsIntegration:
                 "password": "S3cur3P@ssw0rd2024!"
             }
         )
-        
+        # Debug/diagnostics: print status, payload, and diagnostic headers
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {"raw": response.text}
+        diag_headers = {k: v for k, v in response.headers.items() if k.startswith("X-TLDW-")}
+        print("register_status:", response.status_code, "headers:", diag_headers, "payload:", payload)
+
+        # Assert diagnostics to ensure correct runtime wiring (conditionally present)
+        db_hdr = response.headers.get("X-TLDW-DB")
+        if db_hdr is not None:
+            assert db_hdr == "postgres"
+        csrf_hdr = response.headers.get("X-TLDW-CSRF-Enabled")
+        if csrf_hdr is not None:
+            assert csrf_hdr == "false"
+        dur_hdr = response.headers.get("X-TLDW-Register-Duration-ms")
+        if dur_hdr is not None:
+            dur_ms = int(dur_hdr or 0)
+            assert dur_ms >= 0 and dur_ms < 5000
         assert response.status_code in [200, 201]
         data = response.json()
         assert data["username"] == "newuser"
@@ -268,7 +288,11 @@ class TestAuthEndpointsIntegration:
                 "password": "L0g0utP@ssw0rd!"
             }
         )
-        token = login_response.json()["access_token"]
+        tokens = login_response.json()
+        token = tokens["access_token"]
+        refresh_token = tokens["refresh_token"]
+        jwt_service = JWTService()
+        access_jti = jwt_service.extract_jti(token)
         
         # Logout
         logout_response = client.post(
@@ -277,7 +301,80 @@ class TestAuthEndpointsIntegration:
         )
         
         assert logout_response.status_code == 200
-        assert "Successfully logged out" in logout_response.json()["message"]
+        assert "logged out" in logout_response.json()["message"].lower()
+
+        # Access token should now be blacklisted
+        if access_jti:
+            blacklist = get_token_blacklist()
+            assert await blacklist.is_blacklisted(access_jti)
+
+        # Token should no longer grant access
+        me_response = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert me_response.status_code == 401
+        # Refresh token should fail too
+        refresh_resp = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh_token}
+        )
+        assert refresh_resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_logout_all_devices_blacklists_tokens(self, isolated_test_environment):
+        """Logout from all devices blacklists stored JTIs without decrypting tokens."""
+        client, db_name = isolated_test_environment
+
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "masslogout",
+                "email": "masslogout@example.com",
+                "password": "MassL0goutP@ss!"
+            }
+        )
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "masslogout",
+                "password": "MassL0goutP@ss!"
+            }
+        )
+        tokens = login_response.json()
+        access_token = tokens["access_token"]
+        refresh_token = tokens["refresh_token"]
+
+        jwt_service = JWTService()
+        access_jti = jwt_service.extract_jti(access_token)
+        refresh_jti = jwt_service.extract_jti(refresh_token)
+
+        logout_response = client.post(
+            "/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"all_devices": True}
+        )
+        assert logout_response.status_code == 200
+
+        blacklist = get_token_blacklist()
+        if access_jti:
+            assert await blacklist.is_blacklisted(access_jti)
+        if refresh_jti:
+            assert await blacklist.is_blacklisted(refresh_jti)
+
+        # Both access and refresh should be rejected
+        me_response = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert me_response.status_code == 401
+
+        refresh_resp = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh_token}
+        )
+        assert refresh_resp.status_code == 401
     
     @pytest.mark.asyncio
     async def test_get_current_user_info(self, isolated_test_environment):

@@ -64,6 +64,55 @@
                 <div class="metric-value" id="metric-database-size">--</div>
                 <div class="metric-label">MB</div>
             </div>
+
+            <div class="metric-card" style="grid-column: span 2; text-align: left;">
+                <h3>Jobs Overview</h3>
+                <div class="metric-label">Top 3 busiest queues</div>
+                <ul id="metric-jobs-overview" style="margin-top: 8px; padding-left: 18px;">
+                    <li class="text-muted">No data</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="endpoint-section" style="margin-top:16px;">
+            <h3>
+                Embeddings Orchestrator
+                <span id="orchestrator_sse_status" class="badge badge-secondary" title="SSE connection status" style="margin-right:6px;">disconnected</span>
+                <span id="orchestrator_fallback_badge" class="badge badge-warn" style="display:none;" title="Polling summary returned zeroed snapshot (Redis/Orchestrator unavailable)">fallback</span>
+                <span id="orchestrator_fallback_hint" class="text-muted" style="display:none; font-size: 12px;">(zeroed payload; ages/flags unavailable)
+                    <a href="#" onclick="openMonitoringDocs(event)" title="Open Monitoring README for guidance" style="margin-left:6px; text-decoration: underline;">learn more</a>
+                </span>
+            </h3>
+            <div class="metrics-controls">
+                <button class="btn btn-primary" onclick="fetchOrchestratorSummary()">Refresh</button>
+                <button class="btn btn-secondary" onclick="startOrchestratorAutoRefresh()">Auto-Refresh (10s)</button>
+                <button class="btn btn-secondary" onclick="stopOrchestratorAutoRefresh()">Stop</button>
+                <label style="margin-left:8px;">
+                    <input type="checkbox" id="orchestrator_live_sse" onchange="toggleOrchestratorSSE(this)"> Live (SSE)
+                </label>
+            </div>
+            <div class="table-responsive mt-2">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Stage</th>
+                            <th>Queue Depth</th>
+                            <th>DLQ Depth</th>
+                            <th>DLQ Sparkline</th>
+                            <th>DLQ Rate (est/s)</th>
+                            <th>Age Sparkline</th>
+                            <th>Flags</th>
+                            <th>Processed (sum)</th>
+                            <th>Processed/s</th>
+                            <th>Failed (sum)</th>
+                            <th>Failed/s</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orchestrator_tableBody">
+                        <tr><td colspan="8" class="text-muted">No data</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -163,6 +212,414 @@
         
         <h3>Response:</h3>
         <pre id="metricsReset_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="jobsQueueStatsPanel">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/jobs/stats - Jobs Queue Stats</span>
+        </h2>
+        <p>View queue depth and processing counts per domain/queue/job_type. Auto-refresh supported.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="jobsStats_domain">Domain:</label>
+                    <input type="text" id="jobsStats_domain" placeholder="e.g., chatbooks">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="jobsStats_queue">Queue:</label>
+                    <select id="jobsStats_queue">
+                        <option value="">(any)</option>
+                        <option value="default">default</option>
+                        <option value="high">high</option>
+                        <option value="low">low</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="jobsStats_jobType">Job Type:</label>
+                    <input type="text" id="jobsStats_jobType" placeholder="e.g., export">
+                </div>
+            </div>
+        </div>
+
+        <div class="metrics-controls">
+            <button class="btn btn-primary" onclick="fetchJobsStats()">Refresh</button>
+            <button class="btn btn-secondary" onclick="startJobsStatsAutoRefresh()">Auto-Refresh (10s)</button>
+            <button class="btn btn-secondary" onclick="stopJobsStatsAutoRefresh()">Stop</button>
+        </div>
+
+        <div class="table-responsive mt-2">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Queue</th>
+                        <th>Job Type</th>
+                        <th>Queued</th>
+                        <th>Processing</th>
+                    </tr>
+                </thead>
+                <tbody id="jobsStats_tableBody">
+                    <tr><td colspan="5" class="text-muted">No data</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+            let jobsStatsTimer = null;
+            let orchestratorTimer = null;
+            let orchestratorPrev = null; // { ts, stages: {chunking:{dlq,q,proc,fail}, ...} }
+            let orchestratorSSEController = null;
+            let orchestratorSSEEnabled = false;
+
+            function setOrchestratorFallbackBadge(show, text) {
+                const el = document.getElementById('orchestrator_fallback_badge');
+                const hint = document.getElementById('orchestrator_fallback_hint');
+                if (!el) return;
+                if (show) {
+                    if (text) el.textContent = text;
+                    el.style.display = 'inline-block';
+                    if (hint) hint.style.display = 'inline-block';
+                } else {
+                    el.style.display = 'none';
+                    if (hint) hint.style.display = 'none';
+                }
+            }
+
+            function setOrchestratorSSEStatus(connected) {
+                const el = document.getElementById('orchestrator_sse_status');
+                if (!el) return;
+                if (connected) {
+                    el.classList.remove('badge-secondary');
+                    el.classList.add('badge-success');
+                    el.textContent = 'live';
+                } else {
+                    el.classList.remove('badge-success');
+                    el.classList.add('badge-secondary');
+                    el.textContent = 'disconnected';
+                }
+            }
+
+            function updateOrchestratorFromPayload(res) {
+                const q = (res && res.queues) || {};
+                const d = (res && res.dlq) || {};
+                const s = (res && res.stages) || {};
+                const flags = (res && res.flags) || {};
+                const ages = (res && res.ages) || {};
+                // Detect zeroed fallback (summary endpoint graceful fallback)
+                const isZeroed = (!Object.keys(q).length && !Object.keys(d).length && !Object.keys(s).length && !Object.keys(flags).length && !Object.keys(ages).length);
+                setOrchestratorFallbackBadge(isZeroed, 'fallback');
+                const stages = ['chunking','embedding','storage'];
+                const now = (res && res.ts) ? Number(res.ts) : (Date.now()/1000.0);
+                const prev = orchestratorPrev;
+                orchestratorHistory = orchestratorHistory || { chunking: [], embedding: [], storage: [] };
+                window.orchestratorAgeHistory = window.orchestratorAgeHistory || { chunking: [], embedding: [], storage: [] };
+                const rows = stages.map(st => {
+                    const qn = `embeddings:${st}`;
+                    const dq = `embeddings:${st}:dlq`;
+                    const qdepth = q[qn] || 0;
+                    const ddepth = d[dq] || 0;
+                    const ss = s[st] || { processed: 0, failed: 0 };
+                    const ageVal = ages[qn] || 0;
+                    let dlqRate = 0.0, procRate = 0.0, failRate = 0.0;
+                    if (prev && prev.stages && prev.stages[st] && prev.ts) {
+                        const dt = Math.max(0.001, now - prev.ts);
+                        const p = prev.stages[st];
+                        dlqRate = Math.max(0, (ddepth - p.dlq) / dt);
+                        procRate = Math.max(0, (ss.processed - p.processed) / dt);
+                        failRate = Math.max(0, (ss.failed - p.failed) / dt);
+                    }
+                    const hist = orchestratorHistory[st] || [];
+                    hist.push(ddepth);
+                    while (hist.length > 30) hist.shift();
+                    orchestratorHistory[st] = hist;
+                    const ageHist = window.orchestratorAgeHistory[st] || [];
+                    ageHist.push(ageVal);
+                    while (ageHist.length > 30) ageHist.shift();
+                    window.orchestratorAgeHistory[st] = ageHist;
+                    const fl = flags[st] || {};
+                    const flagTxt = [fl.paused ? 'paused' : '', fl.drain ? 'drain' : ''].filter(Boolean).join(' ') || '—';
+                    return `<tr>
+                        <td>${st}</td>
+                        <td>${qdepth}</td>
+                        <td>${ddepth}</td>
+                        <td><svg id="spark-${st}" width="120" height="24" viewBox="0 0 120 24"></svg></td>
+                        <td>${dlqRate.toFixed(2)}</td>
+                        <td><svg id="age-spark-${st}" width="120" height="24" viewBox="0 0 120 24"></svg></td>
+                        <td>${flagTxt}</td>
+                        <td>${ss.processed}</td>
+                        <td>${procRate.toFixed(2)}</td>
+                        <td>${ss.failed}</td>
+                        <td>${failRate.toFixed(2)}</td>
+                    </tr>`;
+                }).join('');
+                const tb = document.getElementById('orchestrator_tableBody');
+                tb.innerHTML = rows || '<tr><td colspan="8" class="text-muted">No data</td></tr>';
+                try {
+                    const render = (elId, data) => {
+                        const svg = document.getElementById(elId);
+                        if (!svg || !data || data.length < 2) return;
+                        const w = 120, h = 24, pad = 1;
+                        const min = Math.min.apply(null, data);
+                        const max = Math.max.apply(null, data);
+                        const range = Math.max(1, max - min);
+                        const step = (w - pad * 2) / (data.length - 1);
+                        let dpath = '';
+                        data.forEach((v, i) => {
+                            const x = pad + i * step;
+                            const y = h - pad - ((v - min) / range) * (h - pad * 2);
+                            dpath += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + y.toFixed(2) + ' ';
+                        });
+                        svg.innerHTML = `<path d="${dpath}" fill="none" stroke="currentColor" stroke-width="1" />`;
+                    };
+                    render('spark-chunking', orchestratorHistory.chunking);
+                    render('spark-embedding', orchestratorHistory.embedding);
+                    render('spark-storage', orchestratorHistory.storage);
+                    render('age-spark-chunking', window.orchestratorAgeHistory.chunking);
+                    render('age-spark-embedding', window.orchestratorAgeHistory.embedding);
+                    render('age-spark-storage', window.orchestratorAgeHistory.storage);
+                } catch (e) { /* ignore */ }
+                orchestratorPrev = {
+                    ts: now,
+                    stages: {
+                        chunking: { dlq: d['embeddings:chunking:dlq'] || 0, processed: (s['chunking']||{}).processed||0, failed: (s['chunking']||{}).failed||0 },
+                        embedding: { dlq: d['embeddings:embedding:dlq'] || 0, processed: (s['embedding']||{}).processed||0, failed: (s['embedding']||{}).failed||0 },
+                        storage: { dlq: d['embeddings:storage:dlq'] || 0, processed: (s['storage']||{}).processed||0, failed: (s['storage']||{}).failed||0 }
+                    }
+                };
+            }
+            async function fetchOrchestratorSummary() {
+                // Prefer richer summary (includes ages/flags); fallback to legacy stats
+                try {
+                    const res0 = await apiClient.get('/api/v1/embeddings/orchestrator/summary');
+                    updateOrchestratorFromPayload(res0);
+                    return;
+                } catch (e) { /* ignore and fallback */ }
+                try {
+                    const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+                    // Legacy stats fallback does not expose ages/flags; hide zeroed badge
+                    setOrchestratorFallbackBadge(false);
+                    const q = (res && res.queues) || {};
+                    const d = (res && res.dlq) || {};
+                    const s = (res && res.stages) || {};
+                    const stages = ['chunking','embedding','storage'];
+                    const now = Date.now() / 1000.0;
+                    const prev = orchestratorPrev;
+                    orchestratorHistory = orchestratorHistory || { chunking: [], embedding: [], storage: [] };
+                    const rows = stages.map(st => {
+                        const qn = `embeddings:${st}`;
+                        const dq = `embeddings:${st}:dlq`;
+                        const qdepth = q[qn] || 0;
+                        const ddepth = d[dq] || 0;
+                        const ss = s[st] || { processed: 0, failed: 0 };
+                        // Compute rates if previous sample exists
+                        let dlqRate = 0.0, procRate = 0.0, failRate = 0.0;
+                        if (prev && prev.stages && prev.stages[st] && prev.ts) {
+                            const dt = Math.max(0.001, now - prev.ts);
+                            const p = prev.stages[st];
+                            dlqRate = Math.max(0, (ddepth - p.dlq) / dt);
+                            procRate = Math.max(0, (ss.processed - p.processed) / dt);
+                            failRate = Math.max(0, (ss.failed - p.failed) / dt);
+                        }
+                        // Update sparkline data (keep last 30)
+                        const hist = orchestratorHistory[st] || [];
+                        hist.push(ddepth);
+                        while (hist.length > 30) hist.shift();
+                        orchestratorHistory[st] = hist;
+
+                        return `<tr>
+                            <td>${st}</td>
+                            <td>${qdepth}</td>
+                            <td>${ddepth}</td>
+                            <td><svg id="spark-${st}" width="120" height="24" viewBox="0 0 120 24"></svg></td>
+                            <td>${dlqRate.toFixed(2)}</td>
+                            <td>${ss.processed}</td>
+                            <td>${procRate.toFixed(2)}</td>
+                            <td>${ss.failed}</td>
+                            <td>${failRate.toFixed(2)}</td>
+                        </tr>`;
+                    }).join('');
+                    const tb = document.getElementById('orchestrator_tableBody');
+                    tb.innerHTML = rows || '<tr><td colspan="8" class="text-muted">No data</td></tr>';
+                    // Render sparklines
+                    try {
+                        const render = (elId, data) => {
+                            const svg = document.getElementById(elId);
+                            if (!svg || !data || data.length < 2) return;
+                            const w = 120, h = 24, pad = 1;
+                            const min = Math.min.apply(null, data);
+                            const max = Math.max.apply(null, data);
+                            const range = Math.max(1, max - min);
+                            const step = (w - pad * 2) / (data.length - 1);
+                            let dpath = '';
+                            data.forEach((v, i) => {
+                                const x = pad + i * step;
+                                const y = h - pad - ((v - min) / range) * (h - pad * 2);
+                                dpath += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + y.toFixed(2) + ' ';
+                            });
+                            svg.innerHTML = `<path d="${dpath}" fill="none" stroke="currentColor" stroke-width="1" />`;
+                        };
+                        render('spark-chunking', orchestratorHistory.chunking);
+                        render('spark-embedding', orchestratorHistory.embedding);
+                        render('spark-storage', orchestratorHistory.storage);
+                    } catch (e) { /* ignore */ }
+
+                    // Save snapshot for next rate computation
+                    orchestratorPrev = {
+                        ts: now,
+                        stages: {
+                            chunking: { dlq: d['embeddings:chunking:dlq'] || 0, processed: (s['chunking']||{}).processed||0, failed: (s['chunking']||{}).failed||0 },
+                            embedding: { dlq: d['embeddings:embedding:dlq'] || 0, processed: (s['embedding']||{}).processed||0, failed: (s['embedding']||{}).failed||0 },
+                            storage: { dlq: d['embeddings:storage:dlq'] || 0, processed: (s['storage']||{}).processed||0, failed: (s['storage']||{}).failed||0 }
+                        }
+                    };
+                } catch (e) {
+                    const tb = document.getElementById('orchestrator_tableBody');
+                    tb.innerHTML = `<tr><td colspan="8">${Utils.escapeHtml(JSON.stringify(e.response || e))}</td></tr>`;
+                }
+            }
+            function startOrchestratorAutoRefresh() {
+                stopOrchestratorAutoRefresh();
+                fetchOrchestratorSummary();
+                orchestratorTimer = setInterval(fetchOrchestratorSummary, 10000);
+                try { Utils.saveToStorage('orchestrator-auto-refresh', true); } catch (e) { /* ignore */ }
+            }
+            function stopOrchestratorAutoRefresh() {
+                if (orchestratorTimer) {
+                    clearInterval(orchestratorTimer);
+                    orchestratorTimer = null;
+                }
+                try { Utils.saveToStorage('orchestrator-auto-refresh', false); } catch (e) { /* ignore */ }
+            }
+
+            async function startOrchestratorSSE() {
+                try {
+                    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+                    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+                    orchestratorSSEController = new AbortController();
+                    const res = await fetch(`${baseUrl}/api/v1/embeddings/orchestrator/events`, {
+                        method: 'GET',
+                        headers: {
+                            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                        },
+                        signal: orchestratorSSEController.signal,
+                    });
+                    orchestratorSSEEnabled = true;
+                    setOrchestratorSSEStatus(true);
+                    await apiClient.handleStreamingResponse(res, (chunk) => {
+                        if (!orchestratorSSEEnabled) return;
+                        if (chunk && !chunk.error) {
+                            updateOrchestratorFromPayload(chunk);
+                        }
+                    });
+                } catch (e) {
+                    // ignore abort/network
+                }
+            }
+            function stopOrchestratorSSE() {
+                orchestratorSSEEnabled = false;
+                if (orchestratorSSEController) {
+                    try { orchestratorSSEController.abort(); } catch (e) { /* ignore */ }
+                    orchestratorSSEController = null;
+                }
+                setOrchestratorSSEStatus(false);
+            }
+            function toggleOrchestratorSSE(cb) {
+                if (cb && cb.checked) {
+                    stopOrchestratorAutoRefresh();
+                    startOrchestratorSSE();
+                } else {
+                    stopOrchestratorSSE();
+                }
+                try { Utils.saveToStorage('orchestrator-sse-enabled', !!(cb && cb.checked)); } catch (e) { /* ignore */ }
+            }
+
+            function openMonitoringDocs(ev){
+                try { if (ev && ev.preventDefault) ev.preventDefault(); } catch(e){}
+                // Try a few likely locations; fall back to GitHub path or alert with instructions.
+                const candidates = [
+                    window.location.origin + '/monitoring/README.md',
+                    window.location.origin + '/webui/monitoring/README.md',
+                ];
+                const gh = 'https://github.com/rmusser01/tldw_server/blob/main/monitoring/README.md';
+                // Attempt to open the first candidate in a new tab; the server may not expose it, so also show a tip
+                try { window.open(candidates[0], '_blank'); } catch(e){}
+                try {
+                    alert('Monitoring docs are available at monitoring/README.md in the repo.\n' +
+                          'If browsing online, see: ' + gh + '\n' +
+                          'Prometheus text metrics: /api/v1/metrics/text');
+                } catch(e){}
+            }
+
+            // Initialize auto-refresh from saved preference
+            try {
+                const saved = Utils.getFromStorage('orchestrator-auto-refresh');
+                if (saved === true) {
+                    startOrchestratorAutoRefresh();
+                }
+            } catch (e) { /* ignore */ }
+            // Initialize SSE preference
+            try {
+                const savedSSE = Utils.getFromStorage('orchestrator-sse-enabled');
+                const cb = document.getElementById('orchestrator_live_sse');
+                if (savedSSE && cb) {
+                    cb.checked = true;
+                    stopOrchestratorAutoRefresh();
+                    startOrchestratorSSE();
+                }
+            } catch (e) { /* ignore */ }
+            async function fetchJobsStats() {
+                const domain = document.getElementById('jobsStats_domain').value.trim();
+                const queue = document.getElementById('jobsStats_queue').value.trim();
+                const jobType = document.getElementById('jobsStats_jobType').value.trim();
+                const query = {};
+                if (domain) query.domain = domain;
+                if (queue) query.queue = queue;
+                if (jobType) query.job_type = jobType;
+                const tbody = document.getElementById('jobsStats_tableBody');
+                try {
+                    Loading.show(tbody.parentElement, 'Loading jobs stats...');
+                    const res = await apiClient.makeRequest('GET', '/api/v1/jobs/stats', { query });
+                    const data = Array.isArray(res) ? res : (res?.data || []);
+                    tbody.innerHTML = '';
+                    if (!data.length) {
+                        tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No data</td></tr>';
+                        return;
+                    }
+                    for (const row of data) {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${row.domain ?? ''}</td>
+                            <td>${row.queue ?? ''}</td>
+                            <td>${row.job_type ?? ''}</td>
+                            <td>${row.queued ?? 0}</td>
+                            <td>${row.processing ?? 0}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    }
+                } catch (e) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="text-error">${(e && e.message) || 'Failed to load'}</td></tr>`;
+                } finally {
+                    Loading.hide(tbody.parentElement);
+                }
+            }
+            function startJobsStatsAutoRefresh() {
+                stopJobsStatsAutoRefresh();
+                jobsStatsTimer = setInterval(fetchJobsStats, 10000);
+                fetchJobsStats();
+            }
+            function stopJobsStatsAutoRefresh() {
+                if (jobsStatsTimer) {
+                    clearInterval(jobsStatsTimer);
+                    jobsStatsTimer = null;
+                }
+            }
+        </script>
     </div>
 </div>
 
@@ -291,6 +748,9 @@ function refreshMetrics() {
         .catch(error => {
             console.error('Failed to fetch metrics:', error);
         });
+
+    // Also refresh Jobs overview widget
+    refreshJobsOverview();
 }
 
 function startAutoRefresh() {
@@ -358,6 +818,93 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshMetrics();
     }
 });
+
+async function refreshJobsOverview() {
+    try {
+        const res = await apiClient.makeRequest('GET', '/api/v1/jobs/stats', { query: {} });
+        const data = Array.isArray(res) ? res : (res?.data || []);
+        const ul = document.getElementById('metric-jobs-overview');
+        ul.innerHTML = '';
+        if (!data.length) {
+            ul.innerHTML = '<li class="text-muted">No data</li>';
+            return;
+        }
+        const scored = data.map(r => ({
+            domain: r.domain || '',
+            queue: r.queue || '',
+            job_type: r.job_type || '',
+            queued: r.queued || 0,
+            processing: r.processing || 0,
+        })).map(r => ({ ...r, score: (r.queued + r.processing) }));
+        scored.sort((a, b) => b.score - a.score);
+        const top = scored.slice(0, 3);
+        for (const row of top) {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = '#';
+            a.textContent = `${row.domain}/${row.queue}/${row.job_type} — queued: ${row.queued}, processing: ${row.processing}`;
+            a.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                openAdminJobsWithFilter(row.domain, row.queue, row.job_type);
+            });
+            li.appendChild(a);
+            ul.appendChild(li);
+        }
+        if (!ul.children.length) {
+            ul.innerHTML = '<li class="text-muted">No active queues</li>';
+        }
+    } catch (e) {
+        // Fallback: show soft error but keep dashboard
+        const ul = document.getElementById('metric-jobs-overview');
+        if (ul) ul.innerHTML = '<li class="text-error">Jobs overview unavailable</li>';
+    }
+}
+
+// Open Admin → Jobs and apply filters, then refresh table
+function openAdminJobsWithFilter(domain, queue, jobType) {
+    try {
+        // Switch to Admin top tab
+        const topAdminBtn = document.querySelector('.top-tab-button[data-toptab="admin"]');
+        if (topAdminBtn) topAdminBtn.click();
+
+        // After a short delay, switch to Admin Jobs sub-tab
+        setTimeout(() => {
+            const adminJobsBtn = document.querySelector('#admin-subtabs .sub-tab-button[data-content-id="tabAdminJobs"]');
+            if (adminJobsBtn) adminJobsBtn.click();
+
+            // Wait for inputs to be available, then set values and refresh
+            let attempts = 0;
+            const tryApply = () => {
+                const d = document.getElementById('adminJobs_domain');
+                const q = document.getElementById('adminJobs_queue');
+                const jt = document.getElementById('adminJobs_jobType');
+                if (d && q && jt) {
+                    d.value = domain || '';
+                    q.value = queue || '';
+                    jt.value = jobType || '';
+                    const topbar = document.getElementById('adminJobs_topbar');
+                    if (topbar) {
+                        const desc = `${domain || '(any)'}/${queue || '(any)'}/${jobType || '(any)'}`;
+                        topbar.textContent = `Filter applied: ${desc}`;
+                    }
+                    try { if (typeof adminJobsSaveFilters === 'function') adminJobsSaveFilters(); } catch (e) { /* ignore */ }
+                    try { if (typeof updateSavedFiltersBadge === 'function') updateSavedFiltersBadge({ domain, queue, job_type: jobType }); } catch (e) { /* ignore */ }
+                    if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
+                    return true;
+                }
+                return false;
+            };
+            const interval = setInterval(() => {
+                attempts += 1;
+                if (tryApply() || attempts > 20) {
+                    clearInterval(interval);
+                }
+            }, 100);
+        }, 100);
+    } catch (e) {
+        console.warn('Failed to navigate to Admin → Jobs with filter', e);
+    }
+}
 </script>
 
 <style>

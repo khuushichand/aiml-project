@@ -7,7 +7,7 @@ import tempfile
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import List
+from typing import Any, Dict, List
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError, ConflictError, InputError
@@ -290,6 +290,190 @@ class TestProjectOperations:
         # Should not exist at all
         deleted = populated_db.get_project(project_id, include_deleted=True)
         assert deleted is None
+
+
+########################################################################################################################
+# Signature CRUD Tests
+
+class TestSignatureOperations:
+    """Test signature CRUD and listing behaviour."""
+
+    def _create_project(self, db: PromptStudioDatabase) -> Dict[str, Any]:
+        return db.create_project(
+            name="Signature Project",
+            description="Project for signature tests",
+            user_id="signature-user",
+        )
+
+    def test_create_and_get_signature(self, test_db: PromptStudioDatabase):
+        project = self._create_project(test_db)
+
+        signature = test_db.create_signature(
+            project_id=project["id"],
+            name="Summarization",
+            input_schema=[{"name": "text", "type": "string"}],
+            output_schema=[{"name": "summary", "type": "string"}],
+            constraints={"max_length": 512},
+        )
+
+        assert signature["name"] == "Summarization"
+        assert signature["project_id"] == project["id"]
+        assert isinstance(signature["input_schema"], list)
+
+        fetched = test_db.get_signature(signature["id"])
+        assert fetched is not None
+        assert fetched["uuid"] == signature["uuid"]
+        assert fetched["input_schema"][0]["name"] == "text"
+
+    def test_list_signatures(self, test_db: PromptStudioDatabase):
+        project = self._create_project(test_db)
+        for idx in range(3):
+            test_db.create_signature(
+                project_id=project["id"],
+                name=f"Signature {idx}",
+                input_schema=[{"name": "field", "type": "string"}],
+                output_schema=[{"name": "result", "type": "string"}],
+            )
+
+        signatures = test_db.list_signatures(project_id=project["id"])
+        assert isinstance(signatures, list)
+        assert len(signatures) == 3
+
+    def test_update_signature(self, test_db: PromptStudioDatabase):
+        project = self._create_project(test_db)
+        signature = test_db.create_signature(
+            project_id=project["id"],
+            name="Draft Signature",
+            input_schema=[{"name": "field", "type": "string"}],
+            output_schema=[{"name": "result", "type": "string"}],
+        )
+
+        updated = test_db.update_signature(
+            signature["id"],
+            {
+                "name": "Updated Signature",
+                "validation_rules": {"required": ["field"]},
+            },
+        )
+
+        assert updated["name"] == "Updated Signature"
+        assert updated["validation_rules"]["required"] == ["field"]
+
+    def test_delete_signature(self, test_db: PromptStudioDatabase):
+        project = self._create_project(test_db)
+        signature = test_db.create_signature(
+            project_id=project["id"],
+            name="Temp Signature",
+            input_schema=[{"name": "field", "type": "string"}],
+            output_schema=[{"name": "result", "type": "string"}],
+        )
+
+        assert test_db.delete_signature(signature["id"])
+        assert test_db.get_signature(signature["id"]) is None
+
+    def test_create_signature_conflict(self, test_db: PromptStudioDatabase):
+        project = self._create_project(test_db)
+        test_db.create_signature(
+            project_id=project["id"],
+            name="Duplicate Signature",
+            input_schema=[{"name": "field", "type": "string"}],
+            output_schema=[{"name": "result", "type": "string"}],
+        )
+
+        with pytest.raises(ConflictError):
+            test_db.create_signature(
+                project_id=project["id"],
+                name="Duplicate Signature",
+                input_schema=[{"name": "another", "type": "string"}],
+                output_schema=[{"name": "result", "type": "string"}],
+            )
+
+########################################################################################################################
+# Test Run & Evaluation Tests
+
+class TestTestRunOperations:
+    """Verify creating test runs via the database abstraction."""
+
+    def _seed_prompt_and_case(self, db: PromptStudioDatabase) -> Dict[str, Any]:
+        project = db.create_project(name="Run Project", description="", user_id="runner")
+        prompt = db.create_prompt(
+            project_id=project["id"],
+            name="Run Prompt",
+            system_prompt="You are helpful.",
+            user_prompt="Answer: {value}",
+        )
+        test_case = db.create_test_case(
+            project_id=project["id"],
+            name="Case",
+            inputs={"value": "42"},
+            expected_outputs={"response": "42"},
+        )
+        return {"project": project, "prompt": prompt, "test_case": test_case}
+
+    def test_create_test_run(self, test_db: PromptStudioDatabase):
+        seeded = self._seed_prompt_and_case(test_db)
+        run = test_db.create_test_run(
+            project_id=seeded["project"]["id"],
+            prompt_id=seeded["prompt"]["id"],
+            test_case_id=seeded["test_case"]["id"],
+            model_name="gpt-3.5-turbo",
+            inputs={"value": "42"},
+            outputs={"response": "42"},
+            expected_outputs={"response": "42"},
+        )
+
+        assert run["prompt_id"] == seeded["prompt"]["id"]
+        assert run["test_case_id"] == seeded["test_case"]["id"]
+        assert run["inputs"]["value"] == "42"
+
+
+class TestEvaluationOperations:
+    """Verify evaluation CRUD operations through the abstraction."""
+
+    def _seed_prompt(self, db: PromptStudioDatabase) -> Dict[str, Any]:
+        project = db.create_project(name="Eval Project", description="", user_id="eval")
+        prompt = db.create_prompt(
+            project_id=project["id"],
+            name="Eval Prompt",
+            system_prompt="System",
+            user_prompt="User",
+        )
+        test_case = db.create_test_case(
+            project_id=project["id"],
+            name="Eval Case",
+            inputs={"text": "hello"},
+            expected_outputs={"response": "hello"},
+        )
+        return {"project": project, "prompt": prompt, "test_case": test_case}
+
+    def test_create_and_update_evaluation(self, test_db: PromptStudioDatabase):
+        seeded = self._seed_prompt(test_db)
+        evaluation = test_db.create_evaluation(
+            prompt_id=seeded["prompt"]["id"],
+            project_id=seeded["project"]["id"],
+            model_configs={"model": "gpt-3.5-turbo"},
+            test_case_ids=[seeded["test_case"]["id"]],
+        )
+
+        assert evaluation["prompt_id"] == seeded["prompt"]["id"]
+        assert evaluation["status"] == "running"
+
+        updated = test_db.update_evaluation(
+            evaluation["id"],
+            {
+                "status": "completed",
+                "aggregate_metrics": {"average_score": 1.0},
+            },
+        )
+
+        assert updated["status"] == "completed"
+        assert updated["aggregate_metrics"]["average_score"] == 1.0
+
+        fetched = test_db.get_evaluation(evaluation["id"])
+        assert fetched is not None
+
+        listing = test_db.list_evaluations(project_id=seeded["project"]["id"])
+        assert listing["pagination"]["total"] >= 1
 
 ########################################################################################################################
 # Transaction Tests

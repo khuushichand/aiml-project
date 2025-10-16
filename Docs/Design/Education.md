@@ -2,6 +2,12 @@
 
 
 ### Link Dump:
+
+https://openscilm.allen.ai/
+https://arxiv.org/abs/2411.14199
+https://arxiv.org/html/2411.14199v1
+
+
 https://arxiv.org/abs/2412.02035
 https://github.com/andreamust/NEON-GPT
 https://arxiv.org/abs/2412.02035v1

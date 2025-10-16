@@ -6,7 +6,7 @@ Guarantees no data loss even under concurrent load.
 import asyncio
 import json
 from typing import List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
@@ -238,12 +238,12 @@ class SafeWriteBuffer:
             backup_path.parent.mkdir(parents=True, exist_ok=True)
             
             # Write with timestamp in filename
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             final_path = backup_path.parent / f"buffer_backup_{timestamp}.json"
             
             # Save tasks as JSON
             backup_data = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'task_count': len(self.buffer),
                 'tasks': [task.to_dict() for task in self.buffer]
             }

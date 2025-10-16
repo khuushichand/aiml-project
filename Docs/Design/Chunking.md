@@ -37,7 +37,7 @@ https://github.com/anthropics/anthropic-cookbook/blob/main/skills/contextual-emb
 https://arxiv.org/abs/2203.09638
 https://arxiv.org/abs/2506.15655e
 
-
+https://hierarchychunker.codeaxion.com/#pricing
 https://github.com/ofriw/chunkhound?tab=readme-ov-file
 
 

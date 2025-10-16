@@ -51,6 +51,15 @@ class APIKeyManager:
         self.settings = get_settings()
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
         self.key_length = 32  # Length of random part
+        # Fingerprint the HMAC key material to detect settings changes (e.g., JWT_SECRET_KEY)
+        try:
+            key_material = (
+                (self.settings.JWT_SECRET_KEY or "")
+                or (self.settings.API_KEY_PEPPER or "")
+            ) or "tldw_default_api_key_hmac"
+            self._hmac_key_fingerprint = (key_material[:32])
+        except Exception:
+            self._hmac_key_fingerprint = ""
         
     async def initialize(self):
         """Initialize database connection and ensure tables exist"""
@@ -71,7 +80,7 @@ class APIKeyManager:
         """Create API keys and related tables if they don't exist"""
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS api_keys (
@@ -120,6 +129,19 @@ class APIKeyManager:
                             FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
                         )
                     """)
+                    # Ensure Virtual Key columns (Postgres)
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
+                    # Store allowlists as TEXT (JSON string) for compatibility across asyncpg versions
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
                     
                 else:
                     # SQLite
@@ -149,12 +171,33 @@ class APIKeyManager:
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
-                    
+                    # Ensure Virtual Key columns (SQLite)
+                    cur = await conn.execute("PRAGMA table_info(api_keys)")
+                    rows = await cur.fetchall()
+                    cols = {r[1] for r in rows}
+                    async def _add_col(name: str, decl: str):
+                        if name not in cols:
+                            await conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+                    await _add_col('is_virtual', "is_virtual INTEGER DEFAULT 0")
+                    await _add_col('parent_key_id', "parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await _add_col('org_id', "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await _add_col('team_id', "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await _add_col('llm_budget_day_tokens', "llm_budget_day_tokens INTEGER")
+                    await _add_col('llm_budget_month_tokens', "llm_budget_month_tokens INTEGER")
+                    await _add_col('llm_budget_day_usd', "llm_budget_day_usd REAL")
+                    await _add_col('llm_budget_month_usd', "llm_budget_month_usd REAL")
+                    await _add_col('llm_allowed_endpoints', "llm_allowed_endpoints TEXT")
+                    await _add_col('llm_allowed_providers', "llm_allowed_providers TEXT")
+                    await _add_col('llm_allowed_models', "llm_allowed_models TEXT")
+
                     # Create indexes
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
                     
                     # Create API key audit log table
                     await conn.execute("""
@@ -193,8 +236,12 @@ class APIKeyManager:
         full_key = f"{self.key_prefix}{random_part}"
         
         # Create HMAC hash for storage (more secure than plain SHA256)
-        # Use a consistent HMAC key derived from settings
-        hmac_key = self.settings.JWT_SECRET_KEY[:32].encode() if len(self.settings.JWT_SECRET_KEY) >= 32 else self.settings.JWT_SECRET_KEY.encode()
+        # Use a consistent HMAC key derived from settings with safe fallback for single-user mode
+        key_material = (
+            (self.settings.JWT_SECRET_KEY or "")
+            or (self.settings.API_KEY_PEPPER or "")
+        ) or "tldw_default_api_key_hmac"
+        hmac_key = (key_material[:32]).encode()
         key_hash = hmac.new(hmac_key, full_key.encode(), hashlib.sha256).hexdigest()
         
         return full_key, key_hash
@@ -217,8 +264,12 @@ class APIKeyManager:
         Returns:
             HMAC-SHA256 hash of the API key
         """
-        # Use a consistent HMAC key derived from settings
-        hmac_key = self.settings.JWT_SECRET_KEY[:32].encode() if len(self.settings.JWT_SECRET_KEY) >= 32 else self.settings.JWT_SECRET_KEY.encode()
+        # Use a consistent HMAC key derived from settings with safe fallback for single-user mode
+        key_material = (
+            (self.settings.JWT_SECRET_KEY or "")
+            or (self.settings.API_KEY_PEPPER or "")
+        ) or "tldw_default_api_key_hmac"
+        hmac_key = (key_material[:32]).encode()
         return hmac.new(hmac_key, api_key.encode(), hashlib.sha256).hexdigest()
     
     async def create_api_key(
@@ -318,6 +369,150 @@ class APIKeyManager:
         except Exception as e:
             logger.error(f"Failed to create API key: {e}")
             raise DatabaseError(f"Failed to create API key: {e}")
+
+    async def create_virtual_key(
+        self,
+        *,
+        user_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        expires_in_days: Optional[int] = 30,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        allowed_endpoints: Optional[list[str]] = None,
+        allowed_providers: Optional[list[str]] = None,
+        allowed_models: Optional[list[str]] = None,
+        budget_day_tokens: Optional[int] = None,
+        budget_month_tokens: Optional[int] = None,
+        budget_day_usd: Optional[float] = None,
+        budget_month_usd: Optional[float] = None,
+        parent_key_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Create a Virtual API Key with LLM endpoint scope and budgets."""
+        if not self._initialized:
+            await self.initialize()
+
+        full_key, key_hash = self.generate_api_key()
+        key_prefix = full_key[:10] + "..."
+        expires_at = None
+        if expires_in_days:
+            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                import json
+                if hasattr(conn, 'fetchval'):
+                    # In asyncpg 0.30, Json wrapper is removed; pass JSON strings and cast to jsonb
+                    import json as _json
+                    _endpoints = _json.dumps(allowed_endpoints) if allowed_endpoints is not None else None
+                    _providers = _json.dumps(allowed_providers) if allowed_providers is not None else None
+                    _models    = _json.dumps(allowed_models)    if allowed_models    is not None else None
+
+                    # Detect column types to choose JSONB cast or plain text insert (compat across migrations)
+                    try:
+                        col_type = await conn.fetchval(
+                            """
+                            SELECT data_type FROM information_schema.columns
+                            WHERE table_name = 'api_keys' AND column_name = 'llm_allowed_endpoints'
+                            """
+                        )
+                    except Exception:
+                        col_type = None
+                    is_jsonb = isinstance(col_type, str) and ('json' in col_type.lower())
+
+                    if is_jsonb:
+                        key_id = await conn.fetchval(
+                            """
+                            INSERT INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                                is_virtual, parent_key_id, org_id, team_id,
+                                llm_budget_day_tokens, llm_budget_month_tokens,
+                                llm_budget_day_usd, llm_budget_month_usd,
+                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                            ) VALUES (
+                                $1,$2,$3,$4,$5,$6,'active',$7,
+                                TRUE,$8,$9,$10,
+                                $11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb
+                            ) RETURNING id
+                            """,
+                            user_id, key_hash, key_prefix, name, description, 'read', expires_at,
+                            parent_key_id, org_id, team_id,
+                            budget_day_tokens, budget_month_tokens,
+                            budget_day_usd, budget_month_usd,
+                            _endpoints, _providers, _models,
+                        )
+                    else:
+                        key_id = await conn.fetchval(
+                            """
+                            INSERT INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                                is_virtual, parent_key_id, org_id, team_id,
+                                llm_budget_day_tokens, llm_budget_month_tokens,
+                                llm_budget_day_usd, llm_budget_month_usd,
+                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                            ) VALUES (
+                                $1,$2,$3,$4,$5,$6,'active',$7,
+                                TRUE,$8,$9,$10,
+                                $11,$12,$13,$14,$15,$16,$17
+                            ) RETURNING id
+                            """,
+                            user_id, key_hash, key_prefix, name, description, 'read', expires_at,
+                            parent_key_id, org_id, team_id,
+                            budget_day_tokens, budget_month_tokens,
+                            budget_day_usd, budget_month_usd,
+                            _endpoints, _providers, _models,
+                        )
+                else:
+                    cursor = await conn.execute(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                            is_virtual, parent_key_id, org_id, team_id,
+                            llm_budget_day_tokens, llm_budget_month_tokens,
+                            llm_budget_day_usd, llm_budget_month_usd,
+                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                        ) VALUES (?,?,?,?,?,?,'active',?,
+                            1,?,?,?,?,?,?,?,?,?,?
+                        )
+                        """,
+                        (
+                            user_id, key_hash, key_prefix, name, description, 'read',
+                            expires_at.isoformat() if expires_at else None,
+                            parent_key_id, org_id, team_id,
+                            budget_day_tokens, budget_month_tokens,
+                            budget_day_usd, budget_month_usd,
+                            (json.dumps(allowed_endpoints) if allowed_endpoints else None),
+                            (json.dumps(allowed_providers) if allowed_providers else None),
+                            (json.dumps(allowed_models) if allowed_models else None),
+                        )
+                    )
+                    key_id = cursor.lastrowid
+                    await conn.commit()
+
+            await self._log_action(key_id, "created_virtual", user_id, {
+                "org_id": org_id, "team_id": team_id, "budgets": {
+                    "day_tokens": budget_day_tokens,
+                    "month_tokens": budget_month_tokens,
+                    "day_usd": budget_day_usd,
+                    "month_usd": budget_month_usd,
+                },
+                "allowed_endpoints": allowed_endpoints or []
+            })
+
+            return {
+                "id": key_id,
+                "key": full_key,
+                "key_prefix": key_prefix,
+                "name": name,
+                "scope": 'read',
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "created_at": datetime.utcnow().isoformat(),
+                "message": "Store this key securely - it will not be shown again"
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to create virtual API key: {e}")
+            raise DatabaseError(f"Failed to create virtual API key: {e}")
     
     async def validate_api_key(
         self,
@@ -342,16 +537,37 @@ class APIKeyManager:
         key_hash = self.hash_api_key(api_key)
         
         try:
-            # Get key information
-            result = await self.db_pool.fetchone(
-                """
-                SELECT id, user_id, name, scope, status, expires_at,
-                       rate_limit, allowed_ips, usage_count
-                FROM api_keys
-                WHERE key_hash = ? AND status = ?
-                """,
-                key_hash, APIKeyStatus.ACTIVE.value
-            )
+            # Get key information (dialect-aware placeholders)
+            if getattr(self.db_pool, 'pool', None) is not None:
+                result = await self.db_pool.fetchone(
+                    """
+                    SELECT id, user_id, name, scope, status, expires_at,
+                           rate_limit, allowed_ips, usage_count,
+                           COALESCE(is_virtual, FALSE) AS is_virtual,
+                           parent_key_id, org_id, team_id,
+                           llm_budget_day_tokens, llm_budget_month_tokens,
+                           llm_budget_day_usd, llm_budget_month_usd,
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                    FROM api_keys
+                    WHERE key_hash = $1 AND status = $2
+                    """,
+                    key_hash, APIKeyStatus.ACTIVE.value
+                )
+            else:
+                result = await self.db_pool.fetchone(
+                    """
+                    SELECT id, user_id, name, scope, status, expires_at,
+                           rate_limit, allowed_ips, usage_count,
+                           COALESCE(is_virtual, 0) AS is_virtual,
+                           parent_key_id, org_id, team_id,
+                           llm_budget_day_tokens, llm_budget_month_tokens,
+                           llm_budget_day_usd, llm_budget_month_usd,
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                    FROM api_keys
+                    WHERE key_hash = ? AND status = ?
+                    """,
+                    key_hash, APIKeyStatus.ACTIVE.value
+                )
             
             if not result:
                 return None
@@ -381,6 +597,14 @@ class APIKeyManager:
             
             # Update usage statistics
             await self._update_usage(key_info['id'], ip_address)
+
+            # Optional lightweight audit of usage
+            try:
+                if self.settings.API_KEY_AUDIT_LOG_USAGE:
+                    await self._log_action(key_info['id'], "used", key_info.get('user_id'))
+            except Exception as _e:
+                # Do not fail request on audit write
+                logger.debug(f"API key usage audit skipped/failed: {_e}")
             
             return key_info
             
@@ -435,7 +659,7 @@ class APIKeyManager:
             # Update rotation references
             async with self.db_pool.transaction() as conn:
                 # Mark old key as rotated
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         """
                         UPDATE api_keys 
@@ -698,14 +922,15 @@ class APIKeyManager:
         try:
             import json
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
+                    import json as _json
+                    _details = _json.dumps(details) if details is not None else None
                     await conn.execute(
                         """
                         INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)
-                        VALUES ($1, $2, $3, $4)
+                        VALUES ($1, $2, $3, $4::jsonb)
                         """,
-                        key_id, action, user_id,
-                        json.dumps(details) if details else None
+                        key_id, action, user_id, _details
                     )
                 else:
                     await conn.execute(
@@ -732,10 +957,34 @@ _api_key_manager: Optional[APIKeyManager] = None
 async def get_api_key_manager() -> APIKeyManager:
     """Get APIKeyManager singleton instance"""
     global _api_key_manager
+    # If an instance exists but the HMAC key material has changed (env/settings), recreate it
+    try:
+        current_settings = get_settings()
+        current_material = (
+            (current_settings.JWT_SECRET_KEY or "")
+            or (current_settings.API_KEY_PEPPER or "")
+        ) or "tldw_default_api_key_hmac"
+        current_fp = (current_material[:32])
+    except Exception:
+        current_fp = ""
+
+    if _api_key_manager is not None:
+        try:
+            if getattr(_api_key_manager, "_hmac_key_fingerprint", None) != current_fp:
+                _api_key_manager = None
+        except Exception:
+            _api_key_manager = None
+
     if not _api_key_manager:
         _api_key_manager = APIKeyManager()
         await _api_key_manager.initialize()
     return _api_key_manager
+
+
+async def reset_api_key_manager():
+    """Reset the APIKeyManager singleton (mainly for testing)."""
+    global _api_key_manager
+    _api_key_manager = None
 
 #
 # End of api_key_manager.py

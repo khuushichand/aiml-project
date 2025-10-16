@@ -5,7 +5,12 @@ Pydantic schemas for chunking template API endpoints.
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    from pydantic import field_validator
+except Exception:
+    from pydantic import validator as field_validator  # type: ignore
+from pydantic import ConfigDict
 import json
 
 
@@ -37,7 +42,8 @@ class TemplateConfig(BaseModel):
         description="Optional classifier for auto-apply (media_types, filename_regex, title_regex, url_regex, min_score, priority)"
     )
     
-    @validator('chunking')
+    @field_validator('chunking')
+    @classmethod
     def validate_chunking(cls, v):
         """Validate chunking configuration has required fields."""
         if 'method' not in v:
@@ -46,7 +52,8 @@ class TemplateConfig(BaseModel):
             v['config'] = {}
         return v
 
-    @validator('classifier')
+    @field_validator('classifier')
+    @classmethod
     def validate_classifier(cls, v):
         if v is None:
             return v
@@ -95,13 +102,15 @@ class ChunkingTemplateResponse(ChunkingTemplateBase):
     version: int = Field(1, description="Template version number")
     user_id: Optional[str] = Field(None, description="User ID of template owner")
     
-    class Config:
-        orm_mode = True
-        json_encoders = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={
             datetime: lambda v: v.isoformat()
         }
+    )
     
-    @validator('template_json', pre=False)
+    @field_validator('template_json')
+    @classmethod
     def ensure_json_string(cls, v):
         """Ensure template_json is a string."""
         if isinstance(v, dict):
@@ -117,8 +126,7 @@ class ChunkingTemplateListResponse(BaseModel):
     )
     total: int = Field(..., description="Total number of templates")
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChunkingTemplateFilter(BaseModel):

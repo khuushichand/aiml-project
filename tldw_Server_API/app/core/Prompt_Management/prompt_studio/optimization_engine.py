@@ -647,62 +647,30 @@ class OptimizationEngine:
     
     def _get_optimization(self, optimization_id: int) -> Optional[Dict[str, Any]]:
         """Get optimization from database."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT * FROM prompt_studio_optimizations WHERE id = ?",
-            (optimization_id,)
-        )
-        
-        row = cursor.fetchone()
-        if row:
-            return self.db._row_to_dict(cursor, row)
-        return None
-    
+        return self.db.get_optimization(optimization_id)
+
     def _update_optimization_status(self, optimization_id: int, status: str,
                                    error_message: Optional[str] = None):
         """Update optimization status."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        if status == "running":
-            cursor.execute("""
-                UPDATE prompt_studio_optimizations
-                SET status = ?, started_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (status, optimization_id))
-        else:
-            cursor.execute("""
-                UPDATE prompt_studio_optimizations
-                SET status = ?, error_message = ?
-                WHERE id = ?
-            """, (status, error_message, optimization_id))
-        
-        conn.commit()
-    
+        mark_started = status == "running"
+        mark_completed = status in {"failed", "cancelled"}
+        self.db.set_optimization_status(
+            optimization_id,
+            status,
+            error_message=error_message,
+            mark_started=mark_started,
+            mark_completed=mark_completed,
+        )
+
     def _update_optimization_results(self, optimization_id: int, results: Dict[str, Any]):
         """Update optimization with results."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            UPDATE prompt_studio_optimizations
-            SET status = 'completed',
-                completed_at = CURRENT_TIMESTAMP,
-                optimized_prompt_id = ?,
-                iterations_completed = ?,
-                initial_metrics = ?,
-                final_metrics = ?,
-                improvement_percentage = ?
-            WHERE id = ?
-        """, (
-            results.get("optimized_prompt_id"),
-            results.get("iterations", 1),
-            json.dumps({"score": results.get("initial_score", 0)}),
-            json.dumps({"score": results.get("final_score", 0)}),
-            results.get("improvement", 0) * 100,
-            optimization_id
-        ))
-        
-        conn.commit()
+        self.db.complete_optimization(
+            optimization_id,
+            optimized_prompt_id=results.get("optimized_prompt_id"),
+            iterations_completed=results.get("iterations", 1),
+            initial_metrics={"score": results.get("initial_score", 0)},
+            final_metrics={"score": results.get("final_score", 0)},
+            improvement_percentage=results.get("improvement", 0) * 100,
+            total_tokens=results.get("total_tokens"),
+            total_cost=results.get("total_cost"),
+        )

@@ -16,23 +16,192 @@ from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
 from loguru import logger
 
+# Backend abstraction (optional) for PostgreSQL support
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseBackend,
+    DatabaseError as BackendDatabaseError,
+    QueryResult,
+)
+from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
+    prepare_backend_statement,
+)
+from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.config import load_comprehensive_config
+
+
+class _BackendCursorAdapter:
+    """Adapter exposing QueryResult via a cursor-like interface."""
+
+    def __init__(self, result: QueryResult):
+        self._result = result
+        self._index = 0
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+
+    def fetchall(self):
+        return list(self._result.rows)
+
+    def fetchone(self):
+        if self._index >= len(self._result.rows):
+            return None
+        row = self._result.rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchmany(self, size: Optional[int] = None):
+        if size is None or size <= 0:
+            size = len(self._result.rows) - self._index
+        end = min(self._index + size, len(self._result.rows))
+        rows = self._result.rows[self._index:end]
+        self._index = end
+        return list(rows)
+
+    def close(self):
+        self._result = QueryResult(rows=[], rowcount=0)
+        self.rowcount = 0
+        self.lastrowid = None
+        self.description = None
+
+
+class _EvaluationsBackendCursor:
+    """Cursor wrapper that routes SQL through the configured DatabaseBackend."""
+
+    def __init__(self, db: "EvaluationsDatabase", connection: Any):
+        self._db = db
+        self._conn = connection
+        self._adapter: Optional[_BackendCursorAdapter] = None
+        self.rowcount: int = -1
+        self.lastrowid: Optional[int] = None
+        self.description = None
+
+    def execute(self, query: str, params: Optional[Any] = None):
+        prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
+        result = self._db.backend.execute(prepared_query, prepared_params, connection=self._conn)
+        self._adapter = _BackendCursorAdapter(result)
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+        return self
+
+    def executemany(self, query: str, params_list: List[Any]):
+        prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
+        result = self._db.backend.execute_many(prepared_query, prepared_params_list, connection=self._conn)
+        self._adapter = _BackendCursorAdapter(result)
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+        return self
+
+    def fetchone(self):
+        if not self._adapter:
+            return None
+        row = self._adapter.fetchone()
+        return dict(row) if row else None
+
+    def fetchall(self):
+        if not self._adapter:
+            return []
+        return [dict(r) for r in self._adapter.fetchall()]
+
+    def fetchmany(self, size: Optional[int] = None):
+        if not self._adapter:
+            return []
+        return [dict(r) for r in self._adapter.fetchmany(size)]
+
+    def close(self):
+        if self._adapter:
+            self._adapter.close()
+        self._adapter = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self.description = None
+
+
+class _EvaluationsBackendConnection:
+    """Connection shim exposing sqlite-like helpers for backend usage."""
+
+    def __init__(self, db: "EvaluationsDatabase", connection: Any):
+        self._db = db
+        self._conn = connection
+        self.row_factory = None
+
+    def cursor(self) -> _EvaluationsBackendCursor:
+        return _EvaluationsBackendCursor(self._db, self._conn)
+
+    def execute(self, query: str, params: Optional[Any] = None):
+        return self.cursor().execute(query, params)
+
+    def executemany(self, query: str, params_list: List[Any]):
+        return self.cursor().executemany(query, params_list)
+
+    # Compatibility no-ops
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
 class EvaluationsDatabase:
-    """Database manager for evaluations system"""
-    
-    def __init__(self, db_path: str):
+    """Database manager for evaluations system (SQLite or PostgreSQL)."""
+
+    def __init__(self, db_path: str, *, backend: Optional[DatabaseBackend] = None):
         self.db_path = db_path
-        self._initialize_database()
-        self._apply_migrations()
+        # Resolve backend (content backend by default)
+        self.backend: Optional[DatabaseBackend] = backend
+        if self.backend is None:
+            try:
+                cfg = load_comprehensive_config()
+                self.backend = get_content_backend(cfg)
+            except Exception:
+                self.backend = None
+
+        self.backend_type: BackendType = self.backend.backend_type if self.backend else BackendType.SQLITE
+
+        if self.backend_type == BackendType.SQLITE:
+            self._initialize_database()
+            self._apply_migrations()
+        else:
+            self._initialize_database_postgres()
     
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        """Context manager for database connections (backend-aware)."""
+        if self.backend_type == BackendType.SQLITE:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
+            return
+
+        assert self.backend is not None
+        raw = self.backend.get_pool().get_connection()
         try:
-            yield conn
+            yield _EvaluationsBackendConnection(self, raw)
         finally:
-            conn.close()
+            try:
+                self.backend.get_pool().return_connection(raw)
+            except Exception:
+                pass
+
+    # --- Backend helpers ---
+    def _prepare_backend_statement(self, query: str, params: Optional[Any] = None) -> Tuple[str, Optional[Any]]:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query, params
+        return prepare_backend_statement(self.backend_type, query, params, apply_default_transform=True)
+
+    def _prepare_backend_many_statement(self, query: str, params_list: List[Any]) -> Tuple[str, List[Any]]:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query, params_list
+        # Transform the statement, params are passed through (placeholders converted once)
+        converted_query, _ = prepare_backend_statement(self.backend_type, query, None, apply_default_transform=True)
+        return converted_query, params_list
     
     def _initialize_database(self):
         """Create database tables if they don't exist"""
@@ -163,6 +332,20 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC)")
 
+            # Idempotency mapping table (generic, scoped by user and entity type)
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    user_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(user_id, entity_type, idempotency_key)
+                )
+                """
+            )
+
             # Embeddings A/B test tables
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS embedding_abtests (
@@ -249,6 +432,190 @@ class EvaluationsDatabase:
             
             conn.commit()
             logger.info("Evaluations database initialized")
+
+    def _initialize_database_postgres(self) -> None:
+        """Provision PostgreSQL tables and indexes to mirror SQLite schema."""
+        assert self.backend is not None
+        ddl = """
+        CREATE TABLE IF NOT EXISTS evaluations (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            eval_type TEXT NOT NULL,
+            eval_spec JSONB NOT NULL,
+            dataset_id TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            created_by TEXT,
+            metadata JSONB,
+            deleted_at TIMESTAMPTZ NULL
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_runs (
+            id TEXT PRIMARY KEY,
+            eval_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            target_model TEXT,
+            config JSONB,
+            progress JSONB,
+            results JSONB,
+            error_message TEXT,
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            webhook_url TEXT,
+            usage JSONB,
+            FOREIGN KEY (eval_id) REFERENCES evaluations(id)
+        );
+        CREATE TABLE IF NOT EXISTS datasets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            samples JSONB NOT NULL,
+            sample_count INTEGER,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            created_by TEXT,
+            metadata JSONB
+        );
+        -- Unified evaluations table (enabled by default on PostgreSQL)
+        CREATE TABLE IF NOT EXISTS evaluations_unified (
+            id TEXT PRIMARY KEY,
+            evaluation_id TEXT UNIQUE,
+            name TEXT NOT NULL,
+            evaluation_type TEXT NOT NULL,
+            input_data JSONB NOT NULL,
+            results JSONB,
+            status TEXT NOT NULL DEFAULT 'completed',
+            user_id TEXT,
+            metadata JSONB,
+            embedding_provider TEXT,
+            embedding_model TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            completed_at TIMESTAMPTZ,
+            eval_spec JSONB
+        );
+        CREATE TABLE IF NOT EXISTS internal_evaluations (
+            evaluation_id TEXT PRIMARY KEY,
+            evaluation_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            input_data JSONB,
+            results JSONB,
+            metadata JSONB,
+            user_id TEXT,
+            status TEXT DEFAULT 'pending',
+            completed_at TIMESTAMPTZ,
+            embedding_provider TEXT,
+            embedding_model TEXT
+        );
+        CREATE TABLE IF NOT EXISTS pipeline_presets (
+            name TEXT PRIMARY KEY,
+            config JSONB NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            user_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ephemeral_collections (
+            collection_name TEXT PRIMARY KEY,
+            namespace TEXT,
+            run_id TEXT,
+            ttl_seconds INTEGER DEFAULT 86400,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            deleted_at TIMESTAMPTZ
+        );
+        CREATE TABLE IF NOT EXISTS webhook_registrations (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            events TEXT NOT NULL,
+            active BOOLEAN DEFAULT TRUE,
+            retry_count INTEGER DEFAULT 3,
+            timeout_seconds INTEGER DEFAULT 30,
+            total_deliveries INTEGER DEFAULT 0,
+            successful_deliveries INTEGER DEFAULT 0,
+            failed_deliveries INTEGER DEFAULT 0,
+            last_delivery_at TIMESTAMPTZ,
+            last_error TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            webhook_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS embedding_abtests (
+            test_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_by TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            status TEXT NOT NULL DEFAULT 'pending',
+            config_json JSONB NOT NULL,
+            stats_json JSONB,
+            notes TEXT
+        );
+        CREATE TABLE IF NOT EXISTS embedding_abtest_arms (
+            arm_id TEXT PRIMARY KEY,
+            test_id TEXT NOT NULL,
+            arm_index INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            dimensions INTEGER,
+            collection_hash TEXT,
+            pipeline_hash TEXT,
+            collection_name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            stats_json JSONB,
+            metadata_json JSONB,
+            FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id)
+        );
+        CREATE TABLE IF NOT EXISTS embedding_abtest_queries (
+            query_id TEXT PRIMARY KEY,
+            test_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            ground_truth_ids JSONB,
+            metadata_json JSONB,
+            FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id)
+        );
+        CREATE TABLE IF NOT EXISTS embedding_abtest_results (
+            result_id TEXT PRIMARY KEY,
+            test_id TEXT NOT NULL,
+            arm_id TEXT NOT NULL,
+            query_id TEXT NOT NULL,
+            ranked_ids JSONB NOT NULL,
+            scores JSONB,
+            metrics_json JSONB,
+            latency_ms DOUBLE PRECISION,
+            ranked_distances JSONB,
+            ranked_metadatas JSONB,
+            ranked_documents JSONB,
+            rerank_scores JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id),
+            FOREIGN KEY (arm_id) REFERENCES embedding_abtest_arms(arm_id),
+            FOREIGN KEY (query_id) REFERENCES embedding_abtest_queries(query_id)
+        );
+        -- Indexes
+        CREATE INDEX IF NOT EXISTS idx_evals_created ON evaluations(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_status ON evaluation_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_evals_unified_created ON evaluations_unified(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_evals_unified_status ON evaluations_unified(status);
+        CREATE INDEX IF NOT EXISTS idx_evals_unified_type ON evaluations_unified(evaluation_type);
+        CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type);
+        CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id);
+        CREATE INDEX IF NOT EXISTS idx_webhooks_active ON evaluation_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC);
+        
+        -- Idempotency mapping table (generic, scoped by user and entity type)
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            user_id TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY(user_id, entity_type, idempotency_key)
+        );
+        """
+        with self.backend.transaction() as conn:
+            self.backend.create_tables(ddl, connection=conn)
     
     def _apply_migrations(self):
         """Apply database migrations including the unified schema."""
@@ -267,13 +634,23 @@ class EvaluationsDatabase:
     
     def _use_unified_table(self) -> bool:
         """Check if the unified table exists and should be used."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='evaluations_unified'
-            """)
-            return cursor.fetchone() is not None
+        if self.backend_type == BackendType.SQLITE:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='evaluations_unified'"
+                )
+                return cursor.fetchone() is not None
+        # PostgreSQL path
+        if not self.backend:
+            return False
+        result = self.backend.execute(
+            (
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_name='evaluations_unified')"
+            )
+        )
+        return bool(result.scalar)
     
     # ============= Evaluation CRUD Operations =============
     
@@ -523,6 +900,99 @@ class EvaluationsDatabase:
             )
             rows = [dict(r) for r in cursor.fetchall()]
         return rows, total
+
+    # ============= Idempotency Helpers =============
+
+    def lookup_idempotency(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[str]:
+        """Lookup an existing entity_id by idempotency key scoped to user and entity type."""
+        if not key:
+            return None
+        uid = user_id or ""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT entity_id FROM idempotency_keys WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?",
+                    (uid, entity_type, key),
+                )
+                row = cursor.fetchone()
+                if row:
+                    # sqlite3.Row or dict-like from backend adapter
+                    return row[0] if not isinstance(row, dict) else row.get("entity_id")
+            except Exception:
+                return None
+        return None
+
+    def record_idempotency(self, entity_type: str, key: str, entity_id: str, user_id: Optional[str]) -> None:
+        """Record an idempotency mapping; ignore on conflict."""
+        if not key or not entity_id:
+            return
+        uid = user_id or ""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Try INSERT OR IGNORE for SQLite; Postgres path uses ON CONFLICT via backend adapter
+                if self.backend_type == BackendType.SQLITE:
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO idempotency_keys (user_id, entity_type, idempotency_key, entity_id)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (uid, entity_type, key, entity_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO idempotency_keys (user_id, entity_type, idempotency_key, entity_id)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(user_id, entity_type, idempotency_key) DO NOTHING
+                        """,
+                        (uid, entity_type, key, entity_id),
+                    )
+                conn = getattr(cursor, "connection", None)
+                try:
+                    if conn:
+                        conn.commit()
+                except Exception:
+                    pass
+            except Exception:
+                # Best-effort; safe to ignore failures
+                pass
+
+    def cleanup_idempotency_keys(self, ttl_hours: int = 72) -> int:
+        """Remove idempotency keys older than ttl_hours. Returns deleted row count.
+
+        This is intended to be invoked by a periodic maintenance task.
+        For SQLite, uses datetime('now', ?). For PostgreSQL, uses NOW() - INTERVAL.
+        """
+        deleted = 0
+        try:
+            if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        DELETE FROM idempotency_keys
+                        WHERE created_at < (NOW() - (INTERVAL '1 hour' * %s))
+                        """,
+                        (ttl_hours,),
+                    )
+                    deleted = cursor.rowcount or 0
+                    # no commit needed for backend adapter
+            else:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    # SQLite: datetime('now', '-{ttl} hours')
+                    cursor.execute(
+                        "DELETE FROM idempotency_keys WHERE datetime(created_at) < datetime('now', ?)",
+                        (f"-{int(ttl_hours)} hours",),
+                    )
+                    conn.commit()
+                    deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
+        except Exception as e:
+            logger.warning(f"cleanup_idempotency_keys failed: {e}")
+            return 0
+        return int(deleted)
     
     def update_evaluation(self, eval_id: str, updates: Dict[str, Any]) -> bool:
         """Update evaluation definition"""
@@ -919,64 +1389,131 @@ class EvaluationsDatabase:
         """Store evaluation in the unified table if it exists, otherwise fall back to internal_evaluations."""
         if self._use_unified_table():
             # Store in unified table
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
+            if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+                upsert = (
+                    "INSERT INTO evaluations_unified ("
+                    "id, evaluation_id, name, evaluation_type, input_data, results, status, user_id,"
+                    "metadata, embedding_provider, embedding_model, created_at, completed_at, eval_spec"
+                    ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s) "
+                    "ON CONFLICT (id) DO UPDATE SET "
+                    "name = EXCLUDED.name, evaluation_type = EXCLUDED.evaluation_type, input_data = EXCLUDED.input_data,"
+                    "results = EXCLUDED.results, status = EXCLUDED.status, user_id = EXCLUDED.user_id,"
+                    "metadata = EXCLUDED.metadata, embedding_provider = EXCLUDED.embedding_provider,"
+                    "embedding_model = EXCLUDED.embedding_model, completed_at = EXCLUDED.completed_at"
+                )
                 try:
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO evaluations_unified (
-                            id, evaluation_id, name, evaluation_type, 
-                            input_data, results, status, user_id,
-                            metadata, embedding_provider, embedding_model,
-                            created_at, completed_at, eval_spec
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)
-                    """, (
-                        evaluation_id,  # Use same ID for both id and evaluation_id
-                        evaluation_id,
-                        name or evaluation_type,
-                        evaluation_type,
-                        json.dumps(input_data),
-                        json.dumps(results),
-                        status,
-                        user_id,
-                        json.dumps(metadata) if metadata else None,
-                        embedding_provider,
-                        embedding_model,
-                        json.dumps({})  # Empty eval_spec for backward compatibility
-                    ))
-                    conn.commit()
+                    self.backend.execute(
+                        upsert,
+                        (
+                            evaluation_id,
+                            evaluation_id,
+                            name or evaluation_type,
+                            evaluation_type,
+                            json.dumps(input_data),
+                            json.dumps(results),
+                            status,
+                            user_id,
+                            json.dumps(metadata) if metadata else None,
+                            embedding_provider,
+                            embedding_model,
+                            json.dumps({}),
+                        ),
+                    )
                     return True
-                except Exception as e:
-                    logger.error(f"Failed to store in unified table: {e}")
-                    conn.rollback()
+                except Exception as exc:
+                    logger.error(f"Failed to store in unified table (PG): {exc}")
                     return False
+            else:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO evaluations_unified (
+                                id, evaluation_id, name, evaluation_type, 
+                                input_data, results, status, user_id,
+                                metadata, embedding_provider, embedding_model,
+                                created_at, completed_at, eval_spec
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)
+                        """, (
+                            evaluation_id,  # Use same ID for both id and evaluation_id
+                            evaluation_id,
+                            name or evaluation_type,
+                            evaluation_type,
+                            json.dumps(input_data),
+                            json.dumps(results),
+                            status,
+                            user_id,
+                            json.dumps(metadata) if metadata else None,
+                            embedding_provider,
+                            embedding_model,
+                            json.dumps({})  # Empty eval_spec for backward compatibility
+                        ))
+                        conn.commit()
+                        return True
+                    except Exception as e:
+                        logger.error(f"Failed to store in unified table: {e}")
+                        conn.rollback()
+                        return False
         else:
             # Store in internal_evaluations table as fallback
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
+            if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+                upsert = (
+                    "INSERT INTO internal_evaluations ("
+                    "evaluation_id, evaluation_type, input_data, results, user_id, metadata, status,"
+                    "embedding_provider, embedding_model, created_at, completed_at"
+                    ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) "
+                    "ON CONFLICT (evaluation_id) DO UPDATE SET "
+                    "evaluation_type = EXCLUDED.evaluation_type, input_data = EXCLUDED.input_data,"
+                    "results = EXCLUDED.results, user_id = EXCLUDED.user_id, metadata = EXCLUDED.metadata,"
+                    "status = EXCLUDED.status, embedding_provider = EXCLUDED.embedding_provider,"
+                    "embedding_model = EXCLUDED.embedding_model, completed_at = EXCLUDED.completed_at"
+                )
                 try:
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO internal_evaluations (
-                            evaluation_id, evaluation_type, input_data, results,
-                            user_id, metadata, status, embedding_provider, embedding_model,
-                            created_at, completed_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-                    """, (
-                        evaluation_id,
-                        evaluation_type,
-                        json.dumps(input_data),
-                        json.dumps(results),
-                        user_id,
-                        json.dumps(metadata) if metadata else None,
-                        status,
-                        embedding_provider,
-                        embedding_model
-                    ))
-                    conn.commit()
+                    self.backend.execute(
+                        upsert,
+                        (
+                            evaluation_id,
+                            evaluation_type,
+                            json.dumps(input_data),
+                            json.dumps(results),
+                            user_id,
+                            json.dumps(metadata) if metadata else None,
+                            status,
+                            embedding_provider,
+                            embedding_model,
+                        ),
+                    )
                     return True
-                except Exception as e:
-                    logger.error(f"Failed to store evaluation: {e}")
-                    conn.rollback()
+                except Exception as exc:
+                    logger.error(f"Failed to store evaluation (PG): {exc}")
                     return False
+            else:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO internal_evaluations (
+                                evaluation_id, evaluation_type, input_data, results,
+                                user_id, metadata, status, embedding_provider, embedding_model,
+                                created_at, completed_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                        """, (
+                            evaluation_id,
+                            evaluation_type,
+                            json.dumps(input_data),
+                            json.dumps(results),
+                            user_id,
+                            json.dumps(metadata) if metadata else None,
+                            status,
+                            embedding_provider,
+                            embedding_model
+                        ))
+                        conn.commit()
+                        return True
+                    except Exception as e:
+                        logger.error(f"Failed to store evaluation: {e}")
+                        conn.rollback()
+                        return False
     
     def get_unified_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
         """Get evaluation from unified table if it exists, otherwise from legacy tables."""
@@ -1096,6 +1633,14 @@ class EvaluationsDatabase:
             return True
 
     def list_expired_ephemeral_collections(self) -> List[str]:
+        if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+            result = self.backend.execute(
+                (
+                    "SELECT collection_name FROM ephemeral_collections "
+                    "WHERE deleted_at IS NULL AND (created_at + (ttl_seconds || ' seconds')::interval) <= NOW()"
+                )
+            )
+            return [r["collection_name"] for r in result.rows]
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

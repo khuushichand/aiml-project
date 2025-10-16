@@ -1,0 +1,3 @@
+{"id": "nq-1", "question": "How many experiments were run?", "answers": ["42"], "contexts": [{"id": "d_nq_1", "title": "Experiments", "text": "We ran 42 experiments. The findings were consistent across trials."}]}
+{"id": "nq-2", "question": "What prevents overfitting?", "answers": ["dropout"], "contexts": [{"id": "d_nq_2", "title": "Regularization", "text": "Dropout helps prevent overfitting by reducing co-adaptation of neurons."}]}
+

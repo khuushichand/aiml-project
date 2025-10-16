@@ -3,7 +3,7 @@
 #
 # Imports:
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Sequence, Literal
+from typing import List, Dict, Any, Optional, Union, Sequence, Literal, Tuple, Set
 import threading
 import re
 import os
@@ -11,6 +11,7 @@ import os
 import chromadb
 import tempfile
 import uuid
+# Redundant in some environments, but keep explicit Dict import for clarity
 from typing import Dict
 try:
     # Prefer the modern Settings from chromadb.config (works in 0.4.x and 1.x)
@@ -38,7 +39,9 @@ except Exception:
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
     def create_embeddings_batch(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
-from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+    log_security_violation,
+)
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
@@ -67,12 +70,8 @@ def validate_user_id(user_id: str) -> str:
     # First, check raw input for forbidden characters (before trimming)
     if any(pattern in raw_user_id for pattern in ['..', '/', '\\', '\x00', '\n', '\r']):
         logger.error(f"Potential path traversal attempt detected in user_id: {user_id[:50]}")
-        audit_log(
-            AuditEventType.PATH_TRAVERSAL_ATTEMPT,
-            user_id=raw_user_id[:50],
-            details={"attempted_value": raw_user_id[:100]},
-            severity="WARNING"
-        )
+        # Best-effort unified audit (non-blocking)
+        log_security_violation(user_id=raw_user_id[:50], action="path_traversal_attempt", metadata={"attempted_value": raw_user_id[:100]})
         raise ValueError("Invalid user_id: contains forbidden characters")
     
     # Now trim safe leading/trailing whitespace
@@ -81,12 +80,7 @@ def validate_user_id(user_id: str) -> str:
     # Only allow alphanumeric, underscore, and hyphen
     if not re.match(r'^[a-zA-Z0-9_-]+$', user_id):
         logger.error(f"Invalid user_id format: {user_id[:50]}")
-        audit_log(
-            AuditEventType.INVALID_USER_ID,
-            user_id=user_id[:50],
-            details={"reason": "invalid_characters"},
-            severity="WARNING"
-        )
+        log_security_violation(user_id=user_id[:50], action="invalid_user_id", metadata={"reason": "invalid_characters"})
         raise ValueError("Invalid user_id: must contain only alphanumeric characters, underscores, and hyphens")
     
     # Limit length to prevent DoS
@@ -632,6 +626,9 @@ class ChromaDBManager:
         try:
             # Chunking (pass options as kwargs for compatibility). Support hierarchical mode.
             effective_chunk_opts: Dict = dict(chunk_options or {})
+            # Enable adaptive chunking with overlap tuning by default for large docs
+            effective_chunk_opts.setdefault('adaptive', True)
+            effective_chunk_opts.setdefault('adaptive_overlap', True)
             if hierarchical_chunking is True or (hierarchical_template and isinstance(hierarchical_template, dict)):
                 effective_chunk_opts['hierarchical'] = True if hierarchical_chunking is None else bool(hierarchical_chunking)
                 if hierarchical_template:
@@ -643,6 +640,23 @@ class ChromaDBManager:
                 logger.warning(
                     f"User '{self.user_id}': No chunks generated for media_id {media_id}, file {file_name}. Skipping storage.")
                 return
+
+            # Ingest-time deduplication (near-duplicate removal)
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+            except Exception:
+                _settings = {}
+            try:
+                ingest_dedup_enabled = bool(_settings.get("INGEST_ENABLE_DEDUP", True))
+                dedup_threshold = float(_settings.get("INGEST_DEDUP_THRESHOLD", 0.9))
+            except Exception:
+                ingest_dedup_enabled = True
+                dedup_threshold = 0.9
+            duplicate_map: Dict[str, str] = {}
+            if ingest_dedup_enabled and chunks and len(chunks) > 1:
+                chunks, duplicate_map = self._dedupe_text_chunks(chunks, threshold=dedup_threshold)
+                if duplicate_map:
+                    logger.info(f"User '{self.user_id}': Deduplicated {len(duplicate_map)} near-duplicate chunks for media_id {media_id}.")
 
             # TODO: Point 6 - MediaDatabase interaction
             # Placeholder for new MediaDatabase interactions:
@@ -1269,7 +1283,121 @@ class ChromaDBManager:
         """Deletes items from a collection by their IDs."""
         if not ids:
             logger.warning(f"User '{self.user_id}': No IDs provided for deletion. Skipping.")
-            return
+        return
+
+    # --- Ingest-time utilities ---
+    def _dedupe_text_chunks(self, chunks: List[Dict[str, Any]], threshold: float = 0.9) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        """Remove near-duplicate chunks using Jaccard + SimHash (short-text friendly).
+
+        Args:
+            chunks: List of {'text': str, 'metadata': {...}} dicts
+            threshold: Jaccard similarity >= threshold marks as duplicate
+
+        Returns:
+            (filtered_chunks, duplicate_map) where duplicate_map maps duplicate_chunk_uid -> canonical_chunk_uid
+        """
+        try:
+            k = 7  # shingle size
+
+            def _simhash64(s: str) -> int:
+                """Compute a simple 64-bit SimHash for short technical text.
+
+                Uses word-level hashing with weighted character n-grams to improve
+                discrimination on short inputs. Deterministic and fast; not cryptographic.
+                """
+                try:
+                    import hashlib as _hash
+                    words = [w for w in re.split(r"\W+", s.lower()) if w]
+                    if not words:
+                        return 0
+                    # small char-gram features per word to reduce collisions
+                    def grams(w: str) -> List[str]:
+                        g = set()
+                        w2 = f"^{w}$"
+                        for n in (2, 3):
+                            if len(w2) >= n:
+                                for i in range(len(w2) - n + 1):
+                                    g.add(w2[i:i+n])
+                        return list(g) or [w]
+                    bits = [0] * 64
+                    for w in words:
+                        feats = grams(w)
+                        for f in feats:
+                            h = int(_hash.sha1(f.encode("utf-8")).hexdigest()[:16], 16)
+                            for b in range(64):
+                                if (h >> b) & 1:
+                                    bits[b] += 1
+                                else:
+                                    bits[b] -= 1
+                    out = 0
+                    for b in range(64):
+                        if bits[b] >= 0:
+                            out |= (1 << b)
+                    return out
+                except Exception:
+                    return 0
+
+            def _hamming(a: int, b: int) -> int:
+                x = a ^ b
+                # Kernighan popcount
+                c = 0
+                while x:
+                    x &= x - 1
+                    c += 1
+                return c
+            def shingles(s: str) -> Set[str]:
+                s = s or ""
+                if len(s) < k:
+                    return {s}
+                return {s[i:i+k] for i in range(0, len(s) - k + 1)}
+
+            canon: List[Tuple[str, Set[str], int]] = []  # (uid, shingle_set, simhash)
+            duplicate_map: Dict[str, str] = {}
+            filtered: List[Dict[str, Any]] = []
+            # SimHash gating config
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+            except Exception:
+                _settings = {}
+            use_simhash = bool(_settings.get("INGEST_DEDUP_USE_SIMHASH", True))
+            simhash_hamming_thresh = int(_settings.get("INGEST_SIMHASH_HAMMING_THRESHOLD", 3))
+
+            for ch in chunks:
+                txt = ch.get('text') or ''
+                md = ch.get('metadata') or {}
+                uid = str(md.get('chunk_uid') or md.get('chunk_index') or f"idx_{len(filtered)}")
+                sh = shingles(txt)
+                sh_val = _simhash64(txt) if use_simhash else 0
+                is_dup = False
+                for (cuid, cset, csim) in canon:
+                    inter = len(sh & cset)
+                    union = max(1, len(sh | cset))
+                    jac = inter / union
+                    if jac >= threshold:
+                        # Mark duplicate of canonical cuid
+                        duplicate_map[uid] = cuid
+                        is_dup = True
+                        break
+                    if use_simhash and sh_val and csim:
+                        if _hamming(sh_val, csim) <= simhash_hamming_thresh:
+                            duplicate_map[uid] = cuid
+                            is_dup = True
+                            break
+                if not is_dup:
+                    canon.append((uid, sh, sh_val))
+                    filtered.append(ch)
+            # Annotate duplicates in metadata for traceability
+            if duplicate_map:
+                for ch in chunks:
+                    md = ch.get('metadata') or {}
+                    uid = str(md.get('chunk_uid') or md.get('chunk_index') or '')
+                    if uid in duplicate_map:
+                        md['duplicate_of'] = duplicate_map[uid]
+                        ch['metadata'] = md
+            return filtered, duplicate_map
+        except Exception as e:
+            logger.warning(f"User '{self.user_id}': Dedupe failed ({e}); returning original chunks.")
+            return chunks, {}
 
         target_collection = self.get_or_create_collection(collection_name)  # Ensures collection exists
         with self._lock:

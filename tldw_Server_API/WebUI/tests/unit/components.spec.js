@@ -31,5 +31,22 @@ describe('Components', () => {
     const content = container.querySelector('.json-content');
     expect(content).toBeTruthy();
   });
-});
 
+  it('detectBatchItem infers arXiv PDF from DOI', () => {
+    const container = document.createElement('div');
+    const v = new JSONViewer(container, {}, { expanded: 0 });
+    const obj = { doi: '10.48550/arXiv.1706.03762', title: 'Attention' };
+    const item = v.detectBatchItem(obj);
+    expect(item).toBeTruthy();
+    expect(item.pdf_url).toContain('https://arxiv.org/pdf/1706.03762.pdf');
+  });
+
+  it('detectPmcBatchItem finds PMCID and formats', () => {
+    const container = document.createElement('div');
+    const v = new JSONViewer(container, {}, { expanded: 0 });
+    const obj = { pmcid: '12345', title: 'PMC Test' };
+    const pmc = v.detectPmcBatchItem(obj);
+    expect(pmc).toBeTruthy();
+    expect(pmc.pmcid).toBe('PMC12345');
+  });
+});

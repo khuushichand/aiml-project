@@ -61,6 +61,91 @@ class StorageQuotaService:
         self._initialized = True
         logger.info("StorageQuotaService initialized")
     
+    async def calculate_user_storage(
+        self,
+        user_id: int,
+        update_database: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Calculate actual storage usage for a user and optionally persist it.
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        # Check cache first
+        cache_key = f"storage_calc:{user_id}"
+        if cache_key in self.storage_cache and not update_database:
+            return self.storage_cache[cache_key]
+        
+        # Calculate storage in thread pool
+        user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
+        loop = asyncio.get_event_loop()
+        size_bytes = await loop.run_in_executor(
+            self.executor,
+            self._calculate_directory_size,
+            str(user_dir)
+        )
+        
+        # Also calculate ChromaDB if configured
+        chroma_bytes = 0
+        if self.settings.CHROMADB_BASE_PATH:
+            chroma_dir = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
+            chroma_bytes = await loop.run_in_executor(
+                self.executor,
+                self._calculate_directory_size,
+                str(chroma_dir)
+            )
+        
+        total_bytes = size_bytes + chroma_bytes
+        total_mb = total_bytes / (1024 * 1024)
+        
+        # Get quota from database
+        user_info = await self._get_user_storage_info(user_id)
+        if not user_info:
+            raise UserNotFoundError(f"User {user_id}")
+        quota_mb = user_info['storage_quota_mb']
+        
+        # Update database if requested
+        if update_database:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    # PostgreSQL
+                    await conn.execute(
+                        "UPDATE users SET storage_used_mb = $1 WHERE id = $2",
+                        total_mb, user_id
+                    )
+                else:
+                    # SQLite
+                    await conn.execute(
+                        "UPDATE users SET storage_used_mb = ? WHERE id = ?",
+                        (total_mb, user_id)
+                    )
+                    await conn.commit()
+            
+            # Invalidate quota cache
+            self.quota_cache.pop(f"quota:{user_id}", None)
+            logger.info(
+                f"Recalculated storage for user {user_id}: {total_mb:.2f}MB / {quota_mb}MB"
+            )
+        
+        result = {
+            "user_id": user_id,
+            "user_data_bytes": size_bytes,
+            "user_data_mb": round(size_bytes / (1024 * 1024), 2),
+            "chromadb_bytes": chroma_bytes,
+            "chromadb_mb": round(chroma_bytes / (1024 * 1024), 2),
+            "total_bytes": total_bytes,
+            "total_mb": round(total_mb, 2),
+            "quota_mb": quota_mb,
+            "available_mb": round(max(0, quota_mb - total_mb), 2),
+            "usage_percentage": round((total_mb / quota_mb * 100) if quota_mb > 0 else 0, 1),
+            "calculated_at": datetime.utcnow().isoformat()
+        }
+        
+        # Update cache
+        self.storage_cache[cache_key] = result
+        return result
+    
     async def check_quota(
         self,
         user_id: int,
@@ -237,129 +322,13 @@ class StorageQuotaService:
             raise StorageError(f"Failed to update storage usage: {e}")
 
 
-# Singleton accessor
-_quota_service: Optional[StorageQuotaService] = None
-
-
-def get_storage_quota_service() -> StorageQuotaService:
-    global _quota_service
-    if _quota_service is None:
-        _quota_service = StorageQuotaService()
-    return _quota_service
-    
-    async def calculate_user_storage(
-        self,
-        user_id: int,
-        update_database: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Calculate actual storage usage for a user
-        
-        Args:
-            user_id: User's database ID
-            update_database: Update database with calculated value
-            
-        Returns:
-            Storage calculation results
-        """
-        if not self._initialized:
-            await self.initialize()
-        
-        # Check cache first
-        cache_key = f"storage_calc:{user_id}"
-        if cache_key in self.storage_cache and not update_database:
-            return self.storage_cache[cache_key]
-        
-        # Calculate storage in thread pool
-        user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
-        
-        loop = asyncio.get_event_loop()
-        size_bytes = await loop.run_in_executor(
-            self.executor,
-            self._calculate_directory_size,
-            str(user_dir)
-        )
-        
-        # Also calculate ChromaDB if configured
-        chroma_bytes = 0
-        if self.settings.CHROMADB_BASE_PATH:
-            chroma_dir = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
-            chroma_bytes = await loop.run_in_executor(
-                self.executor,
-                self._calculate_directory_size,
-                str(chroma_dir)
-            )
-        
-        total_bytes = size_bytes + chroma_bytes
-        total_mb = total_bytes / (1024 * 1024)
-        
-        # Get quota from database
-        user_info = await self._get_user_storage_info(user_id)
-        if not user_info:
-            raise UserNotFoundError(f"User {user_id}")
-        
-        quota_mb = user_info['storage_quota_mb']
-        
-        # Update database if requested
-        if update_database:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
-                    # PostgreSQL
-                    await conn.execute(
-                        "UPDATE users SET storage_used_mb = $1 WHERE id = $2",
-                        total_mb, user_id
-                    )
-                else:
-                    # SQLite
-                    await conn.execute(
-                        "UPDATE users SET storage_used_mb = ? WHERE id = ?",
-                        (total_mb, user_id)
-                    )
-                    await conn.commit()
-            
-            # Invalidate quota cache
-            self.quota_cache.pop(f"quota:{user_id}", None)
-            
-            logger.info(
-                f"Recalculated storage for user {user_id}: "
-                f"{total_mb:.2f}MB / {quota_mb}MB"
-            )
-        
-        result = {
-            "user_id": user_id,
-            "user_data_bytes": size_bytes,
-            "user_data_mb": round(size_bytes / (1024 * 1024), 2),
-            "chromadb_bytes": chroma_bytes,
-            "chromadb_mb": round(chroma_bytes / (1024 * 1024), 2),
-            "total_bytes": total_bytes,
-            "total_mb": round(total_mb, 2),
-            "quota_mb": quota_mb,
-            "available_mb": round(max(0, quota_mb - total_mb), 2),
-            "usage_percentage": round((total_mb / quota_mb * 100) if quota_mb > 0 else 0, 1),
-            "calculated_at": datetime.utcnow().isoformat()
-        }
-        
-        # Update cache
-        self.storage_cache[cache_key] = result
-        
-        return result
-    
+    # ---- Filesystem and reporting helpers ----
     def _calculate_directory_size(self, path: str) -> int:
-        """
-        Calculate directory size (runs in thread pool)
-        
-        Args:
-            path: Directory path
-            
-        Returns:
-            Size in bytes
-        """
+        """Calculate directory size (runs in thread pool)."""
         total = 0
         path_obj = Path(path)
-        
         if not path_obj.exists():
             return 0
-        
         try:
             for entry in path_obj.rglob('*'):
                 if entry.is_file():
@@ -369,55 +338,31 @@ def get_storage_quota_service() -> StorageQuotaService:
                         continue
         except (OSError, PermissionError) as e:
             logger.error(f"Error calculating size for {path}: {e}")
-        
         return total
-    
+
     async def get_storage_breakdown(self, user_id: int) -> Dict[str, Any]:
-        """
-        Get detailed storage breakdown by file type
-        
-        Args:
-            user_id: User's database ID
-            
-        Returns:
-            Detailed storage breakdown
-        """
+        """Get detailed storage breakdown by file type for a user."""
         if not self._initialized:
             await self.initialize()
-        
         user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
-        
-        # Calculate breakdown in thread pool
         loop = asyncio.get_event_loop()
         breakdown = await loop.run_in_executor(
             self.executor,
             self._calculate_storage_breakdown,
             str(user_dir)
         )
-        
-        # Get quota info
         user_info = await self._get_user_storage_info(user_id)
         if not user_info:
             raise UserNotFoundError(f"User {user_id}")
-        
         breakdown.update({
             "user_id": user_id,
             "quota_mb": user_info['storage_quota_mb'],
             "current_usage_mb": float(user_info['storage_used_mb'])
         })
-        
         return breakdown
-    
+
     def _calculate_storage_breakdown(self, path: str) -> Dict[str, Any]:
-        """
-        Calculate storage breakdown by file type
-        
-        Args:
-            path: Directory path
-            
-        Returns:
-            Storage breakdown
-        """
+        """Calculate storage breakdown by top-level category under the user dir."""
         breakdown = {
             "media": {"count": 0, "bytes": 0},
             "notes": {"count": 0, "bytes": 0},
@@ -426,68 +371,36 @@ def get_storage_quota_service() -> StorageQuotaService:
             "temp": {"count": 0, "bytes": 0},
             "other": {"count": 0, "bytes": 0}
         }
-        
         path_obj = Path(path)
         if not path_obj.exists():
             return breakdown
-        
         try:
             for entry in path_obj.rglob('*'):
                 if entry.is_file():
                     try:
                         size = entry.stat().st_size
-                        
-                        # Determine category based on path
                         relative_path = entry.relative_to(path_obj)
                         parts = relative_path.parts
-                        
-                        if parts and parts[0] in breakdown:
-                            category = parts[0]
-                        else:
-                            category = "other"
-                        
+                        category = parts[0] if parts and parts[0] in breakdown else "other"
                         breakdown[category]["count"] += 1
                         breakdown[category]["bytes"] += size
-                        
                     except (OSError, PermissionError):
                         continue
-                        
         except (OSError, PermissionError) as e:
             logger.error(f"Error calculating breakdown for {path}: {e}")
-        
-        # Convert bytes to MB
         for category in breakdown:
-            breakdown[category]["mb"] = round(
-                breakdown[category]["bytes"] / (1024 * 1024), 2
-            )
-        
+            breakdown[category]["mb"] = round(breakdown[category]["bytes"] / (1024 * 1024), 2)
         return breakdown
-    
-    async def set_user_quota(
-        self,
-        user_id: int,
-        quota_mb: int
-    ) -> Dict[str, Any]:
-        """
-        Set storage quota for a user
-        
-        Args:
-            user_id: User's database ID
-            quota_mb: New quota in megabytes
-            
-        Returns:
-            Updated quota information
-        """
+
+    async def set_user_quota(self, user_id: int, quota_mb: int) -> Dict[str, Any]:
+        """Set storage quota for a user (min 100MB)."""
         if not self._initialized:
             await self.initialize()
-        
-        if quota_mb < 100:  # Minimum 100MB
+        if quota_mb < 100:
             quota_mb = 100
-        
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
                     result = await conn.fetchrow(
                         """
                         UPDATE users 
@@ -497,58 +410,40 @@ def get_storage_quota_service() -> StorageQuotaService:
                         """,
                         quota_mb, user_id
                     )
-                    
                     if not result:
                         raise UserNotFoundError(f"User {user_id}")
-                    
                     current_usage = float(result['storage_used_mb'])
-                    
                 else:
-                    # SQLite
                     await conn.execute(
                         "UPDATE users SET storage_quota_mb = ? WHERE id = ?",
                         (quota_mb, user_id)
                     )
-                    
                     cursor = await conn.execute(
                         "SELECT storage_used_mb FROM users WHERE id = ?",
                         (user_id,)
                     )
-                    result = await cursor.fetchone()
-                    
-                    if not result:
+                    row = await cursor.fetchone()
+                    if not row:
                         raise UserNotFoundError(f"User {user_id}")
-                    
-                    current_usage = float(result[0])
+                    current_usage = float(row[0])
                     await conn.commit()
-                
-                # Invalidate cache
-                self.quota_cache.pop(f"quota:{user_id}", None)
-                
-                logger.info(f"Set quota for user {user_id}: {quota_mb}MB")
-                
-                return {
-                    "user_id": user_id,
-                    "storage_quota_mb": quota_mb,
-                    "storage_used_mb": round(current_usage, 2),
-                    "available_mb": round(max(0, quota_mb - current_usage), 2),
-                    "usage_percentage": round((current_usage / quota_mb * 100) if quota_mb > 0 else 0, 1)
-                }
-                
+            self.quota_cache.pop(f"quota:{user_id}", None)
+            logger.info(f"Set quota for user {user_id}: {quota_mb}MB")
+            return {
+                "user_id": user_id,
+                "storage_quota_mb": quota_mb,
+                "storage_used_mb": round(current_usage, 2),
+                "available_mb": round(max(0, quota_mb - current_usage), 2),
+                "usage_percentage": round((current_usage / quota_mb * 100) if quota_mb > 0 else 0, 1)
+            }
         except Exception as e:
             logger.error(f"Failed to set user quota: {e}")
             raise StorageError(f"Failed to set quota: {e}")
-    
+
     async def get_all_users_storage(self) -> List[Dict[str, Any]]:
-        """
-        Get storage information for all users
-        
-        Returns:
-            List of user storage information
-        """
+        """List storage usage for all active users, sorted by usage desc."""
         if not self._initialized:
             await self.initialize()
-        
         users = await self.db_pool.fetchall(
             """
             SELECT id, username, storage_used_mb, storage_quota_mb
@@ -558,12 +453,10 @@ def get_storage_quota_service() -> StorageQuotaService:
             """,
             True
         )
-        
         result = []
         for user in users:
             used = float(user['storage_used_mb'])
             quota = user['storage_quota_mb']
-            
             result.append({
                 "user_id": user['id'],
                 "username": user['username'],
@@ -572,37 +465,18 @@ def get_storage_quota_service() -> StorageQuotaService:
                 "available_mb": round(max(0, quota - used), 2),
                 "usage_percentage": round((used / quota * 100) if quota > 0 else 0, 1)
             })
-        
         return result
-    
-    async def cleanup_temp_files(
-        self,
-        user_id: Optional[int] = None,
-        older_than_hours: int = 24
-    ) -> Dict[str, Any]:
-        """
-        Clean up temporary files older than specified time
-        
-        Args:
-            user_id: Specific user or all if None
-            older_than_hours: Age threshold in hours
-            
-        Returns:
-            Cleanup statistics
-        """
+
+    async def cleanup_temp_files(self, user_id: Optional[int] = None, older_than_hours: int = 24) -> Dict[str, Any]:
+        """Delete temp files older than the threshold for one or all users."""
         if not self._initialized:
             await self.initialize()
-        
         cutoff_time = datetime.now() - timedelta(hours=older_than_hours)
-        
-        # Determine directories to clean
         if user_id:
             temp_dirs = [Path(self.settings.USER_DATA_BASE_PATH) / str(user_id) / "temp"]
         else:
             base_path = Path(self.settings.USER_DATA_BASE_PATH)
             temp_dirs = list(base_path.glob("*/temp"))
-        
-        # Clean in thread pool
         loop = asyncio.get_event_loop()
         stats = await loop.run_in_executor(
             self.executor,
@@ -610,45 +484,22 @@ def get_storage_quota_service() -> StorageQuotaService:
             temp_dirs,
             cutoff_time
         )
-        
         if stats['files_deleted'] > 0:
             logger.info(
-                f"Cleaned up {stats['files_deleted']} temp files "
-                f"({stats['bytes_freed'] / (1024*1024):.2f}MB)"
+                f"Cleaned up {stats['files_deleted']} temp files ({stats['bytes_freed'] / (1024*1024):.2f}MB)"
             )
-        
         return stats
-    
-    def _cleanup_temp_directories(
-        self,
-        temp_dirs: List[Path],
-        cutoff_time: datetime
-    ) -> Dict[str, Any]:
-        """
-        Clean up temporary directories
-        
-        Args:
-            temp_dirs: List of temp directories
-            cutoff_time: Delete files older than this
-            
-        Returns:
-            Cleanup statistics
-        """
-        stats = {
-            "files_deleted": 0,
-            "bytes_freed": 0,
-            "errors": 0
-        }
-        
+
+    def _cleanup_temp_directories(self, temp_dirs: List[Path], cutoff_time: datetime) -> Dict[str, Any]:
+        """Filesystem worker to cleanup temp directories."""
+        stats = {"files_deleted": 0, "bytes_freed": 0, "errors": 0}
         for temp_dir in temp_dirs:
             if not temp_dir.exists():
                 continue
-            
             try:
                 for file_path in temp_dir.rglob('*'):
                     if file_path.is_file():
                         try:
-                            # Check file age
                             mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
                             if mtime < cutoff_time:
                                 size = file_path.stat().st_size
@@ -658,24 +509,33 @@ def get_storage_quota_service() -> StorageQuotaService:
                         except (OSError, PermissionError):
                             stats['errors'] += 1
                             continue
-                            
             except (OSError, PermissionError):
                 stats['errors'] += 1
                 continue
-        
         return stats
-    
+
     async def _get_user_storage_info(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Get user storage information from database"""
+        """Get user storage info from the database."""
         return await self.db_pool.fetchone(
             "SELECT storage_used_mb, storage_quota_mb FROM users WHERE id = ?",
             user_id
         )
-    
+
     async def shutdown(self):
-        """Shutdown the storage quota service"""
+        """Shutdown the storage quota service."""
         self.executor.shutdown(wait=False)
         logger.info("StorageQuotaService shutdown complete")
+
+
+# Singleton accessor
+_quota_service: Optional[StorageQuotaService] = None
+
+
+def get_storage_quota_service() -> StorageQuotaService:
+    global _quota_service
+    if _quota_service is None:
+        _quota_service = StorageQuotaService()
+    return _quota_service
 
 
 #######################################################################################################################

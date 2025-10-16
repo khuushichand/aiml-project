@@ -63,29 +63,31 @@ def extract_text_from_segments(segments, include_timestamps=True):
     logger.trace(f"Segments received: {segments}")
     logger.trace(f"Type of segments: {type(segments)}")
 
-    def extract_text_recursive(data, include_timestamps):
+    def extract_text_recursive(data):
+        results = []
         if isinstance(data, dict):
-            text = data.get('Text', '')
-            if include_timestamps and 'Time_Start' in data and 'Time_End' in data:
-                return f"{data['Time_Start']}s - {data['Time_End']}s | {text}"
+            if 'Text' in data and isinstance(data['Text'], str):
+                text_item = data['Text']
+                if include_timestamps and 'Time_Start' in data and 'Time_End' in data:
+                    text_item = f"{data['Time_Start']}s - {data['Time_End']}s | {text_item}"
+                results.append(text_item)
             for key, value in data.items():
                 if key == 'Text':
-                    return value
-                elif isinstance(value, (dict, list)):
-                    result = extract_text_recursive(value, include_timestamps)
-                    if result:
-                        return result
+                    continue
+                if isinstance(value, (dict, list)):
+                    results.extend(extract_text_recursive(value))
         elif isinstance(data, list):
-            return '\n'.join(filter(None, [extract_text_recursive(item, include_timestamps) for item in data]))
-        return None
+            for item in data:
+                results.extend(extract_text_recursive(item))
+        return results
 
-    text = extract_text_recursive(segments, include_timestamps)
+    pieces = [piece.strip() for piece in extract_text_recursive(segments) if piece]
 
-    if text:
-        return text.strip()
-    else:
-        logging.error(f"Unable to extract text from segments: {segments}")
-        return "Error: Unable to extract transcription"
+    if pieces:
+        return '\n'.join(pieces)
+
+    logging.error(f"Unable to extract text from segments: {segments}")
+    return "Error: Unable to extract transcription"
 
 #
 #
@@ -371,37 +373,53 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
 
 def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5):
     temp_path = dest_path + '.tmp'
+    dest_dir = os.path.dirname(dest_path)
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
 
     for attempt in range(max_retries):
         try:
-            # Check if a partial download exists and get its size
-            resume_header = {}
+            resume_from = 0
             if os.path.exists(temp_path):
-                resume_header = {'Range': f'bytes={os.path.getsize(temp_path)}-'}
+                resume_from = os.path.getsize(temp_path)
 
-            response = requests.get(url, stream=True, headers=resume_header, timeout=60)
+            headers = {'Range': f'bytes={resume_from}-'} if resume_from else {}
+
+            response = requests.get(url, stream=True, headers=headers, timeout=60)
             response.raise_for_status()
 
-            # Get the total file size from headers
-            total_size = int(response.headers.get('content-length', 0))
-            initial_pos = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
+            content_range = response.headers.get('Content-Range') or response.headers.get('content-range')
+            is_partial = response.status_code == 206 or content_range is not None
+            if resume_from and not is_partial:
+                # Server ignored our range request; restart download from scratch
+                os.remove(temp_path)
+                resume_from = 0
 
-            mode = 'ab' if 'Range' in response.headers else 'wb'
+            total_header = response.headers.get('content-length')
+            total_size = int(total_header) if total_header and total_header.isdigit() else None
+            total_for_progress = (total_size + resume_from) if (total_size is not None and resume_from and is_partial) else total_size
+
+            mode = 'ab' if resume_from and is_partial else 'wb'
+            initial_progress = resume_from if mode == 'ab' else 0
+
             with open(temp_path, mode) as temp_file, tqdm(
-                total=total_size, unit='B', unit_scale=True, desc=dest_path, initial=initial_pos, ascii=True
+                total=total_for_progress,
+                unit='B',
+                unit_scale=True,
+                desc=dest_path,
+                initial=initial_progress,
+                ascii=True,
+                leave=False,
             ) as pbar:
                 for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:  # filter out keep-alive new chunks
+                    if chunk:
                         temp_file.write(chunk)
                         pbar.update(len(chunk))
 
-            # Verify the checksum if provided
-            if expected_checksum:
-                if not verify_checksum(temp_path, expected_checksum):
-                    os.remove(temp_path)
-                    raise ValueError("Downloaded file's checksum does not match the expected checksum")
+            if expected_checksum and not verify_checksum(temp_path, expected_checksum):
+                os.remove(temp_path)
+                raise ValueError("Downloaded file's checksum does not match the expected checksum")
 
-            # Move the file to the final destination
             os.rename(temp_path, dest_path)
             print("Download complete and verified!")
             return dest_path
@@ -423,7 +441,9 @@ def download_file_if_missing(url: str, local_path: str) -> None:
         logging.debug(f"File already exists locally: {local_path}")
         return
     logging.info(f"Downloading from {url} to {local_path}")
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    dirpath = os.path.dirname(local_path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
     r = requests.get(url, stream=True, timeout=60)
     r.raise_for_status()
     with open(local_path, "wb") as f:
@@ -475,6 +495,9 @@ def safe_read_file(file_path):
         try:
             decoded_content = raw_data.decode(encoding)
             # Check if the content is mostly printable
+            if not decoded_content:
+                logging.info(f"Decoded content empty with encoding {encoding}, trying next")
+                continue
             if sum(c.isprintable() for c in decoded_content) / len(decoded_content) > 0.90:
                 logging.info(f"Successfully decoded file with encoding: {encoding}")
                 return decoded_content
@@ -514,8 +537,8 @@ def generate_unique_identifier(file_path):
     # Generate a hash of the file content
     hasher = hashlib.md5()
     with open(file_path, 'rb') as f:
-        buf = f.read()
-        hasher.update(buf)
+        for block in iter(lambda: f.read(1024 * 1024), b''):
+            hasher.update(block)
     content_hash = hasher.hexdigest()[:8]  # Use first 8 characters of the hash
 
     return f"local:{timestamp}:{content_hash}:{filename}"
@@ -687,14 +710,33 @@ def get_db_config():
 # Track temp files for cleanup
 temp_files = []
 
-temp_file_paths = []
-
 def save_temp_file(file):
     global temp_files
     temp_dir = tempfile.gettempdir()
-    temp_path = os.path.join(temp_dir, file.name)
+
+    original_name = getattr(file, "name", "") or ""
+    safe_name = os.path.basename(original_name)
+    stem, ext = os.path.splitext(safe_name)
+    if not stem:
+        stem = "upload"
+    unique_name = f"{stem}_{uuid.uuid4().hex}{ext}"
+
+    temp_path = os.path.join(temp_dir, unique_name)
+    if hasattr(file, "seek"):
+        try:
+            file.seek(0)
+        except Exception:
+            pass
+    data = file.read()
+    if isinstance(data, str):
+        data = data.encode('utf-8')
     with open(temp_path, 'wb') as f:
-        f.write(file.read())
+        f.write(data)
+    if hasattr(file, "seek"):
+        try:
+            file.seek(0)
+        except Exception:
+            pass
     temp_files.append(temp_path)
     return temp_path
 

@@ -9,7 +9,7 @@ import pickle
 from typing import Any, Optional, Dict
 from pathlib import Path
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from ..base.queue_backend import QueueBackend
@@ -100,7 +100,7 @@ class PayloadService:
             
             # Generate reference ID
             payload_ref = hashlib.sha256(
-                f"{task_id}_{datetime.utcnow().isoformat()}".encode()
+                f"{task_id}_{datetime.now(timezone.utc).isoformat()}".encode()
             ).hexdigest()[:16]
             
             # Store to file
@@ -113,7 +113,7 @@ class PayloadService:
                 'format': format_type,
                 'compressed': compressed,
                 'size': len(data),
-                'created_at': datetime.utcnow().isoformat()
+                'created_at': datetime.now(timezone.utc).isoformat()
             }
             
             with open(file_path, 'wb') as f:
@@ -203,7 +203,7 @@ class PayloadService:
         if retention_days is None:
             retention_days = self.config.payload_retention_days
         
-        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
         deleted = 0
         
         try:

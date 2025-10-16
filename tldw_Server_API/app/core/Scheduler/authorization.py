@@ -157,6 +157,10 @@ class TaskAuthorizer:
             if not context.is_admin:
                 return False, f"Handler '{handler}' requires admin privileges"
         
+        # Admins bypass further permission checks
+        if context.is_admin:
+            return True, None
+        
         # Check handler-specific permissions
         required_perms = self._handler_permissions.get(handler, set())
         if required_perms:

@@ -1,6 +1,8 @@
 # ChaChaNotes_DB.py
 # Description: DB Library for Character Cards, Chats, and Notes.
 #
+from __future__ import annotations
+
 """
 ChaChaNotes_DB.py
 -----------------
@@ -37,16 +39,38 @@ changes in the `sync_log` and in individual records.
 import sqlite3
 import json
 import uuid
+import re
+from contextlib import contextmanager
+from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import threading
-import logging
-from typing import List, Dict, Optional, Any, Union, Set
+from loguru import logger
+from typing import List, Dict, Optional, Any, Union, Set, Tuple
 #
 # Third-Party Libraries
 from loguru import logger
 #
 # Local Imports
+#
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseBackend,
+    DatabaseConfig,
+    DatabaseError as BackendDatabaseError,
+    QueryResult,
+)
+from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
+    normalise_params,
+    prepare_backend_many_statement,
+    prepare_backend_statement,
+    replace_insert_or_ignore,
+    transform_sqlite_query_for_postgres,
+)
+from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.config import load_comprehensive_config
 #
 ########################################################################################################################
 #
@@ -96,6 +120,172 @@ class ConflictError(CharactersRAGDBError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+class BackendCursorAdapter:
+    """Adapter exposing QueryResult via a cursor-like interface."""
+
+    def __init__(self, result: QueryResult):
+        self._result = result
+        self._index = 0
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+
+    def fetchall(self):
+        return list(self._result.rows)
+
+    def fetchone(self):
+        if self._index >= len(self._result.rows):
+            return None
+        row = self._result.rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchmany(self, size: Optional[int] = None):
+        if size is None or size <= 0:
+            size = len(self._result.rows) - self._index
+        end = min(self._index + size, len(self._result.rows))
+        rows = self._result.rows[self._index:end]
+        self._index = end
+        return list(rows)
+
+    def __iter__(self):
+        return iter(self._result.rows)
+
+    def close(self):
+        self._result = QueryResult(rows=[], rowcount=0)
+        self.rowcount = 0
+        self.lastrowid = None
+        self.description = None
+
+
+class BackendCursorWrapper:
+    """Cursor wrapper that routes operations through the configured backend."""
+
+    def __init__(self, db: 'CharactersRAGDB', connection):
+        self._db = db
+        self._connection = connection
+        self._result: Optional[QueryResult] = None
+        self._adapter: Optional[BackendCursorAdapter] = None
+        self.rowcount: int = -1
+        self.lastrowid: Optional[int] = None
+        self.description = None
+
+    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+        prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
+        self._result = self._db.backend.execute(
+            prepared_query,
+            prepared_params,
+            connection=self._connection,
+        )
+        self._adapter = BackendCursorAdapter(self._result)
+        self.rowcount = self._result.rowcount
+        self.lastrowid = self._result.lastrowid
+        self.description = self._result.description
+        return self
+
+    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict]]):
+        prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
+        self._result = self._db.backend.execute_many(
+            prepared_query,
+            prepared_params_list,
+            connection=self._connection,
+        )
+        self._adapter = BackendCursorAdapter(self._result)
+        self.rowcount = self._result.rowcount
+        self.lastrowid = self._result.lastrowid
+        self.description = self._result.description
+        return self
+
+    def fetchone(self) -> Optional[Dict[str, Any]]:
+        if not self._adapter:
+            return None
+        row = self._adapter.fetchone()
+        return dict(row) if row else None
+
+    def fetchall(self) -> List[Dict[str, Any]]:
+        if not self._adapter:
+            return []
+        return [dict(row) for row in self._adapter.fetchall()]
+
+    def fetchmany(self, size: Optional[int] = None) -> List[Dict[str, Any]]:
+        if not self._adapter:
+            return []
+        rows = self._adapter.fetchmany(size)
+        return [dict(row) for row in rows]
+
+    def close(self):
+        if self._adapter:
+            self._adapter.close()
+        self._result = None
+        self._adapter = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self.description = None
+
+
+class BackendConnectionWrapper:
+    """Connection wrapper that returns backend-aware cursors."""
+
+    def __init__(self, db: 'CharactersRAGDB', connection):
+        self._db = db
+        self._connection = connection
+
+    def cursor(self):
+        if self._db.backend_type == BackendType.SQLITE:
+            return self._connection.cursor()
+        return BackendCursorWrapper(self._db, self._connection)
+
+    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+        cursor = self.cursor()
+        return cursor.execute(query, params)
+
+    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict]]):
+        cursor = self.cursor()
+        return cursor.executemany(query, params_list)
+
+    def executescript(self, script: str):
+        statements = [stmt.strip() for stmt in script.split(';') if stmt.strip()]
+        cursor = self.cursor()
+        for stmt in statements:
+            cursor.execute(stmt)
+        return cursor
+
+    def commit(self):
+        return self._connection.commit()
+
+    def rollback(self):
+        return self._connection.rollback()
+
+    @property
+    def in_transaction(self) -> bool:
+        if self._db.backend_type == BackendType.SQLITE:
+            return self._connection.in_transaction
+        return True
+
+    def __getattr__(self, item):
+        return getattr(self._connection, item)
+
+
+class BackendManagedTransaction:
+    """Context manager leveraging the backend's native transaction handling."""
+
+    def __init__(self, db: 'CharactersRAGDB'):
+        self._db = db
+        self._ctx = None
+        self._conn = None
+
+    def __enter__(self):
+        self._ctx = self._db.backend.transaction()
+        raw_conn = self._ctx.__enter__()
+        self._conn = BackendConnectionWrapper(self._db, raw_conn)
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._ctx is None:
+            return False
+        return self._ctx.__exit__(exc_type, exc_val, exc_tb)
+
+
 # --- Database Class ---
 class CharactersRAGDB:
     """
@@ -122,8 +312,56 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 7 # Schema v7 adds flashcard reverse flag
+    _CURRENT_SCHEMA_VERSION = 8  # Schema v8 adds multi-image support for messages
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
+
+    _FTS_CONFIG: List[Tuple[str, str, List[str]]] = [
+        (
+            "character_cards_fts",
+            "character_cards",
+            ["name", "description", "personality", "scenario", "system_prompt"],
+        ),
+        (
+            "conversations_fts",
+            "conversations",
+            ["title"],
+        ),
+        (
+            "messages_fts",
+            "messages",
+            ["content"],
+        ),
+        (
+            "keywords_fts",
+            "keywords",
+            ["keyword"],
+        ),
+        (
+            "keyword_collections_fts",
+            "keyword_collections",
+            ["name"],
+        ),
+        (
+            "notes_fts",
+            "notes",
+            ["title", "content"],
+        ),
+        (
+            "flashcards_fts",
+            "flashcards",
+            ["front", "back", "notes"],
+        ),
+    ]
+
+    _POSTGRES_SEQUENCE_TABLES: Tuple[Tuple[str, str], ...] = (
+        ("character_cards", "id"),
+        ("keywords", "id"),
+        ("keyword_collections", "id"),
+        ("sync_log", "change_id"),
+        ("decks", "id"),
+        ("flashcards", "id"),
+        ("flashcard_reviews", "id"),
+    )
 
     _FULL_SCHEMA_SQL_V4 = """
 /*───────────────────────────────────────────────────────────────
@@ -330,6 +568,20 @@ AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts,rowid,content)
   VALUES('delete',old.rowid,old.content);
 END;
+
+/*----------------------------------------------------------------
+  3b. Message images (multi-image support)
+----------------------------------------------------------------*/
+CREATE TABLE IF NOT EXISTS message_images(
+  message_id      TEXT    NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  position        INTEGER NOT NULL,
+  image_data      BLOB    NOT NULL,
+  image_mime_type TEXT    NOT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(message_id, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_images_message ON message_images(message_id);
 
 /*----------------------------------------------------------------
   4. Keywords
@@ -1145,7 +1397,43 @@ UPDATE db_schema_version
    AND version < 7;
 """
 
-    def __init__(self, db_path: Union[str, Path], client_id: str):
+    # --- Migration: V7 -> V8 (Message images table) ---
+    _MIGRATION_SQL_V7_TO_V8 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 8 – Message images table (2025-10-14)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS message_images(
+  message_id      TEXT    NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  position        INTEGER NOT NULL,
+  image_data      BLOB    NOT NULL,
+  image_mime_type TEXT    NOT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(message_id, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_images_message ON message_images(message_id);
+
+INSERT OR IGNORE INTO message_images (message_id, position, image_data, image_mime_type, created_at)
+SELECT id, 0, image_data, image_mime_type, CURRENT_TIMESTAMP
+FROM messages
+WHERE image_data IS NOT NULL;
+
+UPDATE db_schema_version
+   SET version = 8
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 8;
+"""
+
+    def __init__(
+        self,
+        db_path: Union[str, Path],
+        client_id: str,
+        *,
+        backend: DatabaseBackend | None = None,
+        config: ConfigParser | None = None,
+    ):
         """
         Initializes the CharactersRAGDB instance.
 
@@ -1166,24 +1454,38 @@ UPDATE db_schema_version
             SchemaError: If schema migration or versioning issues occur.
         """
         if isinstance(db_path, Path):
-            self.is_memory_db = False
-            self.db_path = db_path.resolve()
+            resolved_path = db_path.resolve()
+            is_memory = False
         else:
-            self.is_memory_db = (db_path == ':memory:')
-            self.db_path = Path(db_path).resolve() if not self.is_memory_db else Path(":memory:")
-        self.db_path_str = str(self.db_path) if not self.is_memory_db else ':memory:'
+            is_memory = db_path == ':memory:'
+            resolved_path = Path(db_path).resolve() if not is_memory else Path(":memory:")
+
+        self.is_memory_db = is_memory
+        self.db_path = resolved_path
+        self.db_path_str = ':memory:' if self.is_memory_db else str(self.db_path)
 
         if not client_id:
             raise ValueError("Client ID cannot be empty or None.")
         self.client_id = client_id
 
-        if not self.is_memory_db:
+        self.backend = self._resolve_backend(backend=backend, config=config)
+        self.backend_type = self.backend.backend_type
+
+        if self.backend_type != BackendType.SQLITE:
+            self.is_memory_db = False
+
+        if self.backend_type == BackendType.SQLITE and not self.is_memory_db:
             try:
                 self.db_path.parent.mkdir(parents=True, exist_ok=True)
             except OSError as e:
-                raise CharactersRAGDBError(f"Failed to create database directory {self.db_path.parent}: {e}")
+                raise CharactersRAGDBError(
+                    f"Failed to create database directory {self.db_path.parent}: {e}"
+                ) from e
 
-        logger.info(f"Initializing CharactersRAGDB for path: {self.db_path_str} [Client ID: {self.client_id}]")
+        logger.info(
+            f"Initializing CharactersRAGDB for path: {self.db_path_str} "
+            f"[Client ID: {self.client_id}] (backend={self.backend_type.value})"
+        )
         self._local = threading.local()
         try:
             self._initialize_schema()
@@ -1198,67 +1500,199 @@ UPDATE db_schema_version
             self.close_connection()
             raise CharactersRAGDBError(f"Unexpected database initialization error: {e}") from e
 
-    # --- Connection Management ---
-    def _get_thread_connection(self) -> sqlite3.Connection:
-        """
-        Retrieves or creates a thread-local SQLite connection.
+    # --- Backend Resolution Helpers ---
+    def _resolve_backend(
+        self,
+        *,
+        backend: DatabaseBackend | None,
+        config: ConfigParser | None,
+    ) -> DatabaseBackend:
+        """Select the database backend instance for this content store."""
+        if backend is not None:
+            return backend
 
-        Ensures that each thread has its own independent connection to the database.
-        If an existing connection is closed or unusable, it's reopened.
-        Enables WAL mode for file-based databases and sets PRAGMA foreign_keys=ON.
-        Sets a timeout for database operations.
+        parser: ConfigParser | None = config
+        if parser is None:
+            try:
+                parser = load_comprehensive_config()
+            except Exception:
+                parser = None
+
+        if parser is not None:
+            candidate = get_content_backend(parser)
+            if candidate and candidate.backend_type == BackendType.POSTGRESQL:
+                return candidate
+
+        fallback_config = DatabaseConfig(
+            backend_type=BackendType.SQLITE,
+            sqlite_path=self.db_path_str,
+        )
+        return DatabaseBackendFactory.create_backend(fallback_config)
+
+
+    def _prepare_backend_statement(
+        self,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        return prepare_backend_statement(
+            self.backend_type,
+            query,
+            params,
+            transformer=self._transform_query_for_backend
+            if self.backend_type == BackendType.POSTGRESQL
+            else None,
+            ensure_returning=False,
+        )
+
+    def _prepare_backend_many_statement(
+        self,
+        query: str,
+        params_list: List[Union[Tuple, List, Dict]],
+    ) -> Tuple[str, List[Union[Tuple, Dict]]]:
+        converted_query, prepared_params = prepare_backend_many_statement(
+            self.backend_type,
+            query,
+            params_list,
+            transformer=self._transform_query_for_backend
+            if self.backend_type == BackendType.POSTGRESQL
+            else None,
+            ensure_returning=False,
+        )
+        return converted_query, prepared_params
+
+    def _normalise_params(
+        self,
+        params: Optional[Union[List, Tuple, Dict, Any]],
+    ) -> Optional[Union[Tuple, Dict]]:
+        return normalise_params(params)
+
+    def _transform_query_for_backend(self, query: str) -> str:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query
+        return transform_sqlite_query_for_postgres(query)
+
+
+    def _open_new_connection(self):
+        try:
+            pool = self.backend.get_pool()
+            conn = pool.get_connection()
+            # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.user_id'))
+            try:
+                if self.backend_type == BackendType.POSTGRESQL and self.client_id:
+                    cur = conn.cursor()
+                    # Use SESSION scope so it persists for pooled connection lifecycle
+                    cur.execute("SET SESSION app.user_id = %s", (str(self.client_id),))
+                    try:
+                        conn.commit()
+                    except Exception:
+                        pass
+            except Exception:
+                # Best-effort; if setting fails, continue without crashing
+                pass
+            return conn
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc
+
+    def _release_connection(self, connection) -> None:
+        try:
+            if self.backend_type == BackendType.SQLITE:
+                thread_id = threading.get_ident()
+                try:
+                    pool = self.backend.get_pool()
+                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                        pool._local.connection = None  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
+            else:
+                self.backend.get_pool().return_connection(connection)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Error while releasing connection: %s", exc)
+
+    def _ensure_sqlite_backend(self) -> None:
+        if self.backend_type != BackendType.SQLITE:
+            return
+
+    # --- Connection Management ---
+    def _get_thread_connection(self) -> Any:
+        """
+        Retrieve (or open) the thread-local connection for the configured backend.
+
+        For SQLite we maintain a single `sqlite3.Connection` per thread and ensure it
+        stays usable (re-opening on failure). For PostgreSQL we borrow a pooled
+        connection and cache it per thread until explicitly released.
 
         Returns:
-            A thread-local sqlite3.Connection object.
+            Backend-specific connection handle suitable for use with
+            :class:`BackendConnectionWrapper`.
 
         Raises:
-            CharactersRAGDBError: If connecting to the database fails.
+            CharactersRAGDBError: If acquiring a connection from the backend fails.
         """
         conn = getattr(self._local, 'conn', None)
-        if conn:
-            try:
-                conn.execute("SELECT 1")  # Check if connection is still alive
-            except (sqlite3.ProgrammingError, sqlite3.OperationalError):
-                logger.warning(
-                    f"Thread-local connection for {self.db_path_str} was closed or became unusable. Reopening.")
+
+        if self.backend_type == BackendType.SQLITE:
+            pool = self.backend.get_pool()
+            if conn is not None:
                 try:
-                    conn.close()
-                except Exception as e:
-                    logger.warning(f"Failed to close database connection: {e}")
-                conn = None
+                    conn.execute("SELECT 1")
+                    return conn
+                except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+                    logger.warning(
+                        "Thread-local connection for %s was closed or became unusable. Reopening.",
+                        self.db_path_str,
+                    )
+                    try:
+                        conn.close()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Failed to close database connection: %s", exc)
+                    thread_id = threading.get_ident()
+                    try:
+                        pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                        if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                            pool._local.connection = None  # type: ignore[attr-defined]
+                    except AttributeError:
+                        pass
+                    conn = None
+                    self._local.conn = None
 
-        if not conn:
-            try:
-                conn = sqlite3.connect(
-                    self.db_path_str,
-                    detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-                    check_same_thread=False, # Required for threading.local approach
-                    timeout=15 # Maybe slightly increase timeout?
-                )
-                conn.row_factory = sqlite3.Row
-                if not self.is_memory_db:
-                    conn.execute("PRAGMA journal_mode=WAL;")
-
-                conn.execute("PRAGMA foreign_keys = ON;")
+            if conn is None:
+                conn = self._open_new_connection()
                 self._local.conn = conn
                 logger.debug(
-                    f"Opened/Reopened SQLite connection to {self.db_path_str} (Journal: {conn.execute('PRAGMA journal_mode;').fetchone()[0]}) for thread {threading.get_ident()}")
-            except sqlite3.Error as e:
-                logger.error(f"Failed to connect to database {self.db_path_str}: {e}", exc_info=True)
-                self._local.conn = None
-                raise CharactersRAGDBError(f"Failed to connect to database '{self.db_path_str}': {e}") from e
-        return self._local.conn
+                    "Opened/Reopened SQLite connection to %s for thread %s",
+                    self.db_path_str,
+                    threading.get_ident(),
+                )
+            return conn
 
-    def get_connection(self) -> sqlite3.Connection:
-        """
-        Public method to get the current thread's database connection.
+        # Non-SQLite backend: reuse connection if still open, otherwise borrow anew.
+        if conn is not None and getattr(conn, "closed", False):
+            self._release_connection(conn)
+            conn = None
+            self._local.conn = None
 
-        This is a convenience wrapper around `_get_thread_connection`.
+        if conn is None:
+            conn = self._open_new_connection()
+            self._local.conn = conn
+            logger.debug(
+                "Acquired backend connection (%s) for thread %s",
+                self.backend_type.value,
+                threading.get_ident(),
+            )
+        return conn
 
-        Returns:
-            The active sqlite3.Connection for the current thread.
-        """
-        return self._get_thread_connection()
+    def get_connection(self) -> Any:
+        """Return the active connection wrapper for the current thread."""
+        raw_conn = self._get_thread_connection()
+        if self.backend_type == BackendType.SQLITE:
+            return raw_conn
+        return BackendConnectionWrapper(self, raw_conn)
 
     def close_connection(self):
         """
@@ -1271,43 +1705,72 @@ UPDATE db_schema_version
         Clears the connection reference from `threading.local` for the current thread.
         """
         conn = getattr(self._local, 'conn', None)
-        if conn is not None:
-            try:
+        if conn is None:
+            return
+
+        try:
+            if self.backend_type == BackendType.SQLITE:
                 if not self.is_memory_db:
-                    # Resolve any pending transaction before checkpointing
                     if conn.in_transaction:
                         try:
                             logger.warning(
-                                f"Connection to {self.db_path_str} is in an uncommitted transaction during close. Attempting rollback.")
-                            conn.rollback()  # Attempt rollback if transaction is open
+                                "Connection to %s is in an uncommitted transaction during close. Attempting rollback.",
+                                self.db_path_str,
+                            )
+                            conn.rollback()
                         except sqlite3.Error as rb_err:
-                            logger.error(f"Rollback attempt during close for {self.db_path_str} failed: {rb_err}")
-                            # Don't proceed to checkpoint if rollback fails and we're still in transaction potentially
-                            # However, conn.close() below should still be attempted.
+                            logger.error(
+                                "Rollback attempt during close for %s failed: %s",
+                                self.db_path_str,
+                                rb_err,
+                            )
 
-                    # Checkpoint WAL only if not in a failed transaction state that prevents it
-                    # and WAL mode is active.
-                    # We assume if conn.in_transaction is false now, any transaction was committed/rolled back.
-                    if not conn.in_transaction:  # Re-check after potential rollback
+                    if not conn.in_transaction:
                         mode_row = conn.execute("PRAGMA journal_mode;").fetchone()
                         if mode_row and mode_row[0].lower() == 'wal':
                             try:
                                 logger.debug(
-                                    f"Attempting WAL checkpoint (TRUNCATE) before closing {self.db_path_str} on thread {threading.get_ident()}.")
+                                    "Attempting WAL checkpoint (TRUNCATE) before closing %s on thread %s.",
+                                    self.db_path_str,
+                                    threading.get_ident(),
+                                )
                                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                                logger.debug(f"WAL checkpoint TRUNCATE executed for {self.db_path_str}.")
+                                logger.debug("WAL checkpoint TRUNCATE executed for %s.", self.db_path_str)
                             except sqlite3.Error as cp_err:
-                                logger.warning(f"WAL checkpoint failed for {self.db_path_str}: {cp_err}")
+                                logger.warning("WAL checkpoint failed for %s: %s", self.db_path_str, cp_err)
+
                 conn.close()
-                logger.debug(f"Closed connection for thread {threading.get_ident()} to {self.db_path_str}.")
-            except sqlite3.Error as e:  # Catches errors from execute, checkpoint, or close
-                logger.warning(
-                    f"Error during SQLite connection close/checkpoint for {self.db_path_str} on thread {threading.get_ident()}: {e}")
-            finally:
-                # This ensures that the reference is cleared from threading.local
-                # even if conn.close() itself raised an exception.
-                if hasattr(self._local, 'conn'):
-                    self._local.conn = None
+                logger.debug(
+                    "Closed SQLite connection for thread %s to %s.",
+                    threading.get_ident(),
+                    self.db_path_str,
+                )
+            else:
+                self.backend.get_pool().return_connection(conn)
+                logger.debug(
+                    "Returned backend connection (%s) for thread %s.",
+                    self.backend_type.value,
+                    threading.get_ident(),
+                )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Error during SQLite connection close/checkpoint for %s on thread %s: %s",
+                self.db_path_str,
+                threading.get_ident(),
+                exc,
+            )
+        finally:
+            if hasattr(self._local, 'conn'):
+                self._local.conn = None
+            if self.backend_type == BackendType.SQLITE:
+                thread_id = threading.get_ident()
+                try:
+                    pool = self.backend.get_pool()
+                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                        pool._local.connection = None  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
 
     def backup_database(self, backup_file_path: str) -> bool:
         """
@@ -1365,8 +1828,14 @@ UPDATE db_schema_version
             # and should not be closed here to allow continued use of the DB instance.
 
     # --- Query Execution ---
-    def execute_query(self, query: str, params: Optional[Union[tuple, Dict[str, Any]]] = None, *, commit: bool = False,
-                      script: bool = False) -> sqlite3.Cursor:
+    def execute_query(
+        self,
+        query: str,
+        params: Optional[Union[tuple, Dict[str, Any]]] = None,
+        *,
+        commit: bool = False,
+        script: bool = False,
+    ) -> Any:
         """
         Executes a single SQL query or an entire SQL script.
 
@@ -1389,16 +1858,22 @@ UPDATE db_schema_version
         """
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            #if logger.isEnabledFor(logging.DEBUG):  # Avoid formatting query/params if not debugging
-            logger.debug(f"Executing SQL (script={script}): {query[:300]}... Params: {str(params)[:200]}...")
+            logger.debug(
+                "Executing SQL (script=%s, backend=%s): %s... Params: %s...",
+                script,
+                self.backend_type.value,
+                query[:300],
+                str(params)[:200],
+            )
 
             if script:
-                cursor.executescript(query)
+                cursor = conn.executescript(query)
             else:
-                cursor.execute(query, params or ())
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                cursor = conn.cursor()
+                cursor.execute(prepared_query, prepared_params or ())
 
-            if commit and not conn.in_transaction:  # Only commit if not already in a transaction handled by the context manager
+            if self.backend_type == BackendType.SQLITE and commit and not conn.in_transaction:
                 conn.commit()
                 logger.debug("Committed directly by execute_query.")
             return cursor
@@ -1412,8 +1887,25 @@ UPDATE db_schema_version
         except sqlite3.Error as e:
             logger.error(f"Query execution failed: {query[:300]}... Error: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Query execution failed: {e}") from e
+        except BackendDatabaseError as exc:
+            msg = str(exc).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(message=f"Database constraint violation: {exc}") from exc
+            logger.error(
+                "Backend query execution failed (%s): %s",
+                self.backend_type.value,
+                exc,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Query execution failed: {exc}") from exc
 
-    def execute_many(self, query: str, params_list: List[tuple], *, commit: bool = False) -> Optional[sqlite3.Cursor]:
+    def execute_many(
+        self,
+        query: str,
+        params_list: List[tuple],
+        *,
+        commit: bool = False,
+    ) -> Optional[Any]:
         """
         Executes a parameterized SQL query multiple times with a list of parameter sets.
 
@@ -1436,10 +1928,16 @@ UPDATE db_schema_version
             logger.debug("execute_many called with empty or invalid params_list.")
             return None
         try:
+            logger.debug(
+                "Executing Many on backend %s: %s... with %d sets.",
+                self.backend_type.value,
+                query[:150],
+                len(params_list),
+            )
+            prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
             cursor = conn.cursor()
-            logger.debug(f"Executing Many: {query[:150]}... with {len(params_list)} sets.")
-            cursor.executemany(query, params_list)
-            if commit and not conn.in_transaction:  # Only commit if not already in a transaction
+            cursor.executemany(prepared_query, prepared_params_list)
+            if self.backend_type == BackendType.SQLITE and commit and not conn.in_transaction:
                 conn.commit()
                 logger.debug("Committed Many directly by execute_many.")
             return cursor
@@ -1451,22 +1949,24 @@ UPDATE db_schema_version
         except sqlite3.Error as e:
             logger.error(f"Execute Many failed: {query[:150]}... Error: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Execute Many failed: {e}") from e
+        except BackendDatabaseError as exc:
+            msg = str(exc).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(message=f"Database constraint violation during batch: {exc}") from exc
+            logger.error(
+                "Backend execute_many failed (%s): %s",
+                self.backend_type.value,
+                exc,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Execute Many failed: {exc}") from exc
 
     # --- Transaction Context ---
-    def transaction(self) -> 'TransactionContextManager':
-        """
-        Returns a context manager for database transactions.
-
-        Usage:
-            with db.transaction() as conn:
-                # Database operations using conn.execute(...)
-                # Commit is handled automatically on successful exit,
-                # rollback on exception.
-
-        Returns:
-            TransactionContextManager: An object to be used in a `with` statement.
-        """
-        return TransactionContextManager(self)
+    def transaction(self) -> Union['TransactionContextManager', BackendManagedTransaction]:
+        """Return a context manager for database transactions."""
+        if self.backend_type == BackendType.SQLITE:
+            return TransactionContextManager(self)
+        return BackendManagedTransaction(self)
 
     # --- Schema Initialization and Migration ---
     def _get_db_version(self, conn: sqlite3.Connection) -> int:
@@ -1482,7 +1982,7 @@ UPDATE db_schema_version
             for `self._SCHEMA_NAME` does not exist (indicating a fresh database).
 
         Raises:
-            SchemaError: If there's an unexpected SQL error while querying the version,
+            SchemaError: If there is an unexpected SQL error while querying the version,
                          other than "no such table".
         """
         try:
@@ -1495,6 +1995,19 @@ UPDATE db_schema_version
                 return 0
             logger.error(f"Could not determine database schema version for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise SchemaError(f"Could not determine schema version for '{self._SCHEMA_NAME}': {e}") from e
+        except BackendDatabaseError as e:
+            if "does not exist" in str(e).lower():
+                return 0
+            logger.error(
+                "Could not determine database schema version for '%s' (backend %s): %s",
+                self._SCHEMA_NAME,
+                self.backend_type.value,
+                e,
+                exc_info=True,
+            )
+            raise SchemaError(
+                f"Could not determine schema version for '{self._SCHEMA_NAME}': {e}"
+            ) from e
 
     def _apply_schema_v4(self, conn: sqlite3.Connection):
         """
@@ -1523,7 +2036,39 @@ UPDATE db_schema_version
                 raise SchemaError(
                     f"[{self._SCHEMA_NAME} V4] Schema version update check failed. Expected 4, got: {final_version}")
             logger.info(f"[{self._SCHEMA_NAME} V4] Schema 4 applied and version confirmed for DB: {self.db_path_str}.")
-        except sqlite3.Error as e:
+        except sqlite3.OperationalError as e:
+            # Compatibility repair path: if an older pre-versioned DB already has a
+            # sync_log table without the 'entity_id' column, CREATE INDEX on
+            # (entity, entity_id) will fail. Attempt to add the column, then rerun.
+            if "no such column: entity_id" in str(e).lower():
+                try:
+                    # Detect existing sync_log definition
+                    try:
+                        rows = conn.execute("PRAGMA table_info(sync_log)").fetchall()
+                    except sqlite3.Error:
+                        rows = []
+                    col_names = {r[1] if not isinstance(r, dict) else r.get('name') for r in rows} if rows else set()
+                    if rows and ('entity_id' not in col_names):
+                        logger.warning(
+                            f"[{self._SCHEMA_NAME} V4] Detected legacy sync_log without 'entity_id'. Adding column for compatibility.")
+                        # Add column without NOT NULL to avoid rewrite; acceptable for legacy fix
+                        conn.execute("ALTER TABLE sync_log ADD COLUMN entity_id TEXT")
+                    # Re-run the full schema to finish indexes/triggers idempotently
+                    conn.executescript(self._FULL_SCHEMA_SQL_V4)
+                    final_version = self._get_db_version(conn)
+                    if final_version != 4:
+                        raise SchemaError(
+                            f"[{self._SCHEMA_NAME} V4] Post-repair version check failed. Expected 4, got: {final_version}")
+                    logger.info(f"[{self._SCHEMA_NAME} V4] Schema 4 applied after legacy sync_log repair for DB: {self.db_path_str}.")
+                    return
+                except Exception as repair_err:  # noqa: BLE001
+                    logger.error(
+                        f"[{self._SCHEMA_NAME} V4] Repair attempt after 'entity_id' error failed: {repair_err}",
+                        exc_info=True,
+                    )
+                    raise SchemaError(
+                        f"DB schema V4 setup failed for '{self._SCHEMA_NAME}': {e}") from e
+            # Any other sqlite operational error: re-raise as SchemaError
             logger.error(f"[{self._SCHEMA_NAME} V4] Schema application failed: {e}", exc_info=True)
             raise SchemaError(f"DB schema V4 setup failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
@@ -1594,7 +2139,36 @@ UPDATE db_schema_version
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V6->V7: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V7 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v7_to_v8(self, conn: sqlite3.Connection):
+        """Migrates schema from V7 to V8 (introduces message_images table)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V7 to V8 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V7_TO_V8)
+            final_version = self._get_db_version(conn)
+            if final_version != 8:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V7->V8 failed version check. Expected 8, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V8 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V7->V8 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V7->V8 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V7->V8: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V8 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
+        if self.backend_type == BackendType.SQLITE:
+            self._initialize_schema_sqlite()
+        elif self.backend_type == BackendType.POSTGRESQL:
+            self._initialize_schema_postgres()
+        else:
+            raise NotImplementedError(
+                f"Schema initialization not implemented for backend {self.backend_type}"
+            )
+
+    def _initialize_schema_sqlite(self):
         """
         Initializes or migrates the database schema to `_CURRENT_SCHEMA_VERSION`.
 
@@ -1643,6 +2217,9 @@ UPDATE db_schema_version
                     if target_version >= 7 and current_db_version == 6:
                         self._migrate_from_v6_to_v7(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 8 and current_db_version == 7:
+                        self._migrate_from_v7_to_v8(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Example for future migrations:
                 # elif current_db_version == 1:
                 #     self._migrate_from_v1_to_v2(conn)
@@ -1658,14 +2235,29 @@ UPDATE db_schema_version
                         if target_version >= 6 and current_db_version == 5:
                             self._migrate_from_v5_to_v6(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 7 and current_db_version == 6:
+                            self._migrate_from_v6_to_v7(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 8 and current_db_version == 7:
+                            self._migrate_from_v7_to_v8(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 5 and target_version >= 6:
                         self._migrate_from_v5_to_v6(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 7 and current_db_version == 6:
                             self._migrate_from_v6_to_v7(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 8 and current_db_version == 7:
+                            self._migrate_from_v7_to_v8(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 6 and target_version >= 7:
                         self._migrate_from_v6_to_v7(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 8 and current_db_version == 7:
+                            self._migrate_from_v7_to_v8(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 7 and target_version >= 8:
+                        self._migrate_from_v7_to_v8(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -1688,6 +2280,586 @@ UPDATE db_schema_version
             logger.error(f"Unexpected error during schema initialization for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise CharactersRAGDBError(f"Unexpected error applying schema for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _initialize_schema_postgres(self):
+        """Bootstrap or migrate the ChaCha schema on PostgreSQL."""
+
+        backend = self.backend
+        target_version = self._CURRENT_SCHEMA_VERSION
+
+        with backend.transaction() as conn:
+            schema_exists = backend.table_exists('db_schema_version', connection=conn)
+
+            if not schema_exists:
+                self._apply_schema_v4_postgres(conn)
+                current_version = 4
+            else:
+                current_version = self._get_schema_version_postgres(conn)
+
+            if current_version < 5:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V4_TO_V5, conn, expected_version=5)
+                current_version = 5
+
+            if current_version < 6:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V5_TO_V6, conn, expected_version=6)
+                current_version = 6
+
+            if current_version < 7:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V6_TO_V7, conn, expected_version=7)
+                current_version = 7
+
+            if current_version < 8:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V7_TO_V8, conn, expected_version=8)
+                current_version = 8
+
+            if current_version > target_version:
+                raise SchemaError(
+                    f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
+                )
+
+            if current_version < target_version:
+                logger.warning(
+                    "ChaChaNotes PostgreSQL schema is at version %s but code expects %s. Pending migrations will "
+                    "be addressed in a future update.",
+                    current_version,
+                    target_version,
+                )
+
+            try:
+                # Namespace migration: if legacy 'keywords' exists, rename to 'chacha_keywords'
+                try:
+                    if self.backend.table_exists('keywords', connection=conn) and not self.backend.table_exists('chacha_keywords', connection=conn):
+                        self.backend.execute("ALTER TABLE keywords RENAME TO chacha_keywords", connection=conn)
+                except Exception:
+                    pass
+
+                self._ensure_postgres_fts(conn)
+            except BackendDatabaseError as exc:
+                raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
+
+    def _ensure_postgres_fts(self, conn) -> None:
+        """Ensure PostgreSQL full-text search structures exist for ChaCha entities."""
+
+        backend = self.backend
+        for fts_table, source_table, columns in self._FTS_CONFIG:
+            actual_source = self._map_table_for_backend(source_table)
+            backend.create_fts_table(
+                table_name=fts_table,
+                source_table=actual_source,
+                columns=columns,
+                connection=conn,
+            )
+
+    def rebuild_full_text_indexes(self) -> None:
+        """Rebuild FTS indexes for the active backend."""
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            try:
+                for fts_table, source_table, columns in self._FTS_CONFIG:
+                    actual_source = self._map_table_for_backend(source_table)
+                    self.backend.create_fts_table(
+                        table_name=fts_table,
+                        source_table=actual_source,
+                        columns=columns,
+                        connection=None,
+                    )
+            except BackendDatabaseError as exc:
+                raise CharactersRAGDBError(f"Failed to rebuild PostgreSQL FTS structures: {exc}") from exc
+            return
+
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                with self.transaction() as conn:
+                    for fts_table, _, _ in self._FTS_CONFIG:
+                        conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
+            except sqlite3.Error as exc:
+                raise CharactersRAGDBError(f"Failed to rebuild SQLite FTS structures: {exc}") from exc
+            return
+
+        raise NotImplementedError(f"FTS rebuild not supported for backend {self.backend_type.value}")
+
+    # ----------------------
+    # Message metadata (tool calls)
+    # ----------------------
+    def add_message_metadata(self, message_id: str, tool_calls: Optional[Any] = None, extra: Optional[Any] = None) -> bool:
+        """Upsert per-message metadata such as tool calls.
+
+        Stores JSON-serialized metadata in an auxiliary table `message_metadata`.
+        The table is created on-demand if missing.
+        """
+        try:
+            # Ensure table exists (SQLite)
+            if self.backend_type == BackendType.SQLITE:
+                self.execute_query(
+                    """
+                    CREATE TABLE IF NOT EXISTS message_metadata(
+                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                      tool_calls_json TEXT,
+                      extra_json TEXT,
+                      last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                    script=False,
+                    commit=True,
+                )
+                query = (
+                    "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
+                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(message_id) DO UPDATE SET tool_calls_json=excluded.tool_calls_json, "
+                    "extra_json=excluded.extra_json, last_modified=CURRENT_TIMESTAMP"
+                )
+                self.execute_query(query, (message_id, json.dumps(tool_calls) if tool_calls is not None else None,
+                                            json.dumps(extra) if extra is not None else None), commit=True)
+                return True
+            # PostgreSQL
+            else:
+                # Create table if not exists (versionless auxiliary)
+                self.backend.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS message_metadata(
+                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                      tool_calls_json TEXT,
+                      extra_json TEXT,
+                      last_modified TIMESTAMP NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                upsert = (
+                    "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
+                    "VALUES (%s, %s, %s, NOW()) "
+                    "ON CONFLICT (message_id) DO UPDATE SET tool_calls_json = EXCLUDED.tool_calls_json, "
+                    "extra_json = EXCLUDED.extra_json, last_modified = NOW()"
+                )
+                self.backend.execute(upsert, (message_id, json.dumps(tool_calls) if tool_calls is not None else None,
+                                              json.dumps(extra) if extra is not None else None))
+                return True
+        except Exception as e:
+            logger.warning(f"add_message_metadata failed for message {message_id}: {e}")
+            return False
+
+    def get_message_metadata(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch metadata for a message if present."""
+        try:
+            if self.backend_type == BackendType.SQLITE:
+                cursor = self.execute_query(
+                    "SELECT tool_calls_json, extra_json, last_modified FROM message_metadata WHERE message_id = ?",
+                    (message_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                tc, ex, lm = row
+            else:
+                result = self.backend.execute(
+                    "SELECT tool_calls_json, extra_json, last_modified FROM message_metadata WHERE message_id = %s",
+                    (message_id,)
+                )
+                r = result.fetchone()
+                if not r:
+                    return None
+                tc, ex, lm = r
+            return {
+                "tool_calls": json.loads(tc) if tc else None,
+                "extra": json.loads(ex) if ex else None,
+                "last_modified": lm,
+            }
+        except Exception:
+            return None
+
+    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> List[str]:
+        """Convert SQLite schema SQL into individual Postgres-compatible statements."""
+
+        statements: List[str] = []
+        buffer: List[str] = []
+        in_block_comment = False
+        skip_until_semicolon = False
+        skip_trigger_block = False
+
+        for raw_line in sql.splitlines():
+            stripped = raw_line.strip()
+
+            if not stripped:
+                continue
+
+            if in_block_comment:
+                if '*/' in stripped:
+                    in_block_comment = False
+                continue
+
+            if stripped.startswith('/*'):
+                if '*/' not in stripped:
+                    in_block_comment = True
+                continue
+
+            if stripped.startswith('--'):
+                continue
+
+            upper = stripped.upper()
+
+            if upper.startswith('PRAGMA'):
+                continue
+
+            if skip_until_semicolon:
+                if stripped.endswith(';'):
+                    skip_until_semicolon = False
+                continue
+
+            if skip_trigger_block:
+                if upper.endswith('END;'):
+                    skip_trigger_block = False
+                continue
+
+            if 'CREATE VIRTUAL TABLE' in upper:
+                if not stripped.endswith(';'):
+                    skip_until_semicolon = True
+                continue
+
+            if upper.startswith('DROP TRIGGER'):
+                if not stripped.endswith(';'):
+                    skip_until_semicolon = True
+                continue
+
+            if upper.startswith('CREATE TRIGGER'):
+                skip_trigger_block = True
+                continue
+
+            buffer.append(raw_line)
+
+            if stripped.endswith(';'):
+                statement = '\n'.join(buffer).strip()
+                buffer = []
+                transformed = self._transform_sqlite_schema_statement_for_postgres(statement)
+                if transformed:
+                    statements.append(transformed)
+
+        return statements
+
+    # ----------------------
+    # Message metadata helpers (structured extras + backfill)
+    # ----------------------
+    def set_message_metadata_extra(self, message_id: str, extra: Dict[str, Any], merge: bool = True) -> bool:
+        """Set or merge structured extra metadata for a message.
+
+        Expected shape for `extra`:
+          {
+            "tool_results": { "<tool_call_id>": <any-json-serializable> },
+            ... other namespaced keys ...,
+            "version": 1
+          }
+
+        If merge=True and existing extra exists, perform a shallow merge; nested maps like
+        tool_results are merged key-wise.
+        """
+        try:
+            current = self.get_message_metadata(message_id) or {}
+            current_extra = current.get('extra') or {}
+            if merge and isinstance(current_extra, dict) and isinstance(extra, dict):
+                merged = dict(current_extra)
+                # Merge tool_results specially
+                tr_existing = merged.get('tool_results') if isinstance(merged.get('tool_results'), dict) else {}
+                tr_incoming = extra.get('tool_results') if isinstance(extra.get('tool_results'), dict) else {}
+                if tr_existing or tr_incoming:
+                    merged['tool_results'] = {**tr_existing, **tr_incoming}
+                # Merge top-level keys (favor incoming)
+                for k, v in extra.items():
+                    if k == 'tool_results':
+                        continue
+                    merged[k] = v
+                new_extra = merged
+            else:
+                new_extra = extra
+            return self.add_message_metadata(message_id, tool_calls=current.get('tool_calls'), extra=new_extra)
+        except Exception as e:
+            logger.warning(f"set_message_metadata_extra failed for {message_id}: {e}")
+            return False
+
+    def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
+        """Scan assistant messages for an inline "[tool_calls]: <json>" suffix and backfill message_metadata.
+
+        - Extracts JSON array/object after the last occurrence of "[tool_calls]:" (case-sensitive).
+        - Persists it into `message_metadata.tool_calls_json`.
+        - If `strip_inline=True`, removes the suffix from message content using optimistic locking.
+
+        Returns counts: { scanned, matched, backfilled, stripped }
+        """
+        counts = {"scanned": 0, "matched": 0, "backfilled": 0, "stripped": 0}
+        pattern = re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", re.DOTALL)
+
+        def _extract(content: str) -> Optional[Dict[str, Any]]:
+            if not content:
+                return None
+            m = pattern.search(content)
+            if not m:
+                return None
+            json_str = m.group(1).strip()
+            try:
+                data = json.loads(json_str)
+                # Normalize: ensure list for tool_calls when object provided
+                if isinstance(data, dict) and 'tool_calls' in data:
+                    tool_calls = data.get('tool_calls')
+                else:
+                    tool_calls = data
+                if isinstance(tool_calls, (list, dict)):
+                    return {"tool_calls": tool_calls, "prefix_end": m.start(), "json_end": m.end()}
+                return None
+            except Exception:
+                return None
+
+        try:
+            rows: List[Dict[str, Any]] = []
+            if self.backend_type == BackendType.SQLITE:
+                query = "SELECT id, content, version FROM messages WHERE sender = ? AND deleted = 0"
+                params = ("assistant",)
+                if limit and isinstance(limit, int):
+                    query += " LIMIT ?"
+                    params = ("assistant", limit)
+                cur = self.execute_query(query, params)
+                rows = [dict(r) for r in cur.fetchall()]
+            else:
+                q = "SELECT id, content, version FROM messages WHERE sender = %s AND deleted = false"
+                params = ("assistant",)
+                if limit and isinstance(limit, int):
+                    q += " LIMIT %s"
+                    params = ("assistant", limit)
+                res = self.backend.execute(q, params)
+                fetched = res.fetchall()
+                # Convert to dicts (backend returns sequence rows)
+                for r in fetched:
+                    # Row maybe mapping or tuple; try subscripting by name first
+                    try:
+                        rows.append({"id": r[0], "content": r[1], "version": r[2]})
+                    except Exception:
+                        try:
+                            rows.append({"id": r['id'], "content": r['content'], "version": r['version']})
+                        except Exception:
+                            pass
+
+            for row in rows:
+                counts["scanned"] += 1
+                mid = row.get('id')
+                content = row.get('content') or ""
+                version = row.get('version') or 1
+                extracted = _extract(content)
+                if not extracted:
+                    continue
+                counts["matched"] += 1
+                tool_calls = extracted.get('tool_calls')
+                # Persist tool_calls array/object
+                try:
+                    if self.add_message_metadata(mid, tool_calls=tool_calls):
+                        counts["backfilled"] += 1
+                except Exception:
+                    pass
+                # Optionally strip inline suffix
+                if strip_inline:
+                    try:
+                        # Trim content up to prefix_end
+                        new_content = content[: int(extracted.get('prefix_end') or len(content))].rstrip()
+                        self.update_message(mid, {"content": new_content}, expected_version=version)
+                        counts["stripped"] += 1
+                    except Exception:
+                        # If version changed, skip silently
+                        pass
+        except Exception as e:
+            logger.warning(f"backfill_tool_calls_from_inline encountered an error: {e}")
+        return counts
+
+    def _transform_sqlite_schema_statement_for_postgres(self, statement: str) -> Optional[str]:
+        """Apply token-level rewrites so the statement can run on Postgres."""
+
+        stmt = statement.strip()
+        if not stmt:
+            return None
+
+        stmt = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'BIGSERIAL PRIMARY KEY', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'INTEGER\s+PRIMARY\s+KEY', 'BIGINT PRIMARY KEY', stmt, flags=re.IGNORECASE)
+
+        def _replace_integer_references(match: re.Match[str]) -> str:
+            suffix = match.group(1) or ''
+            return f"BIGINT{suffix} REFERENCES"
+
+        stmt = re.sub(
+            r'INTEGER(\s+NOT\s+NULL)?\s+REFERENCES',
+            _replace_integer_references,
+            stmt,
+            flags=re.IGNORECASE,
+        )
+
+        stmt = re.sub(r'BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+0', 'BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+1', 'BOOLEAN NOT NULL DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+0', 'BOOLEAN DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+1', 'BOOLEAN DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+
+        stmt = re.sub(r'DATETIME', 'TIMESTAMPTZ', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BLOB', 'BYTEA', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'COLLATE\s+NOCASE', '', stmt, flags=re.IGNORECASE)
+
+        stmt = re.sub(r'WHERE\s+([A-Za-z_]+)\s*=\s*0', r'WHERE \1 = FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'WHERE\s+([A-Za-z_]+)\s*=\s*1', r'WHERE \1 = TRUE', stmt, flags=re.IGNORECASE)
+
+        stmt = replace_insert_or_ignore(stmt)
+
+        # Special-case: seed insert for character_cards uses integer for boolean 'deleted'.
+        lower_stmt = stmt.lower()
+        if lower_stmt.startswith('insert') and 'into character_cards' in lower_stmt:
+            # Convert trailing deleted value 0/1 to boolean FALSE/TRUE for Postgres
+            stmt = re.sub(r",\s*0\)\s*;\s*$", ", FALSE);", stmt)
+            stmt = re.sub(r",\s*1\)\s*;\s*$", ", TRUE);", stmt)
+            stmt = re.sub(r",\s*0\)\s*ON\s+CONFLICT", ", FALSE) ON CONFLICT", stmt, flags=re.IGNORECASE)
+            stmt = re.sub(r",\s*1\)\s*ON\s+CONFLICT", ", TRUE) ON CONFLICT", stmt, flags=re.IGNORECASE)
+
+        # Break circular FK between conversations/messages by dropping conversations->messages FK at create time
+        if lower_stmt.startswith('create table') and 'create table if not exists conversations' in lower_stmt:
+            # Remove the forked_from_message_id FK clause
+            stmt = re.sub(
+                r"forked_from_message_id\s+TEXT\s+REFERENCES\s+messages\s*\(\s*id\s*\)\s*ON\s+DELETE\s+SET\s+NULL,?",
+                "forked_from_message_id TEXT,",
+                stmt,
+                flags=re.IGNORECASE,
+            )
+
+        # Namespace the 'keywords' table to avoid collision with Media DB keywords
+        # Only adjust creation/references; triggers and FTS blocks are skipped earlier
+        if 'create table if not exists keywords' in lower_stmt:
+            stmt = re.sub(
+                r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+keywords\s*\(",
+                "CREATE TABLE IF NOT EXISTS chacha_keywords(",
+                stmt,
+                flags=re.IGNORECASE,
+            )
+        # Adjust references to keywords in foreign keys/content declarations
+        stmt = re.sub(
+            r"REFERENCES\s+keywords\s*\(\s*id\s*\)",
+            "REFERENCES chacha_keywords(id)",
+            stmt,
+            flags=re.IGNORECASE,
+        )
+        stmt = re.sub(
+            r"content='keywords'",
+            "content='chacha_keywords'",
+            stmt,
+            flags=re.IGNORECASE,
+        )
+
+        if not stmt.endswith(';'):
+            stmt = f"{stmt};"
+        return stmt
+
+    def _apply_schema_v4_postgres(self, conn) -> None:
+        statements = self._convert_sqlite_schema_to_postgres_statements(self._FULL_SCHEMA_SQL_V4)
+
+        deferred_sync_idx_stmt: Optional[str] = None
+        for stmt in statements:
+            up = stmt.upper().strip()
+            if up.startswith("CREATE INDEX IF NOT EXISTS IDX_SYNC_LOG_ENTITY"):
+                deferred_sync_idx_stmt = stmt
+                continue
+            self.backend.execute(stmt, connection=conn)
+
+        # Create sync_log entity index depending on available columns
+        try:
+            cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
+        except Exception:
+            cols = set()
+
+        if 'entity_id' in cols:
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity,entity_id)",
+                connection=conn,
+            )
+        elif 'entity_uuid' in cols:
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity,entity_uuid)",
+                connection=conn,
+            )
+        elif deferred_sync_idx_stmt:
+            self.backend.execute(deferred_sync_idx_stmt, connection=conn)
+
+        self._set_schema_version_postgres(conn, 4)
+        self._sync_postgres_sequences(conn)
+
+    def _apply_postgres_migration_script(self, script: str, conn, *, expected_version: int) -> None:
+        statements = self._convert_sqlite_schema_to_postgres_statements(script)
+        for stmt in statements:
+            self.backend.execute(stmt, connection=conn)
+        self._set_schema_version_postgres(conn, expected_version)
+        self._sync_postgres_sequences(conn)
+
+    def _get_schema_version_postgres(self, conn) -> int:
+        result = self.backend.execute(
+            "SELECT version FROM db_schema_version WHERE schema_name = %s LIMIT 1",
+            (self._SCHEMA_NAME,),
+            connection=conn,
+        )
+        value = result.scalar if result else None
+        return int(value) if value is not None else 0
+
+    def _set_schema_version_postgres(self, conn, version: int) -> None:
+        self.backend.execute(
+            """
+            INSERT INTO db_schema_version(schema_name, version)
+            VALUES (%s, %s)
+            ON CONFLICT (schema_name) DO UPDATE SET version = EXCLUDED.version
+            """,
+            (self._SCHEMA_NAME, version),
+            connection=conn,
+        )
+
+    def _sync_postgres_sequences(self, conn) -> None:
+        """Ensure PostgreSQL sequences match current maxima for managed tables."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        for table_name, column_name in self._POSTGRES_SEQUENCE_TABLES:
+            try:
+                # Skip tables that may not exist yet at this schema version
+                try:
+                    if not backend.table_exists(table_name, connection=conn):
+                        continue
+                except Exception:
+                    continue
+                seq_result = backend.execute(
+                    "SELECT pg_get_serial_sequence(%s, %s) AS seq",
+                    (table_name, column_name),
+                    connection=conn,
+                )
+                sequence_name = seq_result.scalar if seq_result else None
+                if not sequence_name:
+                    continue
+
+                max_result = backend.execute(
+                    (
+                        f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "
+                        f"FROM {ident(table_name)}"
+                    ),
+                    connection=conn,
+                )
+
+                try:
+                    max_id = int(max_result.scalar or 0)
+                except (TypeError, ValueError):
+                    max_id = 0
+
+                if max_id <= 0:
+                    backend.execute(
+                        "SELECT setval(%s, %s, false)",
+                        (sequence_name, 1),
+                        connection=conn,
+                    )
+                else:
+                    backend.execute(
+                        "SELECT setval(%s, %s)",
+                        (sequence_name, max_id),
+                        connection=conn,
+                    )
+            except BackendDatabaseError as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to synchronize PostgreSQL sequence for %s.%s: %s",
+                    table_name,
+                    column_name,
+                    exc,
+                )
+
     # --- Internal Helpers ---
     def _get_current_utc_timestamp_iso(self) -> str:
         """
@@ -1708,6 +2880,18 @@ UPDATE db_schema_version
             A string representation of the UUID.
         """
         return str(uuid.uuid4())
+
+    def _map_table_for_backend(self, table_name: str) -> str:
+        """Map logical table names to backend-specific physical names.
+
+        This avoids name collisions with other modules when sharing a Postgres database.
+        """
+        if self.backend_type == BackendType.POSTGRESQL:
+            mapping = {
+                'keywords': 'chacha_keywords',
+            }
+            return mapping.get(table_name, table_name)
+        return table_name
 
     def _get_current_db_version(self, conn: sqlite3.Connection, table_name: str, pk_col_name: str,
                                 pk_value: Any) -> int:
@@ -1760,12 +2944,17 @@ UPDATE db_schema_version
             data = list(data)  # Convert set to list before dumping
         return json.dumps(data)
 
+    def _is_unique_violation(self, error: Exception) -> bool:
+        """Return True if the provided backend error represents a unique constraint violation."""
+        message = str(error).lower()
+        return "unique constraint" in message or "duplicate key" in message
+
     def _deserialize_row_fields(self, row: sqlite3.Row, json_fields: List[str]) -> Optional[Dict[str, Any]]:
         """
         Converts a sqlite3.Row object to a dictionary, deserializing specified JSON fields.
 
         If a field listed in `json_fields` contains a string, it attempts to
-        parse it as JSON. If parsing fails, the field's value is set to None
+        parse it as JSON. If parsing fails, the field value is set to None
         and a warning is logged.
 
         Args:
@@ -1800,18 +2989,18 @@ UPDATE db_schema_version
         Serializes Python list, dict, or set to a JSON string, or passes through an existing string.
 
         - If data is None, returns None.
-        - If data is a list, dict, or set (converted to list), it's serialized to JSON.
+        - If data is a list, dict, or set (converted to list), it is serialized to JSON.
         - If data is already a string, it attempts to validate it as JSON.
           - If valid JSON, the string is returned as is.
           - If not valid JSON, the string is returned as is (logged with DEBUG level).
-          This behavior assumes that if a string is passed, it's either pre-formatted JSON
+          This behavior assumes that if a string is passed, it is either pre-formatted JSON
           or a plain string intended for a text field that happens to be JSON-serializable.
 
         Args:
             data: The Python object (list, dict, set, str) to process, or None.
 
         Returns:
-            A JSON string representation of the data, the original string if it's
+            A JSON string representation of the data, the original string if it is
             valid JSON or a plain string, or None if input `data` was None.
         """
         if data is None:
@@ -1841,7 +3030,7 @@ UPDATE db_schema_version
         are handled automatically by SQL triggers.
 
         Args:
-            card_data: A dictionary containing the character card's data.
+            card_data: A dictionary containing the character card data.
                        Required fields: 'name'.
                        Optional fields include: 'description', 'personality', 'scenario', 'image',
                        'post_history_instructions', 'first_message', 'message_example',
@@ -1875,13 +3064,15 @@ UPDATE db_schema_version
         tags_json = get_json_field_as_string(card_data.get('tags'))
         extensions_json = get_json_field_as_string(card_data.get('extensions'))
 
-        query = """
-                INSERT INTO character_cards (name, description, personality, scenario, image, post_history_instructions, \
-                                             first_message, message_example, creator_notes, system_prompt, \
-                                             alternate_greetings, tags, creator, character_version, extensions, \
-                                             created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0) \
-                """ # created_at added
+        base_query = """
+            INSERT INTO character_cards (
+                name, description, personality, scenario, image, post_history_instructions,
+                first_message, message_example, creator_notes, system_prompt,
+                alternate_greetings, tags, creator, character_version, extensions,
+                created_at, last_modified, client_id, version, deleted
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
         params = (
             card_data['name'], card_data.get('description'), card_data.get('personality'),
             card_data.get('scenario'), card_data.get('image'), card_data.get('post_history_instructions'),
@@ -1892,8 +3083,18 @@ UPDATE db_schema_version
         )
         try:
             with self.transaction() as conn:
-                cursor = conn.execute(query, params)  # execute_query not needed due to conn from context
-                char_id = cursor.lastrowid
+                cursor = conn.cursor()
+                if self.backend_type == BackendType.POSTGRESQL:
+                    query = base_query + " RETURNING id"
+                    exec_params = params + (1, False)
+                    prepared_query, prepared_params = self._prepare_backend_statement(query, exec_params)
+                    cursor.execute(prepared_query, prepared_params)
+                    row = cursor.fetchone()
+                    char_id = row['id'] if row else None
+                else:
+                    exec_params = params + (1, 0)
+                    cursor.execute(base_query, exec_params)
+                    char_id = cursor.lastrowid
                 logger.info(f"Added character card '{card_data['name']}' with ID: {char_id}.")
                 return char_id
         except sqlite3.IntegrityError as e:
@@ -1902,6 +3103,19 @@ UPDATE db_schema_version
                 raise ConflictError(f"Character card with name '{card_data['name']}' already exists.",
                                     entity="character_cards", entity_id=card_data['name']) from e
             raise CharactersRAGDBError(f"Database integrity error adding character card: {e}") from e
+        except BackendDatabaseError as e:
+            if self._is_unique_violation(e):
+                logger.warning(
+                    "Character card with name '%s' already exists (backend %s).",
+                    card_data['name'],
+                    self.backend_type.value,
+                )
+                raise ConflictError(
+                    f"Character card with name '{card_data['name']}' already exists.",
+                    entity="character_cards",
+                    entity_id=card_data['name'],
+                ) from e
+            raise CharactersRAGDBError(f"Database integrity error adding character card: {e}") from e
         except CharactersRAGDBError as e:
             logger.error(f"Database error adding character card '{card_data.get('name')}': {e}")
             raise
@@ -1909,17 +3123,17 @@ UPDATE db_schema_version
 
     def get_character_card_by_id(self, character_id: int) -> Optional[Dict[str, Any]]:
         """
-        Retrieves a specific character card by its ID.
+        Retrieve a specific character card by its ID.
 
-        Only non-deleted cards are returned. JSON fields (`alternate_greetings`,
-        `tags`, `extensions` as defined in `_CHARACTER_CARD_JSON_FIELDS`)
+        Only non-deleted cards are returned. JSON fields (alternate_greetings,
+        tags, extensions as defined in _CHARACTER_CARD_JSON_FIELDS)
         are deserialized from strings to Python objects.
 
         Args:
             character_id: The integer ID of the character card.
 
         Returns:
-            A dictionary containing the character card's data if found and not deleted,
+            A dictionary containing the character card data if found and not deleted,
             otherwise None.
 
         Raises:
@@ -1936,17 +3150,17 @@ UPDATE db_schema_version
 
     def get_character_card_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieves a specific character card by its unique name.
+        Retrieve a specific character card by its unique name.
 
         Only non-deleted cards are returned. JSON fields (see `_CHARACTER_CARD_JSON_FIELDS`)
         are deserialized. Name comparison is case-sensitive as per default SQLite behavior
-        (schema's `name` column does not specify `COLLATE NOCASE`).
+        because the schema column "name" does not specify `COLLATE NOCASE`.
 
         Args:
             name: The unique name of the character card.
 
         Returns:
-            A dictionary containing the character card's data if found and not deleted,
+            A dictionary containing character card data if found and not deleted,
             otherwise None.
 
         Raises:
@@ -1989,42 +3203,7 @@ UPDATE db_schema_version
             raise
 
     def update_character_card(self, character_id: int, card_data: Dict[str, Any], expected_version: int) -> bool | None:
-        """
-        Updates an existing character card using optimistic locking.
-
-        The update will only succeed if `expected_version` matches the card's current
-        version in the database. Upon successful update, the card's `version`
-        is incremented, `last_modified` is updated to the current UTC time, and
-        `client_id` is set to the DB instance's `client_id`.
-
-        If `card_data` is empty, the method logs this and returns True immediately
-        without performing any database operations or version checks.
-
-        Updatable fields: "name", "description", "personality", "scenario", "image",
-        "post_history_instructions", "first_message", "message_example",
-        "creator_notes", "system_prompt", "creator", "character_version",
-        and JSON fields: "alternate_greetings", "tags", "extensions".
-        Other fields in `card_data` (like 'id', 'created_at') are ignored.
-
-        FTS updates (`character_cards_fts`) and `sync_log` entries for updates
-        are handled automatically by SQL triggers.
-
-        Args:
-            character_id: The ID of the character card to update.
-            card_data: A dictionary containing the fields to update.
-                       If empty, the method returns True without making changes.
-            expected_version: The version number the client expects the record to have.
-
-        Returns:
-            True if the update was successful.
-
-        Raises:
-            ConflictError: If the character card is not found, is soft-deleted,
-                           or if `expected_version` does not match the current database version
-                           (indicating a concurrent modification). Also raised if an update to
-                           'name' violates its unique constraint.
-            CharactersRAGDBError: For other database-related errors.
-        """
+        """Update character card with optimistic locking."""
         logger.debug(
             f"Starting update_character_card for ID {character_id}, expected_version {expected_version} (SINGLE UPDATE STRATEGY)")
 
@@ -2141,6 +3320,27 @@ UPDATE db_schema_version
         except sqlite3.DatabaseError as e:
             logger.critical(f"DATABASE ERROR during update_character_card (SINGLE UPDATE STRATEGY) for ID {character_id}: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Database error during single update: {e}") from e
+        except BackendDatabaseError as e:
+            if self._is_unique_violation(e):
+                updated_name = card_data.get("name", "[name not in update_data]")
+                logger.warning(
+                    "Update for character card ID %s failed on backend %s: name '%s' already exists.",
+                    character_id,
+                    self.backend_type.value,
+                    updated_name,
+                )
+                raise ConflictError(
+                    f"Cannot update character card ID {character_id}: name '{updated_name}' already exists.",
+                    entity="character_cards",
+                    entity_id=updated_name,
+                ) from e
+            logger.critical(
+                "Backend error during update_character_card (SINGLE UPDATE STRATEGY) for ID %s: %s",
+                character_id,
+                e,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Database error during single update: {e}") from e
         except ConflictError:  # Re-raise ConflictErrors from _get_current_db_version or manual checks
             logger.warning(f"ConflictError during update_character_card for ID {character_id}.",
                            exc_info=False)  # exc_info=True if needed
@@ -2236,6 +3436,14 @@ UPDATE db_schema_version
                 return True
         except ConflictError:
             raise
+        except BackendDatabaseError as e:
+            logger.error(
+                "Backend error soft-deleting character card ID %s (expected v%s): %s",
+                character_id,
+                expected_version,
+                e,
+            )
+            raise CharactersRAGDBError(f"Backend error during soft delete: {e}") from e
         except CharactersRAGDBError as e:  # Catches sqlite3.Error from conn.execute
             logger.error(
                 f"Database error soft-deleting character card ID {character_id} (expected v{expected_version}): {e}",
@@ -2262,6 +3470,36 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors during the search.
         """
+        if not search_term.strip():
+            logger.warning("Empty character card search term provided; returning no results.")
+            return []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug("FTS normalization produced empty tsquery for input '%s'", search_term)
+                return []
+
+            query = """
+                SELECT cc.*, ts_rank(cc.character_cards_fts_tsv, to_tsquery('english', ?)) AS rank
+                FROM character_cards cc
+                WHERE cc.deleted = FALSE
+                  AND cc.character_cards_fts_tsv @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, cc.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                rows = cursor.fetchall()
+                return [
+                    self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
+                    for row in rows
+                    if row
+                ]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for character cards term '%s': %s", search_term, exc)
+                raise
+
         safe_search_term = f'"{search_term}"'
         query = """
                 SELECT cc.*
@@ -2286,6 +3524,9 @@ UPDATE db_schema_version
         Returns:
             True if JSON functions are available, False otherwise.
         """
+        if self.backend_type != BackendType.SQLITE:
+            return False
+
         try:
             cursor = self.execute_query("SELECT json('{}') as test")
             cursor.fetchone()
@@ -2480,14 +3721,22 @@ UPDATE db_schema_version
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
                                            character_id, title, rating, \
                                            created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
-        params = (
-            conv_id, root_id, conv_data.get('forked_from_message_id'),
-            conv_data.get('parent_conversation_id'), conv_data['character_id'],
-            conv_data.get('title'), conv_data.get('rating'),
-            now, now, client_id # created_at, last_modified, client_id
-        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (
+                conv_id, root_id, conv_data.get('forked_from_message_id'),
+                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('title'), conv_data.get('rating'),
+                now, now, client_id, 1, False
+            )
+        else:
+            params = (
+                conv_id, root_id, conv_data.get('forked_from_message_id'),
+                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('title'), conv_data.get('rating'),
+                now, now, client_id, 1, 0
+            )
         try:
             with self.transaction() as conn:
                 conn.execute(query, params)
@@ -2552,6 +3801,28 @@ UPDATE db_schema_version
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching conversations for character ID {character_id}: {e}")
+            raise
+
+    def count_conversations_for_user(self, client_id: str) -> int:
+        """
+        Count total non-deleted conversations for a given user (client_id).
+
+        Args:
+            client_id: The user/client identifier as string.
+
+        Returns:
+            Integer count of conversations.
+
+        Raises:
+            CharactersRAGDBError on database failure.
+        """
+        query = "SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND deleted = 0"
+        try:
+            cursor = self.execute_query(query, (client_id,))
+            row = cursor.fetchone()
+            return int(row[0] if row else 0)
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error counting conversations for client_id {client_id}: {e}")
             raise
 
     def update_conversation(self, conversation_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
@@ -2814,6 +4085,36 @@ UPDATE db_schema_version
         if not title_query.strip():
             logger.warning("Empty title_query provided for conversation search. Returning empty list.")
             return []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
+            if not tsquery:
+                logger.debug("Conversation title query normalized to empty tsquery for input '%s'", title_query)
+                return []
+
+            base_query = [
+                "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS rank",
+                "FROM conversations c",
+                "WHERE c.deleted = FALSE",
+                "AND c.conversations_fts_tsv @@ to_tsquery('english', ?)",
+            ]
+            params_list: List[Any] = [tsquery, tsquery]
+
+            if character_id is not None:
+                base_query.append("AND c.character_id = ?")
+                params_list.append(character_id)
+
+            base_query.append("ORDER BY rank DESC, c.last_modified DESC")
+            base_query.append("LIMIT ?")
+            params_list.append(limit)
+
+            try:
+                cursor = self.execute_query("\n".join(base_query), tuple(params_list))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for conversations term '%s': %s", title_query, exc)
+                raise
+
         safe_search_term = f'"{title_query}"'
         base_query = """
                      SELECT c.*
@@ -2822,7 +4123,7 @@ UPDATE db_schema_version
                      WHERE fts.conversations_fts MATCH ? \
                        AND c.deleted = 0 \
                      """
-        params_list: List[Any] = [title_query]
+        params_list = [title_query]
         if character_id is not None:
             base_query += " AND c.character_id = ?"
             params_list.append(character_id)
@@ -2843,7 +4144,7 @@ UPDATE db_schema_version
         Adds a new message to a conversation, optionally with image data.
 
         `id` (UUID string) is auto-generated if not provided in `msg_data`.
-        Requires 'conversation_id', 'sender'. Message must have 'content' (text) or 'image_data'.
+        Requires 'conversation_id', 'sender'. Message must have 'content' (text) or image attachments.
         `client_id` defaults to DB instance's `client_id`. `version` is set to 1.
         `timestamp` defaults to current UTC time if not provided; `last_modified` is set to current UTC time.
 
@@ -2852,31 +4153,52 @@ UPDATE db_schema_version
 
         Args:
             msg_data: Dictionary with message data.
-                      Required: 'conversation_id', 'sender'. At least one of 'content' or 'image_data'.
+                      Required: 'conversation_id', 'sender'. At least one of 'content' or images.
                       Optional: 'id', 'parent_message_id', 'content' (str),
                                 'image_data' (bytes), 'image_mime_type' (str, required if image_data present),
-                                'timestamp', 'ranking', 'client_id'.
+                                'images' (iterable of {'data','mime'}), 'timestamp', 'ranking', 'client_id'.
 
         Returns:
             The string UUID of the newly added message.
 
         Raises:
-            InputError: If required fields are missing, if both 'content' and 'image_data' are absent,
+            InputError: If required fields are missing, if both 'content' and attachments are absent,
                         or if the parent conversation is not found or is deleted.
             ConflictError: If a message with the provided 'id' (if any) already exists.
             CharactersRAGDBError: For other database errors (e.g., FK violation for conversation_id).
         """
+        images_payload_raw = msg_data.pop('images', None)
+        normalized_images: List[Tuple[bytes, str]] = []
+        if images_payload_raw:
+            for entry in images_payload_raw:
+                img_bytes: Optional[bytes] = None
+                img_mime: Optional[str] = None
+                if isinstance(entry, dict):
+                    img_bytes = entry.get("data") or entry.get("image_data")
+                    img_mime = entry.get("mime") or entry.get("image_mime_type")
+                elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    img_bytes, img_mime = entry[0], entry[1]
+                if img_bytes is None or img_mime is None:
+                    continue
+                if isinstance(img_bytes, memoryview):
+                    img_bytes = img_bytes.tobytes()
+                normalized_images.append((img_bytes, str(img_mime)))
+
         msg_id = msg_data.get('id') or self._generate_uuid()
 
-        required_fields = ['conversation_id', 'sender', 'content']  # Content can be empty if image is present
+        required_fields = ['conversation_id', 'sender', 'content']
         for field in required_fields:
-            if field not in msg_data:  # Removed "not msg_data[field]" for 'content'
+            if field not in msg_data:
                 raise InputError(f"Required field '{field}' is missing for message.")
-        if not msg_data.get('content') and not msg_data.get('image_data'):
+        if not msg_data.get('content') and not msg_data.get('image_data') and not normalized_images:
             raise InputError("Message must have text content or image data.")
         if msg_data.get('image_data') and not msg_data.get('image_mime_type'):
             raise InputError("image_mime_type is required if image_data is provided.")
 
+        if normalized_images and not msg_data.get('image_data'):
+            first_bytes, first_mime = normalized_images[0]
+            msg_data['image_data'] = first_bytes
+            msg_data['image_mime_type'] = first_mime
 
         client_id = msg_data.get('client_id') or self.client_id
         if not client_id:
@@ -2889,35 +4211,101 @@ UPDATE db_schema_version
                 INSERT INTO messages (id, conversation_id, parent_message_id, sender, content,
                                       image_data, image_mime_type,
                                       timestamp, ranking, last_modified, client_id, version, deleted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-        params = (
-            msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
-            msg_data['sender'], msg_data.get('content', ''),  # Default to empty string if no text content
-            msg_data.get('image_data'), msg_data.get('image_mime_type'),
-            timestamp, msg_data.get('ranking'), now, client_id
-        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (
+                msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
+                msg_data['sender'], msg_data.get('content', ''),
+                msg_data.get('image_data'), msg_data.get('image_mime_type'),
+                timestamp, msg_data.get('ranking'), now, client_id, 1, False
+            )
+        else:
+            params = (
+                msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
+                msg_data['sender'], msg_data.get('content', ''),
+                msg_data.get('image_data'), msg_data.get('image_mime_type'),
+                timestamp, msg_data.get('ranking'), now, client_id, 1, 0
+            )
         try:
             with self.transaction():
-                conv_cursor = self.execute_query("SELECT 1 FROM conversations WHERE id = ? AND deleted = 0",
-                                                 (msg_data['conversation_id'],))
+                conv_cursor = self.execute_query(
+                    "SELECT 1 FROM conversations WHERE id = ? AND deleted = 0",
+                    (msg_data['conversation_id'],),
+                )
                 if not conv_cursor.fetchone():
                     raise InputError(
-                        f"Cannot add message: Conversation ID '{msg_data['conversation_id']}' not found or deleted.")
-                self.execute_query(query, params)  # commit handled by transaction context
+                        f"Cannot add message: Conversation ID '{msg_data['conversation_id']}' not found or deleted."
+                    )
+                self.execute_query(query, params)
+                if normalized_images:
+                    self._insert_message_images(msg_id, normalized_images)
             logger.info(
-                f"Added message ID: {msg_id} to conversation {msg_data['conversation_id']} (Image: {'Yes' if msg_data.get('image_data') else 'No'}).")
+                "Added message ID: %s to conversation %s (Images stored: %s).",
+                msg_id,
+                msg_data['conversation_id'],
+                len(normalized_images) if normalized_images else ("Yes" if msg_data.get('image_data') else "No"),
+            )
             return msg_id
         except sqlite3.IntegrityError as e:
             if "UNIQUE constraint failed: messages.id" in str(e):
-                raise ConflictError(f"Message with ID '{msg_id}' already exists.", entity="messages",
-                                    entity_id=msg_id) from e
+                raise ConflictError(
+                    f"Message with ID '{msg_id}' already exists.",
+                    entity="messages",
+                    entity_id=msg_id,
+                ) from e
             raise CharactersRAGDBError(f"Database integrity error adding message: {e}") from e
         except InputError:
             raise
         except CharactersRAGDBError as e:
             logger.error(f"Database error adding message: {e}")
             raise
+    def _insert_message_images(self, message_id: str, images: List[Tuple[bytes, str]]) -> None:
+        """Insert or replace message images for the given message."""
+        if not images:
+            return
+        params: List[Tuple[str, int, bytes, str]] = []
+        for idx, (img_bytes, img_mime) in enumerate(images):
+            if img_bytes is None or img_mime is None:
+                continue
+            if isinstance(img_bytes, memoryview):
+                img_bytes = img_bytes.tobytes()
+            params.append((message_id, idx, img_bytes, img_mime))
+        if not params:
+            return
+        query = (
+            "INSERT INTO message_images (message_id, position, image_data, image_mime_type) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(message_id, position) DO UPDATE SET "
+            "image_data=excluded.image_data, image_mime_type=excluded.image_mime_type, "
+            "created_at=CURRENT_TIMESTAMP"
+        )
+        self.execute_many(query, params, commit=False)
+
+    def get_message_images(self, message_id: str) -> List[Dict[str, Any]]:
+        """Fetch all images associated with a message, ordered by position."""
+        try:
+            cursor = self.execute_query(
+                "SELECT message_id, position, image_data, image_mime_type FROM message_images "
+                "WHERE message_id = ? ORDER BY position ASC",
+                (message_id,),
+            )
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            images: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                img_bytes = record.get("image_data")
+                if isinstance(img_bytes, memoryview):
+                    record["image_data"] = img_bytes.tobytes()
+                images.append(record)
+            return images
+        except CharactersRAGDBError as e:
+            logger.error(f"Failed to fetch images for message {message_id}: {e}")
+            return []
 
     def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -2939,7 +4327,18 @@ UPDATE db_schema_version
         try:
             cursor = self.execute_query(query, (message_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            if isinstance(row, dict):
+                record = dict(row)
+            else:
+                columns = [col[0] for col in cursor.description] if cursor.description else []
+                record = {columns[idx]: row[idx] for idx in range(len(columns))}
+            img_blob = record.get("image_data")
+            if isinstance(img_blob, memoryview):
+                record["image_data"] = img_blob.tobytes()
+            record["images"] = self.get_message_images(message_id)
+            return record
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching message ID {message_id}: {e}")
             raise
@@ -2969,7 +4368,20 @@ UPDATE db_schema_version
         """
         try:
             cursor = self.execute_query(query, (conversation_id, limit, offset))
-            return [dict(row) for row in cursor.fetchall()]
+            raw_rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            results: List[Dict[str, Any]] = []
+            for row in raw_rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                image_blob = record.get("image_data")
+                if isinstance(image_blob, memoryview):
+                    record["image_data"] = image_blob.tobytes()
+                record["images"] = self.get_message_images(record["id"])
+                results.append(record)
+            return results
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching messages for conversation ID {conversation_id}: {e}")
             raise
@@ -3030,7 +4442,7 @@ UPDATE db_schema_version
                 fields_to_update_sql.append(f"{key} = ?")
                 params_for_set_clause.append(value)
             elif key not in ['id', 'conversation_id', 'sender', 'timestamp', 'last_modified', 'version', 'client_id', 'deleted']:
-                logging.warning(
+                logger.warning(
                     f"Attempted to update immutable or unknown field '{key}' in message ID {message_id}, skipping.")
 
         if not fields_to_update_sql: # If only image was cleared, this list might be empty now if no other fields
@@ -3184,6 +4596,35 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database search errors.
         """
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(content_query, 'postgresql')
+            if not tsquery:
+                logger.debug("Message content query normalized to empty tsquery for input '%s'", content_query)
+                return []
+
+            base_query = [
+                "SELECT m.*, ts_rank(m.messages_fts_tsv, to_tsquery('english', ?)) AS rank",
+                "FROM messages m",
+                "WHERE m.deleted = FALSE",
+                "AND m.messages_fts_tsv @@ to_tsquery('english', ?)",
+            ]
+            params_list: List[Any] = [tsquery, tsquery]
+
+            if conversation_id:
+                base_query.append("AND m.conversation_id = ?")
+                params_list.append(conversation_id)
+
+            base_query.append("ORDER BY rank DESC, m.last_modified DESC")
+            base_query.append("LIMIT ?")
+            params_list.append(limit)
+
+            try:
+                cursor = self.execute_query("\n".join(base_query), tuple(params_list))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for messages term '%s': %s", content_query, exc)
+                raise
+
         safe_search_term = f'"{content_query}"'
         base_query = """
                      SELECT m.*
@@ -3192,7 +4633,7 @@ UPDATE db_schema_version
                      WHERE fts.messages_fts MATCH ? \
                        AND m.deleted = 0 \
                      """
-        params_list: List[Any] = [content_query]
+        params_list = [content_query]
         if conversation_id:
             base_query += " AND m.conversation_id = ?"
             params_list.append(conversation_id)
@@ -3262,15 +4703,26 @@ UPDATE db_schema_version
 
         # Add created_at for new inserts
         cols_str_list_insert = cols_str_list + ['created_at', 'last_modified', 'client_id', 'version', 'deleted']
-        placeholders_str_list_insert = placeholders_str_list + ['?', '?', '?', '1', '0']
+        if self.backend_type == BackendType.POSTGRESQL:
+            placeholders_str_list_insert = placeholders_str_list + ['?', '?', '?', '?', '?']
+            version_value = 1
+            deleted_value = False
+        else:
+            placeholders_str_list_insert = placeholders_str_list + ['?', '?', '?', '1', '0']
+            version_value = 1
+            deleted_value = 0
 
+        table_name = self._map_table_for_backend(table_name)
         query = f"""
             INSERT INTO {table_name} (
                 {', '.join(cols_str_list_insert)}
             ) VALUES ({', '.join(placeholders_str_list_insert)})
         """
         # Params for INSERT: main_value, other_values..., created_at, last_modified, client_id
-        params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use])
+        if self.backend_type == BackendType.POSTGRESQL:
+            params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use, version_value, deleted_value])
+        else:
+            params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use])
 
 
         try:
@@ -3307,7 +4759,15 @@ UPDATE db_schema_version
 
                 # If not undeleting, proceed with insert
                 cursor_insert = conn.execute(query, params_tuple_insert)
-                item_id_insert = cursor_insert.lastrowid
+                item_id_insert = cursor_insert.lastrowid if hasattr(cursor_insert, 'lastrowid') else None
+                if item_id_insert is None and self.backend_type == BackendType.POSTGRESQL:
+                    sel = conn.execute(
+                        f"SELECT id FROM {table_name} WHERE {unique_col_name} = ?",
+                        (main_col_value,)
+                    )
+                    row = sel.fetchone()
+                    if row is not None:
+                        item_id_insert = int(row['id'] if isinstance(row, dict) else row[0])
                 logger.info(f"Added {table_name} '{main_col_value}' with ID: {item_id_insert}.")
                 return item_id_insert
         except sqlite3.IntegrityError as e:
@@ -3337,6 +4797,7 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
+        table_name = self._map_table_for_backend(table_name)
         query = f"SELECT * FROM {table_name} WHERE id = ? AND deleted = 0"
         try:
             cursor = self.execute_query(query, (item_id,))
@@ -3362,6 +4823,7 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
+        table_name = self._map_table_for_backend(table_name)
         query = f"SELECT * FROM {table_name} WHERE {unique_col_name} = ? AND deleted = 0"
         try:
             cursor = self.execute_query(query, (value,))
@@ -3370,6 +4832,16 @@ UPDATE db_schema_version
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching {table_name} by {unique_col_name} '{value}': {e}")
             raise
+
+    def _case_insensitive_order_expression(self, column: str, direction: Optional[str] = None) -> str:
+        direction_clean = (direction or '').strip()
+        direction_clause = f" {direction_clean}" if direction_clean else ""
+        if self.backend_type == BackendType.POSTGRESQL:
+            return f"LOWER({column}){direction_clause}"
+        return f"{column} COLLATE NOCASE{direction_clause}"
+
+    def _case_insensitive_order_clause(self, column: str, direction: Optional[str] = None) -> str:
+        return f"ORDER BY {self._case_insensitive_order_expression(column, direction)}"
 
     def _list_generic_items(self, table_name: str, order_by_col: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """
@@ -3387,7 +4859,13 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_by_col} LIMIT ? OFFSET ?"
+        order_expression = order_by_col
+        if 'COLLATE NOCASE' in order_by_col.upper():
+            base, _, direction = order_by_col.partition('COLLATE NOCASE')
+            order_expression = self._case_insensitive_order_expression(base.strip(), direction.strip() or None)
+
+        table_name = self._map_table_for_backend(table_name)
+        query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_expression} LIMIT ? OFFSET ?"
         try:
             cursor = self.execute_query(query, (limit, offset))
             return [dict(row) for row in cursor.fetchall()]
@@ -3653,12 +5131,38 @@ UPDATE db_schema_version
         # or FTS is configured with content_rowid='id'.
         # For tables like 'notes' where 'id' is TEXT UUID and FTS uses 'rowid', the join is different.
         # This helper as written is best for keywords and keyword_collections.
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug(
+                    "Generic FTS query normalized to empty tsquery for table '%s' with input '%s'",
+                    main_table_name,
+                    search_term,
+                )
+                return []
+
+            fts_column = f"{fts_table_name}_tsv"
+            query = f"""
+                SELECT main.*, ts_rank(main.{fts_column}, to_tsquery('english', ?)) AS rank
+                FROM {main_table_name} main
+                WHERE main.deleted = FALSE
+                  AND main.{fts_column} @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, main.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for table '%s': %s", main_table_name, exc)
+                raise
+
         query = f"""
             SELECT main.*
             FROM {fts_table_name} fts
             JOIN {main_table_name} main ON fts.rowid = main.id
             WHERE fts.{fts_match_cols_or_table} MATCH ? AND main.deleted = 0
-            ORDER BY rank
+            ORDER BY bm25(fts)
             LIMIT ?
         """
         try:
@@ -3770,6 +5274,29 @@ UPDATE db_schema_version
         Returns:
             A list of matching keyword dictionaries.
         """
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug("Keyword search term normalized to empty tsquery for input '%s'", search_term)
+                return []
+
+            source_table = self._map_table_for_backend("keywords")
+            fts_column = "keywords_fts_tsv"
+            query = f"""
+                SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                FROM {source_table} k
+                WHERE k.deleted = FALSE
+                  AND k.{fts_column} @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, k.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                raise
+
         # Support prefix/substring search expectations in tests by using prefix match
         # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
         # Avoid quoting here to preserve wildcard behavior.
@@ -3911,9 +5438,12 @@ UPDATE db_schema_version
 
         query = """
             INSERT INTO notes (id, title, content, last_modified, client_id, version, deleted, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
-        params = (final_note_id, title.strip(), content, now, client_id_to_use, now) # created_at is also now
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (final_note_id, title.strip(), content, now, client_id_to_use, 1, False, now)
+        else:
+            params = (final_note_id, title.strip(), content, now, client_id_to_use, 1, 0, now)
 
         try:
             with self.transaction() as conn:
@@ -4061,6 +5591,27 @@ UPDATE db_schema_version
         """Searches notes_fts (title and content). Corrected JOIN condition."""
         # FTS5 requires wrapping terms with special characters in double quotes
         # to be treated as a literal phrase.
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug("Notes search term normalized to empty tsquery for input '%s'", search_term)
+                return []
+
+            query = """
+                SELECT n.*, ts_rank(n.notes_fts_tsv, to_tsquery('english', ?)) AS rank
+                FROM notes n
+                WHERE n.deleted = FALSE
+                  AND n.notes_fts_tsv @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, n.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for notes term '%s': %s", search_term, exc)
+                raise
+
         safe_search_term = f'"{search_term}"'
 
         query = """
@@ -4069,10 +5620,9 @@ UPDATE db_schema_version
                          JOIN notes main ON fts.rowid = main.rowid
                 WHERE fts.notes_fts MATCH ?
                   AND main.deleted = 0
-                ORDER BY rank LIMIT ?
+                ORDER BY bm25(fts) LIMIT ?
                 """
         try:
-            # Pass the quoted string as the parameter
             cursor = self.execute_query(query, (safe_search_term, limit))
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
@@ -4092,11 +5642,20 @@ UPDATE db_schema_version
         try:
             with self.transaction() as conn:
                 if operation == "link":
-                    query = f"INSERT OR IGNORE INTO {link_table} ({col1_name}, {col2_name}, created_at) VALUES (?, ?, ?)"
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        query = (
+                            f"INSERT INTO {link_table} ({col1_name}, {col2_name}, created_at) "
+                            f"VALUES (?, ?, ?) ON CONFLICT ({col1_name}, {col2_name}) DO NOTHING"
+                        )
+                    else:
+                        query = (
+                            f"INSERT OR IGNORE INTO {link_table} ({col1_name}, {col2_name}, created_at) "
+                            "VALUES (?, ?, ?)"
+                        )
                     params = (col1_val, col2_val, now_iso)
                     cursor = conn.execute(query, params)
                     rows_affected = cursor.rowcount
-                    if rows_affected > 0: # Link was actually created
+                    if rows_affected > 0:  # Link was actually created
                         log_sync_entry = True
                         sync_payload_dict = {col1_name: col1_val, col2_name: col2_val, 'created_at': now_iso}
                 elif operation == "unlink":
@@ -4104,7 +5663,7 @@ UPDATE db_schema_version
                     params = (col1_val, col2_val)
                     cursor = conn.execute(query, params)
                     rows_affected = cursor.rowcount
-                    if rows_affected > 0: # Link was actually deleted
+                    if rows_affected > 0:  # Link was actually deleted
                         log_sync_entry = True
                         sync_payload_dict = {col1_name: col1_val, col2_name: col2_val}
                 else:
@@ -4115,10 +5674,19 @@ UPDATE db_schema_version
                     sync_op = 'create' if operation == 'link' else 'delete'
                     sync_timestamp = now_iso # Use now_iso for create, and also for delete event time
 
-                    sync_log_query = """
-                        INSERT INTO sync_log (entity, entity_id, operation, timestamp, client_id, version, payload)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """
+                    entity_col = 'entity_id'
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        try:
+                            cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
+                            if 'entity_uuid' in cols and 'entity_id' not in cols:
+                                entity_col = 'entity_uuid'
+                        except Exception:
+                            pass
+
+                    sync_log_query = (
+                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "
+                        f"VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    )
                     sync_log_params = (
                         link_table, sync_entity_id, sync_op, sync_timestamp,
                         self.client_id, 1, # Link table entries don't have their own version, use 1 for sync log
@@ -4130,10 +5698,26 @@ UPDATE db_schema_version
             logger.info(
                 f"{operation.capitalize()}ed {link_table}: {col1_name}={col1_val}, {col2_name}={col2_val}. Rows affected: {rows_affected}")
             return rows_affected > 0
-        except sqlite3.Error as e: # Catch SQLite specific errors from conn.execute
-            logger.error(f"SQLite error during {operation} for {link_table} ({col1_name}={col1_val}, {col2_name}={col2_val}): {e}", exc_info=True)
+        except sqlite3.Error as e:  # Catch SQLite specific errors from conn.execute
+            logger.error(
+                f"SQLite error during {operation} for {link_table} ({col1_name}={col1_val}, {col2_name}={col2_val}): {e}",
+                exc_info=True,
+            )
             raise CharactersRAGDBError(f"Database error during {operation} for {link_table}: {e}") from e
-        except CharactersRAGDBError as e: # Catch custom errors like InputError
+        except BackendDatabaseError as exc:
+            logger.error(
+                "Backend error during %s for %s (%s=%s, %s=%s): %s",
+                operation,
+                link_table,
+                col1_name,
+                col1_val,
+                col2_name,
+                col2_val,
+                exc,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Database error during {operation} for {link_table}: {exc}") from exc
+        except CharactersRAGDBError as e:  # Catch custom errors like InputError
             logger.error(f"Application error during {operation} for {link_table}: {e}", exc_info=True)
             raise
 
@@ -4148,13 +5732,14 @@ UPDATE db_schema_version
                                  "unlink")
 
     def get_keywords_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
-        query = """
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
                 SELECT k.* \
                 FROM keywords k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id = ? \
                   AND k.deleted = 0 \
-                ORDER BY k.keyword COLLATE NOCASE
+                {order_clause}
                 """
         cursor = self.execute_query(query, (conversation_id,))
         return [dict(row) for row in cursor.fetchall()]
@@ -4182,25 +5767,27 @@ UPDATE db_schema_version
                                  "unlink")
 
     def get_keywords_for_collection(self, collection_id: int) -> List[Dict[str, Any]]:
-        query = """
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
                 SELECT k.* \
                 FROM keywords k \
                          JOIN collection_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.collection_id = ? \
                   AND k.deleted = 0 \
-                ORDER BY k.keyword COLLATE NOCASE
+                {order_clause}
                 """
         cursor = self.execute_query(query, (collection_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def get_collections_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
-        query = """
+        order_clause = self._case_insensitive_order_clause("kc.name")
+        query = f"""
                 SELECT kc.* \
                 FROM keyword_collections kc \
                          JOIN collection_keywords ck ON kc.id = ck.collection_id
                 WHERE ck.keyword_id = ? \
                   AND kc.deleted = 0
-                ORDER BY kc.name COLLATE NOCASE LIMIT ? \
+                {order_clause} LIMIT ? \
                 OFFSET ? \
                 """
         cursor = self.execute_query(query, (keyword_id, limit, offset))
@@ -4214,13 +5801,14 @@ UPDATE db_schema_version
         return self._manage_link("note_keywords", "note_id", note_id, "keyword_id", keyword_id, "unlink")
 
     def get_keywords_for_note(self, note_id: str) -> List[Dict[str, Any]]: # note_id is str
-        query = """
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
                 SELECT k.* \
                 FROM keywords k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id = ? \
                   AND k.deleted = 0 \
-                ORDER BY k.keyword COLLATE NOCASE
+                {order_clause}
                 """
         cursor = self.execute_query(query, (note_id,))
         return [dict(row) for row in cursor.fetchall()]
@@ -4246,15 +5834,38 @@ UPDATE db_schema_version
         now = self._get_current_utc_timestamp_iso()
         try:
             with self.transaction() as conn:
-                cursor = conn.execute(
-                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted) VALUES(?, ?, ?, ?, ?, 1, 0)",
-                    (name, description, now, now, self.client_id)
+                insert_sql = (
+                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted)"
+                    " VALUES(?, ?, ?, ?, ?, ?, ?)"
                 )
-                deck_id = cursor.lastrowid
-                return int(deck_id)
+                params = (
+                    name,
+                    description,
+                    now,
+                    now,
+                    self.client_id,
+                    1,
+                    False,
+                )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    deck_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    deck_id = int(cursor.lastrowid)
+
+                if deck_id is None:
+                    raise CharactersRAGDBError("Failed to determine deck ID after insert")
+                return deck_id
         except sqlite3.IntegrityError as e:
             if "UNIQUE constraint failed: decks.name" in str(e):
                 raise ConflictError("Deck name already exists", entity="decks", identifier=name)
+            raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
+        except BackendDatabaseError as e:
+            if self._is_unique_violation(e):
+                raise ConflictError("Deck name already exists", entity="decks", identifier=name) from e
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
@@ -4303,25 +5914,68 @@ UPDATE db_schema_version
             reverse_flag = 1 if model_type == 'basic_reverse' else 0
         try:
             with self.transaction() as conn:
-                conn.execute(
+                insert_sql = (
                     """
-                    INSERT INTO flashcards(uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                                           source_ref_type, source_ref_id, ef, interval_days, repetitions,
-                                           lapses, due_at, last_reviewed_at, created_at, last_modified, deleted, client_id, version, model_type, reverse)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, NULL, NULL, ?, ?, 0, ?, 1, ?, ?)
-                    """,
-                    (uuid_val, deck_id, front, back, notes, extra, is_cloze, tags_json, source_ref_type, source_ref_id,
-                     now, now, self.client_id, model_type, 1 if reverse_flag else 0)
+                    INSERT INTO flashcards(
+                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
+                        source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                        lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        deleted, client_id, version, model_type, reverse
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
                 )
+
+                params = (
+                    uuid_val,
+                    deck_id,
+                    front,
+                    back,
+                    notes,
+                    extra,
+                    bool(is_cloze),
+                    tags_json,
+                    source_ref_type,
+                    source_ref_id,
+                    2.5,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                    model_type,
+                    bool(reverse_flag),
+                )
+
+                conn.execute(insert_sql, params)
                 return uuid_val
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to add flashcard: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard: {exc}") from exc
 
     def add_flashcards_bulk(self, cards: List[Dict[str, Any]]) -> List[str]:
         """Bulk create flashcards; returns list of uuids in same order."""
         uuids: List[str] = []
         try:
             with self.transaction() as conn:
+                insert_sql = (
+                    """
+                    INSERT INTO flashcards(
+                        uuid, deck_id, front, back, notes, is_cloze, tags_json,
+                        source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                        lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        deleted, client_id, version
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                )
+
                 for card_data in cards:
                     uuid_val = self._generate_uuid()
                     uuids.append(uuid_val)
@@ -4330,25 +5984,42 @@ UPDATE db_schema_version
                     front = card_data['front']
                     back = card_data['back']
                     notes = card_data.get('notes')
-                    is_cloze = 1 if card_data.get('is_cloze') else 0
+                    is_cloze = bool(card_data.get('is_cloze'))
                     tags_json = card_data.get('tags_json')
                     source_ref_type = card_data.get('source_ref_type', 'manual')
                     source_ref_id = card_data.get('source_ref_id')
-                    conn.execute(
-                        """
-                        INSERT INTO flashcards(uuid, deck_id, front, back, notes, is_cloze, tags_json,
-                                               source_ref_type, source_ref_id, ef, interval_days, repetitions,
-                                               lapses, due_at, last_reviewed_at, created_at, last_modified, deleted, client_id, version)
-                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, NULL, NULL, ?, ?, 0, ?, 1)
-                        """,
-                        (uuid_val, deck_id, front, back, notes, is_cloze, tags_json, source_ref_type, source_ref_id,
-                         now, now, self.client_id)
+
+                    params = (
+                        uuid_val,
+                        deck_id,
+                        front,
+                        back,
+                        notes,
+                        is_cloze,
+                        tags_json,
+                        source_ref_type,
+                        source_ref_id,
+                        2.5,
+                        0,
+                        0,
+                        0,
+                        None,
+                        None,
+                        now,
+                        now,
+                        False,
+                        self.client_id,
+                        1,
                     )
+
+                    conn.execute(insert_sql, params)
             return uuids
         except KeyError as e:
             raise InputError(f"Missing required field in bulk flashcard: {e}") from e
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {exc}") from exc
 
     def list_flashcards(self,
                         deck_id: Optional[int] = None,
@@ -4363,7 +6034,10 @@ UPDATE db_schema_version
         where_clauses = ["1=1"]
         params: List[Any] = []
         if not include_deleted:
-            where_clauses.append("f.deleted = 0")
+            if self.backend_type == BackendType.POSTGRESQL:
+                where_clauses.append("f.deleted = FALSE")
+            else:
+                where_clauses.append("f.deleted = 0")
         if deck_id is not None:
             where_clauses.append("f.deck_id = ?")
             params.append(deck_id)
@@ -4387,8 +6061,16 @@ UPDATE db_schema_version
         # FTS filter
         fts_filter = ""
         if q:
-            fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
-            params.append(q)
+            if self.backend_type == BackendType.POSTGRESQL:
+                tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
+                if not tsquery:
+                    logger.debug("Flashcard query normalized to empty tsquery for input '%s'", q)
+                    return []
+                fts_filter = "AND f.flashcards_fts_tsv @@ to_tsquery('english', ?)"
+                params.append(tsquery)
+            else:
+                fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
+                params.append(q)
 
         # order by
         order_sql = "ORDER BY f.due_at, f.created_at DESC" if order_by == 'due_at' else "ORDER BY f.created_at DESC"
@@ -4604,13 +6286,14 @@ UPDATE db_schema_version
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
         """Return keywords linked to a flashcard."""
-        query = """
+        order_clause = self._case_insensitive_order_clause("kw.keyword")
+        query = f"""
             SELECT kw.*
               FROM flashcards f
               JOIN flashcard_keywords fk ON fk.card_id = f.id
               JOIN keywords kw ON kw.id = fk.keyword_id
              WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
-             ORDER BY kw.keyword COLLATE NOCASE
+             {order_clause}
         """
         try:
             cur = self.execute_query(query, (card_uuid,))
@@ -4646,9 +6329,18 @@ UPDATE db_schema_version
                         kid = kw['id']
                     desired_kw_ids.add(int(kid))
                 # link missing
+                insert_ts = self._get_current_utc_timestamp_iso()
                 for kid in desired_kw_ids - cur_kw_ids:
-                    conn.execute("INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)",
-                                 (card_id, int(kid), self._get_current_utc_timestamp_iso()))
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        insert_query = (
+                            "INSERT INTO flashcard_keywords(card_id, keyword_id, created_at) "
+                            "VALUES(?, ?, ?) ON CONFLICT (card_id, keyword_id) DO NOTHING"
+                        )
+                    else:
+                        insert_query = (
+                            "INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)"
+                        )
+                    conn.execute(insert_query, (card_id, int(kid), insert_ts))
                 # unlink extras
                 for kid in cur_kw_ids - desired_kw_ids:
                     conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
@@ -4658,6 +6350,8 @@ UPDATE db_schema_version
                 return True
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to set flashcard tags: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to set flashcard tags: {exc}") from exc
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,
@@ -4714,6 +6408,7 @@ class TransactionContextManager:
         self.is_outermost_transaction = False
 
     def __enter__(self) -> sqlite3.Connection:
+        self.db._ensure_sqlite_backend()
         self.conn = self.db.get_connection()
         if not self.conn.in_transaction:
             # Using deferred transaction by default. Could be "IMMEDIATE" or "EXCLUSIVE" if needed.
@@ -4729,6 +6424,7 @@ class TransactionContextManager:
         return self.conn
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.db._ensure_sqlite_backend()
         if not self.conn:  # Should not happen if __enter__ succeeded
             logger.error("Transaction context: Connection is None in __exit__.")
             return False # Re-raise exception if any

@@ -5,7 +5,6 @@
 import asyncio
 import json
 from html import unescape
-import pytest
 import random
 import re
 import time
@@ -22,10 +21,63 @@ from urllib3 import Retry
 #
 # Local Imports
 from tldw_Server_API.app.core.Utils.Utils import logging
+from functools import lru_cache
 from tldw_Server_API.app.core.config import load_and_log_configs
-loaded_config_data = load_and_log_configs()
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+
+
+@lru_cache(maxsize=1)
+def get_loaded_config() -> Dict[str, Any]:
+    """Lazy, cached config loader to avoid import-time I/O and duplicate logs."""
+    return load_and_log_configs()
+
+
+def _get_relevance_jitter_ms() -> int:
+    """Optional jitter (ms) for LLM calls. Defaults to 0 (disabled)."""
+    cfg = get_loaded_config()
+    section = cfg.get('Web-Scraping', {}) or {}
+    # Accept single value or min/max; if both given, use max
+    val = section.get('relevance_jitter_ms', 0)
+    try:
+        return int(val)
+    except Exception:
+        try:
+            # support min/max pair
+            min_v = int(section.get('relevance_jitter_min_ms', 0) or 0)
+            max_v = int(section.get('relevance_jitter_max_ms', 0) or 0)
+            return max(0, max_v)
+        except Exception:
+            return 0
+
+
+def _get_llm_timeouts() -> Dict[str, float]:
+    """Timeouts (seconds) for relevance LLM calls and article fetches."""
+    cfg = get_loaded_config()
+    section = cfg.get('Web-Scraping', {}) or {}
+    llm_to = float(section.get('relevance_llm_timeout_s', 30) or 30)
+    scrape_to = float(section.get('relevance_scrape_timeout_s', 30) or 30)
+    return {"llm": llm_to, "scrape": scrape_to}
+
+
+class _SimpleCircuitBreaker:
+    def __init__(self, fail_threshold: int = 3, reset_after_s: float = 30.0):
+        self.fail_threshold = int(fail_threshold)
+        self.reset_after_s = float(reset_after_s)
+        self.fail_count = 0
+        self.open_until = 0.0
+
+    def allow(self) -> bool:
+        return time.time() >= self.open_until
+
+    def record_success(self):
+        self.fail_count = 0
+
+    def record_failure(self):
+        self.fail_count += 1
+        if self.fail_count >= self.fail_threshold:
+            self.open_until = time.time() + self.reset_after_s
+            self.fail_count = 0
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
 #######################################################################################################################
@@ -172,7 +224,7 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
     }
 
 
-async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: Dict, search_params: Dict) -> Dict:
+async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: Dict, search_params: Dict, cancel_event: Optional[asyncio.Event] = None) -> Dict:
     logging.info("Starting analyze_and_aggregate")
 
     # 4. Score/filter results
@@ -182,7 +234,8 @@ async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: D
         web_search_results_dict["results"],
         sub_query_dict["main_goal"],
         sub_questions,
-        search_params.get('relevance_analysis_llm')
+        search_params.get('relevance_analysis_llm'),
+        cancel_event=cancel_event,
     )
     # FIXME
     logging.debug("Relevant results returned by search_result_relevance:")
@@ -211,34 +264,7 @@ async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: D
     }
 
 
-@pytest.mark.asyncio
-async def test_perplexity_pipeline():
-    # Phase 1: Generate sub-queries and perform web searches
-    search_params = {
-        "engine": "google",
-        "content_country": "countryUS",
-        "search_lang": "en",
-        "output_lang": "en",
-        "result_count": 10,
-        "date_range": None,
-        "safesearch": "active",
-        "site_blacklist": ["spam-site.com"],
-        "exactTerms": None,
-        "excludeTerms": None,
-        "filter": None,
-        "geolocation": None,
-        "search_result_language": None,
-        "sort_results_by": None,
-        "subquery_generation": True,
-        "subquery_generation_llm": "openai",
-        "relevance_analysis_llm": "openai",
-        "final_answer_llm": "openai"
-    }
-    phase1_results = generate_and_search("What is the capital of France?", search_params)
-    # Review the results here if needed
-    # Phase 2: Analyze relevance and aggregate final answer
-    phase2_results = await analyze_and_aggregate(phase1_results["web_search_results_dict"], phase1_results["sub_query_dict"], search_params)
-    print(phase2_results["final_answer"])
+# NOTE: module-level demos/tests moved into tests/WebScraping/ to avoid import-time side effects
 
 
 ######################### Question Analysis #########################
@@ -338,7 +364,8 @@ async def search_result_relevance(
     search_results: List[Dict],
     original_question: str,
     sub_questions: List[str],
-    api_endpoint: str
+    api_endpoint: str,
+    cancel_event: Optional[asyncio.Event] = None,
 ) -> Dict[str, Dict]:
     """
     Evaluate whether each search result is relevant to the original question and sub-questions.
@@ -368,7 +395,20 @@ async def search_result_relevance(
     4. Include key details and statistics if present
     """
 
+    # Simple circuit breaker for LLM provider
+    cfg = get_loaded_config()
+    ws_section = cfg.get('Web-Scraping', {}) or {}
+    breaker = _SimpleCircuitBreaker(
+        fail_threshold=int(ws_section.get('llm_cb_fail_threshold', 3) or 3),
+        reset_after_s=float(ws_section.get('llm_cb_reset_after_s', 30) or 30.0),
+    )
+
+    timeouts = _get_llm_timeouts()
+    jitter_ms = _get_relevance_jitter_ms()
+
     for idx, result in enumerate(search_results):
+        if cancel_event and cancel_event.is_set():
+            break
         content = result.get("content", "")
         if not content:
             logging.error("No Content found in search results array!")
@@ -395,25 +435,34 @@ async def search_result_relevance(
         input_data = "Evaluate the relevance of the search result."
 
         try:
-            # Add delay to avoid rate limiting
-            sleep_time = random.uniform(0.2, 0.6)
-            await asyncio.sleep(sleep_time)
+            # Optional jitter
+            if jitter_ms > 0:
+                await asyncio.sleep(jitter_ms / 1000.0)
 
-            # Evaluate relevance
-            relevancy_result = chat_api_call(
-                api_endpoint=api_endpoint,
-                api_key=None,
-                input_data=input_data,
-                prompt=eval_prompt,
-                temp=0.7,
-                system_message=None,
-                streaming=False,
-                minp=None,
-                maxp=None,
-                model=None,
-                topk=None,
-                topp=None,
-            )
+            # Evaluate relevance with timeout and circuit breaker
+            if not breaker.allow():
+                logging.warning("LLM circuit breaker open; skipping relevance evaluation")
+                continue
+
+            async def _llm_call():
+                return await asyncio.to_thread(
+                    lambda: chat_api_call(
+                        api_endpoint=api_endpoint,
+                        api_key=None,
+                        input_data=input_data,
+                        prompt=eval_prompt,
+                        temp=0.7,
+                        system_message=None,
+                        streaming=False,
+                        minp=None,
+                        maxp=None,
+                        model=None,
+                        topk=None,
+                        topp=None,
+                    )
+                )
+
+            relevancy_result = await asyncio.wait_for(_llm_call(), timeout=timeouts["llm"])
 
             # FIXME
             logging.debug(f"[DEBUG] Relevancy LLM response for index {idx}:\n{relevancy_result}\n---")
@@ -441,7 +490,9 @@ async def search_result_relevance(
                         # Use the 'id' from the result if available, otherwise use idx
                         result_id = result.get("id", str(idx))
                         # Scrape the content of the relevant result
-                        scraped_content = await scrape_article(result['url'])
+                        scraped_content = await asyncio.wait_for(
+                            scrape_article(result['url']), timeout=timeouts["scrape"]
+                        )
 
                         # Create Summarization prompt
                         logging.debug(f"Creating Summarization Prompt for result idx={idx}")
@@ -450,20 +501,25 @@ async def search_result_relevance(
                             content=scraped_content['content']
                         )
 
-                        # Add delay before summarization
-                        await asyncio.sleep(sleep_time)
-
-                        # Generate summary using the summarize function
+                        # Generate summary using the summarize function with timeout
                         logging.info(f"Summarizing relevant result: ID={result_id}")
-                        summary = analyze(
-                            input_data=scraped_content['content'],
-                            custom_prompt_arg=summary_prompt,
-                            api_name=api_endpoint,
-                            api_key=None,
-                            temp=0.7,
-                            system_message=None,
-                            streaming=False
-                        )
+                        async def _summ_call():
+                            return await asyncio.to_thread(
+                                lambda: analyze(
+                                    input_data=scraped_content['content'],
+                                    custom_prompt_arg=summary_prompt,
+                                    api_name=api_endpoint,
+                                    api_key=None,
+                                    temp=0.7,
+                                    system_message=None,
+                                    streaming=False,
+                                )
+                            )
+                        try:
+                            summary = await asyncio.wait_for(_summ_call(), timeout=timeouts["llm"])
+                        except Exception as e:
+                            logging.error(f"Summary generation failed: {e}")
+                            summary = "Summary generation failed"
 
                         relevant_results[result_id] = {
                             "content": summary,  # Store the summary instead of full content
@@ -476,13 +532,21 @@ async def search_result_relevance(
 
                 else:
                     logging.warning("Failed to parse the API response for relevance analysis.")
+            breaker.record_success()
+        except asyncio.TimeoutError:
+            breaker.record_failure()
+            logging.error(f"Timeout during LLM/scrape for result idx={idx}")
+        except asyncio.CancelledError:
+            logging.warning("Relevance evaluation cancelled")
+            raise
         except Exception as e:
+            breaker.record_failure()
             logging.error(f"Error during relevance evaluation/summarization for result idx={idx}: {e}")
 
     return relevant_results
 
 
-def review_and_select_results(web_search_results_dict: Dict) -> Dict:
+def review_and_select_results(web_search_results_dict: Dict, selector: Optional[callable] = None) -> Dict:
     """
     Allows the user to review and select relevant results from the search results.
 
@@ -492,17 +556,18 @@ def review_and_select_results(web_search_results_dict: Dict) -> Dict:
     Returns:
         Dict: A dictionary containing only the user-selected relevant results.
     """
-    relevant_results = {}
-    print("Review the search results and select the relevant ones:")
-    for idx, result in enumerate(web_search_results_dict["results"]):
-        print(f"\nResult {idx + 1}:")
-        print(f"Title: {result['title']}")
-        print(f"URL: {result['url']}")
-        print(f"Content: {result['content'][:200]}...")  # Show a preview of the content
-        user_input = input("Is this result relevant? (y/n): ").strip().lower()
-        if user_input == 'y':
-            relevant_results[str(idx)] = result
+    # If no selector provided, default to keeping all results as relevant
+    if selector is None:
+        return {str(idx): res for idx, res in enumerate(web_search_results_dict.get("results", []))}
 
+    relevant_results: Dict[str, Dict] = {}
+    for idx, result in enumerate(web_search_results_dict.get("results", [])):
+        try:
+            if selector(result):
+                relevant_results[str(idx)] = result
+        except Exception:
+            # If selector throws, skip selection for this item
+            continue
     return relevant_results
 
 
@@ -757,8 +822,8 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             # Prepare the arguments for search_web_google
             google_args = {
                 "search_query": search_query,
-                "google_search_api_key": loaded_config_data['search_engines']['google_search_api_key'],
-                "google_search_engine_id": loaded_config_data['search_engines']['google_search_engine_id'],
+                "google_search_api_key": get_loaded_config()['search_engines']['google_search_api_key'],
+                "google_search_engine_id": get_loaded_config()['search_engines']['google_search_engine_id'],
                 "result_count": result_count,
                 "c2coff": "1",  # Default value
                 "results_origin_country": content_country,
@@ -1088,12 +1153,12 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
     search_url = "https://api.search.brave.com/res/v1/web/search"
     if not brave_api_key and search_type == "web":
         # load key from config file
-        brave_api_key = loaded_config_data['search_engines']['brave_search_api_key']
+        brave_api_key = get_loaded_config()['search_engines']['brave_search_api_key']
         if not brave_api_key:
             raise ValueError("Please provide a valid Brave Search API subscription key")
     # Respect provided country; fallback to config default
     if not country:
-        country = loaded_config_data['search_engines']['search_engine_country_code_brave']
+        country = get_loaded_config()['search_engines']['search_engine_country_code_brave']
     if not search_lang:
         search_lang = "en"
     if not ui_lang:
@@ -1105,7 +1170,7 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
     if not result_filter:
         result_filter = "webpages"
     if search_type == "ai":
-        brave_api_key = loaded_config_data['search_engines']['brave_search_ai_api_key']
+        brave_api_key = get_loaded_config()['search_engines']['brave_search_ai_api_key']
     else:
         raise ValueError("Invalid search type. Please choose 'ai' or 'web'.")
 
@@ -1449,7 +1514,7 @@ def search_web_google(
     """
     try:
         # Load Search API URL from config file
-        search_url = loaded_config_data['search_engines']['google_search_api_url']
+        search_url = get_loaded_config()['search_engines']['google_search_api_url']
         logging.info(f"Using search URL: {search_url}")
 
         # Initialize params dictionary
@@ -1457,28 +1522,28 @@ def search_web_google(
 
         # Handle c2coff
         if c2coff is None:
-            c2coff = loaded_config_data['search_engines']['google_simp_trad_chinese']
+            c2coff = get_loaded_config()['search_engines']['google_simp_trad_chinese']
         if c2coff is not None:
             params["c2coff"] = c2coff
 
         # Handle results_origin_country
         if results_origin_country is None:
-            limit_country_search = loaded_config_data['search_engines']['limit_google_search_to_country']
+            limit_country_search = get_loaded_config()['search_engines']['limit_google_search_to_country']
             if limit_country_search:
-                results_origin_country = loaded_config_data['search_engines']['google_search_country']
+                results_origin_country = get_loaded_config()['search_engines']['google_search_country']
         if results_origin_country:
             params["cr"] = results_origin_country
 
         # Handle google_search_engine_id
         if google_search_engine_id is None:
-            google_search_engine_id = loaded_config_data['search_engines']['google_search_engine_id']
+            google_search_engine_id = get_loaded_config()['search_engines']['google_search_engine_id']
         if not google_search_engine_id:
             raise ValueError("Please set a valid Google Search Engine ID in the config file")
         params["cx"] = google_search_engine_id
 
         # Handle google_search_api_key
         if google_search_api_key is None:
-            google_search_api_key = loaded_config_data['search_engines']['google_search_api_key']
+            google_search_api_key = get_loaded_config()['search_engines']['google_search_api_key']
         if not google_search_api_key:
             raise ValueError("Please provide a valid Google Search API subscription key")
         params["key"] = google_search_api_key
@@ -1501,7 +1566,7 @@ def search_web_google(
         if search_result_language:
             params["lr"] = search_result_language
         if safesearch is None:
-            safesearch = loaded_config_data['search_engines']['google_safe_search']
+            safesearch = get_loaded_config()['search_engines']['google_safe_search']
         if safesearch:
             params["safe"] = safesearch
         if sort_results_by:
@@ -1533,8 +1598,8 @@ def search_web_google(
 
 def test_search_google():
     search_query = "How can I bake a cherry cake?"
-    google_search_api_key = loaded_config_data['search_engines']['google_search_api_key']
-    google_search_engine_id = loaded_config_data['search_engines']['google_search_engine_id']
+    google_search_api_key = get_loaded_config()['search_engines']['google_search_api_key']
+    google_search_engine_id = get_loaded_config()['search_engines']['google_search_engine_id']
     result_count = 10
     c2coff = "1"
     results_origin_country = "countryUS"
@@ -1682,7 +1747,7 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
     search_url = "https://kagi.com/api/v0/search"
 
     # load key from config file
-    kagi_api_key = loaded_config_data['search_engines']['kagi_search_api_key']
+    kagi_api_key = get_loaded_config()['search_engines']['kagi_search_api_key']
     if not kagi_api_key:
         raise ValueError("Please provide a valid Kagi Search API subscription key")
 
@@ -1805,7 +1870,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
     """
     # Use the provided Searx URL or fall back to the configured one
     if not searx_url:
-        searx_url = loaded_config_data['search_engines']['searx_search_api_url']
+        searx_url = get_loaded_config()['search_engines']['searx_search_api_url']
     if not searx_url:
         return {"error": "SearX Search is disabled and no content was found. This functionality is disabled because the user has not set it up yet."}
 
@@ -1912,7 +1977,7 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
     # Check if API URL is configured
     tavily_api_url = "https://api.tavily.com/search"
 
-    tavily_api_key = loaded_config_data['search_engines']['tavily_search_api_key']
+    tavily_api_key = get_loaded_config()['search_engines']['tavily_search_api_key']
 
     # Prepare the request payload
     payload = {

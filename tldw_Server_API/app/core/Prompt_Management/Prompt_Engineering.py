@@ -7,7 +7,7 @@ import re
 # External Imports
 #
 # Local Imports
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 #
 #
 #######################################################################################################################
@@ -546,5 +546,4 @@ def test_generated_prompt(api_endpoint, api_key, generated_prompt, variable_valu
 #
 # End of Function Definitions
 ########################################################################################################################
-
 

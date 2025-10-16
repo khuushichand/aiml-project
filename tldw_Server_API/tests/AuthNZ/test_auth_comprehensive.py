@@ -3,6 +3,7 @@
 #
 # Imports
 import pytest
+import pytest_asyncio
 import asyncio
 import os
 import uuid
@@ -38,7 +39,7 @@ TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
 # Note: We now use isolated_test_environment from conftest.py for true DB isolation
 # Each test gets its own unique database that is created and destroyed per test
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_user_data(isolated_test_environment):
     """Create test user data in isolated database"""
     import asyncpg
@@ -83,7 +84,7 @@ async def test_user_data(isolated_test_environment):
     finally:
         await conn.close()
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def admin_user_data(isolated_test_environment):
     """Create admin user data in isolated database"""
     import asyncpg
@@ -129,7 +130,7 @@ async def admin_user_data(isolated_test_environment):
         await conn.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_client(isolated_test_environment):
     """Create async test client using isolated environment"""
     # Use the client from isolated_test_environment
@@ -144,7 +145,7 @@ async def async_client(isolated_test_environment):
 # These are properly configured with PostgreSQL test database
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def auth_headers(isolated_test_environment, test_user_data):
     """Get authentication headers for a test user"""
     client, db_name = isolated_test_environment
@@ -160,7 +161,7 @@ async def auth_headers(isolated_test_environment, test_user_data):
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def admin_headers(isolated_test_environment, admin_user_data):
     """Get authentication headers for an admin user"""
     client, db_name = isolated_test_environment
@@ -183,6 +184,7 @@ async def admin_headers(isolated_test_environment, admin_user_data):
 class TestAuthentication:
     """Test authentication endpoints"""
     
+    @pytest.mark.asyncio
     async def test_login_success(self, isolated_test_environment, test_user_data):
         """Test successful login"""
         client, db_name = isolated_test_environment
@@ -200,7 +202,7 @@ class TestAuthentication:
         assert data["token_type"] == "bearer"
         assert data["expires_in"] > 0
     
-    async def test_login_invalid_username(self, isolated_test_environment):
+    def test_login_invalid_username(self, isolated_test_environment):
         """Test login with invalid username"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -213,6 +215,7 @@ class TestAuthentication:
         assert response.status_code == 401
         assert "Incorrect username or password" in response.json()["detail"]
     
+    @pytest.mark.asyncio
     async def test_login_invalid_password(self, isolated_test_environment, test_user_data):
         """Test login with invalid password"""
         client, db_name = isolated_test_environment
@@ -226,6 +229,7 @@ class TestAuthentication:
         assert response.status_code == 401
         assert "Incorrect username or password" in response.json()["detail"]
     
+    @pytest.mark.asyncio
     async def test_logout(self, isolated_test_environment, auth_headers):
         """Test logout endpoint"""
         client, db_name = isolated_test_environment
@@ -236,6 +240,7 @@ class TestAuthentication:
         assert response.status_code == 200
         assert "Successfully logged out" in response.json()["message"]
     
+    @pytest.mark.asyncio
     async def test_refresh_token(self, isolated_test_environment, test_user_data):
         """Test token refresh"""
         client, db_name = isolated_test_environment
@@ -260,6 +265,7 @@ class TestAuthentication:
         assert "access_token" in data
         assert "refresh_token" in data
     
+    @pytest.mark.asyncio
     async def test_get_current_user(self, isolated_test_environment, auth_headers):
         """Test getting current user info"""
         client, db_name = isolated_test_environment
@@ -282,7 +288,7 @@ class TestAuthentication:
 class TestRegistration:
     """Test user registration"""
     
-    async def test_register_success(self, isolated_test_environment):
+    def test_register_success(self, isolated_test_environment):
         """Test successful registration"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -299,7 +305,7 @@ class TestRegistration:
         assert data["email"] == "newuser@example.com"
         assert "user_id" in data
     
-    async def test_register_duplicate_username(self, isolated_test_environment, test_user_data):
+    def test_register_duplicate_username(self, isolated_test_environment, test_user_data):
         """Test registration with duplicate username"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -313,7 +319,7 @@ class TestRegistration:
         assert response.status_code == 409
         assert "already" in response.json()["detail"].lower()
     
-    async def test_register_duplicate_email(self, isolated_test_environment, test_user_data):
+    def test_register_duplicate_email(self, isolated_test_environment, test_user_data):
         """Test registration with duplicate email"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -397,6 +403,7 @@ class TestUserManagement:
 class TestAdminEndpoints:
     """Test admin endpoints"""
     
+    @pytest.mark.asyncio
     async def test_list_users(self, isolated_test_environment, admin_headers):
         """Test listing users as admin"""
         client, db_name = isolated_test_environment
@@ -410,6 +417,7 @@ class TestAdminEndpoints:
         assert "total" in data
         assert "page" in data
     
+    @pytest.mark.asyncio
     async def test_update_user(self, isolated_test_environment, admin_headers, test_user_data):
         """Test updating user as admin"""
         client, db_name = isolated_test_environment
@@ -424,6 +432,7 @@ class TestAdminEndpoints:
         assert response.status_code == 200
         assert "updated successfully" in response.json()["message"]
     
+    @pytest.mark.asyncio
     async def test_create_registration_code(self, isolated_test_environment, admin_headers):
         """Test creating registration code"""
         client, db_name = isolated_test_environment
@@ -442,6 +451,7 @@ class TestAdminEndpoints:
         assert data["max_uses"] == 5
         assert data["role_to_grant"] == "user"
     
+    @pytest.mark.asyncio
     async def test_get_system_stats(self, isolated_test_environment, admin_headers):
         """Test getting system statistics"""
         client, db_name = isolated_test_environment
@@ -455,6 +465,7 @@ class TestAdminEndpoints:
         assert "storage" in data
         assert "sessions" in data
     
+    @pytest.mark.asyncio
     async def test_get_audit_log(self, isolated_test_environment, admin_headers):
         """Test getting audit log"""
         client, db_name = isolated_test_environment
@@ -474,7 +485,7 @@ class TestAdminEndpoints:
 class TestHealthEndpoints:
     """Test health monitoring endpoints"""
     
-    async def test_health_check(self, isolated_test_environment):
+    def test_health_check(self, isolated_test_environment):
         """Test main health check"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health")
@@ -484,14 +495,14 @@ class TestHealthEndpoints:
         assert "checks" in data
         assert "timestamp" in data
     
-    async def test_liveness_probe(self, isolated_test_environment):
+    def test_liveness_probe(self, isolated_test_environment):
         """Test liveness probe"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/live")
         assert response.status_code == 200
         assert response.json()["status"] == "alive"
     
-    async def test_readiness_probe(self, isolated_test_environment):
+    def test_readiness_probe(self, isolated_test_environment):
         """Test readiness probe"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/ready")
@@ -499,7 +510,7 @@ class TestHealthEndpoints:
         data = response.json()
         assert "status" in data
     
-    async def test_metrics_endpoint(self, isolated_test_environment):
+    def test_metrics_endpoint(self, isolated_test_environment):
         """Test metrics endpoint"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/metrics")
@@ -517,13 +528,13 @@ class TestHealthEndpoints:
 class TestSecurity:
     """Test security features"""
     
-    async def test_unauthorized_access(self, isolated_test_environment):
+    def test_unauthorized_access(self, isolated_test_environment):
         """Test accessing protected endpoint without auth"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/users/me")
         assert response.status_code in [401, 403]  # Both unauthorized and forbidden are acceptable
     
-    async def test_invalid_token(self, isolated_test_environment):
+    def test_invalid_token(self, isolated_test_environment):
         """Test with invalid token"""
         client, db_name = isolated_test_environment
         response = client.get(
@@ -532,6 +543,7 @@ class TestSecurity:
         )
         assert response.status_code == 401
     
+    @pytest.mark.asyncio
     async def test_admin_endpoint_as_user(self, isolated_test_environment, auth_headers):
         """Test accessing admin endpoint as regular user"""
         client, db_name = isolated_test_environment
@@ -546,7 +558,7 @@ class TestSecurity:
         get_settings().RATE_LIMIT_ENABLED == False,
         reason="Rate limiting disabled"
     )
-    async def test_rate_limiting(self, isolated_test_environment):
+    def test_rate_limiting(self, isolated_test_environment):
         """Test rate limiting"""
         client, db_name = isolated_test_environment
         # Make many requests quickly
@@ -571,6 +583,7 @@ class TestSecurity:
 class TestPerformance:
     """Test performance and concurrency"""
     
+    @pytest.mark.asyncio
     async def test_concurrent_logins(self, isolated_test_environment, test_user_data):
         """Test handling concurrent login requests"""
         client, db_name = isolated_test_environment
@@ -590,6 +603,7 @@ class TestPerformance:
         # All should succeed
         assert all(r.status_code == 200 for r in responses)
     
+    @pytest.mark.asyncio
     async def test_session_cleanup(self, isolated_test_environment):
         """Test that expired sessions are cleaned up"""
         import asyncpg
@@ -679,7 +693,7 @@ class TestPerformance:
 class TestIntegration:
     """Test full user flows"""
     
-    async def test_full_user_lifecycle(self, isolated_test_environment):
+    def test_full_user_lifecycle(self, isolated_test_environment):
         """Test complete user lifecycle from registration to deletion"""
         client, db_name = isolated_test_environment
         # 1. Register new user

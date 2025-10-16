@@ -11,6 +11,7 @@ Key enhancements over v5:
 """
 
 import asyncio
+import json
 import base64
 import hashlib
 import time
@@ -23,7 +24,8 @@ import atexit
 import os
 
 from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
-from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
+from fastapi.responses import JSONResponse, StreamingResponse
 import tiktoken
 from loguru import logger
 from asyncio import Lock
@@ -37,10 +39,12 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     EmbeddingData,
     EmbeddingUsage
 )
+from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from pydantic import BaseModel, Field
 
 # Authentication
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Configuration
@@ -49,10 +53,7 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 from pathlib import Path
 import configparser
 
-# Audit logging
-from tldw_Server_API.app.core.Embeddings.audit_logger import (
-    get_audit_logger, AuditEventType
-)
+# Audit logging: unify later via unified audit DI; legacy import removed (unused here)
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
@@ -69,6 +70,10 @@ from slowapi.util import get_remote_address
 
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
+import redis.asyncio as aioredis
+from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
 
 # ============================================================================
@@ -226,6 +231,51 @@ embedding_token_inputs_total = get_or_create_counter(
     ['mode']  # single or batch
 )
 
+# DLQ/admin metrics
+dlq_requeued_total = get_or_create_counter(
+    'embedding_dlq_requeued_total',
+    'Number of DLQ items requeued via admin API',
+    ['queue_name', 'status']
+)
+dlq_requeue_errors_total = get_or_create_counter(
+    'embedding_dlq_requeue_errors_total',
+    'Errors during DLQ requeue operations',
+    ['queue_name', 'error_type']
+)
+
+# Orchestrator observability metrics
+orchestrator_sse_connections = get_or_create_gauge(
+    'orchestrator_sse_connections',
+    'Current number of active SSE connections to orchestrator'
+)
+
+orchestrator_sse_disconnects_total = get_or_create_counter(
+    'orchestrator_sse_disconnects_total',
+    'Total number of SSE disconnect events from orchestrator',
+    []
+)
+
+orchestrator_summary_failures_total = get_or_create_counter(
+    'orchestrator_summary_failures_total',
+    'Total number of summary failures (fallbacks returned)',
+    []
+)
+
+# Export queue age and stage flags for Prometheus scraping
+embedding_queue_age_current_seconds = get_or_create_gauge(
+    'embedding_queue_age_current_seconds',
+    'Current age (seconds) of oldest message per queue',
+    ['queue_name']
+)
+
+embedding_stage_flag = get_or_create_gauge(
+    'embedding_stage_flag',
+    'Per-stage control flags as gauges (1=true,0=false)',
+    ['stage', 'flag']
+)
+
+## Backpressure and quotas (configured later; depends on _cfg_int defined below)
+
 # ============================================================================
 # Configuration and Constants
 # ============================================================================
@@ -241,13 +291,154 @@ class EmbeddingProvider(str, Enum):
     MISTRAL = "mistral"
 
 # Production configuration
-MAX_BATCH_SIZE = 100
-MAX_CACHE_SIZE = 5000
-CACHE_TTL_SECONDS = 3600
-CACHE_CLEANUP_INTERVAL = 300
-CONNECTION_POOL_SIZE = 20
-REQUEST_TIMEOUT = 30
-MAX_RETRIES = 3
+DEFAULT_MAX_BATCH_SIZE = 100
+DEFAULT_MAX_CACHE_SIZE = 5000
+DEFAULT_CACHE_TTL_SECONDS = 3600
+DEFAULT_CACHE_CLEANUP_INTERVAL = 300
+DEFAULT_CONNECTION_POOL_SIZE = 20
+DEFAULT_REQUEST_TIMEOUT = 30
+DEFAULT_MAX_RETRIES = 3
+
+# Allow overriding via settings/env
+def _cfg_int(name: str, default_val: int) -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings
+        val = _settings.get(name, None)
+        if isinstance(val, (int, float)):
+            return int(val)
+    except Exception:
+        pass
+    try:
+        env = os.getenv(name)
+        if env is not None and str(env).strip() != "":
+            return int(env)
+    except Exception:
+        pass
+    return default_val
+
+# Backpressure and quotas configuration
+def _cfg_float(name: str, default_val: float) -> float:
+    try:
+        v = settings.get(name, None)
+        if isinstance(v, (int, float)):
+            return float(v)
+    except Exception:
+        pass
+    try:
+        env = os.getenv(name)
+        if env is not None and str(env).strip() != "":
+            return float(env)
+    except Exception:
+        pass
+    return float(default_val)
+
+BP_MAX_DEPTH = int(_cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000))
+BP_MAX_AGE_S = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
+TENANT_RPS = int(_cfg_int("EMBEDDINGS_TENANT_RPS", 0))  # 0 disables
+# Orchestrator snapshot scan cap (prevent unbounded SCAN work per build)
+ORCH_SCAN_MAX_KEYS = int(_cfg_int("EMB_ORCH_MAX_SCAN_KEYS", 500))
+
+async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
+    """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    depths = []
+    ages = []
+    now = time.time()
+    for q in queues:
+        try:
+            d = await client.xlen(q)
+        except Exception:
+            d = 0
+        depths.append(int(d or 0))
+        try:
+            items = await client.xrange(q, "-", "+", count=1)
+            if items:
+                first_id = items[0][0]
+                ts_ms = float(first_id.split("-", 1)[0])
+                ages.append(max(0.0, now - (ts_ms / 1000.0)))
+            else:
+                ages.append(0.0)
+        except Exception:
+            ages.append(0.0)
+    return (max(depths) if depths else 0, max(ages) if ages else 0.0)
+
+async def _check_backpressure_and_quotas(request: Request, user: User) -> Optional[HTTPException]:
+    """Return HTTPException(429) if backpressure or tenant quota exceeded; else None."""
+    # Orchestrator-based backpressure
+    try:
+        client = await _get_redis_client()
+    except Exception:
+        client = None
+    try:
+        if client is not None:
+            depth, age = await _orchestrator_depth_and_age(client)
+            if depth >= BP_MAX_DEPTH or age >= BP_MAX_AGE_S:
+                retry_after = 5
+                if age >= BP_MAX_AGE_S:
+                    retry_after = min(60, int(max(5, age / 2)))
+                headers = {"Retry-After": str(retry_after)}
+                return HTTPException(status_code=429, detail="Backpressure: queue overload", headers=headers)
+    except Exception:
+        pass
+    finally:
+        try:
+            if client is not None:
+                await client.close()
+        except Exception:
+            pass
+
+    # Per-tenant quotas in multi-user mode
+    try:
+        if not is_single_user_mode() and TENANT_RPS > 0:
+            client2 = await _get_redis_client()
+            ts = int(time.time())
+            key = f"embeddings:tenant:rps:{getattr(user, 'id', 'anon')}:{ts}"
+            current = await client2.incr(key)
+            await client2.expire(key, 2)
+            remaining = max(0, TENANT_RPS - int(current or 0))
+            if current > TENANT_RPS:
+                headers = {"Retry-After": "1", "X-RateLimit-Limit": str(TENANT_RPS), "X-RateLimit-Remaining": str(0)}
+                return HTTPException(status_code=429, detail="Tenant quota exceeded", headers=headers)
+            else:
+                if hasattr(request, 'state'):
+                    try:
+                        request.state.rate_limit_limit = TENANT_RPS
+                        request.state.rate_limit_remaining = remaining
+                    except Exception:
+                        pass
+            await client2.close()
+    except Exception:
+        pass
+    return None
+
+
+# ============================================================================
+# Redis helpers for DLQ admin endpoints
+# ============================================================================
+
+async def _get_redis_client() -> aioredis.Redis:
+    url = settings.get('REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379'))
+    return await aioredis.from_url(url, decode_responses=True)
+
+def _dlq_stream_name(stage: str) -> str:
+    stage = stage.strip().lower()
+    if stage not in {"chunking", "embedding", "storage"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    return f"embeddings:{stage}:dlq"
+
+def _live_stream_name(stage: str) -> str:
+    stage = stage.strip().lower()
+    if stage not in {"chunking", "embedding", "storage"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    return f"embeddings:{stage}"
+
+MAX_BATCH_SIZE = _cfg_int("EMBEDDINGS_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE)
+MAX_CACHE_SIZE = _cfg_int("EMBEDDINGS_CACHE_MAX_SIZE", DEFAULT_MAX_CACHE_SIZE)
+CACHE_TTL_SECONDS = _cfg_int("EMBEDDINGS_CACHE_TTL_SECONDS", DEFAULT_CACHE_TTL_SECONDS)
+CACHE_CLEANUP_INTERVAL = _cfg_int("EMBEDDINGS_CACHE_CLEANUP_INTERVAL", DEFAULT_CACHE_CLEANUP_INTERVAL)
+CONNECTION_POOL_SIZE = _cfg_int("EMBEDDINGS_CONNECTION_POOL_SIZE", DEFAULT_CONNECTION_POOL_SIZE)
+REQUEST_TIMEOUT = _cfg_int("EMBEDDINGS_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
+MAX_RETRIES = _cfg_int("EMBEDDINGS_MAX_RETRIES", DEFAULT_MAX_RETRIES)
 
 # Circuit breaker configuration
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
@@ -407,6 +598,10 @@ class TTLCache:
                     self.cache.keys(),
                     key=lambda k: self.cache[k].get('last_access', 0)
                 )
+                try:
+                    logger.debug(f"Embeddings TTLCache evict LRU key={lru_key[:8]}..., size={len(self.cache)}")
+                except Exception:
+                    pass
                 del self.cache[lru_key]
                 
             self.cache[key] = {
@@ -524,6 +719,76 @@ def apply_rate_limit(limit_string: str):
         return wrapper
     return decorator
 
+@asynccontextmanager
+async def _embeddings_router_lifespan(app):
+    # Startup
+    logger.info("Starting embeddings service v5 enhanced (with circuit breaker)")
+    await embedding_cache.start_cleanup_task()
+    if not EMBEDDINGS_AVAILABLE:
+        logger.error("Embeddings implementation not available - service will not function")
+    try:
+        ci = os.getenv("CI", "").lower() == "true"
+        auto_dl = os.getenv("AUTO_DOWNLOAD_MODELS", "true").lower() == "true"
+        if ci and auto_dl:
+            async def _preload_models_on_startup():
+                try:
+                    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
+                    preload_list = []
+                    env_models = os.getenv("PRELOAD_EMBEDDING_MODELS")
+                    if env_models:
+                        preload_list.extend([m.strip() for m in env_models.split(",") if m.strip()])
+                    try:
+                        cfg_preload = cfg.get("preload_models", []) or []
+                        if isinstance(cfg_preload, list):
+                            preload_list.extend([str(m).strip() for m in cfg_preload if str(m).strip()])
+                    except Exception:
+                        pass
+                    default_model = cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
+                    default_provider = cfg.get("embedding_provider") or "huggingface"
+                    if default_model:
+                        if ":" in default_model:
+                            preload_list.append(default_model)
+                        else:
+                            preload_list.append(f"{default_provider}:{default_model}")
+                    seen = set(); final_models = []
+                    for m in preload_list:
+                        if m and m not in seen:
+                            seen.add(m); final_models.append(m)
+                    if final_models:
+                        logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
+                        for full in final_models:
+                            try:
+                                if ":" in full:
+                                    prov, mdl = full.split(":", 1)
+                                    provider = prov.strip().lower(); model = mdl.strip()
+                                else:
+                                    model = full.strip(); provider = guess_provider_for_model(model)
+                                if not is_model_allowed(provider, model):
+                                    logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
+                                    continue
+                                if provider == "openai" and not settings.get("OPENAI_API_KEY"):
+                                    logger.info("Skipping OpenAI preload due to missing OPENAI_API_KEY")
+                                    continue
+                                await create_embeddings_batch_async(texts=["ci preload"], provider=provider, model_id=model)
+                                logger.info(f"Preloaded model {provider}:{model}")
+                            except Exception as e:
+                                logger.warning(f"Failed to preload model {full}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error during preload task: {e}")
+            asyncio.create_task(_preload_models_on_startup())
+    except Exception as e:
+        logger.error(f"Failed to schedule model preloads: {e}")
+    logger.info("Embeddings service started successfully")
+
+    try:
+        yield
+    finally:
+        # Shutdown
+        logger.info("Shutting down embeddings service")
+        await embedding_cache.stop_cleanup_task()
+        await connection_manager.close_all()
+        logger.info("Embeddings service shutdown complete")
+
 router = APIRouter(
     tags=["embeddings"],
     responses={
@@ -532,121 +797,36 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"},
         500: {"description": "Internal server error"},
         503: {"description": "Service unavailable"}
-    }
+    },
+    lifespan=_embeddings_router_lifespan,
 )
 
-# ============================================================================
-# Startup and Shutdown Events
-# ============================================================================
 
-@router.on_event("startup")
-async def startup_event():
-    """Initialize services on startup"""
-    logger.info("Starting embeddings service v5 enhanced (with circuit breaker)")
-    
-    await embedding_cache.start_cleanup_task()
-    
-    if not EMBEDDINGS_AVAILABLE:
-        logger.error("Embeddings implementation not available - service will not function")
-    
-    # In CI/CD (or when AUTO_DOWNLOAD_MODELS=true), proactively download/preload models
-    try:
-        ci = os.getenv("CI", "").lower() == "true"
-        auto_dl = os.getenv("AUTO_DOWNLOAD_MODELS", "true").lower() == "true"
-        if ci and auto_dl:
-            async def _preload_models_on_startup():
-                try:
-                    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
-                    # Collect candidate models to preload
-                    preload_list = []
-                    # 1) From env PRELOAD_EMBEDDING_MODELS (comma-separated, supports provider:model)
-                    env_models = os.getenv("PRELOAD_EMBEDDING_MODELS")
-                    if env_models:
-                        preload_list.extend([m.strip() for m in env_models.split(",") if m.strip()])
-                    # 2) From config key 'preload_models' (list)
-                    try:
-                        cfg_preload = cfg.get("preload_models", []) or []
-                        if isinstance(cfg_preload, list):
-                            preload_list.extend([str(m).strip() for m in cfg_preload if str(m).strip()])
-                    except Exception:
-                        pass
-                    # 3) Always include default model
-                    default_model = cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
-                    default_provider = cfg.get("embedding_provider") or "huggingface"
-                    if default_model:
-                        if ":" in default_model:
-                            preload_list.append(default_model)
-                        else:
-                            preload_list.append(f"{default_provider}:{default_model}")
-                    # De-duplicate while preserving order
-                    seen = set()
-                    final_models = []
-                    for m in preload_list:
-                        if m and m not in seen:
-                            seen.add(m)
-                            final_models.append(m)
-                    if not final_models:
-                        logger.info("No models specified for preload in CI; skipping preload")
-                        return
-                    logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
-                    for full in final_models:
-                        try:
-                            if ":" in full:
-                                prov, mdl = full.split(":", 1)
-                                provider = prov.strip().lower()
-                                model = mdl.strip()
-                            else:
-                                model = full.strip()
-                                provider = guess_provider_for_model(model)
-                            if not is_model_allowed(provider, model):
-                                logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
-                                continue
-                            if provider == "openai" and not settings.get("OPENAI_API_KEY"):
-                                logger.info("Skipping OpenAI preload due to missing OPENAI_API_KEY")
-                                continue
-                            # Trigger a tiny embedding to force download
-                            await create_embeddings_batch_async(
-                                texts=["ci preload"],
-                                provider=provider,
-                                model_id=model
-                            )
-                            logger.info(f"Preloaded model {provider}:{model}")
-                        except Exception as e:
-                            logger.warning(f"Failed to preload model {full}: {e}")
-                except Exception as e:
-                    logger.error(f"Unexpected error during preload task: {e}")
-            # Fire and forget
-            asyncio.create_task(_preload_models_on_startup())
-    except Exception as e:
-        logger.error(f"Failed to schedule model preloads: {e}")
-    
-    logger.info("Embeddings service started successfully")
+# Implemented provider set for 501 guard
+IMPLEMENTED_PROVIDERS = {"openai", "huggingface", "onnx", "local_api", "cohere", "google"}
 
-@router.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down embeddings service")
-    
-    await embedding_cache.stop_cleanup_task()
-    await connection_manager.close_all()
-    
-    logger.info("Embeddings service shutdown complete")
 
 # Register cleanup on process exit
 def cleanup_on_exit():
     """Synchronous cleanup for process exit"""
+    # Avoid logging in atexit, as sinks may already be closed
     try:
         loop = asyncio.get_event_loop()
-        if not loop.is_closed():
-            # Stop TTL cache cleanup task if running
+    except Exception:
+        return
+    try:
+        if loop and not loop.is_closed():
             try:
                 loop.run_until_complete(embedding_cache.stop_cleanup_task())
             except Exception:
                 pass
-            # Close provider connection pools
-            loop.run_until_complete(connection_manager.close_all())
-    except Exception as e:
-        logger.error(f"Error during exit cleanup: {e}")
+            try:
+                loop.run_until_complete(connection_manager.close_all())
+            except Exception:
+                pass
+    except Exception:
+        # Swallow any errors during interpreter teardown
+        pass
 
 atexit.register(cleanup_on_exit)
 
@@ -679,6 +859,46 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int
         key_parts.append(str(dimensions))
     key_string = "|".join(key_parts)
     return hashlib.sha256(key_string.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# On-demand vector compaction (admin only)
+# ---------------------------------------------------------------------------
+
+class CompactorRunRequest(BaseModel):
+    user_id: Optional[str] = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
+    media_db_path: Optional[str] = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
+
+
+class CompactorRunResponse(BaseModel):
+    user_id: str
+    collections_touched: int
+    ts: float
+
+
+@router.post(
+    "/embeddings/compactor/run",
+    response_model=CompactorRunResponse,
+    summary="Run a one-shot vector compaction for a user (admin only)"
+)
+async def run_compactor_once(
+    req: CompactorRunRequest,
+    current_user: User = Depends(get_request_user),
+):
+    require_admin(current_user)
+    try:
+        # Lazy import to avoid heavy imports on module import
+        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
+    except Exception:
+        raise HTTPException(status_code=503, detail="Compactor unavailable")
+    uid = str(req.user_id or current_user.id)
+    try:
+        touched = await _compact_once(uid, db_path=req.media_db_path or None)
+        return CompactorRunResponse(user_id=uid, collections_touched=int(touched or 0), ts=datetime.utcnow().timestamp())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Compactor run failed: {e}")
 
 # ============================================================================
 # Token-array handling and dimension adjustment helpers
@@ -807,6 +1027,53 @@ def resolve_fallback_chain(primary_provider: str) -> List[str]:
         "local_api": ["local_api", "huggingface"],
     }
     return defaults.get(primary_provider, [primary_provider])
+
+def _fallback_model_map() -> Dict[str, Dict[str, str]]:
+    """Return mapping for provider-specific model fallbacks.
+
+    Shape: {"<src_provider>:<src_model>": {"<dst_provider>": "<dst_model>"}}
+    """
+    try:
+        m = settings.get("EMBEDDINGS_FALLBACK_MODEL_MAP", None)
+        if isinstance(m, dict) and m:
+            return m
+    except Exception:
+        pass
+    # Sensible defaults for common OpenAI → HF mapping
+    return {
+        "openai:text-embedding-3-small": {
+            "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
+            "onnx": "sentence-transformers/all-MiniLM-L6-v2",
+            "local_api": "sentence-transformers/all-MiniLM-L6-v2",
+        },
+        "openai:text-embedding-3-large": {
+            "huggingface": "sentence-transformers/all-mpnet-base-v2",
+            "onnx": "sentence-transformers/all-mpnet-base-v2",
+            "local_api": "sentence-transformers/all-mpnet-base-v2",
+        },
+        "openai:text-embedding-ada-002": {
+            "huggingface": "sentence-transformers/all-mpnet-base-v2",
+            "onnx": "sentence-transformers/all-mpnet-base-v2",
+            "local_api": "sentence-transformers/all-mpnet-base-v2",
+        },
+    }
+
+def map_model_for_provider(src_provider: str, dst_provider: str, model_id: str) -> str:
+    """Map a model id to the destination provider if a mapping exists."""
+    if not src_provider or not dst_provider:
+        return model_id
+    if src_provider == dst_provider:
+        return model_id
+    key = f"{src_provider}:{model_id}"
+    mapping = _fallback_model_map()
+    try:
+        dst_map = mapping.get(key, {})
+        mapped = dst_map.get(dst_provider)
+        if isinstance(mapped, str) and mapped:
+            return mapped
+    except Exception:
+        pass
+    return model_id
 
 # Models that require trust_remote_code=True for HuggingFace loading
 def _hf_trusts_remote_code(model_name: str) -> bool:
@@ -993,6 +1260,64 @@ async def create_embeddings_with_circuit_breaker(
                     api_url=config.get("api_url"),
                     api_key=config.get("api_key"),
                 )
+            elif provider == "cohere":
+                # Direct async call to Cohere embeddings
+                api_key = config.get("api_key") or settings.get("COHERE_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Cohere API key not configured")
+                mdl = config.get("model_name_or_path", model_id) or "embed-english-v3.0"
+                session = await connection_manager.get_session(provider)
+                url = "https://api.cohere.com/v1/embed"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {"model": mdl, "texts": texts, "input_type": "search_document"}
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status >= 400:
+                        detail = await resp.text()
+                        raise HTTPException(status_code=resp.status, detail=f"Cohere error: {detail}")
+                    data = await resp.json()
+                    embs = None
+                    try:
+                        if isinstance(data.get("embeddings"), list):
+                            embs = data["embeddings"]
+                        elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
+                            embs = data["embeddings"]["float"]
+                    except Exception:
+                        embs = None
+                    if not embs:
+                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
+                    return embs
+            elif provider == "google":
+                # Direct async call to Google Generative Language API (text-embedding-004)
+                api_key = config.get("api_key") or settings.get("GOOGLE_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google API key not configured")
+                raw_model = config.get("model_name_or_path", model_id) or "models/text-embedding-004"
+                model_name = raw_model if raw_model.startswith("models/") else f"models/{raw_model}"
+                session = await connection_manager.get_session(provider)
+                base = "https://generativelanguage.googleapis.com/v1beta"
+                url = f"{base}/{model_name}:batchEmbedContents?key={api_key}"
+                reqs = [{"model": model_name, "content": {"parts": [{"text": t}]}} for t in texts]
+                payload = {"requests": reqs}
+                async with session.post(url, json=payload) as resp:
+                    if resp.status >= 400:
+                        detail = await resp.text()
+                        raise HTTPException(status_code=resp.status, detail=f"Google Embeddings error: {detail}")
+                    data = await resp.json()
+                    embs = []
+                    try:
+                        items = data.get("embeddings") or []
+                        for it in items:
+                            vec = it.get("values") or it.get("embedding") or []
+                            if isinstance(vec, dict) and "values" in vec:
+                                vec = vec["values"]
+                            if not isinstance(vec, list):
+                                raise ValueError("invalid embedding vector")
+                            embs.append(vec)
+                    except Exception:
+                        embs = []
+                    if not embs or len(embs) != len(texts):
+                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
+                    return embs
             else:
                 raise ValueError(f"Unknown provider: {provider}")
             
@@ -1047,7 +1372,8 @@ async def create_embeddings_batch_async(
         
         if cached:
             embeddings.append(cached)
-            embedding_cache_hits.labels(provider=provider, model=model_id).inc()
+            # Ensure Prometheus labels are always strings
+            embedding_cache_hits.labels(provider=provider, model=(model_id or "default")).inc()
         else:
             embeddings.append(None)
             uncached_texts.append(text)
@@ -1149,7 +1475,8 @@ def require_admin(user: User) -> None:
     "/embeddings",
     response_model=CreateEmbeddingResponse,
     status_code=status.HTTP_200_OK,
-    summary="Create embeddings (enhanced with circuit breaker)"
+    summary="Create embeddings (enhanced with circuit breaker)",
+    dependencies=[Depends(rbac_rate_limit("embeddings.create"))]
 )
 @apply_rate_limit("5/second")
 async def create_embedding_endpoint(
@@ -1157,7 +1484,8 @@ async def create_embedding_endpoint(
     embedding_request: CreateEmbeddingRequest = Body(...),
     current_user: User = Depends(get_request_user),
     background_tasks: BackgroundTasks = BackgroundTasks(),
-    x_provider: Optional[str] = Header(None, alias="x-provider")
+    x_provider: Optional[str] = Header(None, alias="x-provider"),
+    response: Response = None
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
     
@@ -1171,6 +1499,10 @@ async def create_embedding_endpoint(
     start_time = time.time()
     
     try:
+        # Backpressure and tenant quotas
+        exc = await _check_backpressure_and_quotas(request, current_user)
+        if exc is not None:
+            raise exc
         # Validate provider (defer policy checks until after input validation)
         provider = x_provider or "openai"
         model = embedding_request.model
@@ -1294,6 +1626,16 @@ async def create_embedding_endpoint(
                 embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="model").inc()
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Model '{model}' is not allowed")
 
+        # Guard: return 501 for unsupported/unstyled providers (prevents silent fallback)
+        try:
+            prov_enum = EmbeddingProvider(provider)
+        except Exception:
+            # Unknown provider is handled as 400 elsewhere, keep behavior consistent
+            pass
+        else:
+            if provider.lower() not in IMPLEMENTED_PROVIDERS:
+                raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
+
         # Create embeddings
         # Special-case for OpenAI in test mode: synthesize vectors deterministically
         use_synthetic_openai = (
@@ -1303,6 +1645,9 @@ async def create_embedding_endpoint(
         )
 
         embeddings: List[List[float]] = []
+
+        original_provider = provider
+        original_model = model
 
         if use_synthetic_openai:
             dim = 1536
@@ -1322,20 +1667,34 @@ async def create_embedding_endpoint(
         else:
             # Try provider with fallback chain on failure
             last_error: Optional[Exception] = None
-            chain = resolve_fallback_chain(provider)
+            # Disable fallback when x-provider header is explicitly set
+            fallback_disabled = x_provider is not None
+            chain = [provider] if fallback_disabled else resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
+            fallback_from: Optional[str] = None
             for p in chain:
                 try:
                     if p != provider:
                         embedding_fallbacks_total.labels(from_provider=provider, to_provider=p).inc()
+                        fallback_from = provider
+                    # Map model id to destination provider if needed
+                    target_model_id = map_model_for_provider(original_provider, p, original_model)
                     embeddings = await create_embeddings_batch_async(
                         texts=texts_to_embed,
                         provider=p,
-                        model_id=model,
+                        model_id=target_model_id,
                         dimensions=embedding_request.dimensions
                     )
                     provider = p
+                    # Add response headers to indicate fallback
+                    try:
+                        if response is not None:
+                            response.headers['X-Embeddings-Provider'] = provider
+                            if fallback_from and fallback_from != provider:
+                                response.headers['X-Embeddings-Fallback-From'] = fallback_from
+                    except Exception:
+                        pass
                     break
                 except HTTPException as he:
                     if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
@@ -1354,8 +1713,37 @@ async def create_embedding_endpoint(
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding providers unavailable")
 
         # Optional dimension adjustment (post-process)
+        dims_policy_used = None
         if embedding_request.dimensions:
-            embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
+            # For base64 outputs, always reduce to requested dims for deterministic length
+            if embedding_request.encoding_format == "base64":
+                try:
+                    import numpy as _np
+                    target = int(embedding_request.dimensions)
+                    adjusted: List[List[float]] = []
+                    for v in embeddings:
+                        try:
+                            arr = _np.asarray(v, dtype=_np.float32)
+                            if arr.shape[0] > target:
+                                arr = arr[:target]
+                            adjusted.append(arr.tolist())
+                        except Exception:
+                            adjusted.append(v)
+                    embeddings = adjusted
+                    dims_policy_used = "reduce"
+                except Exception:
+                    # Fallback to normal policy if anything goes wrong
+                    dims_policy_used = _dimension_policy()
+                    embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
+            else:
+                dims_policy_used = _dimension_policy()
+                embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
+            # Add response header for visibility
+            try:
+                if response is not None and dims_policy_used:
+                    response.headers['X-Embeddings-Dimensions-Policy'] = dims_policy_used
+            except Exception:
+                pass
         
         # Format response
         output_data = []
@@ -1402,10 +1790,47 @@ async def create_embedding_endpoint(
                 "user_id": current_user.id,
                 "provider": provider,
                 "model": model,
-                "duration": duration
+                "duration": duration,
+                "fallback_from": original_provider if original_provider != provider else None,
+                "dimensions_policy": dims_policy_used,
             }
         )
         
+        # Persist a usage log entry (best-effort)
+        try:
+            user_id = getattr(current_user, 'id', None)
+            api_key_id = None
+            try:
+                if request is not None and hasattr(request, 'state'):
+                    api_key_id = getattr(request.state, 'api_key_id', None)
+            except Exception:
+                api_key_id = None
+            await log_llm_usage(
+                user_id=user_id,
+                key_id=api_key_id,
+                endpoint=f"{request.method}:{request.url.path}",
+                operation="embeddings",
+                provider=provider,
+                model=model,
+                status=200,
+                latency_ms=int((duration) * 1000),
+                prompt_tokens=int(num_tokens or 0),
+                completion_tokens=0,
+                total_tokens=int(num_tokens or 0),
+                request_id=request.headers.get('X-Request-ID') if request else None,
+            )
+        except Exception:
+            pass
+
+        # Attach quota headers if set
+        try:
+            if hasattr(request, 'state') and response is not None:
+                if getattr(request.state, 'rate_limit_limit', None) is not None:
+                    response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
+                    response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
+        except Exception:
+            pass
+
         return CreateEmbeddingResponse(
             data=output_data,
             model=f"{provider}:{model}" if provider != "openai" else model,
@@ -1419,7 +1844,7 @@ async def create_embedding_endpoint(
         active_embedding_requests.dec()
 
 class EmbeddingsBatchRequest(BaseModel):
-    texts: List[str] = Field(..., min_items=1, description="Texts to embed")
+    texts: List[str] = Field(..., min_length=1, description="Texts to embed")
     model: Optional[str] = Field(None, description="Embedding model identifier")
     provider: Optional[str] = Field(None, description="Embedding provider override")
     dimensions: Optional[int] = Field(None, description="Requested output dimensions if supported")
@@ -1440,7 +1865,9 @@ class EmbeddingsBatchResponse(BaseModel):
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
+    request: Request = None,
+    response: Response = None
 ) -> EmbeddingsBatchResponse:
     texts = payload.texts or []
     if not texts:
@@ -1481,12 +1908,32 @@ async def create_embeddings_batch_endpoint(
             }
         )
 
+    # Backpressure and tenant quotas (best-effort; request may be None in some test paths)
+    try:
+        if request is not None:
+            exc = await _check_backpressure_and_quotas(request, current_user)
+            if exc is not None:
+                raise exc
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     embeddings = await create_embeddings_batch_async(
         texts=texts,
         provider=provider,
         model_id=model,
         dimensions=payload.dimensions
     )
+
+    # Attach quota headers if present (parity with single-item endpoint)
+    try:
+        if hasattr(request, 'state') and response is not None:
+            if getattr(request.state, 'rate_limit_limit', None) is not None:
+                response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
+                response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
+    except Exception:
+        pass
 
     return EmbeddingsBatchResponse(
         embeddings=embeddings,
@@ -1576,6 +2023,51 @@ async def get_embedding_model_info(
         "max_tokens": max_tokens,
         "allowed": True
     }
+
+
+class TenantQuotaResponse(BaseModel):
+    limit_rps: int
+    remaining: Optional[int] = None
+
+
+@router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
+async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
+    if is_single_user_mode() or TENANT_RPS <= 0:
+        return TenantQuotaResponse(limit_rps=0, remaining=None)
+    try:
+        client = await _get_redis_client()
+        ts = int(time.time())
+        key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}:{ts}"
+        val = await client.get(key)
+        await client.close()
+        used = int(val or 0)
+        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=max(0, TENANT_RPS - used))
+    except Exception:
+        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=None)
+
+
+class PriorityBumpRequest(BaseModel):
+    job_id: str
+    priority: str = Field(..., description="one of: high|normal|low")
+    ttl_seconds: Optional[int] = Field(default=600, ge=1, le=86400)
+
+
+@router.post("/embeddings/job/priority/bump", summary="Override/bump job priority for routing into priority queues (best-effort)")
+async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
+    if not getattr(current_user, 'is_admin', False) and not is_single_user_mode():
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    pr = (req.priority or "").strip().lower()
+    if pr not in ("high", "normal", "low"):
+        raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
+    try:
+        client = await _get_redis_client()
+        key = f"embeddings:priority:override:{req.job_id}"
+        await client.set(key, pr)
+        await client.expire(key, int(req.ttl_seconds or 600))
+        await client.close()
+        return {"status": "ok", "job_id": req.job_id, "priority": pr, "ttl_seconds": int(req.ttl_seconds or 600)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}")
 
 
 class ModelActionRequest(BaseModel):
@@ -1911,16 +2403,995 @@ async def get_metrics(
     
     require_admin(current_user)
     
-    return {
+    # Helper to sum counters across all labels
+    def _sum_counter(c):
+        try:
+            total = 0.0
+            for metric in c.collect():
+                for s in metric.samples:
+                    # Only sum the main counter samples (exclude created/_total duplicates if any appear)
+                    if s.name.endswith('_total') or s.name == metric.name:
+                        total += float(s.value)
+            return int(total)
+        except Exception:
+            return None
+
+    def _safe_gauge_value(g):
+        try:
+            return g._value.get()
+        except Exception:
+            return None
+
+    def _details(metric):
+        try:
+            samples = []
+            for m in metric.collect():
+                for s in m.samples:
+                    entry = {"name": s.name, "value": float(s.value)}
+                    try:
+                        entry.update(s.labels)
+                    except Exception:
+                        pass
+                    samples.append(entry)
+            return samples
+        except Exception:
+            return []
+
+    payload = {
         "cache": embedding_cache.stats(),
-        "active_requests": active_embedding_requests._value.get(),
+        "active_requests": _safe_gauge_value(active_embedding_requests),
         "circuit_breakers": circuit_breaker_registry.get_all_status(),
-        "total_requests": {
-            "success": embedding_requests_total.labels(
-                provider="all", model="all", status="success"
-            )._value.get(),
-            "error": embedding_requests_total.labels(
-                provider="all", model="all", status="error"
-            )._value.get()
+        "counters": {
+            "requests_total": _sum_counter(embedding_requests_total),
+            "provider_failures_total": _sum_counter(embedding_provider_failures),
+            "fallbacks_total": _sum_counter(embedding_fallbacks_total),
+            "policy_denied_total": _sum_counter(embedding_policy_denied_total),
+            "dimension_adjustments_total": _sum_counter(embedding_dimension_adjustments_total),
+            "token_inputs_total": _sum_counter(embedding_token_inputs_total),
+        },
+        "details": {
+            "requests": _details(embedding_requests_total),
+            "provider_failures": _details(embedding_provider_failures),
+            "fallbacks": _details(embedding_fallbacks_total),
+            "policy_denied": _details(embedding_policy_denied_total),
+            "dimension_adjustments": _details(embedding_dimension_adjustments_total),
+            "token_inputs": _details(embedding_token_inputs_total),
+        },
+        "config": {
+            "enforce_policy": _should_enforce_policy(current_user),
+            "dimension_policy": _dimension_policy(),
+            "cache": {
+                "ttl_seconds": CACHE_TTL_SECONDS,
+                "max_size": MAX_CACHE_SIZE,
+                "cleanup_interval": CACHE_CLEANUP_INTERVAL,
+            }
         }
     }
+    return payload
+
+
+# ============================================================================
+# DLQ Admin Endpoints
+# ============================================================================
+
+class DLQItem(BaseModel):
+    entry_id: str = Field(..., description="Redis stream entry ID")
+    queue: str = Field(..., description="DLQ stream name")
+    job_id: Optional[str] = None
+    error: Optional[str] = None
+    failed_at: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+    fields: Dict[str, Any] = Field(default_factory=dict)
+    dlq_state: Optional[str] = None
+    operator_note: Optional[str] = None
+
+
+def _redact_obj(obj: Any, depth: int = 0) -> Any:
+    """Redact likely PII/secrets from nested structures for previews."""
+    if depth > 5:
+        return obj
+    SENSITIVE_KEYS = {"api_key", "authorization", "token", "password", "secret", "access_token", "id_token"}
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            key_low = str(k).lower().replace("-", "_")
+            if key_low in SENSITIVE_KEYS:
+                out[k] = "***REDACTED***"
+            else:
+                out[k] = _redact_obj(v, depth + 1)
+        return out
+    if isinstance(obj, list):
+        return [_redact_obj(x, depth + 1) for x in obj]
+    if isinstance(obj, str):
+        if len(obj) > 12 and any(x in obj.lower() for x in ("sk-", "api_key", "bearer ")):
+            return "***REDACTED***"
+    return obj
+
+
+@router.get(
+    "/embeddings/dlq",
+    summary="List DLQ items for a stage (admin only)"
+)
+async def list_dlq_items(
+    stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
+    count: int = Query(50, ge=1, le=500, description="Max items to return"),
+    job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    stream = _dlq_stream_name(stage)
+    try:
+        client = await _get_redis_client()
+        # Reverse range: most recent first
+        entries = await client.xrevrange(stream, "+", "-", count=count)
+        items: List[DLQItem] = []
+        for entry_id, fields in entries:
+            # fields is a dict[str,str]
+            payload = None
+            try:
+                raw_payload = fields.get("payload")
+                if raw_payload:
+                    payload = json.loads(raw_payload)
+                elif fields.get("payload_enc"):
+                    payload = decrypt_payload_if_present(fields.get("payload_enc"))
+            except Exception:
+                payload = None
+            if payload is not None:
+                payload = _redact_obj(payload)
+            ji = fields.get("job_id")
+            if job_id and ji != job_id:
+                continue
+            # sidecar state (quarantine/approval)
+            dlq_state = None
+            operator_note = None
+            try:
+                state_key = f"dlqstate:{stream}:{entry_id}"
+                state_map = await client.hgetall(state_key)
+                if isinstance(state_map, dict):
+                    dlq_state = state_map.get("state") or fields.get("dlq_state")
+                    operator_note = state_map.get("operator_note")
+            except Exception:
+                # Fallback to inline DLQ state fields if available
+                dlq_state = fields.get("dlq_state")
+
+            items.append(DLQItem(
+                entry_id=entry_id,
+                queue=stream,
+                job_id=ji,
+                error=fields.get("error"),
+                failed_at=fields.get("failed_at"),
+                payload=payload,
+                fields=fields,
+                dlq_state=dlq_state,
+                operator_note=operator_note,
+            ))
+        await client.close()
+        return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}")
+
+
+class DLQRequeueRequest(BaseModel):
+    stage: str = Field(..., description="Stage: chunking|embedding|storage")
+    entry_id: str = Field(..., description="Redis stream entry ID")
+    delete_from_dlq: bool = Field(default=True)
+    override_fields: Optional[Dict[str, Any]] = Field(default=None, description="Optional field overrides before requeue")
+
+
+@router.post(
+    "/embeddings/dlq/requeue",
+    summary="Requeue a DLQ item to its live stream (admin only)"
+)
+async def requeue_dlq_item(
+    req: DLQRequeueRequest,
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    dlq_stream = _dlq_stream_name(req.stage)
+    live_stream = _live_stream_name(req.stage)
+    client = await _get_redis_client()
+    try:
+        # Fetch the specific entry
+        # XCLAIM not suitable; use XRANGE and filter by ID
+        entries = await client.xrange(dlq_stream, min=req.entry_id, max=req.entry_id, count=1)
+        if not entries:
+            raise HTTPException(status_code=404, detail="DLQ entry not found")
+        entry_id, fields = entries[0]
+        # Quarantine enforcement: require approved_for_requeue if any state present
+        try:
+            st_map = await client.hgetall(f"dlqstate:{dlq_stream}:{entry_id}")
+            effective_state = st_map.get("state") or fields.get("dlq_state")
+        except Exception:
+            effective_state = fields.get("dlq_state")
+        if effective_state and effective_state not in ("approved_for_requeue",):
+            dlq_requeued_total.labels(queue_name=dlq_stream, status="blocked").inc()
+            raise HTTPException(status_code=400, detail=f"DLQ entry in state '{effective_state}', not approved for requeue")
+        # Prepare requeue payload
+        requeue_fields = dict(fields)
+        warning = None
+        # Validate original payload JSON (if present) and surface warnings
+        try:
+            raw = fields.get("payload")
+            if raw:
+                try:
+                    original = json.loads(raw)
+                except Exception:
+                    original = None
+                if isinstance(original, dict):
+                    try:
+                        validate_schema(req.stage, original)
+                    except Exception as ve:
+                        warning = f"payload schema validation failed: {ve}"
+        except Exception:
+            pass
+        # Remove DLQ-specific fields
+        for k in ["consumer_group", "worker_id", "failed_at", "error", "payload"]:
+            requeue_fields.pop(k, None)
+        if req.override_fields:
+            requeue_fields.update(req.override_fields)
+        # Requeue to live stream
+        await client.xadd(live_stream, requeue_fields)
+        # Optionally delete from DLQ
+        if req.delete_from_dlq:
+            try:
+                await client.xdel(dlq_stream, entry_id)
+            except Exception:
+                pass
+        dlq_requeued_total.labels(queue_name=dlq_stream, status="success").inc()
+        out = {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
+        if warning:
+            out["warning"] = warning
+        # Audit: DLQ requeue single
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/dlq/requeue",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="dlq",
+                resource_id=entry_id,
+                action="requeue",
+                metadata={"from": dlq_stream, "to": live_stream, "stage": req.stage, "warning": bool(warning)},
+            )
+        except Exception:
+            pass
+        return out
+    except HTTPException:
+        dlq_requeued_total.labels(queue_name=dlq_stream, status="not_found").inc()
+        raise
+    except Exception as e:
+        dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
+        raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}")
+    finally:
+        await client.close()
+
+
+class DLQRequeueBulkRequest(BaseModel):
+    stage: str
+    entry_ids: List[str]
+    delete_from_dlq: bool = True
+    override_fields: Optional[Dict[str, Any]] = None
+
+
+@router.post(
+    "/embeddings/dlq/requeue/bulk",
+    summary="Bulk requeue DLQ items to live stream (admin only)"
+)
+async def requeue_dlq_bulk(
+    req: DLQRequeueBulkRequest,
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    dlq_stream = _dlq_stream_name(req.stage)
+    live_stream = _live_stream_name(req.stage)
+    client = await _get_redis_client()
+    results: List[Dict[str, Any]] = []
+    try:
+        for eid in req.entry_ids:
+            status = "success"
+            try:
+                entries = await client.xrange(dlq_stream, min=eid, max=eid, count=1)
+                if not entries:
+                    status = "not_found"
+                else:
+                    eid_found, fields = entries[0]
+                    try:
+                        st_map = await client.hgetall(f"dlqstate:{dlq_stream}:{eid_found}")
+                        effective_state = st_map.get("state") or fields.get("dlq_state")
+                    except Exception:
+                        effective_state = fields.get("dlq_state")
+                    if effective_state and effective_state not in ("approved_for_requeue",):
+                        status = f"blocked:{effective_state}"
+                        results.append({"entry_id": eid, "status": status})
+                        continue
+                    requeue_fields = dict(fields)
+                    warning = None
+                    # Validate original payload JSON (if present) and surface warnings
+                    try:
+                        raw = fields.get("payload")
+                        if raw:
+                            try:
+                                original = json.loads(raw)
+                            except Exception:
+                                original = None
+                            if isinstance(original, dict):
+                                try:
+                                    validate_schema(req.stage, original)
+                                except Exception as ve:
+                                    warning = f"payload schema validation failed: {ve}"
+                    except Exception:
+                        pass
+                    for k in ["consumer_group", "worker_id", "failed_at", "error"]:
+                        requeue_fields.pop(k, None)
+                    requeue_fields.pop("payload", None)
+                    if req.override_fields:
+                        requeue_fields.update(req.override_fields)
+                    await client.xadd(live_stream, requeue_fields)
+                    if req.delete_from_dlq:
+                        try:
+                            await client.xdel(dlq_stream, eid)
+                        except Exception:
+                            pass
+            except Exception as e:
+                status = f"error:{type(e).__name__}"
+                dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
+            else:
+                dlq_requeued_total.labels(queue_name=dlq_stream, status=status).inc()
+            res = {"entry_id": eid, "status": status}
+            if 'warning' in locals() and warning:
+                res["warning"] = warning
+            results.append(res)
+        # Audit: DLQ bulk requeue summary
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/dlq/requeue/bulk",
+                method="POST",
+            )
+            counts = {"success": 0, "not_found": 0, "blocked": 0, "error": 0}
+            for r in results:
+                st = str(r.get("status", "success"))
+                if st.startswith("blocked"):
+                    counts["blocked"] += 1
+                elif st in counts:
+                    counts[st] += 1
+                elif st.startswith("error"):
+                    counts["error"] += 1
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="dlq",
+                resource_id=dlq_stream,
+                action="bulk_requeue",
+                metadata={"stage": req.stage, **counts, "total": len(req.entry_ids)},
+            )
+        except Exception:
+            pass
+        return {"from": dlq_stream, "to": live_stream, "results": results}
+    finally:
+        await client.close()
+
+
+@router.get(
+    "/embeddings/dlq/stats",
+    summary="DLQ and queue depths (admin only)"
+)
+async def get_dlq_stats(
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+        depths = {}
+        dlq_depths = {}
+        for q in queues:
+            try:
+                depths[q] = await client.xlen(q)
+            except Exception:
+                depths[q] = 0
+            dq = f"{q}:dlq"
+            try:
+                dlq_depths[dq] = await client.xlen(dq)
+            except Exception:
+                dlq_depths[dq] = 0
+        total_dlq = sum(dlq_depths.values())
+
+        # Aggregate worker metrics to summarize stage processed/failed
+        stages = {"chunking": {"processed": 0, "failed": 0},
+                  "embedding": {"processed": 0, "failed": 0},
+                  "storage": {"processed": 0, "failed": 0}}
+        try:
+            cursor = 0
+            processed = 0
+            while True:
+                cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
+                for k in keys:
+                    if processed >= ORCH_SCAN_MAX_KEYS:
+                        cursor = 0
+                        break
+                    data = await client.get(k)
+                    processed += 1
+                    if not data:
+                        continue
+                    try:
+                        m = json.loads(data)
+                        stage = str(m.get("worker_type", "")).lower()
+                        proc = int(m.get("jobs_processed", 0) or 0)
+                        fail = int(m.get("jobs_failed", 0) or 0)
+                        if stage in stages:
+                            stages[stage]["processed"] += proc
+                            stages[stage]["failed"] += fail
+                    except Exception:
+                        continue
+                if cursor == 0:
+                    break
+        except Exception:
+            pass
+
+        return {"queues": depths, "dlq": dlq_depths, "total_dlq": total_dlq, "stages": stages}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# DLQ Quarantine State Management (admin only)
+# ---------------------------------------------------------------------------
+
+class DLQStateSetRequest(BaseModel):
+    stage: str
+    entry_id: str
+    state: str  # quarantined | approved_for_requeue | ignored
+    operator_note: Optional[str] = None
+
+
+def _dlq_state_key(stream: str, entry_id: str) -> str:
+    return f"dlqstate:{stream}:{entry_id}"
+
+
+@router.post(
+    "/embeddings/dlq/state",
+    summary="Set DLQ quarantine state (admin only)"
+)
+async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        dlq_stream = _dlq_stream_name(req.stage)
+        # Validate entry exists
+        entries = await client.xrange(dlq_stream, min=req.entry_id, max=req.entry_id, count=1)
+        if not entries:
+            raise HTTPException(status_code=404, detail="DLQ entry not found")
+        st = (req.state or "").strip().lower()
+        if st not in ("quarantined", "approved_for_requeue", "ignored"):
+            raise HTTPException(status_code=400, detail="Invalid state")
+        if st == "approved_for_requeue" and not (req.operator_note and req.operator_note.strip()):
+            raise HTTPException(status_code=400, detail="operator_note is required to approve requeue")
+        val = {
+            "state": st,
+            "operator_note": req.operator_note or "",
+            "updated_by": getattr(current_user, "username", "admin"),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        await client.hset(_dlq_state_key(dlq_stream, req.entry_id), mapping=val)
+        # Audit: DLQ quarantine state change
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/dlq/state",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="dlq",
+                resource_id=req.entry_id,
+                action="quarantine_state",
+                metadata={"stage": req.stage, "state": st, "operator_note": req.operator_note or ""},
+            )
+        except Exception:
+            pass
+        return {"ok": True, "stream": dlq_stream, "entry_id": req.entry_id, "state": st}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Stage Controls: pause/resume/drain per stage (admin only)
+# ---------------------------------------------------------------------------
+
+class StageControlRequest(BaseModel):
+    stage: str  # chunking|embedding|storage|all
+    action: str  # pause|resume|drain
+
+
+def _stage_key(stage: str, suffix: str) -> str:
+    stage = stage.strip().lower()
+    if stage not in {"chunking", "embedding", "storage"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be chunking|embedding|storage")
+    return f"embeddings:stage:{stage}:{suffix}"
+
+
+@router.get(
+    "/embeddings/stage/status",
+    summary="Get per-stage pause/drain flags (admin only)"
+)
+async def get_stage_status(current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        out = {}
+        for st in ("chunking", "embedding", "storage"):
+            paused = await client.get(_stage_key(st, "paused"))
+            drain = await client.get(_stage_key(st, "drain"))
+            out[st] = {
+                "paused": str(paused).lower() in ("1", "true", "yes"),
+                "drain": str(drain).lower() in ("1", "true", "yes"),
+            }
+        return out
+    finally:
+        await client.close()
+
+
+@router.post(
+    "/embeddings/stage/control",
+    summary="Pause/Resume/Drain a stage (admin only)"
+)
+async def control_stage(req: StageControlRequest, current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage"]
+        for st in stages:
+            if req.action == "pause":
+                await client.set(_stage_key(st, "paused"), "1")
+            elif req.action == "resume":
+                await client.delete(_stage_key(st, "paused"))
+                await client.delete(_stage_key(st, "drain"))
+            elif req.action == "drain":
+                # Mark drain intent and pause new reads; in-flight items will finish
+                await client.set(_stage_key(st, "drain"), "1")
+                await client.set(_stage_key(st, "paused"), "1")
+            else:
+                raise HTTPException(status_code=400, detail="Invalid action; must be pause|resume|drain")
+        # Audit
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/stage/control",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.CONFIG_CHANGED,
+                category=AuditEventCategory.SYSTEM,
+                context=ctx,
+                resource_type="embeddings_stage",
+                resource_id=",".join(stages),
+                action=req.action,
+                metadata={"stages": stages, "action": req.action},
+            )
+        except Exception:
+            pass
+        return {"ok": True, "stages": stages, "action": req.action}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Job skip registry (admin only)
+# ---------------------------------------------------------------------------
+
+class JobSkipRequest(BaseModel):
+    job_id: str
+    ttl_seconds: Optional[int] = Field(default=7 * 24 * 3600, ge=60, description="TTL for skip registry entry")
+
+
+def _skip_key(job_id: str) -> str:
+    return f"embeddings:skip:job:{job_id}"
+
+
+@router.post(
+    "/embeddings/job/skip",
+    summary="Mark a job_id as skipped (admin only)"
+)
+async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        await client.set(_skip_key(req.job_id), "1", ex=int(req.ttl_seconds))
+        # Audit
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/job/skip",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="job",
+                resource_id=req.job_id,
+                action="skip",
+                metadata={"ttl_seconds": int(req.ttl_seconds or 0)},
+            )
+        except Exception:
+            pass
+        return {"ok": True, "job_id": req.job_id, "ttl_seconds": req.ttl_seconds}
+    finally:
+        await client.close()
+
+
+@router.get(
+    "/embeddings/job/skip/status",
+    summary="Check if a job_id is marked as skipped (admin only)"
+)
+async def get_job_skip_status(job_id: str = Query(..., description="Job ID to check"), current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        val = await client.get(_skip_key(job_id))
+        return {"job_id": job_id, "skipped": str(val).lower() in ("1", "true", "yes")}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Ledger Admin Endpoints (idempotency/dedupe)
+# ---------------------------------------------------------------------------
+
+class LedgerEntry(BaseModel):
+    key: str
+    status: str | None = None
+    ts: int | None = None
+    job_id: str | None = None
+    raw: dict | str | None = None
+    ttl_seconds: int | None = None
+
+
+@router.get(
+    "/embeddings/ledger/status",
+    summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)"
+)
+async def get_ledger_status(
+    idempotency_key: str | None = Query(default=None),
+    dedupe_key: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+):
+    """Return current ledger values for provided keys.
+
+    Reads:
+      - embeddings:ledger:idemp:{idempotency_key}
+      - embeddings:ledger:dedupe:{dedupe_key}
+    Values may be plain strings or JSON objects with {status, ts, job_id}.
+    """
+    require_admin(current_user)
+    if not idempotency_key and not dedupe_key:
+        raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
+    client = await _get_redis_client()
+    try:
+        out: dict[str, LedgerEntry | None] = {"idempotency": None, "dedupe": None}
+        if idempotency_key:
+            k = f"embeddings:ledger:idemp:{idempotency_key}"
+            raw = await client.get(k)
+            ttl = await client.ttl(k)
+            entry = LedgerEntry(key=k, ttl_seconds=(int(ttl) if isinstance(ttl, (int, float)) else None))
+            if raw is not None:
+                try:
+                    obj = json.loads(raw)
+                    entry.status = str(obj.get("status")) if isinstance(obj, dict) else None
+                    entry.ts = int(obj.get("ts")) if isinstance(obj, dict) and obj.get("ts") is not None else None
+                    entry.job_id = str(obj.get("job_id")) if isinstance(obj, dict) else None
+                    entry.raw = obj if isinstance(obj, dict) else raw
+                except Exception:
+                    entry.raw = raw
+                    entry.status = str(raw)
+            out["idempotency"] = entry
+        if dedupe_key:
+            k = f"embeddings:ledger:dedupe:{dedupe_key}"
+            raw = await client.get(k)
+            ttl = await client.ttl(k)
+            entry = LedgerEntry(key=k, ttl_seconds=(int(ttl) if isinstance(ttl, (int, float)) else None))
+            if raw is not None:
+                try:
+                    obj = json.loads(raw)
+                    entry.status = str(obj.get("status")) if isinstance(obj, dict) else None
+                    entry.ts = int(obj.get("ts")) if isinstance(obj, dict) and obj.get("ts") is not None else None
+                    entry.job_id = str(obj.get("job_id")) if isinstance(obj, dict) else None
+                    entry.raw = obj if isinstance(obj, dict) else raw
+                except Exception:
+                    entry.raw = raw
+                    entry.status = str(raw)
+            out["dedupe"] = entry
+        return out
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Re-embed Scheduling (admin only)
+# ---------------------------------------------------------------------------
+
+class ReembedScheduleRequest(BaseModel):
+    media_id: int = Field(..., description="Target media_id to re-embed")
+    user_id: Optional[str] = Field(default=None, description="Owner user id; defaults to current admin")
+    idempotency_key: Optional[str] = Field(default=None, description="Optional idempotency key to dedupe creation")
+    dedupe_key: Optional[str] = Field(default=None, description="Optional dedupe key; defaults to idempotency_key if not provided")
+    operation_id: Optional[str] = Field(default=None, description="Optional operation id for replay prevention")
+    priority: Optional[int] = Field(default=50, ge=0, le=100)
+    user_tier: Optional[str] = Field(default="free")
+    embedder_name: Optional[str] = None
+    embedder_version: Optional[str] = None
+
+
+class ReembedScheduleResponse(BaseModel):
+    id: int
+    uuid: Optional[str] = None
+    status: str
+    domain: str
+    queue: str
+    job_type: str
+
+
+@router.post(
+    "/embeddings/reembed/schedule",
+    response_model=ReembedScheduleResponse,
+    summary="Schedule a re-embed expansion job (admin only)"
+)
+async def schedule_reembed(
+    req: ReembedScheduleRequest,
+    current_user: User = Depends(get_request_user),
+):
+    """Create a Jobs row for the re-embed expansion worker to process.
+
+    Domain: embeddings, Queue: reembed (configurable via REEMBED_JOB_QUEUE), Job Type: expand_reembed.
+    """
+    require_admin(current_user)
+    # Build payload
+    uid = str(req.user_id or current_user.id)
+    payload = {
+        "user_id": uid,
+        "media_id": int(req.media_id),
+        "idempotency_key": req.idempotency_key,
+        "dedupe_key": req.dedupe_key,
+        "operation_id": req.operation_id,
+        "user_tier": req.user_tier or "free",
+        "embedder_name": req.embedder_name,
+        "embedder_version": req.embedder_version,
+    }
+    # Construct default idempotency/dedupe if not provided
+    if not req.idempotency_key:
+        payload["idempotency_key"] = f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
+    if not req.dedupe_key:
+        payload["dedupe_key"] = payload["idempotency_key"]
+
+    # Create job via JobManager
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager  # local import to avoid hard dep at import-time
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
+        queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+        row = jm.create_job(
+            domain="embeddings",
+            queue=queue,
+            job_type="expand_reembed",
+            payload=payload,
+            owner_user_id=uid,
+            priority=int(req.priority or 50),
+            idempotency_key=payload.get("idempotency_key"),
+        )
+        return ReembedScheduleResponse(
+            id=int(row.get("id")),
+            uuid=row.get("uuid"),
+            status=str(row.get("status")),
+            domain=str(row.get("domain")),
+            queue=str(row.get("queue")),
+            job_type=str(row.get("job_type")),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator snapshot + SSE (admin only)
+# ---------------------------------------------------------------------------
+
+async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[float] = None) -> Dict[str, Any]:
+    """Compute a single orchestrator snapshot.
+
+    Returns dict with keys: queues, dlq, ages, stages, flags, ts
+    """
+    from time import time as _now
+    if now_ts is None:
+        now_ts = _now()
+
+    # Build the same structure as get_dlq_stats and add queue ages and stage flags
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    depths: Dict[str, int] = {}
+    dlq_depths: Dict[str, int] = {}
+    ages: Dict[str, float] = {}
+    # Optional per-priority depths when priority routing is enabled
+    priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
+    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}}
+    for q in queues:
+        try:
+            depths[q] = await client.xlen(q)
+        except Exception:
+            depths[q] = 0
+        # Expose per-priority sub-queue depths (high/normal/low)
+        if priority_enabled:
+            stage = q.split(":", 1)[1]
+            for pr in ("high", "normal", "low"):
+                sub = f"{q}:{pr}"
+                try:
+                    dsub = await client.xlen(sub)
+                except Exception:
+                    dsub = 0
+                depths[sub] = dsub
+                priority_depths[stage][pr] = dsub
+        # queue age (oldest entry)
+        try:
+            rng = await client.xrange(q, min='-', max='+', count=1)
+            if rng:
+                first_id, _ = rng[0]
+                ts_ms = int(str(first_id).split('-')[0])
+                ages[q] = max(0.0, (now_ts * 1000 - ts_ms) / 1000.0)
+            else:
+                ages[q] = 0.0
+        except Exception:
+            ages[q] = 0.0
+        dq = f"{q}:dlq"
+        try:
+            dlq_depths[dq] = await client.xlen(dq)
+        except Exception:
+            dlq_depths[dq] = 0
+        try:
+            embedding_queue_age_current_seconds.labels(queue_name=q).set(float(ages.get(q, 0.0)))
+        except Exception:
+            pass
+
+    # stage counters (aggregate from worker snapshots)
+    stages: Dict[str, Dict[str, int]] = {
+        "chunking": {"processed": 0, "failed": 0},
+        "embedding": {"processed": 0, "failed": 0},
+        "storage": {"processed": 0, "failed": 0},
+    }
+    try:
+        cursor = 0
+        processed = 0
+        while True:
+            cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
+            for k in keys:
+                if processed >= ORCH_SCAN_MAX_KEYS:
+                    cursor = 0
+                    break
+                data = await client.get(k)
+                processed += 1
+                if not data:
+                    continue
+                try:
+                    m = json.loads(data)
+                    st = str(m.get("worker_type", "")).lower()
+                    if st in stages:
+                        stages[st]["processed"] += int(m.get("jobs_processed", 0) or 0)
+                        stages[st]["failed"] += int(m.get("jobs_failed", 0) or 0)
+                except Exception:
+                    continue
+            if cursor == 0:
+                break
+    except Exception:
+        pass
+
+    # stage flags
+    flags: Dict[str, Dict[str, bool]] = {}
+    for st in ("chunking", "embedding", "storage"):
+        p = await client.get(f"embeddings:stage:{st}:paused")
+        d = await client.get(f"embeddings:stage:{st}:drain")
+        flags[st] = {
+            "paused": str(p).lower() in ("1", "true", "yes"),
+            "drain": str(d).lower() in ("1", "true", "yes"),
+        }
+        try:
+            embedding_stage_flag.labels(stage=st, flag="paused").set(1.0 if flags[st]["paused"] else 0.0)
+            embedding_stage_flag.labels(stage=st, flag="drain").set(1.0 if flags[st]["drain"] else 0.0)
+        except Exception:
+            pass
+
+    return {"queues": depths, "dlq": dlq_depths, "ages": ages, "stages": stages, "flags": flags, "priority": priority_depths if priority_enabled else {}, "ts": now_ts}
+
+
+async def _sse_orchestrator_stream(client: aioredis.Redis):
+    import asyncio as _asyncio
+    import random as _random
+    while True:
+        try:
+            payload = await _build_orchestrator_snapshot(client)
+            data = json.dumps(payload)
+            # Emit event type for clients that use it
+            yield f"event: summary\ndata: {data}\n\n"
+            # Optional heartbeat comment
+            yield ":\n\n"
+            # Jittered interval around 5s
+            await _asyncio.sleep(_random.uniform(4.5, 5.5))
+        except Exception as e:
+            # keep the stream alive; emit error info once
+            try:
+                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            except Exception:
+                pass
+            await _asyncio.sleep(_random.uniform(4.5, 5.5))
+
+
+@router.get(
+    "/embeddings/orchestrator/events",
+    summary="SSE: embeddings orchestrator live summary (admin only)"
+)
+async def orchestrator_events(current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    async def _gen():
+        try:
+            orchestrator_sse_connections.inc()
+            async for chunk in _sse_orchestrator_stream(client):
+                yield chunk
+        finally:
+            try:
+                orchestrator_sse_connections.dec()
+                orchestrator_sse_disconnects_total.inc()
+            except Exception:
+                pass
+            try:
+                await client.close()
+            except Exception:
+                pass
+    # The client will keep the connection; we don't close Redis here (shared)
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@router.get(
+    "/embeddings/orchestrator/summary",
+    summary="Orchestrator summary for polling (admin only)"
+)
+async def orchestrator_summary(current_user: User = Depends(get_request_user)):
+    """Return a snapshot identical to the SSE payload.
+
+    Includes: queues, dlq, ages, stages, flags, ts
+    """
+    require_admin(current_user)
+    try:
+        client = await _get_redis_client()
+    except Exception:
+        # Fallback: return zeroed structure with stable shape for polling clients
+        try:
+            orchestrator_summary_failures_total.inc()
+        except Exception:
+            pass
+        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
+    try:
+        return await _build_orchestrator_snapshot(client)
+    except Exception:
+        # Return best-effort empty snapshot on failure while preserving shape
+        try:
+            orchestrator_summary_failures_total.inc()
+        except Exception:
+            pass
+        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
+    finally:
+        await client.close()

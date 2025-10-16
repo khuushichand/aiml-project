@@ -10,10 +10,15 @@ from pathlib import Path
 #
 # Third-party Imports
 from loguru import logger
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    from pydantic import field_validator
+except Exception:
+    from pydantic import validator as field_validator  # type: ignore
 #
 # Local Imports
 from .adapters.base import AudioFormat
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 #
 #######################################################################################################################
 #
@@ -38,7 +43,8 @@ class ProviderConfig(BaseModel):
     auto_download: bool = True
     extra_params: Dict[str, Any] = Field(default_factory=dict)
     
-    @validator('api_key', pre=True)
+    @field_validator('api_key', mode='before')
+    @classmethod
     def resolve_api_key(cls, v):
         """Resolve API key from environment variables"""
         if v and v.startswith('${') and v.endswith('}'):
@@ -59,6 +65,9 @@ class PerformanceConfig(BaseModel):
     cache_enabled: bool = False
     cache_ttl_seconds: int = 3600
     stream_chunk_size: int = 1024
+    # Compatibility flag: when true, embed error messages as audio bytes in streams
+    # Recommended to set false in production to use HTTP errors instead
+    stream_errors_as_audio: bool = True
     memory_warning_threshold: int = 80
     memory_critical_threshold: int = 90
     max_connections_per_provider: int = 5
@@ -347,7 +356,8 @@ class TTSConfigManager:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
-        return self.get_config().dict()
+        cfg = self.get_config()
+        return model_dump_compat(cfg)
     
     def save_yaml(self, path: Optional[Path] = None):
         """Save current configuration to YAML file"""
@@ -361,7 +371,8 @@ class TTSConfigManager:
         if 'providers' in config_dict:
             for provider_name in config_dict['providers']:
                 if isinstance(config_dict['providers'][provider_name], ProviderConfig):
-                    config_dict['providers'][provider_name] = config_dict['providers'][provider_name].dict()
+                    cfg = config_dict['providers'][provider_name]
+                    config_dict['providers'][provider_name] = model_dump_compat(cfg)
         
         with open(path, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)

@@ -19,44 +19,33 @@ All audit functionality is now consolidated in:
 
 ### Old Code (Deprecated):
 ```python
-# Old imports - NO LONGER WORK
+# Old imports — NO LONGER WORK (for historical reference only)
 from tldw_Server_API.app.core.Audit.audit_logger import get_audit_logger, AuditEventType
 from tldw_Server_API.app.services.audit_service import get_audit_service, AuditAction
 from tldw_Server_API.app.core.RAG.rag_audit_logger import get_rag_audit_logger
 from tldw_Server_API.app.core.Evaluations.audit_logger import audit_logger
-
-# Old usage
-audit_logger = get_audit_logger()
-await audit_logger.log_event(
-    event_type=AuditEventType.AUTH_SUCCESS,
-    action="login",
-    user_id=user_id
-)
 ```
 
 ### New Code (Current):
 ```python
-# New unified imports
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    get_unified_audit_service,
-    AuditEventType,
-    AuditContext
-)
+# New unified imports (use dependency injection)
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext, UnifiedAuditService
 
-# New usage
-audit_service = await get_unified_audit_service()
-
-context = AuditContext(
-    user_id=user_id,
-    ip_address=request.client.host,
-    session_id=session_id
-)
-
-await audit_service.log_event(
-    event_type=AuditEventType.AUTH_LOGIN_SUCCESS,
-    context=context,
-    metadata={"browser": "Chrome"}
-)
+async def some_endpoint(
+    audit_service: UnifiedAuditService = Depends(get_audit_service_for_user)
+):
+    context = AuditContext(
+        user_id=str(user_id),
+        ip_address=request.client.host,
+        session_id=session_id
+    )
+    await audit_service.log_event(
+        event_type=AuditEventType.AUTH_LOGIN_SUCCESS,
+        context=context,
+        metadata={"browser": "Chrome"}
+    )
 ```
 
 ## Key Changes

@@ -10,37 +10,33 @@ This file provides comprehensive guidance to Claude Code (claude.ai/code) when w
 The long-term goal is to create something akin to "The Young Lady's Illustrated Primer" from Neal Stephenson's "The Diamond Age" - a personal knowledge assistant that helps users learn and research at their own pace. While acknowledging the inherent difficulties in replicating such a device, this project serves as a practical step toward that vision.
 
 ### Current Status (v0.1.0)
-The project has transitioned from a Gradio-based UI to a robust FastAPI backend, with the Gradio application remaining available but deprecated. The focus is now on building a stable, scalable API that can support various frontend implementations.
+The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (single-user API key and multi-user JWT modes), unified RAG and Evaluation modules, OpenAI-compatible Chat and Audio APIs (including real-time streaming transcription), and a production-grade MCP Unified module. The previous Gradio UI is deprecated.
 
 ## Repository Structure
 
 ```
-tldw_server/
-├── tldw_Server_API/          # Main API server implementation
-│   ├── app/                  # FastAPI application
-│   │   ├── api/v1/          # API endpoints and schemas
-│   │   ├── core/            # Core business logic
-│   │   ├── services/        # Background services
-│   │   └── main.py          # FastAPI entry point
-│   ├── tests/               # Comprehensive test suite
-│   ├── Config_Files/        # Configuration templates
-│   ├── chrome-extension/    # Browser extension (WIP)
-│   └── requirements.txt     # Python dependencies
-├── Docs/                    # Project documentation
-│   ├── API-related/         # API design and notes
-│   ├── Code_Documentation/  # Technical documentation
-│   ├── Design/              # Feature design documents
-│   ├── Prompts/             # LLM prompt library
-│   └── User_Guides/         # User documentation
-├── Helper_Scripts/          # Utility and installation scripts
-│   ├── Installer_Scripts/   # Platform-specific installers
-│   ├── Dockerfiles/         # Docker configurations
-│   └── Prompts/             # Additional prompts
-├── user_databases/          # User data storage (gitignored)
-├── pyproject.toml          # Project configuration
-├── README.md               # Project README
-├── LICENSE.txt             # Dual license (AGPL/Commercial)
-└── Project_Guidelines.md   # Development philosophy
+<repo_root>/
+├── tldw_Server_API/              # Main API server implementation
+│   ├── app/
+│   │   ├── api/v1/
+│   │   │   ├── endpoints/        # REST endpoints (media, chat, audio, rag, evals, etc.)
+│   │   │   ├── schemas/          # Pydantic models
+│   │   │   └── API_Deps/         # Shared dependencies (auth, DB, rate limits)
+│   │   ├── core/                 # Business logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
+│   │   ├── services/             # Background services
+│   │   └── main.py               # FastAPI entry point
+│   ├── WebUI/                    # Integrated web UI served at /webui
+│   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
+│   ├── Dockerfiles/              # Docker images and compose files
+│   ├── Databases/                # Default DBs (runtime data; some are gitignored)
+│   ├── tests/                    # Pytest suite
+│   └── requirements.txt          # Python dependencies
+├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
+├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
+├── Databases/                    # Top-level DBs for local dev
+├── pyproject.toml                # Project configuration
+├── README.md                     # Project README
+└── Project_Guidelines.md         # Development philosophy
 ```
 
 ## Core Features
@@ -51,11 +47,11 @@ tldw_server/
    - Uses yt-dlp for video/audio downloads from 1000+ sites
    - Automatic metadata extraction and storage
 
-2. **Transcription & Analysis**
-   - Audio/video transcription via faster_whisper
-   - Content analysis using multiple LLM providers
-   - Chunked processing for long-form content
-   - Support for diarization (speaker identification)
+2. **Audio STT, TTS & Analysis**
+   - Transcription: faster_whisper, NVIDIA NeMo (Parakeet, Canary), Qwen2Audio
+   - Real-time streaming transcription over WebSocket
+   - Text-to-speech (OpenAI-compatible TTS + local Kokoro ONNX)
+   - Chunked processing for long-form content; optional diarization
 
 3. **Search & Retrieval (RAG)**
    - Full-text search using SQLite FTS5
@@ -64,13 +60,13 @@ tldw_server/
    - Contextual retrieval for improved accuracy
 
 4. **Chat & Interaction**
-   - OpenAI-compatible chat API (`/chat/completions`)
-   - Support for 16+ LLM providers (commercial & local)
-   - Character card support (SillyTavern compatible)
+   - OpenAI-compatible Chat API (`/chat/completions`)
+   - 16+ LLM providers (commercial & local)
+   - Character cards (SillyTavern-compatible) + character chat sessions
    - Chat history management and search
 
 5. **Knowledge Management**
-   - Note-taking system (NotebookLM-style)
+- Note-taking system (notebook-style)
    - Prompt library with import/export
    - Tagging and categorization
    - Soft delete with recovery options
@@ -80,27 +76,22 @@ tldw_server/
    - **Local**: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, Custom OpenAI-compatible
 
 ### Work-in-Progress Features
-- Embeddings API endpoint
-- Enhanced character chat functionality
-- Research tools (Arxiv, Semantic Scholar integration)
-- TTS (Text-to-Speech) support
-- Writing assistance tools
 - Browser extension for web content capture
-- Sync server for multi-device support
-- **Evaluation Module**: Currently undergoing unification (combining OpenAI-compatible and tldw-specific implementations)
+- Selected writing assistance tools
+- Additional research providers (beyond current arXiv/web scraping)
 
 ## Technical Architecture
 
 ### Database Design
-- **SQLite Databases**:
-  - `Media_DB_v2`: Main content database with FTS5
-  - `ChaChaNotes_DB`: Character cards and chats
-  - `Prompts_DB`: Prompt management
+- **SQLite Databases (default)**:
+  - `Databases/Media_DB_v2.db`: Main content DB with FTS5
+  - `Databases/users.db`: AuthNZ users (SQLite by default; PostgreSQL supported)
+  - `Databases/evaluations.db`: Evaluation metadata
+  - Per-user: `Databases/user_databases/<user_id>/ChaChaNotes.db` for notes, chat, characters
   - Implements soft deletes, versioning, and sync logging
 
 - **Vector Storage**:
-  - ChromaDB for embeddings
-  - Supports multiple embedding models
+  - ChromaDB for embeddings (configurable providers/models)
 
 ### API Design
 - RESTful API following OpenAPI 3.0 specification
@@ -109,9 +100,9 @@ tldw_server/
 - Comprehensive error handling with meaningful messages
 
 ### Key Technologies
-- **Backend**: FastAPI, SQLite, ChromaDB
-- **ML/AI**: faster_whisper, sentence-transformers, various LLM SDKs
-- **Audio/Video**: ffmpeg, yt-dlp, pyannote
+- **Backend**: FastAPI, SQLite/PostgreSQL, ChromaDB
+- **ML/AI**: faster_whisper, NeMo (Parakeet/Canary), Qwen2Audio, sentence-transformers
+- **Audio/Video**: ffmpeg, yt-dlp
 - **Document Processing**: pymupdf, docling, ebooklib, pandoc
 - **Testing**: pytest, httpx
 - **Logging**: loguru
@@ -133,15 +124,14 @@ tldw_server/
   - Features: Job queue, worker orchestration, ChromaDB integration
   - Supports batch processing and async operations
   
-- **Authentication**: 
+-- **Authentication**: 
   - Location: `/app/core/AuthNZ/`
-  - JWT-based authentication (WIP)
-  - User management system
+  - Single-user (X-API-KEY) and Multi-user (JWT) modes; user/session mgmt
   
-- **RAG Service**:
-  - Location: `/app/core/RAG/rag_service/`
-  - Implements BM25 + vector search + re-ranking
-  - Configurable retrieval strategies
+-- **RAG Service**:
+  - Location: `/app/core/RAG/`
+  - Hybrid BM25 (FTS5) + vector search + re-ranking
+  - Unified retrieval strategies; OpenAI-compatible entrypoints in endpoints
 
 ## Development Guidelines
 
@@ -212,40 +202,39 @@ tldw_server/
 ## Configuration
 
 ### Configuration Files
-- `config.txt`: Main configuration (API keys, settings)
+- `tldw_Server_API/Config_Files/config.txt`: Main configuration (provider settings)
+- `.env`: AuthNZ and sensitive keys (migrate helpers in `Config_Files/`)
 - `mediawiki_import_config.yaml`: MediaWiki import settings
 - Environment variables override file settings
-- Database paths configurable (default: `./Databases/`)
+- Database location configurable via `DATABASE_URL` (AuthNZ) and config helpers
 
 ### Required Setup
 1. **Dependencies**: `pip install -r tldw_Server_API/requirements.txt`
 2. **FFmpeg**: Required for audio/video processing
-3. **API Keys**: Add to config.txt for LLM providers
-4. **Optional**: CUDA for faster transcription
+3. **Auth Setup**: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+4. **Provider Keys**: Add to `.env` or `Config_Files/config.txt`
+5. **Optional**: CUDA for accelerated STT
 
 ## Common Tasks
 
 ### Starting the Server
 ```bash
-cd tldw_server
 python -m uvicorn tldw_Server_API.app.main:app --reload
-# API docs available at http://127.0.0.1:8000/docs
+# API docs:   http://127.0.0.1:8000/docs
+# Web UI:     http://127.0.0.1:8000/webui/
 ```
 
 ### Running Tests
 ```bash
-# All tests
+# All tests (from repo root)
 python -m pytest -v
 
-# Specific module
-python -m pytest tests/Media_Ingestion_Modification/ -v
-
 # With coverage
-python -m pytest --cov=tldw_Server_API --cov-report=html
+python -m pytest --cov=tldw_Server_API --cov-report=term-missing
 
 # Run tests with markers
-python -m pytest -m "unit" -v  # Unit tests only
-python -m pytest -m "integration" -v  # Integration tests only
+python -m pytest -m "unit" -v
+python -m pytest -m "integration" -v
 ```
 
 ### Database Operations
@@ -258,10 +247,10 @@ db = MediaDatabase(db_path="path/to/media.db", client_id="api_client")
 ```
 
 ### Adding a New LLM Provider
-1. Add provider configuration to `config.txt`
-2. Implement provider in `/app/core/LLM_Calls/LLM_API_Calls.py`
-3. Add to provider list in chat schemas
-4. Write tests for the new provider
+1. Add provider configuration to `Config_Files/config.txt` (or `.env`)
+2. Implement provider in `/app/core/LLM_Calls/`
+3. Register in chat schemas and provider manager
+4. Add tests; update docs and examples
 
 ## Performance & Deployment
 
@@ -273,11 +262,11 @@ db = MediaDatabase(db_path="path/to/media.db", client_id="api_client")
 - **Async Operations**: For I/O-bound tasks
 
 ### Deployment Considerations
-- **Docker**: Dockerfiles available in tldw_Server_API/Dockerfiles/
-- **Environment**: Supports Linux, macOS, Windows
-- **Dependencies**: CUDA support optional for transcription
-- **Backup**: Built-in backup management for databases
-- **CORS**: Configured in `main.py`, adjust for production
+- **Docker**: See `tldw_Server_API/Dockerfiles/`
+- **Environment**: Linux, macOS, Windows supported
+- **Auth Modes**: Single-user (X-API-KEY) and multi-user (JWT)
+- **Backup**: Built-in DB backup/exports (Chatbooks)
+- **CORS**: Configured in `main.py`; adjust for production
 
 ## Debugging Tips
 
@@ -289,8 +278,8 @@ db = MediaDatabase(db_path="path/to/media.db", client_id="api_client")
 
 ### Logging
 - Logs use loguru with color-coded output
-- Debug level includes detailed request/response info
-- Check logs for stack traces on errors
+- Startup displays auth mode and URLs; single-user prints API key
+- Check logs for stack traces and rate-limit messages
 
 ## Project Philosophy
 
@@ -306,8 +295,7 @@ The project follows these core principles (from Project_Guidelines.md):
 ## Important Notes
 
 ### Licensing
-- Dual-licensed: AGPL-3.0 for open source, commercial license available
-- Respect the license terms when contributing
+- GNU General Public License v2.0 (see README)
 
 ### Privacy & Security
 - Designed for local/self-hosted deployment
@@ -323,26 +311,30 @@ The project follows these core principles (from Project_Guidelines.md):
 ## Quick Reference
 
 ### Key Endpoints
-- `POST /api/v1/media/process` - Ingest and process media
-- `POST /api/v1/chat/completions` - OpenAI-compatible chat
-- `GET /api/v1/media/search` - Search ingested content
-- `POST /api/v1/notes/create` - Create a note
-- `GET /api/v1/prompts/list` - List prompts
-- `POST /api/v1/evaluations` - Create evaluation definitions (OpenAI-compatible)
-- `POST /api/v1/evaluations/geval` - G-Eval summarization evaluation
-- `POST /api/v1/evaluations/rag` - RAG system evaluation
+- `POST /api/v1/media/process`         - Ingest and process media
+- `GET  /api/v1/media/search`          - Search ingested content
+- `POST /api/v1/chat/completions`      - OpenAI-compatible chat
+- `POST /api/v1/embeddings`            - OpenAI-compatible embeddings
+- `POST /api/v1/rag/search`            - Unified RAG search
+- `POST /api/v1/evaluations/...`       - Unified evaluation API (geval, rag, batch, metrics)
+- `GET  /api/v1/llm/providers`         - List configured LLM providers
+- `WS   /api/v1/audio/stream/transcribe` - Real-time audio transcription
+- `POST /api/v1/audio/transcriptions`  - File-based transcription (OpenAI compatible)
+- `POST /api/v1/audio/speech`          - TTS (streaming and non-streaming)
+- `GET  /api/v1/mcp/status`            - MCP server status
+- `POST /api/v1/chatbooks/export`      - Export content to chatbook
+- `POST /api/v1/chatbooks/import`      - Import chatbook
 
 ### Environment Variables
-- `TLDW_CONFIG_PATH`: Path to config.txt
-- `OPENAI_API_KEY`: OpenAI API key (can be in config.txt)
-- `ANTHROPIC_API_KEY`: Anthropic API key (can be in config.txt)
-- `DATABASE_PATH`: Override default database location
+- `AUTH_MODE`            : `single_user` or `multi_user`
+- `SINGLE_USER_API_KEY`  : API key for single-user mode
+- `DATABASE_URL`         : AuthNZ DB URL (e.g., `sqlite:///./Databases/users.db`)
+- `OPENAI_API_KEY`       : OpenAI API key (or in config.txt)
+- `ANTHROPIC_API_KEY`    : Anthropic API key (or in config.txt)
+- Provider-specific vars : As needed by configured providers
 
 ### Useful Commands
 ```bash
-# Install with all optional dependencies
-pip install -e ".[all]"
-
 # Run specific test markers
 python -m pytest -m "unit" -v
 python -m pytest -m "integration" -v

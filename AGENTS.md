@@ -68,13 +68,13 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
    - Chat history management and search
 
 5. **Knowledge Management**
-   - Note-taking system (NotebookLM-style)
+  - Note-taking system (notebook-style)
    - Prompt library with import/export
    - Tagging and categorization
    - Soft delete with recovery options
 
 6. **API Providers Supported**
-   - **Commercial**: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter
+   - **Commercial**: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
    - **Local**: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, Custom OpenAI-compatible
 
 7. **MCP Unified**
@@ -302,7 +302,7 @@ The project follows these core principles (from Project_Guidelines.md):
 ## Important Notes
 
 ### Licensing
-- Apache 2.0 License (see README)
+- GNU General Public License v2.0 (see README)
 
 ### Privacy & Security
 - Designed for local/self-hosted deployment
@@ -323,11 +323,13 @@ The project follows these core principles (from Project_Guidelines.md):
 - `POST /api/v1/chat/completions`      - OpenAI-compatible chat
 - `POST /api/v1/embeddings`            - OpenAI-compatible embeddings
 - `POST /api/v1/rag/search`            - Unified RAG search
+- `POST /api/v1/research/websearch`    - Web search (multi-provider) with optional aggregation
 - `POST /api/v1/evaluations/...`       - Unified evaluation API (geval, rag, batch, metrics)
 - `GET  /api/v1/llm/providers`         - List configured LLM providers
 - `WS   /api/v1/audio/stream/transcribe` - Real-time audio transcription
 - `POST /api/v1/audio/transcriptions`  - File-based transcription (OpenAI compatible)
 - `POST /api/v1/audio/speech`          - TTS (streaming and non-streaming)
+- `GET  /api/v1/audio/voices/catalog`  - TTS voice catalog across providers
 - `GET  /api/v1/mcp/status`            - MCP server status
 - `POST /api/v1/chatbooks/export`      - Export content to chatbook
 - `POST /api/v1/chatbooks/import`      - Import chatbook

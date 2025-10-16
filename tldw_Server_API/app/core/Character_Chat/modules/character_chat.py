@@ -427,7 +427,8 @@ def remove_message_from_conversation(
         True if successful, False otherwise
     """
     try:
-        success = db.delete_message(message_id, expected_version)
+        # Use soft-delete semantics with optimistic locking
+        success = db.soft_delete_message(message_id, expected_version)
         if success:
             logger.info(f"Removed message {message_id}")
         else:

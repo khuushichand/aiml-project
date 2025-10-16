@@ -53,7 +53,7 @@ class EvaluationCreate(BaseModel):
     config: Optional[EvaluationConfig] = Field(None, description="Evaluation configuration")
     run_async: bool = Field(default=False, description="Run evaluation asynchronously")
     test_case_ids: Optional[List[int]] = Field(None, description="Specific test cases to run")
-    tags: Optional[List[str]] = Field(None, max_items=20, description="Tags for categorization")
+    tags: Optional[List[str]] = Field(None, max_length=20, description="Tags for categorization")
 
 class EvaluationUpdate(BaseModel):
     """Update evaluation request"""

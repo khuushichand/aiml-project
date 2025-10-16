@@ -18,6 +18,12 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     SessionResponse,
     StorageQuotaResponse
 )
+from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
+    APIKeyCreateRequest,
+    APIKeyCreateResponse,
+    APIKeyRotateRequest,
+    APIKeyMetadata,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
     get_db_transaction,
@@ -33,6 +39,8 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     WeakPasswordError,
     SessionError
 )
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 #######################################################################################################################
 #
@@ -104,7 +112,8 @@ async def update_user_profile(
         
         if request.email and request.email != current_user.get('email'):
             # Update email
-            if hasattr(db, 'execute'):
+            is_pg = await is_postgres_backend()
+            if is_pg:
                 # PostgreSQL
                 await db.execute(
                     "UPDATE users SET email = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
@@ -168,7 +177,8 @@ async def change_password(
     """
     try:
         # Fetch user's password hash from database
-        if hasattr(db, 'fetchval'):
+        is_pg_fetch = await is_postgres_backend()
+        if is_pg_fetch:
             # PostgreSQL
             password_hash = await db.fetchval(
                 "SELECT password_hash FROM users WHERE id = $1",
@@ -217,7 +227,8 @@ async def change_password(
         new_hash = password_service.hash_password(request.new_password)
         
         # Update password in database
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             await db.execute(
                 """
@@ -274,6 +285,67 @@ async def change_password(
 
 #######################################################################################################################
 #
+# API Key Management (per-user)
+
+@router.get("/api-keys", response_model=list[APIKeyMetadata])
+async def list_api_keys(
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+) -> list[APIKeyMetadata]:
+    """List active API keys for the current user (metadata only)."""
+    api_mgr = await get_api_key_manager()
+    rows = await api_mgr.list_user_keys(user_id=int(current_user["id"]))
+    # list_user_keys does not return the raw key; return metadata only
+    return [APIKeyMetadata(**row) for row in rows]
+
+
+@router.post("/api-keys", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_api_key(
+    request: APIKeyCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+) -> APIKeyCreateResponse:
+    """Create a new API key for the current user and return the key once."""
+    api_mgr = await get_api_key_manager()
+    result = await api_mgr.create_api_key(
+        user_id=int(current_user["id"]),
+        name=request.name,
+        description=request.description,
+        scope=request.scope,
+        expires_in_days=request.expires_in_days,
+    )
+    return APIKeyCreateResponse(**result)
+
+
+@router.post("/api-keys/{key_id}/rotate", response_model=APIKeyCreateResponse)
+async def rotate_api_key(
+    key_id: int,
+    request: APIKeyRotateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+) -> APIKeyCreateResponse:
+    """Rotate an API key (revoke old; create new) and return the new key once."""
+    api_mgr = await get_api_key_manager()
+    result = await api_mgr.rotate_api_key(
+        key_id=key_id,
+        user_id=int(current_user["id"]),
+        expires_in_days=request.expires_in_days,
+    )
+    return APIKeyCreateResponse(**result)
+
+
+@router.delete("/api-keys/{key_id}", response_model=MessageResponse)
+async def revoke_api_key(
+    key_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+) -> MessageResponse:
+    """Revoke an API key for the current user."""
+    api_mgr = await get_api_key_manager()
+    success = await api_mgr.revoke_api_key(key_id=key_id, user_id=int(current_user["id"]))
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+    return MessageResponse(message="API key revoked")
+
+
+#######################################################################################################################
+#
 # Session Management
 
 @router.get("/sessions", response_model=List[SessionResponse])
@@ -304,6 +376,13 @@ async def list_user_sessions(
         
     except Exception as e:
         logger.error(f"Failed to list user sessions: {e}")
+        # In test mode, surface the underlying error to aid debugging
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve sessions: {e}"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve sessions"

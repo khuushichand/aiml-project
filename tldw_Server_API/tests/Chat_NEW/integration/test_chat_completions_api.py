@@ -6,12 +6,8 @@ Only external LLM APIs are mocked to avoid actual API calls.
 """
 
 import pytest
-import json
 import os
 from fastapi import status
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
-import asyncio
 
 # ========================================================================
 # Basic Endpoint Tests
@@ -185,14 +181,13 @@ class TestDatabaseIntegration:
     def test_conversation_saved_to_database(self, test_client, populated_chacha_db, auth_headers):
         """Test that conversations are saved to database with real provider."""
         
-        # Override dependency to use our test database
+        # Override dependency to use our test database on the client app instance
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-        
+
         def override_get_db():
             return populated_chacha_db
-        
-        from tldw_Server_API.app.main import app
-        app.dependency_overrides[get_chacha_db_for_user] = override_get_db
+
+        test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
         
         try:
             response = test_client.post(
@@ -218,18 +213,17 @@ class TestDatabaseIntegration:
             
         finally:
             # Clean up dependency override
-            app.dependency_overrides.clear()
+            test_client.app.dependency_overrides.pop(get_chacha_db_for_user, None)
     
     @pytest.mark.integration
     def test_message_history_retrieval(self, test_client, populated_chacha_db, auth_headers):
         """Test retrieving conversation history."""
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-        from tldw_Server_API.app.main import app
-        
+
         def override_get_db():
             return populated_chacha_db
-        
-        app.dependency_overrides[get_chacha_db_for_user] = override_get_db
+
+        test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
         
         try:
             # Get the character from populated DB
@@ -248,7 +242,7 @@ class TestDatabaseIntegration:
             assert len(messages) > 0
             
         finally:
-            app.dependency_overrides.clear()
+            test_client.app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 # ========================================================================
 # Error Handling Tests

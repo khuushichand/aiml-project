@@ -9,14 +9,18 @@ from typing import List, Dict, Any
 import requests  # For mocking requests.exceptions
 
 # Imports from your application
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
-    chat_api_call,
-    chat,  # This is the multimodal chat coordinator
-    save_chat_history_to_db_wrapper,  # Assuming you want to test this too
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.provider_config import (
     API_CALL_HANDLERS,
-    PROVIDER_PARAM_MAP, load_characters, save_character, ChatDictionary, parse_user_dict_markdown_file,
-    # Import other functions you might want to unit test from Chat_Functions.py
-    # e.g., process_user_input, parse_user_dict_markdown_file, etc.
+    PROVIDER_PARAM_MAP,
+)
+from tldw_Server_API.app.core.Chat.Chat_Functions import (
+    chat,  # This is the multimodal chat coordinator
+    save_chat_history_to_db_wrapper,
+    load_characters,
+    save_character,
+    ChatDictionary,
+    parse_user_dict_markdown_file,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError,
@@ -65,7 +69,8 @@ def mock_llm_api_call_handlers_for_chat_functions_unit():
         mock_handler.__name__ = original_func_name  # Explicitly set it
         mocked_handlers_dict[provider_name_key] = mock_handler
 
-    with patch("tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS", new=mocked_handlers_dict):
+    with patch("tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS", new=mocked_handlers_dict), \
+         patch("tldw_Server_API.app.core.Chat.chat_orchestrator.API_CALL_HANDLERS", new=mocked_handlers_dict):
         yield mocked_handlers_dict
 
 
@@ -802,3 +807,53 @@ def test_load_characters_empty_and_with_data_unit():
 # - DB errors during operations (add_conversation, add_message, delete, update)
 # - History with only system messages (should save no messages)
 # - History with malformed image data URI
+
+@pytest.mark.unit
+def test_chat_api_call_routing_and_param_mapping_bedrock_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
+    provider = "bedrock"
+    mock_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
+    mock_handler.return_value = "Bedrock success"
+
+    args = {
+        "api_endpoint": provider,
+        "messages_payload": [{"role": "user", "content": "Hi Bedrock"}],
+        "api_key": "test_bedrock_key",
+        "temp": 0.4,
+        "system_message": "Be helpful.",
+        "streaming": True,
+        "maxp": 0.8,
+        "model": "openai.gpt-oss-20b-1:0",
+        "max_tokens": 256,
+        "n": 1,
+        "stop": ["\n\n"],
+        "presence_penalty": 0.1,
+        "frequency_penalty": 0.2,
+        # Guardrails
+        "extra_headers": {
+            "X-Amzn-Bedrock-GuardrailIdentifier": "gr-123",
+            "X-Amzn-Bedrock-GuardrailVersion": "1",
+            "X-Amzn-Bedrock-Trace": "ENABLED"
+        },
+        "extra_body": {
+            "amazon-bedrock-guardrailConfig": {"tagSuffix": "test"}
+        }
+    }
+    result = chat_api_call(**args)
+    assert result == "Bedrock success"
+    called_kwargs = mock_handler.call_args.kwargs
+    param_map = PROVIDER_PARAM_MAP[provider]
+    assert param_map['messages_payload'] in called_kwargs
+    assert called_kwargs[param_map['messages_payload']] == args['messages_payload']
+    assert called_kwargs[param_map['api_key']] == args['api_key']
+    assert called_kwargs[param_map['temp']] == args['temp']
+    assert called_kwargs[param_map['system_message']] == args['system_message']
+    assert called_kwargs[param_map['streaming']] == args['streaming']
+    assert called_kwargs[param_map['maxp']] == args['maxp']
+    assert called_kwargs[param_map['model']] == args['model']
+    assert called_kwargs[param_map['max_tokens']] == args['max_tokens']
+    assert called_kwargs[param_map['n']] == args['n']
+    assert called_kwargs[param_map['stop']] == args['stop']
+    assert called_kwargs[param_map['presence_penalty']] == args['presence_penalty']
+    assert called_kwargs[param_map['frequency_penalty']] == args['frequency_penalty']
+    assert called_kwargs[param_map['extra_headers']] == args['extra_headers']
+    assert called_kwargs[param_map['extra_body']] == args['extra_body']

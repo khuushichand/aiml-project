@@ -545,7 +545,7 @@ async def entity_recognition_expansion(query: str) -> List[str]:
     return expanded.variations or []
 
 
-async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] = None) -> str:
+async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] = None, corpus: Optional[str] = None) -> str:
     """Combined quick expansion used by unified pipeline tests.
 
     Returns a simple string that concatenates the first available expansion.
@@ -562,14 +562,35 @@ async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] =
             pass
     if not first_variation and "synonym" in strategies:
         try:
-            syns = await expand_synonyms(query)
+            # Load corpus-level synonyms if provided
+            if corpus:
+                try:
+                    from .synonyms_registry import get_corpus_synonyms  # lazy import
+                    synmap = get_corpus_synonyms(corpus)
+                except Exception:
+                    synmap = {}
+                expander = SynonymExpansion(synmap if synmap else None)
+                expanded = await expander.expand(query)
+                syns = expanded.variations or []
+            else:
+                syns = await expand_synonyms(query)
             if syns:
                 first_variation = syns[0]
         except Exception:
             pass
     if not first_variation and "domain" in strategies:
         try:
-            dom = await domain_specific_expansion(query)
+            if corpus:
+                try:
+                    from .synonyms_registry import get_corpus_synonyms
+                    dom_terms = get_corpus_synonyms(corpus)
+                except Exception:
+                    dom_terms = {}
+                expander = DomainExpansion(custom_terms=dom_terms if dom_terms else None)
+                expanded = await expander.expand(query)
+                dom = expanded.variations or []
+            else:
+                dom = await domain_specific_expansion(query)
             if dom:
                 first_variation = dom[0]
         except Exception:

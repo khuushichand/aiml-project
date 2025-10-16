@@ -3,6 +3,7 @@ Simple authentication tests with PostgreSQL test database.
 """
 
 import pytest
+import pytest_asyncio
 import asyncpg
 import os
 import uuid as uuid_lib
@@ -20,7 +21,7 @@ TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
 class TestSimpleAuth:
     """Simple authentication tests."""
     
-    @pytest.fixture(autouse=True)
+    @pytest_asyncio.fixture(autouse=True)
     async def setup_test_user(self, isolated_test_environment):
         """Setup test user in the isolated database."""
         client, db_name = isolated_test_environment

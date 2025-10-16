@@ -1,0 +1,12 @@
+# Optional: OpenTelemetry metrics and tracing support
+# Install via: pip install -r requirements-otel.txt
+# Or: pip install "tldw-server[otel]"
+
+opentelemetry-distro>=0.48b0
+opentelemetry-exporter-otlp>=1.24.0
+opentelemetry-exporter-prometheus>=0.49b0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-httpx>=0.48b0
+opentelemetry-instrumentation-sqlalchemy>=0.48b0
+opentelemetry-instrumentation-psycopg2>=0.48b0
+opentelemetry-instrumentation-aiohttp-client>=0.48b0

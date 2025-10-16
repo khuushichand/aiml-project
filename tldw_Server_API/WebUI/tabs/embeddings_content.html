@@ -50,7 +50,27 @@
 
 <!-- Admin Tools Tab -->
 <div id="tabEmbeddingsAdmin" class="tab-content">
+    <div style="margin: 8px 0 12px 0; font-size: 0.95em; color: var(--text-2);">
+        <strong>Runtime Env Flags</strong>
+        <span class="help-tip" title="Backpressure thresholds and quotas (HTTP 429):
+- EMB_BACKPRESSURE_MAX_DEPTH (default 25000)
+- EMB_BACKPRESSURE_MAX_AGE_SECONDS (default 300)
+- EMBEDDINGS_TENANT_RPS (multi-tenant; 0 disables)
+- INGEST_TENANT_RPS (multi-tenant; fallback to EMBEDDINGS_TENANT_RPS)
+
+Priority queues (per-stage routing):
+- EMBEDDINGS_PRIORITY_ENABLED=true|false
+- EMBEDDINGS_PRIORITY_WEIGHTS=high:5,normal:3,low:1
+
+See Deployment Guide → Backpressure & Quotas for details.">?</span>
+    </div>
     <div class="endpoint-section" id="embeddingsHealth">
+        <div style="margin: 6px 0;">
+            <span class="badge" id="dlq-badge-embedding2" title="Embedding DLQ depth">embedding: 0</span>
+            <span class="badge" id="dlq-badge-chunking2" title="Chunking DLQ depth" style="margin-left:6px;">chunking: 0</span>
+            <span class="badge" id="dlq-badge-storage2" title="Storage DLQ depth" style="margin-left:6px;">storage: 0</span>
+            <button class="api-button" style="margin-left:8px;" onclick="embeddingsRefreshDLQBadges()">Refresh DLQ</button>
+        </div>
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/embeddings/health - Health Check</span>
@@ -93,6 +113,38 @@
         
         <h3>Response:</h3>
         <pre id="embeddingsMetrics_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="embeddingsStageControls">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/stage/control - Stage Controls</span>
+        </h2>
+        <p>Pause / Resume / Drain per-stage workers (admin only).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsStage_stage">Stage:</label>
+                    <select id="embeddingsStage_stage">
+                        <option value="chunking">chunking</option>
+                        <option value="embedding" selected>embedding</option>
+                        <option value="storage">storage</option>
+                        <option value="all">all</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label>Actions:</label><br/>
+                    <button class="api-button" onclick="embeddingsStagePause()">Pause</button>
+                    <button class="api-button" onclick="embeddingsStageResume()">Resume</button>
+                    <button class="api-button btn-warning" onclick="embeddingsStageDrain()">Drain</button>
+                    <button class="api-button" onclick="embeddingsStageStatus()">Status</button>
+                </div>
+            </div>
+        </div>
+        <h3>Status:</h3>
+        <pre id="embeddingsStage_status">---</pre>
     </div>
 
     <div class="endpoint-section" id="embeddingsModelsList">
@@ -179,4 +231,122 @@
         <h3>Response:</h3>
         <pre id="embeddingsModelsDownload_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="embeddingsLedgerStatus">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/embeddings/ledger/status - Ledger Status</span>
+        </h2>
+        <p>Inspect idempotency/dedupe ledger entries (admin only).</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsLedger_idemp">idempotency_key:</label>
+                    <input type="text" id="embeddingsLedger_idemp" placeholder="reembed:user:media:...">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsLedger_dedupe">dedupe_key:</label>
+                    <input type="text" id="embeddingsLedger_dedupe" placeholder="same as idempotency by default">
+                </div>
+            </div>
+        </div>
+
+        <button class="api-button" onclick="embeddingsQueryLedgerStatus()">Query Ledger</button>
+
+        <h3>Response:</h3>
+        <pre id="embeddingsLedgerStatus_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="embeddingsReembedSchedule">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/reembed/schedule - Schedule Re-Embed</span>
+        </h2>
+        <p>Schedule a re-embed expansion job for a media_id (admin only).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsReembed_media_id">media_id <span class="required">*</span>:</label>
+                    <input type="number" id="embeddingsReembed_media_id" placeholder="123">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsReembed_priority">Priority:</label>
+                    <input type="number" id="embeddingsReembed_priority" value="50" min="0" max="100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="embeddingsScheduleReembed()">Schedule Re-Embed</button>
+        <h3>Response:</h3>
+        <pre id="embeddingsReembed_response">---</pre>
+    </div>
+</div>
+
+<!-- DLQ Admin Tab -->
+<div id="tabEmbeddingsDLQ" class="tab-content">
+    <div class="endpoint-section" id="embeddingsDLQ">
+        <h2>
+            <span class="endpoint-method get">GET/POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/dlq - DLQ Admin</span>
+        </h2>
+        <p>Inspect and requeue Dead-Letter Queue (DLQ) entries for embeddings stages (admin only).</p>
+
+        <div style="margin: 6px 0;">
+            <span class="badge" id="dlq-badge-embedding" title="Embedding DLQ depth">embedding: 0</span>
+            <span class="badge" id="dlq-badge-chunking" title="Chunking DLQ depth" style="margin-left:6px;">chunking: 0</span>
+            <span class="badge" id="dlq-badge-storage" title="Storage DLQ depth" style="margin-left:6px;">storage: 0</span>
+            <button class="api-button" style="margin-left:8px;" onclick="embeddingsStartDLQAutoRefresh()">Auto-Refresh (10s)</button>
+            <button class="api-button" onclick="embeddingsStopDLQAutoRefresh()">Stop</button>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsDLQ_stage">Stage:</label>
+                    <select id="embeddingsDLQ_stage">
+                        <option value="embedding" selected>embedding</option>
+                        <option value="chunking">chunking</option>
+                        <option value="storage">storage</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsDLQ_count">Count:</label>
+                    <input type="number" id="embeddingsDLQ_count" value="50" min="1" max="500" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsDLQ_job_id">Job ID Filter (optional):</label>
+                    <input type="text" id="embeddingsDLQ_job_id" placeholder="job-123" />
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="embeddingsListDLQ2()">List DLQ</button>
+            <label style="margin-left:10px;">
+                <input type="checkbox" id="embeddingsDLQ_selectAll" onchange="embeddingsDLQToggleSelectAll(this)" /> Select All
+            </label>
+            <button class="api-button" onclick="embeddingsRequeueDLQSelected()">Requeue Selected</button>
+            <button class="api-button btn-warning" onclick="embeddingsRequeueDLQAllFiltered()">Requeue All Filtered</button>
+        </div>
+
+        <h3>Entries</h3>
+        <div id="embeddingsDLQ_results" class="json-viewer">---</div>
+    </div>
+    <script>
+        // Initialize DLQ auto-refresh preference
+        try {
+            const saved = Utils.getFromStorage('embeddings-dlq-auto-refresh');
+            if (saved === true) {
+                embeddingsStartDLQAutoRefresh();
+            }
+        } catch (e) { /* ignore */ }
+    </script>
 </div>

@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
     ChromaDBManager,
     get_default_chroma_manager
 )
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 
 class ChromaDBAdapter(VectorStoreAdapter):
@@ -72,7 +73,12 @@ class ChromaDBAdapter(VectorStoreAdapter):
             metadata["embedding_dimension"] = self.config.embedding_dim
             
             # ChromaDBManager's get_or_create_collection handles creation
-            collection = self.manager.get_or_create_collection(collection_name)
+            tm = get_tracing_manager()
+            with tm.span("vectorstore.chromadb.create_collection", attributes={
+                "vs.collection": collection_name,
+                "vs.embed_dim": int(self.config.embedding_dim),
+            }):
+                collection = self.manager.get_or_create_collection(collection_name)
             
             # Update metadata if provided
             if metadata and hasattr(collection, 'modify'):
@@ -142,18 +148,21 @@ class ChromaDBAdapter(VectorStoreAdapter):
         try:
             # Validate vectors
             self._validate_vectors(vectors)
-            
-            # Store in ChromaDB using existing manager
-            self.manager.store_in_chroma(
-                collection_name=collection_name,
-                texts=documents,
-                embeddings=vectors,
-                ids=ids,
-                metadatas=metadatas
-            )
-            
+            tm = get_tracing_manager()
+            with tm.span("vectorstore.chromadb.upsert", attributes={
+                "vs.collection": collection_name,
+                "vs.count": int(len(vectors)),
+                "vs.embed_dim": int(self.config.embedding_dim),
+            }):
+                # Store in ChromaDB using existing manager
+                self.manager.store_in_chroma(
+                    collection_name=collection_name,
+                    texts=documents,
+                    embeddings=vectors,
+                    ids=ids,
+                    metadatas=metadatas
+                )
             logger.info(f"Upserted {len(vectors)} vectors to collection '{collection_name}'")
-            
         except Exception as e:
             logger.error(f"Failed to upsert vectors to '{collection_name}': {e}")
             raise
@@ -187,6 +196,101 @@ class ChromaDBAdapter(VectorStoreAdapter):
         except Exception as e:
             logger.error(f"Failed to delete vectors from '{collection_name}': {e}")
             raise
+
+    async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
+        """Delete vectors by metadata filter (best-effort) in ChromaDB.
+
+        Returns 0 when count is not available.
+        """
+        if not self._initialized:
+            await self.initialize()
+        try:
+            collection = self.manager.get_or_create_collection(collection_name)
+            delete = getattr(collection, 'delete', None)
+            if callable(delete):
+                delete(where=filter)  # type: ignore
+            return 0
+        except Exception as e:
+            logger.error(f"Failed to delete by filter in '{collection_name}': {e}")
+            return 0
+
+    # Adapter-specific helper: list vectors with pagination
+    async def list_vectors_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self._initialized:
+            await self.initialize()
+        collection = self.manager.get_or_create_collection(collection_name)
+        total = 0
+        try:
+            total = int(collection.count())
+        except Exception:
+            total = 0
+        # Best-effort where filter if supported
+        try:
+            data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"], where=filter)  # type: ignore
+        except Exception:
+            data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"])  # type: ignore
+        items = []
+        if isinstance(data, dict) and data.get('ids'):
+            for i, vid in enumerate(data['ids']):
+                items.append({
+                    'id': vid,
+                    'content': (data.get('documents') or [""])[i] if data.get('documents') else "",
+                    'metadata': (data.get('metadatas') or [{}])[i] if data.get('metadatas') else {},
+                })
+        return {'items': items, 'total': total}
+
+    # Adapter-specific helper: get single vector by id
+    async def get_vector(self, collection_name: str, vector_id: str) -> Optional[Dict[str, Any]]:
+        if not self._initialized:
+            await self.initialize()
+        try:
+            collection = self.manager.client.get_collection(name=collection_name)
+            data = collection.get(ids=[vector_id], include=["documents", "metadatas"])  # type: ignore
+            ids = data.get('ids') if isinstance(data, dict) else None
+            if not ids:
+                return None
+            content = (data.get('documents') or [""])[0] if isinstance(data, dict) else ""
+            metadata = (data.get('metadatas') or [{}])[0] if isinstance(data, dict) else {}
+            return {'id': vector_id, 'content': content, 'metadata': metadata}
+        except Exception:
+            return None
+
+    # Adapter-specific helper: for duplication – vectors plus embeddings
+    async def list_vectors_with_embeddings_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self._initialized:
+            await self.initialize()
+        collection = self.manager.get_or_create_collection(collection_name)
+        total = 0
+        try:
+            total = int(collection.count())
+        except Exception:
+            total = 0
+        try:
+            data = collection.get(limit=limit, offset=offset, include=["embeddings", "documents", "metadatas"], where=filter)  # type: ignore
+        except Exception:
+            data = collection.get(limit=limit, offset=offset, include=["embeddings", "documents", "metadatas"])  # type: ignore
+        items = []
+        if isinstance(data, dict) and data.get('ids'):
+            embs = data.get('embeddings') or []
+            # Convert numpy arrays to lists if needed
+            try:
+                if hasattr(embs, 'tolist'):
+                    embs = embs.tolist()
+            except Exception:
+                pass
+            for i, vid in enumerate(data['ids']):
+                vec = []
+                try:
+                    vec = list(embs[i]) if isinstance(embs[i], (list, tuple)) else (embs[i].tolist() if hasattr(embs[i], 'tolist') else [])
+                except Exception:
+                    vec = []
+                items.append({
+                    'id': vid,
+                    'vector': vec,
+                    'content': (data.get('documents') or [""])[i] if data.get('documents') else "",
+                    'metadata': (data.get('metadatas') or [{}])[i] if data.get('metadatas') else {},
+                })
+        return {'items': items, 'total': total}
     
     async def search(
         self,
@@ -391,6 +495,20 @@ class ChromaDBAdapter(VectorStoreAdapter):
         
         # ChromaDB handles optimization automatically
         logger.info(f"ChromaDB auto-optimizes collection '{collection_name}'")
+
+    async def get_index_info(self, collection_name: str) -> Dict[str, Any]:
+        # Chroma manages internal index structures; return generic info
+        stats = await self.get_collection_stats(collection_name)
+        return {
+            'backend': 'chroma',
+            'index_type': 'managed',
+            'dimension': stats.get('dimension', self.config.embedding_dim),
+            'count': stats.get('count', 0),
+        }
+
+    def set_ef_search(self, value: int) -> int:
+        # No-op for Chroma
+        return int(value)
     
     async def close(self) -> None:
         """Close ChromaDB connection."""

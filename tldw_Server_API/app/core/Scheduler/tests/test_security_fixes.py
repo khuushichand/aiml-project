@@ -14,6 +14,8 @@ from ..scheduler import Scheduler
 from ..base import TaskRegistry
 from ..authorization import TaskAuthorizer, AuthContext, TaskPermission, get_authorizer
 
+DEFAULT_METADATA = {"user_id": "security-tester"}
+
 
 class TestPathTraversalFixes:
     """Test path traversal vulnerability fixes."""
@@ -89,7 +91,7 @@ class TestPayloadSanitization:
         }
         
         with pytest.raises(ValueError, match="potentially malicious content"):
-            await scheduler.submit('test_handler', payload=malicious_payload)
+            await scheduler.submit('test_handler', payload=malicious_payload, metadata=DEFAULT_METADATA)
     
     @pytest.mark.asyncio
     async def test_sanitize_dangerous_keys(self):
@@ -161,7 +163,7 @@ class TestPayloadSanitization:
         large_payload = {'data': 'x' * 2000}
         
         with pytest.raises(ValueError, match="exceeds maximum allowed size"):
-            await scheduler.submit('test_handler', payload=large_payload)
+            await scheduler.submit('test_handler', payload=large_payload, metadata=DEFAULT_METADATA)
     
     @pytest.mark.asyncio
     async def test_limit_list_size(self):
@@ -209,7 +211,7 @@ class TestHandlerValidation:
         scheduler.registry = TaskRegistry()
         
         with pytest.raises(ValueError, match="Handler 'unknown' not registered"):
-            await scheduler.submit('unknown', payload={'data': 'test'})
+            await scheduler.submit('unknown', payload={'data': 'test'}, metadata=DEFAULT_METADATA)
     
     @pytest.mark.asyncio
     async def test_reject_invalid_handler_name(self):
@@ -231,7 +233,7 @@ class TestHandlerValidation:
             # First, try to register with invalid name (should be rejected by registry)
             # Then try to submit (should be rejected by scheduler)
             with pytest.raises(ValueError, match="contains invalid characters"):
-                await scheduler.submit(name, payload={'data': 'test'})
+                await scheduler.submit(name, payload={'data': 'test'}, metadata=DEFAULT_METADATA)
     
     @pytest.mark.asyncio
     async def test_validate_queue_name(self):
@@ -249,7 +251,8 @@ class TestHandlerValidation:
             await scheduler.submit(
                 'test_handler',
                 payload={'data': 'test'},
-                queue_name='../../etc/passwd'
+                queue_name='../../etc/passwd',
+                metadata=DEFAULT_METADATA
             )
 
 
@@ -319,7 +322,7 @@ class TestIntegrationSecurity:
                 'safe_data': 'This is OK'
             }
             
-            task_id = await scheduler.submit('safe_handler', payload=dangerous_payload)
+            task_id = await scheduler.submit('safe_handler', payload=dangerous_payload, metadata=DEFAULT_METADATA)
             
             # Verify task was created
             assert task_id == 'task-123'
@@ -349,7 +352,7 @@ class TestIntegrationSecurity:
         }
         
         with pytest.raises(ValueError, match="potentially malicious content"):
-            await scheduler.submit('test_handler', payload=malicious_payload)
+            await scheduler.submit('test_handler', payload=malicious_payload, metadata=DEFAULT_METADATA)
 
 
 class TestTaskAuthorization:
@@ -501,7 +504,7 @@ class TestTaskAuthorization:
         )
         
         # Try to submit without authorization context (should work - no auth required by default)
-        task_id = await scheduler.submit('protected_task', payload={'data': 'test'})
+        task_id = await scheduler.submit('protected_task', payload={'data': 'test'}, metadata=DEFAULT_METADATA)
         assert task_id == 'task-123'
         
         # Try to submit with non-admin context (should fail)
@@ -514,7 +517,8 @@ class TestTaskAuthorization:
             await scheduler.submit(
                 'protected_task',
                 payload={'data': 'test'},
-                auth_context=user_context
+                auth_context=user_context,
+                metadata={'user_id': user_context.user_id}
             )
         
         # Try with admin context (should work)
@@ -526,7 +530,8 @@ class TestTaskAuthorization:
         task_id = await scheduler.submit(
             'protected_task',
             payload={'data': 'test'},
-            auth_context=admin_context
+            auth_context=admin_context,
+            metadata={'user_id': admin_context.user_id}
         )
         assert task_id == 'task-123'
 

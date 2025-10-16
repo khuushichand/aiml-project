@@ -217,6 +217,18 @@
             border-radius: var(--radius-md);
             overflow-x: auto;
         }
+
+        /* Simple badge */
+        .badge {
+            background: var(--color-surface-alt);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-pill);
+            padding: 2px 8px;
+            font-size: 0.8rem;
+            margin-left: 8px;
+        }
+        .badge.badge-warn { background: #fff7e6; border-color: #ffe0a3; }
+        .badge.badge-crit { background: #ffe6e6; border-color: #ffb3b3; }
         
         .json-toggle {
             cursor: pointer;
@@ -298,6 +310,7 @@
                     <span class="status-dot" aria-hidden="true"></span>
                     <span class="api-status-text">Checking...</span>
                 </div>
+                <span id="dlq-badge" class="badge" title="Total DLQ depth">DLQ: 0</span>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
                     🌙
                 </button>
@@ -306,12 +319,15 @@
 
         <!-- Search Container -->
         <div class="search-container">
-            <input 
-                type="search" 
-                id="endpoint-search" 
-                placeholder="Search endpoints... (Ctrl+K)"
-                aria-label="Search endpoints"
-            >
+            <div style="display:flex; gap:8px; align-items:center;">
+                <input 
+                    type="search" 
+                    id="endpoint-search" 
+                    placeholder="Search endpoints... (Ctrl+K)"
+                    aria-label="Search endpoints"
+                >
+                <button id="preload-endpoints-btn" class="btn btn-secondary btn-sm" title="Load all tabs so search spans every endpoint">Load all endpoints for search</button>
+            </div>
         </div>
 
         <!-- Top Level Tabs -->
@@ -373,6 +389,9 @@
                 <button class="top-tab-button" data-toptab="evaluations" role="tab" aria-selected="false">
                     Evaluations
                 </button>
+                <button class="top-tab-button" data-toptab="persona" role="tab" aria-selected="false">
+                    Persona
+                </button>
             </div>
             
             <!-- Row 3: Administration & System -->
@@ -394,6 +413,9 @@
                 </button>
                 <button class="top-tab-button" data-toptab="maintenance" role="tab" aria-selected="false">
                     Maintenance
+                </button>
+                <button class="top-tab-button" data-toptab="personalization" role="tab" aria-selected="false">
+                    Personalization
                 </button>
             </div>
         </nav>
@@ -525,6 +547,22 @@
             </div>
         </div>
 
+        <div id="persona-subtabs" class="sub-tab-row" role="navigation" aria-label="Persona sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabPersona" data-load-group="persona" role="tab">
+                    Persona Agent
+                </button>
+            </div>
+        </div>
+
+        <div id="personalization-subtabs" class="sub-tab-row" role="navigation" aria-label="Personalization sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabPersonalization" data-load-group="personalization" role="tab">
+                    Dashboard
+                </button>
+            </div>
+        </div>
+
         <div id="evaluations-subtabs" class="sub-tab-row" role="navigation" aria-label="Evaluations sub-navigation">
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabEvalsOpenAI" data-load-group="evaluations" role="tab">
@@ -576,6 +614,9 @@
                 <button class="sub-tab-button" data-content-id="tabEmbeddingsAdmin" data-load-group="embeddings" role="tab">
                     Admin Tools
                 </button>
+                <button class="sub-tab-button" data-content-id="tabEmbeddingsDLQ" data-load-group="embeddings" role="tab">
+                    DLQ
+                </button>
                 <button class="sub-tab-button" data-content-id="tabVectorStores" data-load-group="vector_stores" role="tab">
                     Vector Stores
                 </button>
@@ -595,6 +636,27 @@
                 </button>
                 <button class="sub-tab-button" data-content-id="tabResearchBioRxiv" data-load-group="research" role="tab">
                     BioRxiv/MedRxiv
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchACM" data-load-group="research" role="tab">
+                    ACM (OpenAlex)
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchWiley" data-load-group="research" role="tab">
+                    Wiley (OpenAlex)
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchIEEE" data-load-group="research" role="tab">
+                    IEEE Xplore
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchSpringer" data-load-group="research" role="tab">
+                    Springer
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchScopus" data-load-group="research" role="tab">
+                    Scopus
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchOAIngest" data-load-group="research" role="tab">
+                    OA Ingest (DOI)
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchChemRxiv" data-load-group="research" role="tab">
+                    ChemRxiv
                 </button>
             </div>
         </div>
@@ -621,8 +683,20 @@
                 <button class="sub-tab-button" data-content-id="tabAdminUsers" data-load-group="admin" role="tab">
                     User Management
                 </button>
+                <button class="sub-tab-button" data-content-id="tabAccessControl" data-load-group="admin" role="tab">
+                    Access Control
+                </button>
                 <button class="sub-tab-button" data-content-id="tabAdminSystem" data-load-group="admin" role="tab">
                     System Status
+                </button>
+                <button class="sub-tab-button" data-content-id="tabModeration" data-load-group="admin" role="tab">
+                    Moderation
+                </button>
+                <button class="sub-tab-button" data-content-id="tabMonitoring" data-load-group="admin" role="tab">
+                    Monitoring
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAdminJobs" data-load-group="jobs" role="tab">
+                    Jobs
                 </button>
                 <button class="sub-tab-button" data-content-id="tabClaims" data-load-group="maintenance" role="tab">
                     Claims ⚖️
@@ -634,6 +708,9 @@
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabLLMProviders" data-load-group="llm_providers" role="tab">
                     Providers
+                </button>
+                <button class="sub-tab-button" data-content-id="tabLLMDiagnostics" data-load-group="llm_diagnostics" role="tab">
+                    Diagnostics
                 </button>
             </div>
         </div>
@@ -702,6 +779,9 @@
                 <button class="sub-tab-button" data-content-id="tabLlamaCppInference" data-load-group="llamacpp" role="tab">
                     Inference
                 </button>
+                <button class="sub-tab-button" data-content-id="tabLlamaCppReranking" data-load-group="llamacpp" role="tab">
+                    Reranking
+                </button>
             </div>
         </div>
 
@@ -762,28 +842,47 @@
                         <div class="column">
                             <div class="form-group">
                                 <label for="baseUrl">API Base URL:</label>
-                                <input 
-                                    type="url" 
-                                    id="baseUrl" 
-                                    value="http://localhost:8000"
-                                    placeholder="http://localhost:8000"
-                                    aria-describedby="baseUrl-help"
-                                >
+                                <div class="input-with-action">
+                                    <input 
+                                        type="url" 
+                                        id="baseUrl" 
+                                        value="http://localhost:8000"
+                                        placeholder="http://localhost:8000"
+                                        aria-describedby="baseUrl-help"
+                                    >
+                                    <button id="copyBaseUrlBtn" type="button" class="btn btn-secondary btn-sm" title="Copy base URL">Copy</button>
+                                </div>
                                 <small id="baseUrl-help">The base URL for all API requests</small>
                             </div>
                         </div>
                         
                         <div class="column">
                             <div class="form-group">
-                                <label for="apiKeyInput">API Token:</label>
-                                <input 
-                                    type="password" 
-                                    id="apiKeyInput" 
-                                    value=""
-                                    placeholder="Enter your API token"
-                                    aria-describedby="apiKey-help"
-                                >
-                                <small id="apiKey-help">Sent in the 'Token' header for authenticated requests. Contact your administrator for an API token.</small>
+                                <label for="apiKeyInput">API Token: <span title="In single-user mode, the token is auto-configured by the server and the field will display '(Auto-configured)'. In multi-user mode, enter a Bearer token or enable 'Prefer X-API-KEY' to use API keys.">ⓘ</span></label>
+                                <div class="input-with-action">
+                                    <input 
+                                        type="password" 
+                                        id="apiKeyInput" 
+                                        value=""
+                                        placeholder="Enter your API token"
+                                        aria-describedby="apiKey-help"
+                                    >
+                                    <button id="toggleApiKeyVisibility" type="button" class="btn btn-secondary btn-sm" title="Show/Hide token">Show</button>
+                                    <button id="copyApiKeyBtn" type="button" class="btn btn-secondary btn-sm" title="Copy API token">Copy</button>
+                                </div>
+                                <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="columns">
+                        <div class="column">
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="preferApiKeyInMultiUser" />
+                                    Prefer X-API-KEY header in multi-user mode (SQLite)
+                                </label>
+                                <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
                             </div>
                         </div>
                     </div>
@@ -845,6 +944,7 @@
     <script src="js/tts-loader.js"></script> <!-- TTS content loader -->
     <script src="js/dictionaries.js"></script> <!-- Chat Dictionaries UI -->
     <script src="js/tab-functions.js"></script> <!-- Load tab functions before main.js -->
+    <script src="js/components_explain.js"></script> <!-- Agentic Explain Panel renderer -->
     <script src="js/main.js"></script>
 
     <!-- Legacy compatibility functions -->
@@ -1033,12 +1133,48 @@
                 }
 
                 // Generate and display cURL command
-                const curlCommand = apiClient.generateCurl(method, processedPath, { body, query });
+                const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
+                    ? apiClient.generateCurlV2(method, processedPath, { body, query })
+                    : apiClient.generateCurl(method, processedPath, { body, query }));
                 if (curlEl) {
                     curlEl.textContent = curlCommand;
                 }
 
-                // Make the request
+                // Quick download toggle for raw CSV/XML endpoints
+                const dlToggle = document.getElementById(endpointId + '_download');
+                if (dlToggle && dlToggle.checked) {
+                    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+                    const url = new URL(`${baseUrl}${processedPath}`);
+                    Object.keys(query || {}).forEach(k => {
+                        const v = query[k];
+                        if (v !== undefined && v !== null && v !== '') url.searchParams.append(k, v);
+                    });
+                    const headers = {};
+                    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+                    if (token) headers['X-API-KEY'] = token;
+                    const resp = await fetch(url.toString(), { method, headers });
+                    if (!resp.ok) {
+                        const text = await resp.text();
+                        throw new Error(`HTTP ${resp.status}: ${text}`);
+                    }
+                    const blob = await resp.blob();
+                    const ct = resp.headers.get('content-type') || '';
+                    const ext = ct.includes('xml') ? 'xml' : ct.includes('csv') ? 'csv' : ct.includes('html') ? 'html' : 'json';
+                    const fnameEl = document.getElementById(endpointId + '_filename');
+                    const filename = ((fnameEl && fnameEl.value) ? fnameEl.value : endpointId) + '.' + ext;
+                    const a = document.createElement('a');
+                    const href = URL.createObjectURL(blob);
+                    a.href = href;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(href);
+                    responseArea.textContent = `(Downloaded ${filename})`;
+                    return;
+                }
+
+                // Make the request normally
                 const response = await apiClient.makeRequest(method, processedPath, { body, query });
 
                 // Display response
@@ -1061,6 +1197,79 @@
                         enableCopy: true,
                         enableCollapse: true
                     });
+
+                    // Notes list: render summary and table view
+                    if (endpointId === 'notesList') {
+                        try {
+                            const notes = (response && (response.notes || response.items || response.results)) || [];
+                            const count = (typeof response.count === 'number') ? response.count : notes.length;
+                            const total = (typeof response.total === 'number') ? response.total : '';
+                            const limit = (typeof response.limit === 'number') ? response.limit : '';
+                            const offset = (typeof response.offset === 'number') ? response.offset : '';
+
+                            const s = document.getElementById('notesList_summary');
+                            if (s) {
+                                s.textContent = `count=${count}  total=${total}  limit=${limit}  offset=${offset}`;
+                            }
+
+                            const tbl = document.getElementById('notesList_table');
+                            if (tbl) {
+                                const tbody = tbl.querySelector('tbody');
+                                if (tbody) {
+                                    if (!Array.isArray(notes) || notes.length === 0) {
+                                        tbody.innerHTML = '<tr><td colspan="4"><em>No notes</em></td></tr>';
+                                    } else {
+                                        const rows = notes.map(n => {
+                                            const title = Utils.escapeHtml(String(n.title ?? 'Untitled'));
+                                            const id = Utils.escapeHtml(String(n.id ?? ''));
+                                            const ver = Utils.escapeHtml(String(n.version ?? ''));
+                                            const lm = Utils.escapeHtml(String(n.last_modified ?? n.updated_at ?? ''));
+                                            return `<tr><td>${title}</td><td>${id}</td><td>${ver}</td><td>${lm}</td></tr>`;
+                                        }).join('');
+                                        tbody.innerHTML = rows;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to render notes list summary/table:', e);
+                        }
+                    }
+
+                    // Notes search: render summary and table view
+                    if (endpointId === 'notesSearch') {
+                        try {
+                            const notes = Array.isArray(response)
+                                ? response
+                                : ((response && (response.notes || response.items || response.results)) || []);
+                            const count = Array.isArray(notes) ? notes.length : 0;
+
+                            const s = document.getElementById('notesSearch_summary');
+                            if (s) {
+                                s.textContent = `count=${count}`;
+                            }
+
+                            const tbl = document.getElementById('notesSearch_table');
+                            if (tbl) {
+                                const tbody = tbl.querySelector('tbody');
+                                if (tbody) {
+                                    if (!Array.isArray(notes) || notes.length === 0) {
+                                        tbody.innerHTML = '<tr><td colspan="4"><em>No results</em></td></tr>';
+                                    } else {
+                                        const rows = notes.map(n => {
+                                            const title = Utils.escapeHtml(String(n.title ?? 'Untitled'));
+                                            const id = Utils.escapeHtml(String(n.id ?? ''));
+                                            const ver = Utils.escapeHtml(String(n.version ?? ''));
+                                            const lm = Utils.escapeHtml(String(n.last_modified ?? n.updated_at ?? ''));
+                                            return `<tr><td>${title}</td><td>${id}</td><td>${ver}</td><td>${lm}</td></tr>`;
+                                        }).join('');
+                                        tbody.innerHTML = rows;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to render notes search summary/table:', e);
+                        }
+                    }
                 } else {
                     responseArea.textContent = response;
                 }
@@ -1082,8 +1291,34 @@
                         '</div>';
                     Toast.error('Request timed out. The operation may still be processing on the server.');
                 } else {
-                    responseArea.textContent = `Error: ${error.message}`;
-                    Toast.error(`Request failed: ${error.message}`);
+                    // MCP-specific hint for permission denials
+                    let hinted = false;
+                    try {
+                        if (error.status === 403 && (processedPath || '').startsWith('/api/v1/mcp')) {
+                            let hintText = '';
+                            const d = error.details;
+                            // FastAPI detail can be string or object
+                            if (d && typeof d === 'object') {
+                                const det = d.detail || d; // sometimes nested in detail
+                                if (typeof det === 'object' && det.hint) hintText = det.hint;
+                                else if (det && det.hint) hintText = det.hint;
+                            }
+                            if (!hintText) {
+                                hintText = 'Permission denied. Ask an admin to grant tools.execute:<tool> or tools.execute:* to your role (Admin → Access Control).';
+                            }
+                            responseArea.innerHTML = '<div style="padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; margin: 10px 0;">' +
+                                '<strong>🚫 Insufficient permissions</strong><br>' +
+                                Utils.escapeHtml(hintText) +
+                                '</div>';
+                            Toast.warning('Permission denied (HTTP 403)');
+                            hinted = true;
+                        }
+                    } catch (e) { /* ignore */ }
+
+                    if (!hinted) {
+                        responseArea.textContent = `Error: ${error.message}`;
+                        Toast.error(`Request failed: ${error.message}`);
+                    }
                 }
             } finally {
                 Loading.hide(responseArea.parentElement);
@@ -1138,6 +1373,62 @@
             } catch (e) {
                 alert('Failed to submit: ' + (e?.message || e));
             }
+        }
+
+        // Notes: quick download of visible list/search via GET export
+        async function notesExportDownload(params, filenameBase) {
+            try {
+                const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+                const url = new URL(`${baseUrl}/api/v1/notes/export`);
+                // Build query params
+                Object.entries(params || {}).forEach(([k, v]) => {
+                    if (v !== undefined && v !== null && v !== '') url.searchParams.append(k, String(v));
+                });
+                // Force CSV format
+                url.searchParams.set('format', 'csv');
+
+                const headers = {};
+                const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+                if (token) headers['X-API-KEY'] = token;
+
+                const resp = await fetch(url.toString(), { method: 'GET', headers });
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    throw new Error(`HTTP ${resp.status}: ${text}`);
+                }
+                const blob = await resp.blob();
+                const a = document.createElement('a');
+                const href = URL.createObjectURL(blob);
+                a.href = href;
+                a.download = `${filenameBase || 'notes_export'}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(href);
+                Toast.success('Downloaded CSV');
+            } catch (e) {
+                Toast.error(e?.message || String(e));
+            }
+        }
+
+        async function notesDownloadVisibleList() {
+            try {
+                const limit = document.getElementById('notesList_limit')?.value || '20';
+                const offset = document.getElementById('notesList_offset')?.value || '0';
+                const include_keywords = document.getElementById('notesList_include_keywords')?.checked ? 'true' : '';
+                const filename = document.getElementById('notesList_dl_filename')?.value || 'notes_visible';
+                await notesExportDownload({ limit, offset, include_keywords }, filename);
+            } catch (e) { /* no-op */ }
+        }
+
+        async function notesDownloadVisibleSearch() {
+            try {
+                const q = document.getElementById('notesSearch_query')?.value || '';
+                const limit = document.getElementById('notesSearch_limit')?.value || '10';
+                const include_keywords = document.getElementById('notesSearch_include_keywords')?.checked ? 'true' : '';
+                const filename = document.getElementById('notesSearch_dl_filename')?.value || 'notes_search';
+                await notesExportDownload({ q, limit, offset: 0, include_keywords }, filename);
+            } catch (e) { /* no-op */ }
         }
     </script>
 </body>

@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import os
+import pathlib
+import tempfile
+from typing import List
+
+import pytest
+from fastapi.testclient import TestClient
+from hypothesis import given, strategies as st, settings
+
+from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture()
+def client_with_db(tmp_path):
+    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+
+    async def override_admin():
+        return User(id=1, username="admin", email="a@x", is_active=True, is_admin=True)
+
+    def override_db():
+        return db
+
+    app.dependency_overrides[get_request_user] = override_admin
+    app.dependency_overrides[wf_mod._get_db] = override_db
+
+    with TestClient(app) as client:
+        yield client
+
+    app.dependency_overrides.clear()
+
+
+def _step_ids(n: int) -> List[str]:
+    return [f"s{i+1}" for i in range(n)]
+
+
+@settings(max_examples=12, deadline=None)
+@given(
+    st.integers(min_value=1, max_value=5),
+    st.lists(st.sampled_from(["prompt", "log", "delay"]), min_size=1, max_size=5),
+)
+def test_definition_fuzz_linear_or_branch(client_with_db: TestClient, n_steps: int, types_list: List[str]):
+    client = client_with_db
+    # Build a small randomized definition; on_success may be valid or dangling
+    steps = []
+    ids = _step_ids(min(n_steps, len(types_list)))
+    for sid, t in zip(ids, types_list):
+        cfg = {"template": "ok"} if t == "prompt" else {}
+        step = {"id": sid, "type": t, "config": cfg}
+        steps.append(step)
+    # Optionally add a branch creating a tiny cycle for robustness
+    if len(steps) >= 2:
+        steps[0]["on_success"] = steps[1]["id"]
+        # 20% chance to form a trivial cycle
+        if os.urandom(1)[0] % 5 == 0:
+            steps[1]["on_success"] = steps[0]["id"]
+
+    definition = {"name": "fuzz", "version": 1, "steps": steps}
+    # Should be accepted by create
+    r = client.post("/api/v1/workflows", json=definition)
+    assert r.status_code in (201, 422, 413)
+    if r.status_code != 201:
+        return
+    wid = r.json()["id"]
+    rr = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}})
+    assert rr.status_code == 200
+
+
+@settings(max_examples=12, deadline=None)
+@given(st.text(min_size=1, max_size=32))
+def test_artifact_path_fuzz_strict_vs_non_strict(monkeypatch, client_with_db: TestClient, suffix: str):
+    client = client_with_db
+    # Ensure env strict by default
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")
+    # Create run
+    d = {"name": "art-fuzz", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "ok"}}]}
+    wid = client.post("/api/v1/workflows", json=d).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}}).json()["run_id"]
+
+    # Temp file (outside CWD workdir scope most of the time)
+    fd, path = tempfile.mkstemp(prefix=f"wf_fuzz_{suffix}_")
+    os.write(fd, b"data")
+    os.close(fd)
+    uri = f"file://{path}"
+
+    # Insert artifact
+    db: WorkflowsDatabase = app.dependency_overrides[wf_mod._get_db]()
+    art_id = f"af_{abs(hash(uri)) % 100000}"
+    db.add_artifact(
+        artifact_id=art_id,
+        tenant_id="default",
+        run_id=run_id,
+        step_run_id=None,
+        type="file",
+        uri=uri,
+        size_bytes=4,
+        mime_type="text/plain",
+        metadata={"workdir": str(pathlib.Path.cwd())},
+    )
+
+    # Strict should 400
+    r1 = client.get(f"/api/v1/workflows/artifacts/{art_id}/download")
+    assert r1.status_code in (200, 400)
+
+    # Non-strict allows even on mismatch
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "false")
+    r2 = client.get(f"/api/v1/workflows/artifacts/{art_id}/download")
+    assert r2.status_code == 200

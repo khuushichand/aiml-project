@@ -1,79 +1,51 @@
-import os
-from pathlib import Path
-from typing import Optional
+from __future__ import annotations
+
+import sys
+import types
+from typing import Any, Dict
 
 
-# Establish writable temp/cache/log dirs inside the repo to satisfy sandboxed runs
-BASE = Path(__file__).resolve().parents[1]  # tldw_Server_API/
-TEST_TEMP = BASE / "Test_Temp"
-TEST_CACHE = BASE / "Test_Cache"
-TEST_LOGS = BASE / "Test_Logs"
+def _install_test_stubs() -> None:
+    """Registers lightweight stubs for App_Function_Libraries to satisfy imports during tests."""
 
-# Core temp envs used by Python and many libs
-os.environ.setdefault("TMPDIR", str(TEST_TEMP))
-os.environ.setdefault("TEMP", str(TEST_TEMP))
-os.environ.setdefault("TMP", str(TEST_TEMP))
+    if "App_Function_Libraries" in sys.modules:
+        return
 
-# Some libraries (e.g., matplotlib) require a writable config/cache dir
-os.environ.setdefault("MPLCONFIGDIR", str(TEST_CACHE / "matplotlib"))
+    base_pkg = types.ModuleType("App_Function_Libraries")
+    sys.modules["App_Function_Libraries"] = base_pkg
 
-# Transformers / HF caches can otherwise try to use user dirs
-os.environ.setdefault("HF_HOME", str(TEST_CACHE / "hf_home"))
-os.environ.setdefault("TRANSFORMERS_CACHE", str(TEST_CACHE / "transformers"))
+    summarization_pkg = types.ModuleType("App_Function_Libraries.Summarization")
+    sys.modules[summarization_pkg.__name__] = summarization_pkg
+    summarize_mod = types.ModuleType("App_Function_Libraries.Summarization.Summarization_General_Lib")
+    summarize_mod.summarize = lambda *args, **kwargs: ""  # type: ignore[assignment]
+    sys.modules[summarize_mod.__name__] = summarize_mod
 
-# Direct file-based loggers to a local, writable folder; or disable if needed
-os.environ.setdefault("TLDB_LOG_DIR", str(TEST_LOGS))
-os.environ.setdefault("TLDB_DISABLE_FILE_LOGS", "1")
+    utils_pkg = types.ModuleType("App_Function_Libraries.Utils")
+    sys.modules[utils_pkg.__name__] = utils_pkg
 
-# Speed up embeddings auto-unload during tests to reduce idle timer waits
-# Default in code is 300s; use 15s for test runs
-os.environ.setdefault("TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS", "15")
+    import logging as py_logging
 
-# Disable auto-download of large models during tests to avoid network/hangs
-os.environ.setdefault("TTS_AUTO_DOWNLOAD", "0")
+    utils_mod = types.ModuleType("App_Function_Libraries.Utils.Utils")
+    utils_mod.loaded_config_data = {"search_engines": {}}
+    utils_mod.logging = py_logging
+    sys.modules[utils_mod.__name__] = utils_mod
 
-# Increase per-process file descriptor limit to avoid EMFILE during large suites
-try:
-    import resource  # type: ignore
+    chat_pkg = types.ModuleType("App_Function_Libraries.Chat")
+    sys.modules[chat_pkg.__name__] = chat_pkg
+    chat_mod = types.ModuleType("App_Function_Libraries.Chat.Chat_Functions")
+    chat_mod.chat_api_call = lambda *args, **kwargs: ""  # type: ignore[assignment]
+    sys.modules[chat_mod.__name__] = chat_mod
 
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    # Aim for at least 4096, without exceeding the hard limit (unless it's RLIM_INFINITY)
-    desired = 4096
-    if hard == resource.RLIM_INFINITY:
-        new_soft = max(soft, desired)
-    else:
-        new_soft = min(hard, max(soft, desired))
-    if new_soft > soft:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
-except Exception:
-    # Not all platforms allow raising limits (e.g., Windows). Best-effort only.
-    pass
+    scraping_pkg = types.ModuleType("App_Function_Libraries.Web_Scraping")
+    sys.modules[scraping_pkg.__name__] = scraping_pkg
 
-# Ensure the temp/cache/log directories exist
-for _p in (TEST_TEMP, TEST_CACHE, TEST_LOGS):
-    try:
-        _p.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    scraping_mod = types.ModuleType("App_Function_Libraries.Web_Scraping.Article_Extractor_Lib")
+
+    async def dummy_scrape_article(*_: Any, **__: Any) -> Dict[str, Any]:
+        return {"content": ""}
+
+    scraping_mod.scrape_article = dummy_scrape_article  # type: ignore[assignment]
+    sys.modules[scraping_mod.__name__] = scraping_mod
 
 
-def pytest_configure(config):
-    config.addinivalue_line("markers", "legacy_tts: Legacy TTS integration tests hitting real models or providers")
-    config.addinivalue_line("markers", "requires_api_key: Tests that require third-party API credentials")
-
-# ------------------------------------------------------------------
-# Fallback 'mocker' fixture when pytest-mock is not installed
-# ------------------------------------------------------------------
-try:
-    import pytest_mock  # type: ignore  # noqa: F401
-except Exception:  # pragma: no cover - only used when plugin unavailable
-    import pytest  # type: ignore
-    from unittest.mock import patch as _unittest_patch
-
-    @pytest.fixture
-    def mocker():
-        class _Mocker:
-            def patch(self, *args, **kwargs):
-                return _unittest_patch(*args, **kwargs)
-
-        return _Mocker()
+_install_test_stubs()

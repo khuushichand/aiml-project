@@ -2,7 +2,7 @@
 #
 #
 # Imports
-import logging
+from loguru import logger
 import os
 import base64
 import sqlite3

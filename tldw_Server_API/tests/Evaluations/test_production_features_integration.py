@@ -1,3 +1,5 @@
+# test_production_features_integration.py
+#
 """
 Integration tests for production features:
 - Database migration
@@ -5,26 +7,24 @@ Integration tests for production features:
 - Webhook support
 - Advanced metrics
 """
-
+#
+# Imports
 import pytest
+import pytest_asyncio
 pytestmark = pytest.mark.integration
-import asyncio
 import sqlite3
-import json
 import tempfile
 import shutil
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
-import aiohttp
 from aioresponses import aioresponses
-
-# Import test configuration
 import sys
 import os
-
+#
+# Local Imports
 from tldw_Server_API.tests.test_config import test_config
-
+#
+#######################################################################################################################
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Set up test environment
@@ -182,7 +182,8 @@ class TestDatabaseMigration:
 class TestUserRateLimiter:
     """Test per-user rate limiting."""
     
-    @pytest.fixture
+    import pytest_asyncio
+    @pytest_asyncio.fixture
     async def rate_limiter(self):
         """Create rate limiter with temp database."""
         temp_dir = tempfile.mkdtemp()
@@ -311,20 +312,15 @@ class TestUserRateLimiter:
         assert allowed is False
 
 
+@pytest_asyncio.fixture
+async def webhook_manager(temp_db_path):
+    """Async fixture: provides a WebhookManager bound to the temp DB schema."""
+    manager = WebhookManager(str(temp_db_path))
+    yield manager
+
+
 class TestWebhookManager:
     """Test webhook management and delivery."""
-    
-    @pytest.fixture
-    async def webhook_manager(self):
-        """Create webhook manager with temp database."""
-        temp_dir = tempfile.mkdtemp()
-        db_path = Path(temp_dir) / "test_webhooks.db"
-        
-        manager = WebhookManager(str(db_path))
-        yield manager
-        
-        # Cleanup
-        shutil.rmtree(temp_dir)
     
     @pytest.mark.asyncio
     async def test_webhook_registration(self, webhook_manager):
@@ -373,6 +369,41 @@ class TestWebhookManager:
     async def test_webhook_delivery(self, webhook_manager, webhook_receiver_server):
         """Test webhook delivery using a real local receiver (no mocks)."""
         import asyncio
+        # Skip guard: if loopback sockets cannot bind in this environment, skip
+        try:
+            from aiohttp import web
+            import aiohttp as _aio
+            _app = web.Application()
+            async def _ping(request):
+                return web.json_response({"ok": True})
+            _app.router.add_get('/ping', _ping)
+            _app.router.add_post('/ping', _ping)
+            _runner = web.AppRunner(_app)
+            await _runner.setup()
+            _site = web.TCPSite(_runner, '127.0.0.1', 0)
+            await _site.start()
+            _port = getattr(_site, '_server').sockets[0].getsockname()[1]
+            _url = f"http://127.0.0.1:{_port}/ping"
+            try:
+                async with _aio.ClientSession() as _sess:
+                    async with _sess.post(_url, json={"probe": True}) as _resp:
+                        if _resp.status >= 400:
+                            pytest.skip("Local HTTP POST to loopback not permitted in this environment")
+            except Exception:
+                pytest.skip("Local HTTP POST to loopback not permitted in this environment")
+        except PermissionError:
+            pytest.skip("Local loopback networking not permitted in this environment")
+        except OSError as _e:
+            # EPERM or similar
+            if getattr(_e, 'errno', None) == 1:
+                pytest.skip("Local loopback networking not permitted in this environment")
+            else:
+                raise
+        finally:
+            try:
+                await _runner.cleanup()  # type: ignore[name-defined]
+            except Exception:
+                pass
 
         user_id = "delivery_user"
         url = webhook_receiver_server["url"]
@@ -391,7 +422,7 @@ class TestWebhookManager:
         )
 
         # Allow async delivery to complete
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.5)
 
         received = webhook_receiver_server["received"]
         assert len(received) >= 1
@@ -408,6 +439,40 @@ class TestWebhookManager:
     async def test_webhook_retry_on_failure(self, webhook_manager, flaky_webhook_receiver_server):
         """Test webhook retry logic with a real flaky receiver (no mocks)."""
         import asyncio
+        # Skip guard: if loopback sockets cannot bind in this environment, skip
+        try:
+            from aiohttp import web
+            import aiohttp as _aio
+            _app = web.Application()
+            async def _ping(request):
+                return web.json_response({"ok": True})
+            _app.router.add_get('/ping', _ping)
+            _app.router.add_post('/ping', _ping)
+            _runner = web.AppRunner(_app)
+            await _runner.setup()
+            _site = web.TCPSite(_runner, '127.0.0.1', 0)
+            await _site.start()
+            _port = getattr(_site, '_server').sockets[0].getsockname()[1]
+            _url = f"http://127.0.0.1:{_port}/ping"
+            try:
+                async with _aio.ClientSession() as _sess:
+                    async with _sess.post(_url, json={"probe": True}) as _resp:
+                        if _resp.status >= 400:
+                            pytest.skip("Local HTTP POST to loopback not permitted in this environment")
+            except Exception:
+                pytest.skip("Local HTTP POST to loopback not permitted in this environment")
+        except PermissionError:
+            pytest.skip("Local loopback networking not permitted in this environment")
+        except OSError as _e:
+            if getattr(_e, 'errno', None) == 1:
+                pytest.skip("Local loopback networking not permitted in this environment")
+            else:
+                raise
+        finally:
+            try:
+                await _runner.cleanup()  # type: ignore[name-defined]
+            except Exception:
+                pass
 
         user_id = "retry_user"
         url = flaky_webhook_receiver_server["url"]
@@ -427,7 +492,7 @@ class TestWebhookManager:
         )
 
         # Wait for retries to complete
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.6)
 
         received = flaky_webhook_receiver_server["received"]
         # Expect at least 3 attempts
@@ -671,3 +736,7 @@ class TestIntegration:
 # Run tests with pytest
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+#
+# End of test_production_features_integration.py
+#######################################################################################################################

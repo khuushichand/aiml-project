@@ -83,24 +83,59 @@ def load_content_db_settings(config: ConfigParser) -> ContentDatabaseSettings:
             pool_timeout=config.getfloat("Database", "pool_timeout", fallback=30.0),
         )
     elif backend_type == BackendType.POSTGRESQL:
+        # Allow multiple environment variable conventions so local test suites
+        # (which historically relied on POSTGRES_TEST_* values) work without
+        # extra configuration. Explicit TLDW_* overrides always win.
+        pg_dsn = os.getenv("TLDW_CONTENT_PG_DSN") or os.getenv("POSTGRES_TEST_DSN")
+
+        def _env_chain(*names: str, fallback: Optional[str] = None) -> Optional[str]:
+            for name in names:
+                value = os.getenv(name)
+                if value:
+                    return value
+            return fallback
+
         database_config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
-            connection_string=os.getenv("TLDW_CONTENT_PG_DSN")
+            connection_string=pg_dsn
             or config.get("Database", "pg_connection_string", fallback=None),
-            pg_host=os.getenv("TLDW_CONTENT_PG_HOST")
-            or config.get("Database", "pg_host", fallback="localhost"),
+            pg_host=_env_chain(
+                "TLDW_CONTENT_PG_HOST",
+                "TLDW_PG_HOST",
+                "POSTGRES_TEST_HOST",
+                fallback=config.get("Database", "pg_host", fallback="localhost"),
+            ),
             pg_port=int(
-                os.getenv("TLDW_CONTENT_PG_PORT")
+                _env_chain(
+                    "TLDW_CONTENT_PG_PORT",
+                    "TLDW_PG_PORT",
+                    "POSTGRES_TEST_PORT",
+                )
                 or config.get("Database", "pg_port", fallback=5432)
             ),
-            pg_database=os.getenv("TLDW_CONTENT_PG_DATABASE")
-            or config.get("Database", "pg_database", fallback="tldw_content"),
-            pg_user=os.getenv("TLDW_CONTENT_PG_USER")
-            or config.get("Database", "pg_user", fallback="tldw_user"),
-            pg_password=os.getenv("TLDW_CONTENT_PG_PASSWORD")
-            or config.get("Database", "pg_password", fallback=""),
-            pg_sslmode=os.getenv("TLDW_CONTENT_PG_SSLMODE")
-            or config.get("Database", "pg_sslmode", fallback="prefer"),
+            pg_database=_env_chain(
+                "TLDW_CONTENT_PG_DATABASE",
+                "TLDW_PG_DATABASE",
+                "POSTGRES_TEST_DATABASE",
+                fallback=config.get("Database", "pg_database", fallback="tldw_content"),
+            ),
+            pg_user=_env_chain(
+                "TLDW_CONTENT_PG_USER",
+                "TLDW_PG_USER",
+                "POSTGRES_TEST_USER",
+                fallback=config.get("Database", "pg_user", fallback="tldw_user"),
+            ),
+            pg_password=_env_chain(
+                "TLDW_CONTENT_PG_PASSWORD",
+                "TLDW_PG_PASSWORD",
+                "POSTGRES_TEST_PASSWORD",
+                fallback=config.get("Database", "pg_password", fallback=""),
+            ),
+            pg_sslmode=_env_chain(
+                "TLDW_CONTENT_PG_SSLMODE",
+                "TLDW_PG_SSLMODE",
+                fallback=config.get("Database", "pg_sslmode", fallback="prefer"),
+            ),
             pool_size=config.getint("Database", "pg_pool_size", fallback=20),
             max_overflow=config.getint("Database", "pg_max_overflow", fallback=40),
             pool_timeout=config.getfloat("Database", "pg_pool_timeout", fallback=30.0),
@@ -146,4 +181,3 @@ def get_content_backend(config: ConfigParser):
     _cached_backend = backend
     _cached_backend_signature = signature
     return backend
-

@@ -7,15 +7,21 @@ The Evaluations API provides comprehensive capabilities for assessing the qualit
 **Base URL**: `http://localhost:8000`  
 **API Version**: `v1`  
 **API Prefix**: `/api/v1`  
-**Authentication**: Bearer token required (see Authentication section)
+**Authentication**: See Authentication section
 
 ## Authentication
 
-All API requests require authentication via Bearer token in the Authorization header.
+All API requests require authentication. In single-user mode use `X-API-KEY` or a Bearer token; in multi-user use JWT Bearer tokens.
 
 ### Single-User Mode (Development)
 ```http
-Authorization: Bearer default-secret-key-for-single-user
+X-API-KEY: YOUR_SINGLE_USER_API_KEY
+```
+
+or
+
+```http
+Authorization: Bearer YOUR_SINGLE_USER_API_KEY
 ```
 
 ### Multi-User Mode (Production)
@@ -33,7 +39,7 @@ Authorization: Bearer YOUR_PERSONAL_API_KEY
 ### Evaluations
 
 #### Create Evaluation
-`POST /api/v1/evals`
+`POST /api/v1/evaluations`
 
 Creates a new evaluation definition.
 
@@ -98,7 +104,7 @@ Creates a new evaluation definition.
 ---
 
 #### List Evaluations
-`GET /api/v1/evals`
+`GET /api/v1/evaluations`
 
 Lists evaluations with pagination support.
 
@@ -137,7 +143,7 @@ Lists evaluations with pagination support.
 ---
 
 #### Get Evaluation
-`GET /api/v1/evals/{eval_id}`
+`GET /api/v1/evaluations/{eval_id}`
 
 Retrieves a specific evaluation by ID.
 
@@ -166,7 +172,7 @@ Retrieves a specific evaluation by ID.
 ---
 
 #### Update Evaluation
-`PATCH /api/v1/evals/{eval_id}`
+`PATCH /api/v1/evaluations/{eval_id}`
 
 Updates an existing evaluation. Only provided fields are updated.
 
@@ -194,7 +200,7 @@ Updates an existing evaluation. Only provided fields are updated.
 ---
 
 #### Delete Evaluation
-`DELETE /api/v1/evals/{eval_id}`
+`DELETE /api/v1/evaluations/{eval_id}`
 
 Soft deletes an evaluation (may be recoverable).
 
@@ -212,7 +218,7 @@ Soft deletes an evaluation (may be recoverable).
 ### Evaluation Runs
 
 #### Create Run
-`POST /api/v1/evals/{eval_id}/runs`
+`POST /api/v1/evaluations/{eval_id}/runs`
 
 Starts an asynchronous evaluation run.
 
@@ -271,7 +277,7 @@ Starts an asynchronous evaluation run.
 ---
 
 #### List Runs
-`GET /api/v1/evals/{eval_id}/runs`
+`GET /api/v1/evaluations/{eval_id}/runs`
 
 Lists runs for a specific evaluation.
 
@@ -288,7 +294,7 @@ Lists runs for a specific evaluation.
 ---
 
 #### Get Run Status
-`GET /api/v1/runs/{run_id}`
+`GET /api/v1/evaluations/runs/{run_id}`
 
 Gets current status and progress of a run.
 
@@ -324,7 +330,7 @@ Gets current status and progress of a run.
 ---
 
 #### Get Run Results
-`GET /api/v1/runs/{run_id}/results`
+`GET /api/v1/evaluations/runs/{run_id}/results`
 
 Gets complete results for a finished run.
 
@@ -397,7 +403,7 @@ Gets complete results for a finished run.
 ---
 
 #### Cancel Run
-`POST /api/v1/runs/{run_id}/cancel`
+`POST /api/v1/evaluations/runs/{run_id}/cancel`
 
 Cancels a running evaluation.
 
@@ -420,56 +426,14 @@ Cancels a running evaluation.
 ---
 
 #### Stream Run Progress
-`GET /api/v1/runs/{run_id}/stream`
-
-Streams real-time progress updates via Server-Sent Events (SSE).
-
-**Path Parameters:**
-- `run_id` (string) - Run ID
-
-**Response:** Server-Sent Events stream
-
-**Event Format:**
-```
-event: progress
-data: {"total_samples": 100, "completed_samples": 50, "percent_complete": 50.0}
-
-event: completed
-data: {"results": {...}, "duration_seconds": 30}
-
-event: failed
-data: {"error": "Error message", "failed_at": 1234567890}
-
-event: cancelled
-data: {"message": "Run was cancelled", "cancelled_at": 1234567890}
-
-event: heartbeat
-data: {"timestamp": 1234567890}
-```
-
-**Client Example (Python):**
-```python
-import sseclient  # pip install sseclient-py
-
-response = requests.get(
-    f"{BASE_URL}/api/v1/runs/{run_id}/stream",
-    headers={"Authorization": f"Bearer {API_KEY}"},
-    stream=True
-)
-
-client = sseclient.SSEClient(response)
-for event in client.events():
-    print(f"{event.event}: {event.data}")
-    if event.event in ["completed", "failed", "cancelled"]:
-        break
-```
+Not currently available on the unified router. Poll `GET /api/v1/evaluations/runs/{run_id}` for status updates.
 
 ---
 
 ### Datasets
 
 #### Create Dataset
-`POST /api/v1/datasets`
+`POST /api/v1/evaluations/datasets`
 
 Creates a reusable dataset for evaluations.
 
@@ -510,7 +474,7 @@ Creates a reusable dataset for evaluations.
 ---
 
 #### List Datasets
-`GET /api/v1/datasets`
+`GET /api/v1/evaluations/datasets`
 
 Lists available datasets.
 
@@ -543,7 +507,7 @@ Lists available datasets.
 ---
 
 #### Get Dataset
-`GET /api/v1/datasets/{dataset_id}`
+`GET /api/v1/evaluations/datasets/{dataset_id}`
 
 Gets a specific dataset including all samples.
 
@@ -559,7 +523,7 @@ Gets a specific dataset including all samples.
 ---
 
 #### Delete Dataset
-`DELETE /api/v1/datasets/{dataset_id}`
+`DELETE /api/v1/evaluations/datasets/{dataset_id}`
 
 Permanently deletes a dataset.
 
@@ -782,20 +746,11 @@ All error responses follow a consistent format:
 
 ## Rate Limits
 
-Default rate limits per API key:
-- **Create operations** (POST): 100 requests/minute
-- **Read operations** (GET): 100 requests/minute
-- **Run operations** (POST runs): 50 requests/minute
-- **Delete operations**: 20 requests/minute
-
-Rate limit information is included in response headers:
-```http
-X-RateLimit-Limit: 100        # Maximum requests allowed
-X-RateLimit-Remaining: 95     # Requests remaining
-X-RateLimit-Reset: 1234567890 # Unix timestamp when limit resets
-```
-
-**Note:** Rate limits are disabled when `TESTING=true` environment variable is set.
+Rate limits (route-specific for evaluations):
+- Standard evaluation requests: 60 requests/minute
+- Run operations: 10 requests/minute
+- Batch operations: 5 requests/minute
+- Burst protection: 10 requests/second
 
 ## Webhooks
 
@@ -808,7 +763,7 @@ When `webhook_url` is provided in a run request, the following payload is sent u
   "eval_id": "eval_xxxxxxxxxxxx",
   "status": "completed",
   "completed_at": 1234567890,
-  "results_url": "/api/v1/runs/run_xxxxxxxxxxxx/results",
+  "results_url": "/api/v1/evaluations/runs/run_xxxxxxxxxxxx/results",
   "summary": {
     "mean_score": 0.85,
     "pass_rate": 0.75,
@@ -827,12 +782,18 @@ When `webhook_url` is provided in a run request, the following payload is sent u
 
 ## Code Examples
 
+> ⚠️ Generate a strong API key and set it via `SINGLE_USER_API_KEY` before running these examples:
+> ```bash
+> export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+> ```
+> Replace `YOUR_API_KEY` below with that value (or load it from your environment at runtime).
+
 ### Python
 ```python
 import requests
 
 # Configuration
-API_KEY = "default-secret-key-for-single-user"
+API_KEY = "YOUR_API_KEY"
 BASE_URL = "http://localhost:8000"
 headers = {"Authorization": f"Bearer {API_KEY}"}
 
@@ -847,7 +808,7 @@ eval_request = {
 }
 
 response = requests.post(
-    f"{BASE_URL}/api/v1/evals",
+    f"{BASE_URL}/api/v1/evaluations",
     json=eval_request,
     headers=headers
 )
@@ -856,7 +817,7 @@ eval_id = response.json()["id"]
 # Run evaluation
 run_request = {"config": {"temperature": 0}}
 response = requests.post(
-    f"{BASE_URL}/api/v1/evals/{eval_id}/runs",
+    f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs",
     json=run_request,
     headers=headers
 )
@@ -864,7 +825,7 @@ run_id = response.json()["id"]
 
 # Get results
 response = requests.get(
-    f"{BASE_URL}/api/v1/runs/{run_id}/results",
+    f"{BASE_URL}/api/v1/evaluations/runs/{run_id}/results",
     headers=headers
 )
 print(response.json())
@@ -873,10 +834,10 @@ print(response.json())
 ### cURL
 ```bash
 # Set API key
-export API_KEY="default-secret-key-for-single-user"
+export API_KEY="YOUR_API_KEY"
 
 # Create evaluation
-curl -X POST http://localhost:8000/api/v1/evals \
+curl -X POST http://localhost:8000/api/v1/evaluations \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -889,23 +850,23 @@ curl -X POST http://localhost:8000/api/v1/evals \
   }'
 
 # Run evaluation
-curl -X POST http://localhost:8000/api/v1/evals/eval_xxx/runs \
+curl -X POST http://localhost:8000/api/v1/evaluations/eval_xxx/runs \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"config": {"temperature": 0}}'
 
 # Get results
-curl http://localhost:8000/api/v1/runs/run_xxx/results \
+curl http://localhost:8000/api/v1/evaluations/runs/run_xxx/results \
   -H "Authorization: Bearer $API_KEY"
 ```
 
 ### JavaScript/TypeScript
 ```javascript
-const API_KEY = 'default-secret-key-for-single-user';
+const API_KEY = 'YOUR_API_KEY';
 const BASE_URL = 'http://localhost:8000';
 
 // Create evaluation
-const evalResponse = await fetch(`${BASE_URL}/api/v1/evals`, {
+const evalResponse = await fetch(`${BASE_URL}/api/v1/evaluations`, {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${API_KEY}`,
@@ -923,7 +884,7 @@ const evalResponse = await fetch(`${BASE_URL}/api/v1/evals`, {
 const { id: evalId } = await evalResponse.json();
 
 // Run evaluation
-const runResponse = await fetch(`${BASE_URL}/api/v1/evals/${evalId}/runs`, {
+const runResponse = await fetch(`${BASE_URL}/api/v1/evaluations/${evalId}/runs`, {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${API_KEY}`,
@@ -934,7 +895,7 @@ const runResponse = await fetch(`${BASE_URL}/api/v1/evals/${evalId}/runs`, {
 const { id: runId } = await runResponse.json();
 
 // Get results (after waiting)
-const resultsResponse = await fetch(`${BASE_URL}/api/v1/runs/${runId}/results`, {
+const resultsResponse = await fetch(`${BASE_URL}/api/v1/evaluations/runs/${runId}/results`, {
   headers: { 'Authorization': `Bearer ${API_KEY}` }
 });
 const results = await resultsResponse.json();

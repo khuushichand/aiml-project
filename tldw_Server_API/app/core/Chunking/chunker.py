@@ -192,6 +192,12 @@ class Chunker:
                 f"{__package__}.strategies.paragraphs", fromlist=["ParagraphChunkingStrategy"]
             ).ParagraphChunkingStrategy(language=lang),
             'structure_aware': lambda: StructureAwareChunkingStrategy(language=lang),
+            'code': lambda: __import__(
+                f"{__package__}.strategies.code", fromlist=["CodeChunkingStrategy"]
+            ).CodeChunkingStrategy(language=lang),
+            'code_ast': lambda: __import__(
+                f"{__package__}.strategies.code_ast", fromlist=["PythonASTCodeChunkingStrategy"]
+            ).PythonASTCodeChunkingStrategy(language='python'),
             ChunkingMethod.PROPOSITIONS.value: lambda: __import__(
                 f"{__package__}.strategies.propositions", fromlist=["PropositionChunkingStrategy"]
             ).PropositionChunkingStrategy(language=lang, llm_call_func=self.llm_call_func, llm_config=self.llm_config),
@@ -226,20 +232,34 @@ class Chunker:
         if not text:
             return spans
 
-        # Compile template boundary patterns if provided
+        # Compile template boundary patterns if provided, with safety limits
         template_patterns: List[Tuple[str, re.Pattern]] = []
         try:
             boundaries = (template or {}).get('boundaries') or []
-            for rule in boundaries:
-                kind = str(rule.get('kind') or 'template')
-                pattern = str(rule.get('pattern') or '')
-                flags_str = str(rule.get('flags') or '').lower()
-                flags = 0
-                if 'i' in flags_str:
-                    flags |= re.IGNORECASE
-                if 'm' in flags_str:
-                    flags |= re.MULTILINE
-                template_patterns.append((kind, re.compile(pattern, flags)))
+            # Safety caps aligned with API validator: at most 20 rules
+            MAX_RULES = 20
+            MAX_PATTERN_LEN = 256
+            from .regex_safety import check_pattern, compile_flags
+            for rule in boundaries[:MAX_RULES]:
+                try:
+                    kind = str(rule.get('kind') or 'template')
+                    pattern = str(rule.get('pattern') or '')
+                    if not pattern:
+                        continue
+                    if len(pattern) > MAX_PATTERN_LEN:
+                        logger.warning(f"Skipping overlong boundary pattern (>{MAX_PATTERN_LEN} chars)")
+                        continue
+                    # Safety check
+                    err = check_pattern(pattern, max_len=MAX_PATTERN_LEN)
+                    if err:
+                        logger.warning(f"Skipping boundary pattern due to safety check: {err}")
+                        continue
+                    flags_val, ferr = compile_flags(str(rule.get('flags') or ''))
+                    flags = flags_val if ferr is None else 0
+                    compiled = re.compile(pattern, flags)
+                    template_patterns.append((kind, compiled))
+                except Exception as e:
+                    logger.warning(f"Ignoring invalid boundary rule: {e}")
         except Exception:
             template_patterns = []
 
@@ -254,9 +274,22 @@ class Chunker:
             offsets.append((pos, len(text), text[pos:len(text)]))
 
         def match_template(s: str) -> Optional[str]:
+            # Use safe search with optional timeouts and RE2 when available
+            try:
+                from .regex_safety import safe_search
+            except Exception:
+                safe_search = None  # type: ignore
             for kind, pat in template_patterns:
-                if pat.search(s):
-                    return kind
+                try:
+                    ok = False
+                    if safe_search is not None:
+                        ok = bool(safe_search(pat, s))
+                    else:
+                        ok = pat.search(s) is not None
+                    if ok:
+                        return kind
+                except Exception:
+                    continue
             return None
 
         def classify_line(s: str) -> Optional[str]:
@@ -336,32 +369,143 @@ class Chunker:
             if start >= end:
                 return
             segment = text[start:end]
-            # Temporarily call the existing strategy with local sizes
+            # Compute chunks using selected method
             chunks = self.chunk_text(segment, method=method, max_size=max_size, overlap=overlap, language=language)
-            # Normalize to dict chunks with offsets
-            # Estimate offsets by naive string find window (best-effort for now)
             out_chunks: List[Dict[str, Any]] = []
-            cursor = start
-            for ch in chunks:
-                if not isinstance(ch, str):
-                    ch_text = str(ch)
+
+            # Method-aware offset mapping to avoid misplacing spans on repeated content
+            try:
+                if method == 'words':
+                    # Map word tokens back to their character spans within the segment
+                    # Build token list equivalent to the words strategy
+                    from .strategies.words import WordChunkingStrategy  # local import to avoid cycle at module import
+                    ws = WordChunkingStrategy(language=language)
+                    tokens = ws._tokenize_text(segment)  # noqa: SLF001 (internal, but stable in-project)
+                    tok_spans: List[Tuple[int, int]] = []
+                    cur = 0
+                    for tok in tokens:
+                        idx = segment.find(tok, cur)
+                        if idx == -1:
+                            idx = cur
+                        tok_spans.append((idx, idx + len(tok)))
+                        cur = idx + len(tok)
+
+                    # Reconstruct chunk spans based on token counts
+                    step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
+                    t_i = 0
+                    for ch in chunks:
+                        ch_text = ch if isinstance(ch, str) else str(ch)
+                        # Derive token count in this chunk by splitting the chunk text similarly
+                        if language in ['zh', 'zh-cn', 'zh-tw', 'ja', 'th']:
+                            # Unknown separation; approximate by consuming tokens until we match the chunk length
+                            k = 0
+                            acc_len = 0
+                            while t_i + k < len(tokens) and acc_len < len(ch_text):
+                                acc_len += len(tokens[t_i + k])
+                                k += 1
+                            k = max(1, k)
+                        else:
+                            k = max(1, len(ch_text.split()))
+
+                        # Clamp k to remaining tokens
+                        k = min(k, max(1, len(tokens) - t_i))
+                        s0 = tok_spans[t_i][0] if t_i < len(tok_spans) else 0
+                        e0 = tok_spans[t_i + k - 1][1] if (t_i + k - 1) < len(tok_spans) else len(segment)
+                        out_chunks.append({
+                            'type': 'text',
+                            'text': ch_text,
+                            'metadata': {
+                                'method': method,
+                                'start_offset': start + s0,
+                                'end_offset': start + e0,
+                                'language': language,
+                                'paragraph_kind': kind,
+                            }
+                        })
+                        # Advance by step (matching words strategy semantics)
+                        t_i = min(len(tokens), t_i + step)
+                elif method == 'sentences':
+                    # Compute sentence spans and group by sentence count to mirror strategy behavior
+                    from .strategies.sentences import SentenceChunkingStrategy  # local import
+                    ss = SentenceChunkingStrategy(language=language)
+                    # Get sentence spans using strategy to avoid naive find
+                    sent_with_spans = ss._split_sentences_with_spans(segment)  # noqa: SLF001
+                    sentences = [s for (s, _s, _e) in sent_with_spans]
+                    sent_spans: List[Tuple[int, int]] = [(s0, e0) for (_t, s0, e0) in sent_with_spans]
+                    # Group sentences into chunks (max_size sentences, overlap)
+                    step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
+                    for i in range(0, len(sentences), step):
+                        group = sentences[i:i + (max_size if isinstance(max_size, int) else len(sentences))]
+                        if not group:
+                            continue
+                        ch_text = ''.join(group) if language in ['zh', 'zh-cn', 'zh-tw', 'ja'] else ' '.join(group)
+                        s0 = sent_spans[i][0] if i < len(sent_spans) else 0
+                        j_last = min(len(sent_spans) - 1, i + len(group) - 1)
+                        e0 = sent_spans[j_last][1] if j_last >= 0 else len(segment)
+                        out_chunks.append({
+                            'type': 'text',
+                            'text': ch_text.strip(),
+                            'metadata': {
+                                'method': method,
+                                'start_offset': start + s0,
+                                'end_offset': start + e0,
+                                'language': language,
+                                'paragraph_kind': kind,
+                            }
+                        })
+                elif method == 'structure_aware':
+                    # Carry block span directly as a precise chunk for structure-aware mode
+                    ch_text = segment
+                    out_chunks.append({
+                        'type': 'text',
+                        'text': ch_text,
+                        'metadata': {
+                            'method': method,
+                            'start_offset': start,
+                            'end_offset': end,
+                            'language': language,
+                            'paragraph_kind': kind,
+                        }
+                    })
                 else:
-                    ch_text = ch
-                idx = text.find(ch_text, cursor, end)
-                if idx == -1:
-                    idx = cursor
-                out_chunks.append({
-                    'type': 'text',
-                    'text': ch_text,
-                    'metadata': {
-                        'method': method,
-                        'start_offset': idx,
-                        'end_offset': idx + len(ch_text),
-                        'language': language,
-                        'paragraph_kind': kind,
-                    }
-                })
-                cursor = idx + len(ch_text)
+                    # Fallback: bound search within the segment using a rolling cursor
+                    cursor = 0
+                    for ch in chunks:
+                        ch_text = ch if isinstance(ch, str) else str(ch)
+                        idx = segment.find(ch_text, cursor)
+                        if idx == -1:
+                            # If not found, place at cursor to keep monotonicity
+                            idx = cursor
+                        out_chunks.append({
+                            'type': 'text',
+                            'text': ch_text,
+                            'metadata': {
+                                'method': method,
+                                'start_offset': start + idx,
+                                'end_offset': start + idx + len(ch_text),
+                                'language': language,
+                                'paragraph_kind': kind,
+                            }
+                        })
+                        cursor = idx + len(ch_text)
+            except Exception as e:
+                # As a last resort, return chunks with naive offsets bounded to this block
+                logger.warning(f"Offset mapping failed for method={method}: {e}; using naive offsets")
+                cursor = 0
+                for ch in chunks:
+                    ch_text = ch if isinstance(ch, str) else str(ch)
+                    out_chunks.append({
+                        'type': 'text',
+                        'text': ch_text,
+                        'metadata': {
+                            'method': method,
+                            'start_offset': start + cursor,
+                            'end_offset': start + min(len(segment), cursor + len(ch_text)),
+                            'language': language,
+                            'paragraph_kind': kind,
+                        }
+                    })
+                    cursor += len(ch_text)
 
             parent.setdefault('children', []).append({
                 'kind': kind,
@@ -385,27 +529,208 @@ class Chunker:
         if current_section and current_section.get('end_offset') is None:
             current_section['end_offset'] = len(text)
 
-        return {'type': 'hierarchical', 'schema_version': 1, 'method': method, 'language': language, 'root': root}
+        return {
+            'type': 'hierarchical',
+            'schema_version': 1,
+            'method': method,
+            'language': language,
+            'max_size': max_size,
+            'overlap': overlap,
+            'root': root,
+        }
 
     def flatten_hierarchical(self, tree: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Flatten a hierarchical tree into a list of dict chunks with ancestry info."""
         if not isinstance(tree, dict):
             return []
         root = tree.get('root') or {'children': tree.get('blocks', [])}
+        method = tree.get('method')
+        # Elements-per-chunk semantics for structure_aware grouping
+        sa_max = tree.get('max_size') if isinstance(tree.get('max_size'), int) else None
+        sa_ovl = tree.get('overlap') if isinstance(tree.get('overlap'), int) else 0
         out: List[Dict[str, Any]] = []
 
-        def walk(node: Dict[str, Any], titles: List[str]):
-            kind = node.get('kind')
-            if kind == 'section':
-                title = str(node.get('title') or '').strip()
-                titles = titles + ([title] if title else [])
-            for ch in node.get('chunks') or []:
+        def _append_with_titles(items: List[Dict[str, Any]], titles: List[str]):
+            for ch in items:
                 txt = ch.get('text') if isinstance(ch, dict) else str(ch)
                 md = dict(ch.get('metadata') or {}) if isinstance(ch, dict) else {}
                 md['ancestry_titles'] = titles
                 if titles:
                     md['section_path'] = ' > '.join(titles)
                 out.append({'text': txt, 'metadata': md})
+
+        def _gather_section_items(section_node: Dict[str, Any]) -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            for child in section_node.get('children') or []:
+                if isinstance(child, dict):
+                    for ch in child.get('chunks') or []:
+                        if isinstance(ch, dict):
+                            items.append(ch)
+            return items
+
+        def _group_items_by_elements(items: List[Dict[str, Any]], max_elements: int, overlap: int) -> List[Dict[str, Any]]:
+            if max_elements is None or max_elements <= 0:
+                return items
+            if overlap < 0:
+                overlap = 0
+            step = max(1, max_elements - overlap)
+            grouped: List[Dict[str, Any]] = []
+            i = 0
+            n = len(items)
+            while i < n:
+                group = items[i:i + max_elements]
+                if not group:
+                    break
+                # Drop short trailing windows when we already emitted at least one window
+                if len(group) < max_elements and i > 0:
+                    break
+                # Concatenate texts preserving original content
+                texts: List[str] = []
+                starts: List[int] = []
+                ends: List[int] = []
+                for it in group:
+                    t = it.get('text') if isinstance(it, dict) else str(it)
+                    texts.append(t)
+                    md = it.get('metadata') if isinstance(it, dict) else {}
+                    try:
+                        s = int(md.get('start_offset')) if md and md.get('start_offset') is not None else None
+                    except Exception:
+                        s = None
+                    try:
+                        e = int(md.get('end_offset')) if md and md.get('end_offset') is not None else None
+                    except Exception:
+                        e = None
+                    if s is not None:
+                        starts.append(s)
+                    if e is not None:
+                        ends.append(e)
+                agg_text = ''.join(texts)
+                start_off = min(starts) if starts else 0
+                end_off = max(ends) if ends else start_off + len(agg_text)
+                grouped.append({
+                    'type': 'text',
+                    'text': agg_text,
+                    'metadata': {
+                        'method': method,
+                        'start_offset': start_off,
+                        'end_offset': end_off,
+                        'grouped_elements': len(group),
+                    }
+                })
+                i += step
+            return grouped
+
+        def _group_section_by_kind_weight(items: List[Dict[str, Any]], max_weight: int, overlap: int, weights: Dict[str, int]) -> List[Dict[str, Any]]:
+            """Group contiguous items by paragraph_kind using weight budget per group.
+
+            Does not cross kind boundaries; code_fence blocks tend to be heavier by default.
+            """
+            if max_weight is None or max_weight <= 0:
+                return items
+            if overlap < 0:
+                overlap = 0
+            # Clamp overlap to max_weight - 1 (no negative step)
+            overlap = min(overlap, max(0, max_weight - 1))
+            out_groups: List[Dict[str, Any]] = []
+            i = 0
+            n = len(items)
+            while i < n:
+                # Start new group at i and keep same kind
+                first = items[i]
+                kind = (first.get('metadata') or {}).get('paragraph_kind') if isinstance(first, dict) else None
+                budget = max_weight
+                j = i
+                texts: List[str] = []
+                starts: List[int] = []
+                ends: List[int] = []
+                count = 0
+                while j < n:
+                    it = items[j]
+                    md = it.get('metadata') if isinstance(it, dict) else {}
+                    ikind = md.get('paragraph_kind') if isinstance(md, dict) else None
+                    if ikind != kind:
+                        break
+                    w = int(weights.get(str(ikind), 1)) if isinstance(weights, dict) else 1
+                    if w <= 0:
+                        w = 1
+                    if w > budget and count > 0:
+                        break
+                    # Take this item
+                    t = it.get('text') if isinstance(it, dict) else str(it)
+                    texts.append(t)
+                    try:
+                        s = int(md.get('start_offset')) if md and md.get('start_offset') is not None else None
+                    except Exception:
+                        s = None
+                    try:
+                        e = int(md.get('end_offset')) if md and md.get('end_offset') is not None else None
+                    except Exception:
+                        e = None
+                    if s is not None:
+                        starts.append(s)
+                    if e is not None:
+                        ends.append(e)
+                    budget -= w
+                    j += 1
+                    count += 1
+                    if budget <= 0:
+                        break
+                if count == 0:
+                    # Fallback to consume one item to make progress
+                    j = i + 1
+                    it = items[i]
+                    t = it.get('text') if isinstance(it, dict) else str(it)
+                    texts = [t]
+                    md = it.get('metadata') if isinstance(it, dict) else {}
+                    starts = [int(md.get('start_offset'))] if md and md.get('start_offset') is not None else []
+                    ends = [int(md.get('end_offset'))] if md and md.get('end_offset') is not None else []
+                agg_text = ''.join(texts)
+                start_off = min(starts) if starts else 0
+                end_off = max(ends) if ends else start_off + len(agg_text)
+                out_groups.append({
+                    'type': 'text',
+                    'text': agg_text,
+                    'metadata': {
+                        'method': method,
+                        'start_offset': start_off,
+                        'end_offset': end_off,
+                        'grouped_elements': count,
+                        'group_kind': kind,
+                    }
+                })
+                # Overlap semantics: step by max(1, count - overlap)
+                step = max(1, count - overlap)
+                i += step
+            return out_groups
+
+        def walk(node: Dict[str, Any], titles: List[str]):
+            kind = node.get('kind')
+            if kind == 'section':
+                title = str(node.get('title') or '').strip()
+                titles = titles + ([title] if title else [])
+            # For structure_aware, group elements per section using max_size/overlap
+            if kind == 'section' and method == 'structure_aware' and isinstance(sa_max, int) and sa_max > 0:
+                section_items = _gather_section_items(node)
+                # Optional grouping configuration carried in tree
+                grouping_cfg = tree.get('grouping') if isinstance(tree.get('grouping'), dict) else {}
+                by_kind = bool(grouping_cfg.get('by_kind', False))
+                weights = grouping_cfg.get('element_weights') if isinstance(grouping_cfg.get('element_weights'), dict) else {
+                    'paragraph': 1,
+                    'list_unordered': 1,
+                    'list_ordered': 1,
+                    'table_md': 2,
+                    'code_fence': 3,
+                }
+                if by_kind:
+                    grouped_items = _group_section_by_kind_weight(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0, weights)
+                else:
+                    grouped_items = _group_items_by_elements(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0)
+                _append_with_titles(grouped_items, titles)
+                # Do not descend into children again to avoid duplicating content
+                return
+            # Default behavior: emit this node's chunks as-is
+            for ch in node.get('chunks') or []:
+                _append_with_titles([ch], titles)
             for child in node.get('children') or []:
                 if isinstance(child, dict):
                     walk(child, titles)
@@ -551,13 +876,59 @@ class Chunker:
             pass
         language = language or self.config.language
         
+        # Handle code strategy mode routing (code_mode: auto|ast|heuristic)
+        orig_method = method
+        if (method or '').lower() == 'code':
+            try:
+                code_mode = str((options or {}).get('code_mode', 'auto')).lower()
+            except Exception:
+                code_mode = 'auto'
+            lang_opt = str((options or {}).get('language') or language or '').lower()
+            if code_mode in ('ast', 'auto') and lang_opt.startswith('py'):
+                method = 'code_ast'
+            else:
+                method = 'code'
+
         # Check cache if enabled
+        cache_key = None
+        cache_allowed = False
+        cache_reason = "disabled"
         if self._cache is not None:
+            try:
+                tlen = len(text)
+                min_len = getattr(self.config, 'min_text_length_to_cache', 0)
+                max_len = getattr(self.config, 'max_text_length_to_cache', getattr(self.config, 'cache_max_text_length', 2_000_000))
+                if tlen < int(min_len):
+                    cache_reason = "skipped_min_len"
+                elif tlen > int(max_len):
+                    cache_reason = "skipped_max_len"
+                else:
+                    cache_allowed = True
+                    cache_reason = "allowed"
+            except Exception:
+                cache_reason = "policy_error"
+        # Attempt get if allowed
+        if self._cache is not None and cache_allowed:
             cache_key = self._get_cache_key(text, method, max_size, overlap, language, options)
             cached_result = self._cache.get(cache_key)
             if cached_result is not None:
+                try:
+                    increment_counter("chunker_cache_get_total", labels={"result": "hit", "reason": cache_reason})
+                except Exception:
+                    pass
                 logger.debug("Returning cached result")
                 return cached_result
+            else:
+                try:
+                    increment_counter("chunker_cache_get_total", labels={"result": "miss", "reason": cache_reason})
+                except Exception:
+                    pass
+        else:
+            # cache disabled or not allowed by policy
+            try:
+                increment_counter("chunker_cache_get_total", labels={"result": "skip", "reason": cache_reason})
+            except Exception:
+                pass
         
         # Get strategy lazily
         strategy = self.get_strategy(method)
@@ -574,8 +945,24 @@ class Chunker:
             chunks = strategy.chunk(text, max_size, overlap, **options)
             
             # Cache result if enabled
-            if self._cache is not None and len(chunks) > 0:
-                self._cache.put(cache_key, chunks)
+            if self._cache is not None and len(chunks) > 0 and cache_allowed and cache_key is not None:
+                try:
+                    self._cache.put(cache_key, chunks)
+                    try:
+                        increment_counter("chunker_cache_put_total", labels={"result": "stored"})
+                    except Exception:
+                        pass
+                except Exception:
+                    # Defensive: never fail chunking due to cache policy
+                    try:
+                        increment_counter("chunker_cache_put_total", labels={"result": "error"})
+                    except Exception:
+                        pass
+            elif self._cache is not None and len(chunks) > 0:
+                try:
+                    increment_counter("chunker_cache_put_total", labels={"result": "skipped", "reason": cache_reason})
+                except Exception:
+                    pass
             
             logger.info(f"Created {len(chunks)} chunks using {method} method")
             return chunks
@@ -630,6 +1017,18 @@ class Chunker:
             pass
         language = language or self.config.language
         
+        # Handle code strategy mode routing (code_mode: auto|ast|heuristic)
+        if (method or '').lower() == 'code':
+            try:
+                code_mode = str((options or {}).get('code_mode', 'auto')).lower()
+            except Exception:
+                code_mode = 'auto'
+            lang_opt = str((options or {}).get('language') or language or '').lower()
+            if code_mode in ('ast', 'auto') and lang_opt.startswith('py'):
+                method = 'code_ast'
+            else:
+                method = 'code'
+
         # Get strategy lazily (supports factory registration)
         strategy = self.get_strategy(method)
         
@@ -738,9 +1137,30 @@ class Chunker:
         Returns:
             Cache key string
         """
-        # Use hash of text to avoid storing full text in key
-        text_hash = hash(text)
-        options_str = str(sorted(options.items()))
+        # Use a stable cryptographic hash to avoid large keys and ensure determinism
+        try:
+            text_hash = hashlib.sha256(text.encode('utf-8', 'ignore')).hexdigest()[:16]
+        except Exception:
+            # Fallback to builtin hash within process
+            text_hash = str(hash(text))
+        # Normalize options deterministically (deep sort for nested structures)
+        def _canon(v: Any) -> Any:
+            try:
+                # Preserve simple types
+                if v is None or isinstance(v, (str, int, float, bool)):
+                    return v
+                if isinstance(v, (list, tuple)):
+                    return [_canon(x) for x in v]
+                if isinstance(v, dict):
+                    return {k: _canon(v[k]) for k in sorted(v.keys(), key=lambda x: str(x))}
+                # Fallback to string repr
+                return str(v)
+            except Exception:
+                return str(v)
+        try:
+            options_str = json.dumps(_canon(dict(options or {})), ensure_ascii=False, sort_keys=True)
+        except Exception:
+            options_str = str(sorted((options or {}).items()))
         return f"{text_hash}:{method}:{max_size}:{overlap}:{language}:{options_str}"
     
     def clear_cache(self):
@@ -848,6 +1268,16 @@ class Chunker:
                 density = max(0.0, min(3.0, len(processed_text) / 10000.0))
                 scaled = int(base_adaptive * (1.0 + 0.2 * density))
                 max_size = max(min_adaptive, min(max_adaptive_hi, scaled))
+                # Optional adaptive overlap tuned by density
+                if bool(opts.get('adaptive_overlap', False)):
+                    try:
+                        base_overlap = int(opts.get('base_overlap') or overlap or 0)
+                        max_overlap = int(opts.get('max_adaptive_overlap') or max(0, base_overlap + 100))
+                        # Increase overlap slightly for denser/longer docs; cap to avoid waste
+                        tuned = int(base_overlap + (density * 10))
+                        overlap = max(0, min(max_overlap, tuned))
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -921,6 +1351,7 @@ class Chunker:
                 max_size=max_size,
                 overlap=overlap,
                 language=language,
+                code_mode=str(opts.get('code_mode', 'auto')).lower() if str(method).lower() == 'code' else opts.get('code_mode'),
             )
             # Normalize and handle JSON-chunk structures
             norm_chunks: List[Dict[str, Any]] = []
@@ -946,6 +1377,23 @@ class Chunker:
         total = len(norm_chunks)
         out: List[Dict[str, Any]] = []
         norm_start = time.perf_counter()
+        # Optional timecode mapping for media transcripts: segments with offsets and times
+        time_segments = None
+        try:
+            segs = opts.get('timecode_map')
+            if isinstance(segs, list):
+                # Expect list of {start_offset,end_offset,start_time,end_time}
+                val = []
+                for s in segs:
+                    if not isinstance(s, dict):
+                        continue
+                    so = s.get('start_offset'); eo = s.get('end_offset')
+                    st = s.get('start_time'); et = s.get('end_time')
+                    if isinstance(so, int) and isinstance(eo, int) and (isinstance(st, (int, float)) and isinstance(et, (int, float))):
+                        val.append((so, eo, float(st), float(et)))
+                time_segments = sorted(val, key=lambda x: x[0]) if val else None
+        except Exception:
+            time_segments = None
         for i, item in enumerate(norm_chunks):
             # Normalize
             txt = item.get('text') if isinstance(item, dict) else str(item)
@@ -955,10 +1403,15 @@ class Chunker:
             md.setdefault('chunk_index', i + 1)
             md.setdefault('total_chunks', total)
             md.setdefault('chunk_method', method)
+            # Standardized keys while retaining legacy for compatibility
             md.setdefault('max_size_setting', max_size)
             md.setdefault('overlap_setting', overlap)
+            md.setdefault('max_size', max_size)
+            md.setdefault('overlap', overlap)
             md.setdefault('language', language)
             md.setdefault('adaptive_chunking_used', bool(opts.get('adaptive', False)))
+            if str(method).lower() in ('code', 'code_ast'):
+                md.setdefault('code_mode_used', str(opts.get('code_mode', 'auto')).lower())
 
             # Relative position using offsets when present
             try:
@@ -966,6 +1419,22 @@ class Chunker:
                 if isinstance(start, int) and isinstance(end, int) and end > start:
                     mid = 0.5 * (float(start) + float(end))
                     rel = mid / max(1.0, float(len(processed_text)))
+                    # Map approximate timecodes when provided
+                    if time_segments is not None:
+                        try:
+                            # Find the segment whose span overlaps the chunk mid; linear scan is fine for small N
+                            for (so, eo, st, et) in time_segments:
+                                if start <= eo and end >= so:
+                                    # Simple proportional mapping within the segment
+                                    seg_len = max(1.0, float(eo - so))
+                                    frac = (min(end, eo) - max(start, so)) / seg_len
+                                    cst = st + 0.0  # start time of overlapped segment
+                                    cet = st + frac * (et - st)
+                                    md.setdefault('start_time', round(cst, 3))
+                                    md.setdefault('end_time', round(cet, 3))
+                                    break
+                        except Exception:
+                            pass
                 else:
                     rel = (i + 1) / total if total > 0 else 0.0
             except Exception:

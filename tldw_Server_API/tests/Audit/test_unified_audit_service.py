@@ -34,7 +34,9 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 # Test Fixtures
 # ============================================================================
 
-@pytest.fixture
+import pytest_asyncio
+
+@pytest_asyncio.fixture
 async def temp_db_path():
     """Create temporary database path"""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -44,7 +46,7 @@ async def temp_db_path():
     Path(db_path).unlink(missing_ok=True)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def audit_service(temp_db_path):
     """Create audit service instance"""
     service = UnifiedAuditService(
@@ -114,6 +116,37 @@ class TestPIIDetection:
         redacted = detector.redact(text)
         assert jwt not in redacted
         assert "[JWT_TOKEN_REDACTED]" in redacted
+
+    @pytest.mark.asyncio
+    async def test_recursive_redaction_in_structures(self, audit_service):
+        """PII is redacted recursively in dicts/lists without breaking structure."""
+        context = AuditContext(user_id="nested_user")
+        api_key = "sk_abcdefghijklmnopqrstuvwxyzABCDEF1234567890"
+        card = "4111-1111-1111-1111"
+        phone = "(555) 321-9876"
+        metadata = {
+            "profile": {"email": "user@example.com", "phones": [phone]},
+            "secrets": [api_key],
+            "note": f"test card {card}"
+        }
+        await audit_service.log_event(
+            event_type=AuditEventType.DATA_WRITE,
+            context=context,
+            metadata=metadata,
+        )
+        await audit_service.flush()
+        events = await audit_service.query_events(user_id="nested_user")
+        assert events, "No audit events returned"
+        event = events[0]
+        red_meta = json.loads(event["metadata"]) if isinstance(event["metadata"], str) else event["metadata"]
+        # Ensure structure preserved and values redacted
+        assert "profile" in red_meta and isinstance(red_meta["profile"], dict)
+        assert red_meta["profile"]["email"] == "[EMAIL_REDACTED]"
+        assert "[PHONE_REDACTED]" in red_meta["profile"]["phones"][0]
+        # API key and card redacted somewhere in metadata
+        stringified = json.dumps(red_meta)
+        assert api_key not in stringified
+        assert card not in stringified
 
 
 # ============================================================================
@@ -335,6 +368,40 @@ class TestUnifiedAuditService:
         )
         assert len(events) == 1
         assert events[0]["event_type"] == AuditEventType.DATA_READ.value
+
+    @pytest.mark.asyncio
+    async def test_export_events_json_and_csv(self, audit_service):
+        """Test exporting events to JSON and CSV formats"""
+        # Log a few events
+        for i in range(3):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=AuditContext(user_id="export_user"),
+                resource_type="doc",
+                resource_id=f"d{i}",
+                metadata={"idx": i},
+            )
+        await audit_service.flush()
+
+        # Export JSON content (no file)
+        json_content = await audit_service.export_events(
+            user_id="export_user",
+            format="json",
+        )
+        data = json.loads(json_content)
+        assert isinstance(data, list) and len(data) >= 3
+        assert any(e.get("resource_type") == "doc" for e in data)
+
+        # Export CSV content (no file)
+        csv_content = await audit_service.export_events(
+            user_id="export_user",
+            format="csv",
+        )
+        # Expect header + at least 3 rows
+        lines = [ln for ln in csv_content.splitlines() if ln.strip()]
+        assert len(lines) >= 4  # header + 3 rows
+        header = lines[0].split(",")
+        assert "event_type" in header and "event_id" in header
     
     @pytest.mark.asyncio
     async def test_daily_statistics_aggregation(self, audit_service):

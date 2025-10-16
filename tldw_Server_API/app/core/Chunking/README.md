@@ -4,6 +4,7 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
 
 ## Overview
 - Entry point: `Chunker` in `chunker.py` (methods: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, …).
+- Entry point: `Chunker` in `chunker.py` (methods: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `code`, …).
 - Template pipeline: `TemplateProcessor` and `TemplateManager` in `templates.py`.
 - Built-in templates: JSON files under `template_library/`, seeded into DB by `template_initialization.py`.
 - New: Seed-driven templates via learned “boundary” rules inferred from example (“seed/template”) documents.
@@ -102,3 +103,71 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Use `structure_aware` for code/docs when possible; otherwise seed headers/fences with `hierarchical_template`.
 - Keep templates JSON-only; put operational notes in `metadata` (never secrets).
 
+## Timecode Mapping for Media Transcripts
+
+Attach approximate time bounds to chunks by supplying a `timecode_map` with character spans and times. The chunker projects `start_time`/`end_time` onto chunk metadata when spans overlap.
+
+Example:
+
+```
+from tldw_Server_API.app.core.Chunking import Chunker
+
+text = "[00:00] intro ... [00:10] content ..."
+segments = [
+    {"start_offset": 0, "end_offset": 120, "start_time": 0.0, "end_time": 10.0},
+    {"start_offset": 120, "end_offset": 300, "start_time": 10.0, "end_time": 25.0},
+]
+
+ck = Chunker()
+chunks = ck.process_text(
+    text,
+    method="sentences",
+    max_size=3,
+    overlap=1,
+    timecode_map=segments,
+    adaptive=True,
+    adaptive_overlap=True,
+)
+for ch in chunks:
+    md = ch["metadata"]
+    print(md.get("start_time"), md.get("end_time"))
+```
+
+Notes:
+- Mapping is best‑effort: if a chunk overlaps a segment, the mapped times cover the overlapped portion proportionally.
+- If multiple segments overlap a chunk, the first overlap is used.
+
+## Environment Toggles (Regex Safety)
+These environment variables harden regex-based detection used by the eBook chapter strategy (`strategies/ebook_chapters.py`). They do not affect non‑regex strategies.
+
+- `CHUNKING_REGEX_TIMEOUT`
+  - Purpose: Cap regex execution time (seconds) for chapter/section detection.
+  - Default: `2` (class default). Values `<= 0` are ignored.
+  - Example: `export CHUNKING_REGEX_TIMEOUT=0.5`
+
+- `CHUNKING_DISABLE_MP`
+  - Purpose: Control optional process-based isolation fallback for regex execution.
+  - Default: Multiprocessing is disabled when unset (safer cross‑platform default).
+  - Values: `1`/`true`/`yes` keeps MP disabled; `0`/`false`/`no` enables MP fallback. Note some environments disallow process spawning.
+
+- `CHUNKING_REGEX_SIMPLE_ONLY`
+  - Purpose: Restrict custom chapter regex to a safe subset.
+  - Effect: When set (`1`/`true`/`yes`), disallows grouping `()`, alternation `|`, wildcard `.`, `?`, `*`. Allows literals, anchors `^`/`$`, character classes `[A-Z]`, escapes `\d`/`\w`, and `+` after safe atoms. Unsafe patterns are rejected during validation.
+## Code Chunking (Python + JavaScript)
+
+- Method: `code` with optional `code_mode` for routing.
+  - `code_mode=auto` (default): If `language` starts with `py`, uses AST-based Python chunking; otherwise uses heuristic chunking.
+  - `code_mode=ast`: Force AST-based Python chunking (for `.py`).
+  - `code_mode=heuristic`: Force heuristic chunking (works across JS/TS, C-like languages, etc.).
+
+- Python (AST-based) produces chunks aligned to import block, top-level classes, and top-level functions with accurate character offsets.
+- JavaScript/TypeScript (heuristic) recognizes:
+  - `export default class Name`, `class Name`
+  - `export function name(...)`, `function name(...)`
+  - `export const name = (...) => { ... }`, `const name = function (...)`
+  - `export default function name(...)`, `export default function (...)`
+  - `export default (...) => { ... }`
+  - `export interface Name { ... }`, `export type Name = ...`
+
+Example:
+  chunker.process_text(code, options={"method": "code", "language": "python", "code_mode": "ast", "max_size": 800})

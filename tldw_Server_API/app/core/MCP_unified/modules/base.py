@@ -27,7 +27,8 @@ class ModuleHealth:
     """Module health information"""
     status: HealthStatus
     message: str = ""
-    last_check: datetime = field(default_factory=datetime.utcnow)
+    # Set to None initially so the first health_check() performs real checks
+    last_check: Optional[datetime] = None
     checks: Dict[str, bool] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     
@@ -78,6 +79,11 @@ class ModuleConfig:
     max_retries: int = 3
     circuit_breaker_threshold: int = 5
     circuit_breaker_timeout: int = 60
+    # Concurrency guard per module (0 disables guard)
+    max_concurrent: int = 20
+    # Circuit breaker backoff and caps for half-open failures
+    circuit_breaker_backoff_factor: float = 2.0
+    circuit_breaker_max_timeout: int = 300
     settings: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -102,6 +108,8 @@ class BaseModule(ABC):
         # Circuit breaker state
         self._circuit_breaker_failures = 0
         self._circuit_breaker_open_until = None
+        self._circuit_breaker_half_open = False
+        self._cb_current_timeout = config.circuit_breaker_timeout
         
         # Initialization state
         self._initialized = False
@@ -112,6 +120,9 @@ class BaseModule(ABC):
         self._tools_cache = None
         self._resources_cache = None
         self._prompts_cache = None
+
+        # Per-module concurrency guard
+        self._semaphore = asyncio.Semaphore(config.max_concurrent) if config.max_concurrent and config.max_concurrent > 0 else None
         
         logger.info(f"Module created: {self.name} v{self.version}")
     
@@ -230,41 +241,68 @@ class BaseModule(ABC):
     def is_circuit_breaker_open(self) -> bool:
         """Check if circuit breaker is open"""
         if self._circuit_breaker_open_until:
-            if datetime.utcnow() < self._circuit_breaker_open_until:
+            now = datetime.utcnow()
+            if now < self._circuit_breaker_open_until:
                 return True
-            else:
-                # Reset circuit breaker
-                self._circuit_breaker_open_until = None
-                self._circuit_breaker_failures = 0
+            # Move to half-open state after timeout expires
+            self._circuit_breaker_open_until = None
+            self._circuit_breaker_half_open = True
         return False
     
     def record_circuit_breaker_failure(self):
         """Record a failure for circuit breaker"""
         self._circuit_breaker_failures += 1
-        
-        if self._circuit_breaker_failures >= self.config.circuit_breaker_threshold:
-            self._circuit_breaker_open_until = (
-                datetime.utcnow() + 
-                timedelta(seconds=self.config.circuit_breaker_timeout)
+        # If we are in half-open state, immediately reopen with backoff
+        if self._circuit_breaker_half_open:
+            self._circuit_breaker_half_open = False
+            self._circuit_breaker_open_until = datetime.utcnow() + timedelta(seconds=self._cb_current_timeout)
+            # Exponential backoff for next open window
+            self._cb_current_timeout = min(
+                int(max(1, self._cb_current_timeout * self.config.circuit_breaker_backoff_factor)),
+                int(max(self.config.circuit_breaker_timeout, self.config.circuit_breaker_max_timeout))
             )
             logger.warning(
-                f"Circuit breaker opened for module {self.name} "
-                f"until {self._circuit_breaker_open_until}"
+                f"Half-open probe failed; circuit breaker re-opened for module {self.name} "
+                f"until {self._circuit_breaker_open_until} (next timeout={self._cb_current_timeout}s)"
+            )
+            return
+
+        if self._circuit_breaker_failures >= self.config.circuit_breaker_threshold:
+            # Open breaker for current timeout value
+            self._circuit_breaker_open_until = datetime.utcnow() + timedelta(seconds=self._cb_current_timeout)
+            # Increase next timeout with backoff
+            self._cb_current_timeout = min(
+                int(max(1, self._cb_current_timeout * self.config.circuit_breaker_backoff_factor)),
+                int(max(self.config.circuit_breaker_timeout, self.config.circuit_breaker_max_timeout))
+            )
+            logger.warning(
+                f"Circuit breaker opened for module {self.name} until {self._circuit_breaker_open_until} "
+                f"(next timeout={self._cb_current_timeout}s)"
             )
     
     def record_circuit_breaker_success(self):
         """Record a success for circuit breaker"""
-        if self._circuit_breaker_failures > 0:
+        # On success, clear half-open and gradually heal failures
+        if self._circuit_breaker_half_open:
+            self._circuit_breaker_half_open = False
+            self._circuit_breaker_failures = 0
+            # Reset backoff timeout to baseline
+            self._cb_current_timeout = self.config.circuit_breaker_timeout
+        elif self._circuit_breaker_failures > 0:
             self._circuit_breaker_failures -= 1
     
     async def execute_with_circuit_breaker(self, operation, *args, **kwargs):
         """Execute an operation with circuit breaker protection"""
         if self.is_circuit_breaker_open():
             raise Exception(f"Circuit breaker is open for module {self.name}")
-        
+        was_half_open = self._circuit_breaker_half_open
         start_time = time.time()
-        
+        acquired = False
         try:
+            # Concurrency guard
+            if self._semaphore is not None:
+                await self._semaphore.acquire()
+                acquired = True
             # Execute with timeout
             result = await asyncio.wait_for(
                 operation(*args, **kwargs),
@@ -295,6 +333,24 @@ class BaseModule(ABC):
             
             logger.error(f"Operation failed in module {self.name}: {str(e)}")
             raise
+        finally:
+            if acquired:
+                try:
+                    self._semaphore.release()
+                except Exception:
+                    pass
+
+    async def get_tool_def(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """Return a single tool definition, using cached tool list if available."""
+        if self._tools_cache is None:
+            self._tools_cache = await self.get_tools()
+        try:
+            for tool in self._tools_cache:
+                if isinstance(tool, dict) and tool.get("name") == tool_name:
+                    return tool
+        except Exception:
+            pass
+        return None
     
     def get_metrics(self) -> ModuleMetrics:
         """Get module metrics"""
@@ -333,13 +389,14 @@ class BaseModule(ABC):
         pass
     
     @abstractmethod
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Optional[Any] = None) -> Any:
         """
         Execute a tool.
         
         Args:
             tool_name: Name of the tool to execute
             arguments: Tool arguments
+            context: Optional RequestContext with user/session/db_paths
         
         Returns:
             Tool execution result
@@ -393,21 +450,67 @@ class BaseModule(ABC):
         # Basic validation - check required fields
         pass
     
-    def sanitize_input(self, input_data: Any) -> Any:
+    def sanitize_input(self, input_data: Any, _depth: int = 0) -> Any:
         """
-        Sanitize user input to prevent injection attacks.
+        Sanitize user input to prevent injection attacks (deep, recursive).
         
-        Override this to add custom sanitization.
+        This implementation recursively validates dicts/lists and inspects strings
+        for common injection/control patterns. Override to add module-specific
+        allowlisting or transforms. A small maximum depth guard prevents abuse.
         """
-        # Basic sanitization
-        if isinstance(input_data, str):
-            # Remove potential SQL injection patterns
-            dangerous_patterns = ["';", '";', '--', '/*', '*/', 'xp_', 'sp_']
+        # Depth guard
+        if _depth > 20:
+            raise ValueError("Input too deeply nested")
+
+        dangerous_patterns = [
+            "';",
+            '";',
+            "--",
+            "/*",
+            "*/",
+            "xp_",
+            "sp_",
+            "\\x00",
+        ]
+
+        def _check_str(s: str) -> str:
+            ls = s.lower()
             for pattern in dangerous_patterns:
-                if pattern in input_data.lower():
+                if pattern in ls:
                     raise ValueError(f"Potentially dangerous input detected: {pattern}")
+            # Strip NULs and control chars
+            return "".join(ch for ch in s if ch >= " " or ch == "\n")
+
+        if isinstance(input_data, str):
+            return _check_str(input_data)
         
+        if isinstance(input_data, dict):
+            return {k: self.sanitize_input(v, _depth + 1) for k, v in input_data.items()}
+
+        if isinstance(input_data, list):
+            return [self.sanitize_input(v, _depth + 1) for v in input_data]
+
+        # Pass-through for other primitives
         return input_data
+
+    # Shared helpers for validators
+    def is_write_tool_def(self, tool_def: Dict[str, Any]) -> bool:
+        """Heuristic and metadata-based check for write/management tools.
+
+        Criteria:
+        - metadata.category in {ingestion, management}
+        - or name matches keywords (ingest|update|delete|create|import)
+        """
+        try:
+            name = str(tool_def.get("name") or "").lower()
+            meta = tool_def.get("metadata") or {}
+            category = (meta.get("category") or "").lower()
+            if category in {"ingestion", "management"}:
+                return True
+            import re as _re
+            return bool(_re.search(r"(ingest|update|delete|create|import)", name))
+        except Exception:
+            return False
 
 
 # Helper functions for creating MCP-compliant definitions

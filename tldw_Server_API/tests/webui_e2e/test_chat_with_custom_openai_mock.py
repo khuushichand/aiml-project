@@ -86,8 +86,9 @@ def test_chat_with_custom_openai_mock(browser):
             # Select provider 'Custom OpenAI API'
             page.select_option("#chatCompletions_provider", label="Custom OpenAI API")
 
-            # Keep default messages; send request
-            page.get_by_text("Send Request").first.click()
+            # Keep default messages; send request scoped to Chat Completions section
+            chat_section = page.locator("#tabChatCompletions")
+            chat_section.get_by_text("Send Request").click()
 
             page.wait_for_selector("#chatCompletions_response")
             txt = page.locator("#chatCompletions_response").inner_text()
@@ -109,4 +110,3 @@ def test_chat_with_custom_openai_mock(browser):
             mock_proc.terminate()
         except Exception:
             pass
-

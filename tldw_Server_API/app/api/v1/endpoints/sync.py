@@ -38,6 +38,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 #
 # DB Mgmt
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, ConflictError, MediaDatabase, InputError
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.Sync.Sync_Client import SYNC_BATCH_SIZE
 #
 #
@@ -99,11 +100,7 @@ async def receive_changes_from_client(
     logger.info(f"[{user_id.username}] Received {len(payload.changes)} changes from client {requesting_client_id}. Applying to DB: {db.db_path_str}")
 
     processor = ServerSyncProcessor(db=db, user_id=user_id.username, requesting_client_id=requesting_client_id)
-    try:
-        # Use .model_dump() for Pydantic v2+, or .dict() for v1
-        changes_as_dicts = [change.model_dump() for change in payload.changes]
-    except AttributeError:
-        changes_as_dicts = [change.dict() for change in payload.changes] # Fallback for Pydantic v1
+    changes_as_dicts = [model_dump_compat(change) for change in payload.changes]
 
     try:
         # --- Run the SYNCHRONOUS method in a thread pool ---

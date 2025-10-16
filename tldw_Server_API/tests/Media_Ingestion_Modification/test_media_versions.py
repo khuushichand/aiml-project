@@ -319,11 +319,16 @@ class TestMediaVersionEndpoints:
         response = self._create_version_request(self.media_id, "Content v2")
         assert response.status_code == status.HTTP_201_CREATED # RESTful creation status
         data = response.json()
+        # Endpoint now returns a rich MediaDetailResponse
         assert isinstance(data, dict)
-        assert "media_id" in data
-        assert "version_number" in data
-        assert data["media_id"] == self.media_id
-        assert data["version_number"] == 2 # Should be the second version
+        assert "media_id" in data and data["media_id"] == self.media_id
+        assert "versions" in data and isinstance(data["versions"], list)
+        # Determine latest version number via list endpoint
+        lst = self.client.get(f"/api/v1/media/{self.media_id}/versions", params={"page": 1, "limit": 10})
+        assert lst.status_code == status.HTTP_200_OK
+        versions_now = lst.json()
+        vnum = max(v.get("version_number", 0) for v in versions_now) if versions_now else 0
+        assert vnum == 2 # Should be the second version
 
     def test_create_version_nonexistent_media_id(self):
         """Test creating version for a media ID that doesn't exist."""
@@ -565,11 +570,14 @@ class TestMediaVersionEndpoints:
         )
         assert response.status_code == status.HTTP_200_OK # Or 201 if creating a new version record
         data = response.json()
-        assert "new_document_version_number" in data
-        new_version_num = data["new_document_version_number"]
+        # Endpoint now returns MediaDetailResponse; verify rich shape
+        assert isinstance(data, dict) and "media_id" in data and "versions" in data
+        # Determine the newly created version number from list endpoint
+        lst_after_rb = self.client.get(f"/api/v1/media/{self.media_id}/versions", params={"page": 1, "limit": 10})
+        assert lst_after_rb.status_code == status.HTTP_200_OK
+        versions_now = lst_after_rb.json()
+        new_version_num = max(v.get("version_number", 0) for v in versions_now) if versions_now else 0
         assert new_version_num == 4  # Should create version 4
-        assert "new_media_version" in data  # Check this key exists if your endpoint returns it
-        new_media_sync_version = data.get("new_media_version")  # Get safely
         #assert new_media_sync_version == media_version_after_v1 + 1
 
         # Verify the new version (v4) content matches the rolled-back version (v1)

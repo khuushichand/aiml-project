@@ -20,9 +20,12 @@ The Chunking Templates API provides a powerful way to define, manage, and apply 
 http://localhost:8000/api/v1/chunking/templates
 ```
 
-## Authentication
+## Auth + Rate Limits
 
-Currently, the API does not require authentication. In production, you should implement proper authentication using the provided auth middleware.
+Authentication is required and follows the server’s AuthNZ mode:
+- Single-user mode: include `X-API-KEY: <your_key>` header
+- Multi-user mode: include `Authorization: Bearer <JWT>` header
+The same requirements apply to all endpoints documented below. Standard limits apply; template operations are lightweight and subject to standard RPM.
 
 ## Endpoints
 
@@ -222,6 +225,12 @@ Delete a template (cannot delete built-in templates).
 
 Apply a template to process text content.
 
+Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| include_metadata | boolean | false | If true, `chunks` items include `{text, metadata}` objects; otherwise returns a list of strings |
+
 #### Request Body
 
 ```json
@@ -369,7 +378,8 @@ Learn a minimal hierarchical boundary configuration from an example (“seed”)
 ```
 
 Validation limits:
-- Max 20 boundary rules; `pattern` ≤ 1000 chars; `flags` ≤ 10 chars.
+- Max 20 boundary rules; `pattern` ≤ 256 chars; `flags` ≤ 10 chars.
+- Allowed regex flags are `i` and `m` only.
 - Prefer anchored, case-insensitive rules for stability (e.g., `^\\s*Abstract\\b`, flags `im`).
 
 ## Built-in Templates
@@ -384,9 +394,32 @@ The system comes with several pre-configured templates:
 
 ### 2. code_documentation
 - **Description**: Template for processing code documentation
-- **Method**: Markdown-aware
+- **Method**: Structure-aware (`structure_aware`)
 - **Features**: Preserves code blocks and headers
 - **Tags**: code, documentation, technical, programming
+
+## Diagnostics Headers
+
+The templates endpoints emit optional diagnostic headers to help operators identify DB capability mismatches. These are present on list/create/apply/update/delete responses.
+
+- `X-Template-DB-Class`: Fully-qualified class name of the DB dependency instance used by the endpoint (e.g., `tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`).
+- `X-Template-DB-Capability`: `native` if the DB provides native template methods; `fallback` if the endpoint is using an in-memory fallback store due to missing methods.
+- `X-Template-DB-Missing`: Comma-separated list of missing DB methods (e.g., `create_chunking_template,get_chunking_template`).
+- `X-Template-DB-Hint`: A short suggestion to ensure the correct DB class is wired: `Ensure Media_DB_v2.MediaDatabase is used: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`.
+
+When you see `fallback`, templates are still functional (created/updated/applied) in-memory for the current process, but will not persist across server restarts. To fix this, ensure the dependency provider returns a `Media_DB_v2.MediaDatabase` instance.
+
+Example (curl):
+
+```
+curl -s -D - http://localhost:8000/api/v1/chunking/templates | head
+HTTP/1.1 200 OK
+X-Template-DB-Class: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase
+X-Template-DB-Capability: native
+...
+```
+
+If you see `fallback` and missing methods, review the DI wiring at `tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py` and ensure your override (in tests) or production container uses `Media_DB_v2.MediaDatabase`.
 
 ### 3. chat_conversation
 - **Description**: Template for processing chat conversations
@@ -469,9 +502,12 @@ The system comes with several pre-configured templates:
 - `paragraphs`: Chunk by paragraph count
 - `tokens`: Chunk by token count
 - `semantic`: Semantic similarity-based chunking
-- `regex`: Pattern-based chunking
-- `markdown`: Markdown-aware chunking
-- `code`: Code-aware chunking
+- `json`: Chunk JSON structures
+- `xml`: Chunk XML structures
+- `ebook_chapters`: Chapter/section-based chunking for long-form content
+- `rolling_summarize`: LLM-assisted rolling summarization
+- `structure_aware`: Markdown/code-aware structure-preserving chunking
+- `propositions`: Extract and chunk by propositions/claims
 
 #### Postprocessing Operations
 - `add_overlap`: Add overlap between chunks
@@ -479,6 +515,14 @@ The system comes with several pre-configured templates:
 - `merge_small`: Merge small chunks
 - `add_metadata`: Add metadata to chunks
 - `format_chunks`: Format chunks with templates
+
+## Compatibility Notes
+
+- Classifier location: `classifier` may be top-level or under `chunking.config`. Both are supported for matching and validation.
+- Hierarchical options: `hierarchical` and `hierarchical_template` must be provided under `chunking.config` (top-level keys are ignored by the validator).
+- Operation schema: Pre/Post operations accept either `{operation, config}` or `{type, params}` — the processor supports both.
+- Apply overrides: You can override `method`, `max_size`, `overlap`, and other config via `override_options` on apply; these merge over template defaults.
+- Response shape: Use `include_metadata=true` to receive `{text, metadata}` objects instead of a plain list of strings.
 
 ## Integration with Existing Chunking API
 
@@ -684,6 +728,5 @@ curl -X POST "/api/v1/chunking/templates" \
 ```
 
 ---
-
-*Last Updated: January 2025*
+*Last Updated: October 2025*
 *API Version: 1.0.0*

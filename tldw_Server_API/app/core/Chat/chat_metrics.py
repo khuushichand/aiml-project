@@ -28,6 +28,9 @@ class ChatMetricLabels(Enum):
     MESSAGE_TYPE = "message_type"
     VALIDATION_TYPE = "validation_type"
     RETRY_COUNT = "retry_count"
+    USER = "user_id"
+    CATEGORY = "category"
+    ACTION = "action"
 
 
 @dataclass
@@ -86,6 +89,15 @@ class ChatMetrics:
     llm_errors: Any
     llm_latency: Any
     llm_cost_estimate: Any
+
+    # Moderation metrics
+    moderation_input_flags: Any
+    moderation_output_redacts: Any
+    moderation_output_blocks: Any
+    moderation_stream_blocks: Any
+    
+    # Fallback metrics
+    provider_fallback_successes: Any
 
 
 class ChatMetricsCollector:
@@ -300,6 +312,35 @@ class ChatMetricsCollector:
                 name="chat_llm_cost_estimate_usd",
                 description="Estimated cost of LLM API calls",
                 unit="USD"
+            ),
+
+            # Moderation metrics
+            moderation_input_flags=self.meter.create_counter(
+                name="chat_moderation_input_flag_total",
+                description="Number of input messages flagged by moderation",
+                unit="1",
+            ),
+            moderation_output_redacts=self.meter.create_counter(
+                name="chat_moderation_output_redact_total",
+                description="Number of outputs redacted by moderation",
+                unit="1",
+            ),
+            moderation_output_blocks=self.meter.create_counter(
+                name="chat_moderation_output_block_total",
+                description="Number of outputs blocked by moderation",
+                unit="1",
+            ),
+            moderation_stream_blocks=self.meter.create_counter(
+                name="chat_moderation_stream_block_total",
+                description="Number of streaming responses blocked by moderation",
+                unit="1",
+            )
+            ,
+            # Fallback metrics
+            provider_fallback_successes=self.meter.create_counter(
+                name="chat_provider_fallback_success_total",
+                description="Count of successful provider fallback transitions",
+                unit="1",
             )
         )
     
@@ -649,6 +690,66 @@ class ChatMetricsCollector:
             "active_streams": self.active_streams,
             "active_transactions": self.active_transactions
         }
+
+    def track_provider_fallback_success(
+        self,
+        requested_provider: str,
+        selected_provider: str,
+        *,
+        streaming: bool,
+        queued: bool,
+    ) -> None:
+        """Record a successful fallback from requested_provider to selected_provider.
+
+        Args:
+            requested_provider: The provider originally requested by the client
+            selected_provider: The provider actually used (fallback)
+            streaming: Whether this was a streaming call
+            queued: Whether this call went through the request queue
+        """
+        try:
+            labels = {
+                ChatMetricLabels.PROVIDER.value: requested_provider,
+                "selected_provider": selected_provider,
+                ChatMetricLabels.STREAMING.value: str(bool(streaming)).lower(),
+                "queued": str(bool(queued)).lower(),
+            }
+            self.metrics.provider_fallback_successes.add(1, labels)
+            logger.info(
+                f"Fallback success: requested={requested_provider}, selected={selected_provider}, "
+                f"streaming={streaming}, queued={queued}"
+            )
+        except Exception:
+            # Metrics must never break the flow
+            pass
+
+    # ---------------- Moderation helpers ----------------
+    def track_moderation_input(self, user_id: str, action: str, category: str = "default"):
+        labels = {
+            ChatMetricLabels.USER.value: str(user_id),
+            ChatMetricLabels.ACTION.value: str(action),
+            ChatMetricLabels.CATEGORY.value: str(category),
+        }
+        self.metrics.moderation_input_flags.add(1, labels)
+
+    def track_moderation_output(self, user_id: str, action: str, streaming: bool = False, category: str = "default"):
+        labels = {
+            ChatMetricLabels.USER.value: str(user_id),
+            ChatMetricLabels.ACTION.value: str(action),
+            ChatMetricLabels.CATEGORY.value: str(category),
+            ChatMetricLabels.STREAMING.value: str(bool(streaming)).lower(),
+        }
+        if action == "block":
+            self.metrics.moderation_output_blocks.add(1, labels)
+        elif action == "redact":
+            self.metrics.moderation_output_redacts.add(1, labels)
+
+    def track_moderation_stream_block(self, user_id: str, category: str = "default"):
+        labels = {
+            ChatMetricLabels.USER.value: str(user_id),
+            ChatMetricLabels.CATEGORY.value: str(category),
+        }
+        self.metrics.moderation_stream_blocks.add(1, labels)
 
 
 # Global instance

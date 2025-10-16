@@ -1,0 +1,33 @@
+groups:
+  - name: tldw-embeddings-slos
+    rules:
+      - alert: EmbeddingsErrorBudgetBurn
+        expr: (
+          sum(increase(embedding_stage_jobs_failed_total[1h]))
+          /
+          (sum(increase(embedding_stage_jobs_failed_total[1h])) + sum(increase(embedding_stage_jobs_processed_total[1h])))
+        ) > 0.005
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Embeddings pipeline error budget burn
+          description: Failed jobs exceeded 0.5% over 1h
+
+      - alert: EmbeddingsQueueAgeP95High
+        expr: histogram_quantile(0.95, sum by (le, queue_name) (rate(embedding_queue_age_seconds_bucket[5m]))) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Embeddings queue age p95 high
+          description: Queue p95 ({{ $labels.queue_name }}) > 2m for >10m
+
+      - alert: EmbeddingsStageLatencyP99High
+        expr: histogram_quantile(0.99, sum by (le, stage) (rate(embedding_stage_processing_latency_seconds_bucket[5m]))) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Embeddings stage latency p99 high
+          description: Stage {{ $labels.stage }} p99 > 10s for >10m

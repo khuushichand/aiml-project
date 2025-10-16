@@ -1,3 +1,6 @@
+# apkg_exporter.py
+#
+# Imports
 import io
 import json
 import math
@@ -9,7 +12,10 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
-
+#
+########################################################################################################################
+#
+# Functions:
 
 def _now_secs() -> int:
     return int(time.time())
@@ -496,3 +502,7 @@ def export_apkg_from_rows(rows: List[Dict], default_deck_name: str = "Default", 
                 z.writestr(str(idx), content)
             z.writestr('media', json.dumps(media_mapping))
         return apkg_bytes.getvalue()
+
+#
+# End of apkg_exporter.py
+########################################################################################################################

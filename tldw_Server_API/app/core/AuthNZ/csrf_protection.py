@@ -5,6 +5,8 @@
 import secrets
 import hashlib
 from typing import Optional, Set, Callable
+import hmac
+import base64
 from datetime import datetime, timedelta
 #
 # 3rd-party imports
@@ -52,15 +54,34 @@ class CSRFTokenManager:
             "text/plain",
         }
     
-    def generate_token(self) -> str:
+    def _hmac_key(self) -> bytes:
+        s = get_settings()
+        material = (s.API_KEY_PEPPER or s.JWT_SECRET_KEY or "tldw_default_csrf_hmac")
+        return (material[:32]).encode()
+
+    def _bind_suffix(self, user_id: Optional[int]) -> Optional[str]:
+        """Return HMAC suffix for user binding if enabled and user_id provided."""
+        s = get_settings()
+        if not s.CSRF_BIND_TO_USER or user_id is None:
+            return None
+        digest = hmac.new(self._hmac_key(), str(user_id).encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest)[:16].decode()
+
+    def generate_token(self, request: Request) -> str:
         """Generate a new CSRF token"""
-        return secrets.token_urlsafe(self.token_length)
+        base = secrets.token_urlsafe(self.token_length)
+        try:
+            uid = getattr(request.state, 'user_id', None)
+        except Exception:
+            uid = None
+        suffix = self._bind_suffix(uid)
+        return f"{base}.{suffix}" if suffix else base
     
     def hash_token(self, token: str) -> str:
         """Create a hash of the token for comparison"""
         return hashlib.sha256(token.encode()).hexdigest()
     
-    def validate_token(self, cookie_token: str, header_token: str) -> bool:
+    def validate_token(self, cookie_token: str, header_token: str, user_id: Optional[int] = None) -> bool:
         """
         Validate CSRF token using double-submit cookie pattern
         
@@ -75,7 +96,17 @@ class CSRFTokenManager:
             return False
         
         # Constant-time comparison to prevent timing attacks
-        return secrets.compare_digest(cookie_token, header_token)
+        if not secrets.compare_digest(cookie_token, header_token):
+            return False
+        # If token includes binding suffix, validate it
+        parts = cookie_token.split('.')
+        if len(parts) == 2 and get_settings().CSRF_BIND_TO_USER:
+            suffix = parts[1]
+            if not suffix or user_id is None:
+                return False
+            expected = self._bind_suffix(user_id)
+            return secrets.compare_digest(suffix, expected)
+        return True
     
     def should_protect(self, request: Request) -> bool:
         """
@@ -161,6 +192,54 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         self.token_manager = CSRFTokenManager()
         logger.info(f"CSRF Protection Middleware initialized (enabled={enabled})")
     
+    async def _resolve_user_id(self, request: Request) -> Optional[int]:
+        """Resolve user identifier prior to dependency execution when binding required."""
+        try:
+            existing = getattr(request.state, "user_id", None)
+            if isinstance(existing, int):
+                return existing
+        except Exception:
+            existing = None
+        # Attempt to decode Authorization bearer token
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if token:
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                    payload = get_jwt_service().decode_access_token(token)
+                    user_id = payload.get("user_id") or payload.get("sub")
+                    if isinstance(user_id, str):
+                        user_id = int(user_id)
+                    if isinstance(user_id, int):
+                        try:
+                            request.state.user_id = user_id
+                        except Exception:
+                            pass
+                        return user_id
+                except Exception as exc:
+                    logger.debug(f"CSRF binding: bearer token decode failed: {exc}")
+        # Attempt API key lookup
+        api_key = request.headers.get("X-API-KEY")
+        if api_key:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+                manager = await get_api_key_manager()
+                info = await manager.validate_api_key(
+                    api_key=api_key,
+                    ip_address=request.client.host if request.client else None
+                )
+                user_id = info.get("user_id") if info else None
+                if isinstance(user_id, int):
+                    try:
+                        request.state.user_id = user_id
+                    except Exception:
+                        pass
+                    return user_id
+            except Exception as exc:
+                logger.debug(f"CSRF binding: API key resolution failed: {exc}")
+        return None
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
         Process request with CSRF protection
@@ -182,12 +261,19 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         
         # Check if this request needs CSRF protection
         if self.token_manager.should_protect(request):
+            if get_settings().CSRF_BIND_TO_USER:
+                user_id = await self._resolve_user_id(request)
+            else:
+                try:
+                    user_id = getattr(request.state, 'user_id', None)
+                except Exception:
+                    user_id = None
             # Get tokens
             cookie_token = request.cookies.get(self.token_manager.token_cookie_name)
             header_token = request.headers.get(self.token_manager.token_header_name)
             
             # Validate tokens
-            if not self.token_manager.validate_token(cookie_token, header_token):
+            if not self.token_manager.validate_token(cookie_token, header_token, user_id):
                 logger.warning(
                     f"CSRF token validation failed for {request.method} {request.url.path} "
                     f"from {request.client.host if request.client else 'unknown'}"
@@ -204,7 +290,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         
         # Set CSRF token cookie if not present
         if self.token_manager.token_cookie_name not in request.cookies:
-            token = self.token_manager.generate_token()
+            token = self.token_manager.generate_token(request)
             self.token_manager.set_cookie(response, token)
             
             # Also add token to response header for easy access

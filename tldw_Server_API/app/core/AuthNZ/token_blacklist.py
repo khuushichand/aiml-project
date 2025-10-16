@@ -8,13 +8,13 @@ import json
 import asyncio
 #
 # 3rd-party imports
-import redis
+from redis import asyncio as redis_async
 from redis.exceptions import RedisError
 from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
 
 #######################################################################################################################
@@ -38,7 +38,7 @@ class TokenBlacklist:
         """Initialize token blacklist service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
-        self.redis_client: Optional[redis.Redis] = None
+        self.redis_client: Optional[redis_async.Redis] = None
         self._initialized = False
         
         # Cache for recently checked tokens (in-memory)
@@ -51,8 +51,7 @@ class TokenBlacklist:
             return
         
         # Get database pool
-        if not self.db_pool:
-            self.db_pool = await get_db_pool()
+        self.db_pool = await self._ensure_db_pool()
         
         # Create blacklist table if it doesn't exist
         await self._create_tables()
@@ -60,12 +59,12 @@ class TokenBlacklist:
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
-                self.redis_client = redis.from_url(
+                self.redis_client = redis_async.from_url(
                     self.settings.REDIS_URL,
                     decode_responses=True,
                     socket_connect_timeout=1
                 )
-                self.redis_client.ping()
+                await self.redis_client.ping()
                 logger.debug("Redis connected for token blacklist")
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis unavailable for token blacklist: {e}")
@@ -73,11 +72,44 @@ class TokenBlacklist:
         
         self._initialized = True
         logger.info("TokenBlacklist service initialized")
+
+    async def _ensure_db_pool(self) -> DatabasePool:
+        """Ensure the blacklist has a usable database pool for the active loop."""
+        if not self.db_pool:
+            self.db_pool = await get_db_pool()
+            return self.db_pool
+
+        pool_ref = getattr(self.db_pool, "pool", None)
+        pool_closed = bool(pool_ref) and getattr(pool_ref, "closed", False)
+
+        loop_changed = False
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        stored_loop = getattr(self.db_pool, "_loop", None)
+        if pool_ref and stored_loop and current_loop and stored_loop is not current_loop:
+            loop_changed = True
+
+        if pool_closed or loop_changed:
+            logger.debug(
+                "TokenBlacklist refreshing database pool "
+                f"(pool_closed={pool_closed}, loop_changed={loop_changed})"
+            )
+            await reset_db_pool()
+            self.db_pool = await get_db_pool()
+            return self.db_pool
+
+        if not getattr(self.db_pool, "_initialized", False):
+            await self.db_pool.initialize()
+
+        return self.db_pool
     
     async def _create_tables(self):
         """Create token blacklist table if it doesn't exist"""
         try:
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 if hasattr(conn, 'execute'):
                     # PostgreSQL
                     await conn.execute("""
@@ -181,7 +213,7 @@ class TokenBlacklist:
                 ttl = int((expires_at - datetime.utcnow()).total_seconds())
                 
                 if ttl > 0:
-                    self.redis_client.setex(
+                    await self.redis_client.setex(
                         key,
                         ttl,
                         json.dumps({
@@ -198,7 +230,8 @@ class TokenBlacklist:
         
         # Add to database for persistence
         try:
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 if hasattr(conn, 'execute'):
                     # PostgreSQL
                     await conn.execute("""
@@ -247,7 +280,8 @@ class TokenBlacklist:
         if self.redis_client:
             try:
                 key = f"blacklist:{jti}"
-                if self.redis_client.exists(key):
+                exists = await self.redis_client.exists(key)
+                if exists:
                     # Add to local cache for next time
                     self._local_cache.add(jti)
                     return True
@@ -256,7 +290,8 @@ class TokenBlacklist:
         
         # Check database
         try:
-            async with self.db_pool.acquire() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.acquire() as conn:
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     exists = await conn.fetchval(
@@ -307,27 +342,47 @@ class TokenBlacklist:
             await self.initialize()
         
         try:
+            db_pool = await self._ensure_db_pool()
             # Get all active sessions for user
-            async with self.db_pool.acquire() as conn:
+            async with db_pool.acquire() as conn:
                 if hasattr(conn, 'fetch'):
                     # PostgreSQL
-                    sessions = await conn.fetch(
-                        "SELECT id, token_hash FROM sessions WHERE user_id = $1 AND is_revoked = 0",
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, access_jti, refresh_jti, expires_at, refresh_expires_at
+                        FROM sessions
+                        WHERE user_id = $1
+                        """,
                         user_id
                     )
+                    sessions = [dict(row) for row in rows]
                 else:
                     # SQLite
                     cursor = await conn.execute(
-                        "SELECT id, token_hash FROM sessions WHERE user_id = ? AND is_revoked = 0",
+                        """
+                        SELECT id, access_jti, refresh_jti, expires_at, refresh_expires_at
+                        FROM sessions
+                        WHERE user_id = ?
+                        """,
                         (user_id,)
                     )
-                    sessions = await cursor.fetchall()
+                    sqlite_rows = await cursor.fetchall()
+                    sessions = [
+                        {
+                            "id": sqlite_row[0],
+                            "access_jti": sqlite_row[1],
+                            "refresh_jti": sqlite_row[2],
+                            "expires_at": sqlite_row[3],
+                            "refresh_expires_at": sqlite_row[4],
+                        }
+                        for sqlite_row in sqlite_rows
+                    ]
                 
                 # Mark sessions as revoked
                 if hasattr(conn, 'execute'):
                     # PostgreSQL
                     await conn.execute(
-                        "UPDATE sessions SET is_revoked = 1 WHERE user_id = $1",
+                        "UPDATE sessions SET is_revoked = TRUE WHERE user_id = $1",
                         user_id
                     )
                 else:
@@ -338,6 +393,46 @@ class TokenBlacklist:
                     )
                     await conn.commit()
             
+            def _to_datetime(value: Optional[Any]) -> Optional[datetime]:
+                if value is None:
+                    return None
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, str):
+                    try:
+                        return datetime.fromisoformat(value)
+                    except ValueError:
+                        return None
+                return None
+
+            # Blacklist stored JTIs without needing token decryption
+            for session in sessions:
+                access_jti = session.get("access_jti")
+                refresh_jti = session.get("refresh_jti")
+                access_exp = _to_datetime(session.get("expires_at"))
+                refresh_exp = _to_datetime(session.get("refresh_expires_at"))
+
+                if access_jti and access_exp:
+                    await self.revoke_token(
+                        jti=access_jti,
+                        expires_at=access_exp,
+                        user_id=user_id,
+                        token_type="access",
+                        reason=reason,
+                        revoked_by=revoked_by,
+                        ip_address=ip_address,
+                    )
+                if refresh_jti and refresh_exp:
+                    await self.revoke_token(
+                        jti=refresh_jti,
+                        expires_at=refresh_exp,
+                        user_id=user_id,
+                        token_type="refresh",
+                        reason=reason,
+                        revoked_by=revoked_by,
+                        ip_address=ip_address,
+                    )
+
             logger.info(f"Revoked {len(sessions)} tokens for user {user_id}")
             return len(sessions)
             
@@ -356,7 +451,8 @@ class TokenBlacklist:
             await self.initialize()
         
         try:
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 if hasattr(conn, 'execute'):
                     # PostgreSQL
                     result = await conn.execute(
@@ -401,7 +497,8 @@ class TokenBlacklist:
             await self.initialize()
         
         try:
-            async with self.db_pool.acquire() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.acquire() as conn:
                 if user_id:
                     if hasattr(conn, 'fetchrow'):
                         # PostgreSQL
@@ -511,6 +608,19 @@ async def revoke_all_user_tokens(user_id: int, reason: str = "User logout") -> i
     """Convenience function to revoke all user tokens"""
     blacklist = get_token_blacklist()
     return await blacklist.revoke_all_user_tokens(user_id, reason)
+
+
+async def reset_token_blacklist():
+    """Reset token blacklist singleton (primarily for testing)."""
+    global _token_blacklist
+    if _token_blacklist:
+        try:
+            if _token_blacklist.redis_client:
+                await _token_blacklist.redis_client.close()
+        except Exception as e:
+            logger.debug(f"TokenBlacklist reset ignored Redis shutdown error: {e}")
+        finally:
+            _token_blacklist = None
 
 
 #

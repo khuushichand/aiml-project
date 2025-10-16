@@ -9,7 +9,7 @@ import asyncio
 import aiosqlite
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, AsyncContextManager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import uuid
 
@@ -195,6 +195,9 @@ class SQLiteBackend(QueueBackend):
             payload_ref TEXT,
             result_ref TEXT,
             
+            -- Task metadata (stored as JSON)
+            metadata TEXT NOT NULL DEFAULT '{}',
+            
             CHECK (status IN ('pending', 'queued', 'running', 'completed', 'failed', 'cancelled', 'dead'))
         );
         
@@ -272,6 +275,14 @@ class SQLiteBackend(QueueBackend):
         async with self._lock:
             await self._connection.executescript(schema)
             await self._connection.commit()
+            
+            # Backfill metadata column for existing deployments if missing
+            cursor = await self._connection.execute("PRAGMA table_info(tasks)")
+            columns = await cursor.fetchall()
+            column_names = {col[1] for col in columns}
+            if 'metadata' not in column_names:
+                await self._connection.execute("ALTER TABLE tasks ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+                await self._connection.commit()
     
     async def enqueue(self, task: Task) -> str:
         """Add a task to the queue"""
@@ -291,8 +302,8 @@ class SQLiteBackend(QueueBackend):
                 id, queue_name, handler, payload, priority, status,
                 scheduled_at, expires_at, max_retries, retry_count,
                 retry_delay, timeout, depends_on, idempotency_key,
-                created_at, queued_at, payload_ref
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, queued_at, payload_ref, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, 
             task.id,
             task.queue_name,
@@ -308,9 +319,10 @@ class SQLiteBackend(QueueBackend):
             task.timeout,
             json.dumps(task.depends_on) if task.depends_on else None,
             task.idempotency_key,
-            datetime.utcnow().isoformat(),
-            datetime.utcnow().isoformat(),
-            task.payload_ref
+            datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            task.payload_ref,
+            json.dumps(task.metadata) if task.metadata else '{}'
         )
         
         return task.id
@@ -341,9 +353,10 @@ class SQLiteBackend(QueueBackend):
                 task.timeout,
                 json.dumps(task.depends_on) if task.depends_on else None,
                 task.idempotency_key,
-                datetime.utcnow().isoformat(),
-                datetime.utcnow().isoformat(),
-                task.payload_ref
+                datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                task.payload_ref,
+                json.dumps(task.metadata) if task.metadata else '{}'
             ))
         
         # Single atomic bulk insert with conflict handling
@@ -353,8 +366,8 @@ class SQLiteBackend(QueueBackend):
                     id, queue_name, handler, payload, priority, status,
                     scheduled_at, expires_at, max_retries, retry_count,
                     retry_delay, timeout, depends_on, idempotency_key,
-                    created_at, queued_at, payload_ref
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, queued_at, payload_ref, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, values)
             
             await self._connection.commit()
@@ -382,7 +395,12 @@ class SQLiteBackend(QueueBackend):
                       AND status = 'queued'
                       AND (scheduled_at IS NULL OR scheduled_at <= datetime('now'))
                       AND (expires_at IS NULL OR expires_at > datetime('now'))
-                      AND (depends_on IS NULL OR depends_on = '[]')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM json_each(COALESCE(depends_on, '[]')) AS deps
+                          LEFT JOIN tasks dep ON dep.id = deps.value
+                          WHERE dep.id IS NULL OR dep.status != 'completed'
+                      )
                     ORDER BY priority ASC, created_at ASC
                     LIMIT 1
                 """, (queue_name,))
@@ -392,12 +410,14 @@ class SQLiteBackend(QueueBackend):
                     await self._connection.rollback()
                     return None
                 
-                task = await self._row_to_task(row, cursor)
+                # Convert row to dict using cursor description
+                columns = [desc[0] for desc in cursor.description]
+                task = await self._row_to_task(dict(zip(columns, row)))
                 
                 # Create lease
                 lease_id = str(uuid.uuid4())
                 lease_duration = task.timeout or self.config.lease_duration_seconds
-                expires_at = datetime.utcnow() + timedelta(seconds=lease_duration)
+                expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=lease_duration)
                 
                 await self._connection.execute("""
                     INSERT INTO task_leases (lease_id, task_id, worker_id, expires_at)
@@ -419,7 +439,7 @@ class SQLiteBackend(QueueBackend):
                 task.status = TaskStatus.RUNNING
                 task.worker_id = worker_id
                 task.lease_id = lease_id
-                task.started_at = datetime.utcnow()
+                task.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 
                 return task
                 
@@ -510,7 +530,7 @@ class SQLiteBackend(QueueBackend):
         if retry and task.retry_count < task.max_retries:
             # Schedule retry
             retry_delay = task.calculate_retry_delay()
-            scheduled_at = datetime.utcnow() + timedelta(seconds=retry_delay)
+            scheduled_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=retry_delay)
             
             await self.execute("""
                 UPDATE tasks
@@ -537,12 +557,12 @@ class SQLiteBackend(QueueBackend):
         
         return True
     
-    async def _row_to_task(self, row: sqlite3.Row) -> Task:
-        """Convert database row to Task object"""
+    async def _row_to_task(self, row: Dict[str, Any]) -> Task:
+        """Convert database row dict to Task object"""
         task_dict = dict(row)
 
         # Parse JSON fields
-        for key in ['payload', 'depends_on', 'result']:
+        for key in ['payload', 'depends_on', 'result', 'metadata']:
             if isinstance(task_dict.get(key), str):
                 try:
                     task_dict[key] = json.loads(task_dict[key])
@@ -616,15 +636,16 @@ class SQLiteBackend(QueueBackend):
         
         await self.execute("""
             INSERT INTO dead_letter_queue (
-                id, original_task_id, queue_name, handler, payload, last_error
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                id, original_task_id, queue_name, handler, payload, last_error, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
             str(uuid.uuid4()),
             task.id,
             task.queue_name,
             task.handler,
             json.dumps(task.payload),
-            reason
+            reason,
+            json.dumps(task.metadata) if task.metadata else '{}'
         )
         
         await self.execute("UPDATE tasks SET status = 'dead' WHERE id = ?", task_id)
@@ -644,13 +665,30 @@ class SQLiteBackend(QueueBackend):
         except:
             return False
     
-    async def renew_lease(self, lease_id: str, expires_at: datetime) -> bool:
-        """Renew lease"""
+    async def renew_lease(self, task_id: str, lease_id: str) -> bool:
+        """Renew lease by extending expiration based on task timeout or config."""
+        duration_seconds = self.config.lease_duration_seconds
+        try:
+            task_timeout = await self.fetchval(
+                "SELECT timeout FROM tasks WHERE id = ?",
+                task_id
+            )
+            if task_timeout:
+                # Ensure positive integer duration
+                task_timeout = int(task_timeout)
+                if task_timeout > 0:
+                    duration_seconds = task_timeout
+        except Exception:
+            # Fall back to config duration if lookup fails or value invalid
+            pass
+
+        new_expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=duration_seconds)
+
         affected = await self.execute("""
             UPDATE task_leases
             SET expires_at = ?, renewal_count = renewal_count + 1
-            WHERE lease_id = ?
-        """, expires_at.isoformat(), lease_id)
+            WHERE lease_id = ? AND task_id = ?
+        """, new_expires.isoformat(), lease_id, task_id)
         return affected > 0
     
     async def delete_lease(self, lease_id: str) -> bool:
@@ -709,14 +747,14 @@ class SQLiteBackend(QueueBackend):
             return row[0] if row else None
     
     async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
-        """Fetch single row using read pool"""
+        """Fetch single row using read pool and return as dict"""
         async with self._get_read_connection() as conn:
             cursor = await conn.execute(query, args)
             row = await cursor.fetchone()
             if row:
                 columns = [desc[0] for desc in cursor.description]
-                return dict(zip(columns, row)), cursor
-            return None, None
+                return dict(zip(columns, row))
+            return None
     
     async def reclaim_expired_leases(self) -> int:
         """
@@ -774,6 +812,78 @@ class SQLiteBackend(QueueBackend):
                 await self._connection.rollback()
                 logger.error(f"Failed to reclaim expired leases: {e}")
                 raise TransactionError(f"Lease reclamation failed: {e}")
+
+    # Leader election (TTL-based) using service_leaders table
+
+    async def acquire_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
+        """Try to acquire leadership for a resource using TTL semantics."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with self._lock:
+            # Begin immediate transaction to avoid races
+            await self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await self._connection.execute(
+                    "SELECT leader_id, acquired_at FROM service_leaders WHERE service_name = ?",
+                    (resource,)
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    # No leader, acquire
+                    await self._connection.execute(
+                        "INSERT INTO service_leaders (service_name, leader_id, acquired_at) VALUES (?, ?, ?)",
+                        (resource, leader_id, now.isoformat())
+                    )
+                    await self._connection.commit()
+                    return True
+                # Existing leader; check TTL expiry or same leader
+                current_leader, acquired_at = row[0], row[1]
+                expired = False
+                try:
+                    acquired_dt = datetime.fromisoformat(acquired_at) if isinstance(acquired_at, str) else now
+                    expired = (now - acquired_dt).total_seconds() >= ttl
+                except Exception:
+                    expired = True
+                if expired or current_leader == leader_id:
+                    await self._connection.execute(
+                        "UPDATE service_leaders SET leader_id = ?, acquired_at = ? WHERE service_name = ?",
+                        (leader_id, now.isoformat(), resource)
+                    )
+                    await self._connection.commit()
+                    return True
+                # Another valid leader holds it
+                await self._connection.rollback()
+                return False
+            except Exception:
+                await self._connection.rollback()
+                return False
+
+    async def renew_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
+        """Renew leadership by updating acquired_at if leader matches."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with self._lock:
+            cursor = await self._connection.execute(
+                "SELECT leader_id FROM service_leaders WHERE service_name = ?",
+                (resource,)
+            )
+            row = await cursor.fetchone()
+            if not row or row[0] != leader_id:
+                return False
+            await self._connection.execute(
+                "UPDATE service_leaders SET acquired_at = ? WHERE service_name = ?",
+                (now.isoformat(), resource)
+            )
+            await self._connection.commit()
+            return True
+
+    async def release_leader(self, resource: str, leader_id: str) -> bool:
+        """Release leadership if currently held by leader_id."""
+        async with self._lock:
+            affected = await self._connection.execute(
+                "DELETE FROM service_leaders WHERE service_name = ? AND leader_id = ?",
+                (resource, leader_id)
+            )
+            await self._connection.commit()
+            return affected.rowcount > 0
     
     # Schema management
     

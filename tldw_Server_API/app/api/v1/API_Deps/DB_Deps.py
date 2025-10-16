@@ -5,7 +5,7 @@
 import threading
 import os
 from pathlib import Path
-import logging
+from loguru import logger
 from typing import Dict, Optional
 
 # 3rd-party Libraries
@@ -15,8 +15,7 @@ try:
     _HAS_CACHETOOLS = True
 except ImportError:
     _HAS_CACHETOOLS = False
-    logging.warning("cachetools not found. User DB instance cache will grow indefinitely. "
-                    "Install with: pip install cachetools")
+    logger.warning("cachetools not found. User DB instance cache will grow indefinitely. Install with: pip install cachetools")
 
 # Local Imports
 # Import the settings dictionary
@@ -37,7 +36,7 @@ MAX_CACHED_DB_INSTANCES = 100  # Adjust as needed
 if _HAS_CACHETOOLS:
     # Keyed by user ID (int)
     _user_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_DB_INSTANCES)
-    logging.info(f"Using LRUCache for user DB instances (maxsize={MAX_CACHED_DB_INSTANCES}).")
+    logger.info(f"Using LRUCache for user DB instances (maxsize={MAX_CACHED_DB_INSTANCES}).")
 else:
     # Keyed by user ID (int)
     _user_db_instances: Dict[int, MediaDatabase] = {} # Fallback to standard dict
@@ -81,7 +80,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
         user_dir.mkdir(parents=True, exist_ok=True)
         # Optional: logging.debug(f"Ensured directory exists for user {user_id}: {user_dir}")
     except OSError as e:
-        logging.error(f"Could not create database directory for user_id {user_id} at {user_dir}: {e}", exc_info=True)
+        logger.error(f"Could not create database directory for user_id {user_id} at {user_dir}: {e}", exc_info=True)
         # Raise a standard exception to be caught by the main dependency
         raise IOError(f"Could not initialize storage directory for user {user_id}.") from e
     return db_file
@@ -110,7 +109,7 @@ async def get_media_db_for_user(
                        or if the database cannot be initialized.
     """
     if not current_user or not isinstance(current_user.id, int):
-        logging.error("get_media_db_for_user called without a valid User object/ID.")
+        logger.error("get_media_db_for_user called without a valid User object/ID.")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed.")
 
     user_id = current_user.id # Will be SINGLE_USER_FIXED_ID in single-user mode
@@ -123,24 +122,24 @@ async def get_media_db_for_user(
 
     if db_instance:
         # Optional: Add connection check if needed, though Database class might handle it
-        logging.debug(f"Using cached Database instance for user_id: {user_id}")
+        logger.debug(f"Using cached Database instance for user_id: {user_id}")
         return db_instance
 
     # --- Instance Not Cached: Create New One ---
-    logging.info(f"No cached DB instance found for user_id: {user_id}. Initializing.")
+    logger.info(f"No cached DB instance found for user_id: {user_id}. Initializing.")
     # Acquire write lock
     with _user_db_lock:
         # Double-check cache in case another thread created it while waiting
         db_instance = _user_db_instances.get(user_id)
         if db_instance:
-            logging.debug(f"DB instance for user {user_id} created concurrently.")
+            logger.debug(f"DB instance for user {user_id} created concurrently.")
             return db_instance
 
         # --- Get Path and Initialize ---
         db_path: Optional[Path] = None # Define scope for logging in except block
         try:
             db_path = _get_db_path_for_user(user_id)
-            logging.info(f"Initializing Database instance for user {user_id} at path: {db_path}")
+            logger.info(f"Initializing Database instance for user {user_id} at path: {db_path}")
 
             # Instantiate the Database class for the specific user ID's path
             # Use SERVER_CLIENT_ID assigned from settings dict
@@ -148,11 +147,11 @@ async def get_media_db_for_user(
 
             # --- Store in Cache ---
             _user_db_instances[user_id] = db_instance
-            logging.info(f"Database instance created and cached successfully for user {user_id}")
+            logger.info(f"Database instance created and cached successfully for user {user_id}")
 
         except (DatabaseError, SchemaError) as e:
             log_path = db_path or f"directory for user_id {user_id}"
-            logging.error(f"Failed to initialize database for user {user_id} at {log_path}: {e}", exc_info=True)
+            logger.error(f"Failed to initialize database for user {user_id} at {log_path}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not initialize database for user: {e}"

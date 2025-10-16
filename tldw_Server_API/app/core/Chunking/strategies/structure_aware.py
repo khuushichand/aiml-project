@@ -368,6 +368,13 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         
         # Look for markdown tables
         lines = text.split('\n')
+        # Precompute character offsets for line starts
+        line_starts: List[int] = []
+        pos = 0
+        for idx, ln in enumerate(lines):
+            line_starts.append(pos)
+            # add 1 for the split '\n' separator except after last line
+            pos += len(ln) + (0 if idx == len(lines) - 1 else 1)
         i = 0
         
         while i < len(lines):
@@ -393,14 +400,23 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                     table = self._parse_markdown_table('\n'.join(table_lines))
                     if table:
                         table_text = table.to_markdown()
+                        # Compute character offsets for the table block based on line indices
+                        try:
+                            start_char = line_starts[i] if i < len(line_starts) else 0
+                            end_char = line_starts[j] if j < len(line_starts) else len(text)
+                            if end_char < start_char:
+                                end_char = start_char
+                        except Exception:
+                            start_char, end_char = (0, 0)
                         table_elements.append(DocumentElement(
                             type=StructureType.TABLE,
                             content=table_text,
                             metadata={
                                 'table': table,
                                 'format': 'markdown',
-                                'start': i,
-                                'end': j
+                                # Use character offsets for consistency with other elements
+                                'start': start_char,
+                                'end': end_char
                             }
                         ))
                         i = j

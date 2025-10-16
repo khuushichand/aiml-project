@@ -9,6 +9,37 @@ as the original monolithic Character_Chat_Lib.py file.
 # Import all functions from the refactored modules
 from .modules import *
 
+# Compatibility wrapper: enrich message with placeholder substitution
+from .modules.character_chat import retrieve_message_details as _retrieve_msg_basic
+from .modules.character_utils import replace_placeholders as _replace_placeholders
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from typing import Optional, Dict, Any
+
+
+def retrieve_message_details(
+    db: CharactersRAGDB,
+    message_id: str,
+    character_name_for_placeholders: Optional[str] = None,
+    user_name_for_placeholders: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Backwards-compatible wrapper that applies placeholder replacement.
+
+    Endpoints historically passed character/user names to have placeholders
+    resolved in returned message content. Delegate to modules for DB reads
+    and apply placeholder substitution here to maintain behavior.
+    """
+    msg = _retrieve_msg_basic(db, message_id)
+    if not msg:
+        return None
+    content = msg.get("content")
+    if isinstance(content, str):
+        msg["content"] = _replace_placeholders(
+            content,
+            character_name_for_placeholders,
+            user_name_for_placeholders,
+        )
+    return msg
+
 # Future structure (when refactoring is complete):
 """
 # Utility functions (character_utils.py)

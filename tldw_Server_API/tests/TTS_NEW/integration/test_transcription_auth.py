@@ -50,12 +50,17 @@ def test_transcriptions_ok_with_override(monkeypatch):
 
         app.dependency_overrides[get_request_user] = _override_user
 
-        def _fake_transcribe_audio(**kwargs):
-            return "stubbed transcript"
+        # Patch the production function used by the endpoint (faster-whisper path)
+        def _fake_speech_to_text(*args, **kwargs):
+            # Endpoint expects a tuple (segments_list, detected_language) when return_language=True
+            segments = [
+                {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "stubbed transcript"}
+            ]
+            return (segments, "en")
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.transcribe_audio",
-            _fake_transcribe_audio,
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            _fake_speech_to_text,
             raising=False,
         )
 
@@ -86,12 +91,16 @@ def test_translations_ok_with_override(monkeypatch):
 
         app.dependency_overrides[get_request_user] = _override_user
 
-        def _fake_transcribe_audio(**kwargs):
-            return "translated transcript"
+        # Patch the production function used by the endpoint (faster-whisper path)
+        def _fake_speech_to_text(*args, **kwargs):
+            segments = [
+                {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "translated transcript"}
+            ]
+            return (segments, "en")
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.transcribe_audio",
-            _fake_transcribe_audio,
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            _fake_speech_to_text,
             raising=False,
         )
 

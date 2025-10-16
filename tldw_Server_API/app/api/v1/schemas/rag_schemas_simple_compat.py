@@ -6,6 +6,7 @@ This file provides the missing classes and enums that tests expect.
 
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 from enum import Enum
 
 # Import everything from the main schema file
@@ -43,7 +44,7 @@ class Message(BaseModel):
 
 class SearchApiRequest(BaseModel):
     """Compatibility wrapper for search requests"""
-    query: str = Field(..., description="Search query string")
+    query: str = Field(..., description="Search query string", alias="querystring")
     mode: Optional[SearchModeEnum] = Field(default=SearchModeEnum.BASIC, description="Search mode")
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of results to return")
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters")
@@ -57,12 +58,7 @@ class SearchApiRequest(BaseModel):
     use_semantic_search: Optional[bool] = Field(default=False, description="Enable semantic search")
     use_hybrid_search: Optional[bool] = Field(default=True, description="Enable hybrid search")
     
-    class Config:
-        # Allow both 'query' and 'querystring' field names
-        fields = {
-            'query': {'alias': 'querystring'}
-        }
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class RetrievalAgentRequest(BaseModel):

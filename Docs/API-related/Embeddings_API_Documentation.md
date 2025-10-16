@@ -2,11 +2,24 @@
 
 ## Overview
 
-The tldw_server Embeddings API provides an OpenAI-compatible interface for generating text embeddings with caching, metrics, and a circuit breaker around provider calls.
+The tldw_server Embeddings API provides an OpenAI‑compatible interface for generating text embeddings with caching, metrics, and a circuit breaker around provider calls.
 
-Status:
-- Supported today: string inputs (single or list), OpenAI and HuggingFace providers, optional base64 encoding, TTL cache, health/metrics/admin endpoints, model listing.
-- Not supported: token-array inputs, generic batch endpoint (`/embeddings/batch`), explicit cache stats endpoint, generic test endpoint. Dimension reduction is provider-specific and may be ignored by non-OpenAI providers.
+Status (current):
+- Supported: string inputs (single or list), token‑array inputs, optional base64 encoding, TTL cache, health + metrics (admin), model listing, model metadata, provider fallback, collection management (ChromaDB), and a batch endpoint.
+- Not implemented: a dedicated cache stats endpoint (cache stats are available via health/metrics), a generic “test” endpoint.
+- Dimensions: server‑side dimension adjustment works across providers using a configurable policy (`reduce`, `pad`, or `ignore`).
+
+## Authentication
+
+Authentication follows the server’s AuthNZ mode:
+- Single-user mode: include `X-API-KEY: <your_key>` header
+- Multi-user mode: include `Authorization: Bearer <JWT>` header
+All endpoints require authentication; some endpoints are admin-only and enforce additional checks.
+
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; batching and large inputs consume more TPM and may be rate-limited.
 
 ## Key Concepts
 
@@ -18,7 +31,7 @@ Embeddings are dense vector representations of text that capture semantic meanin
 - Recommendation systems
 - RAG (Retrieval-Augmented Generation) systems
 
-### Token Array Inputs (not currently supported)
+### Token Array Inputs
 
 Token arrays are the numerical representation of text after tokenization. In the tokenization process:
 
@@ -26,7 +39,7 @@ Token arrays are the numerical representation of text after tokenization. In the
 2. **Tokenization**: Text is split into tokens: `["Hello", ",", " world", "!"]`
 3. **Token IDs**: Each token maps to a vocabulary ID: `[15339, 11, 1917, 0]`
 
-This API does not currently accept token IDs directly. The following content is kept for future consideration. It would be useful when:
+This API accepts token IDs directly. This is useful when:
 - You've pre-tokenized text for efficiency
 - You're working with token-level operations
 - You need to maintain exact tokenization consistency across systems
@@ -38,7 +51,7 @@ This API does not currently accept token IDs directly. The following content is 
 
 **Endpoint**: `POST /api/v1/embeddings`
 
-**Description**: Generate embeddings for text inputs (strings or list of strings). Optional base64 encoding; dimensions affect specific providers only (e.g., OpenAI text-embedding-3).
+**Description**: Generate embeddings for text inputs (strings or token arrays, single or list). Optional base64 encoding. When `dimensions` is set, the API applies a server‑side dimension policy: `reduce` (slice), `pad` (zero‑pad), or `ignore` (no change). Default policy: `reduce`.
 
 #### Request Body
 
@@ -47,7 +60,7 @@ This API does not currently accept token IDs directly. The following content is 
   "input": string | string[],
   "model": string,
   "encoding_format": "float" | "base64",  // optional, default: "float"
-  "dimensions": number,  // optional, only for text-embedding-3-* models
+  "dimensions": number,  // optional; OpenAI supports it for text-embedding-3-*; server can apply post-process policy across providers
   "user": string  // optional
 }
 ```
@@ -112,32 +125,36 @@ The `input` field supports multiple formats:
 }
 ```
 
+Response headers (when applicable):
+- `X-Embeddings-Provider`: actual provider used
+- `X-Embeddings-Fallback-From`: original provider if fallback occurred
+- `X-Embeddings-Dimensions-Policy`: the dimension policy applied (`reduce`, `pad`, `ignore`)
+
 ### 2. Batch Embeddings
 
-Not implemented. Send multiple inputs in one request to `POST /api/v1/embeddings` (max 2048 items).
+**Endpoint**: `POST /api/v1/embeddings/batch`
 
-#### Request Body
+**Description**: Create embeddings for a batch of texts (strings only; use array inputs on the standard endpoint for token arrays).
 
-Array of embedding requests (max 10):
-
+**Request Body**
 ```json
-[
-  {
-    "input": "First request text",
-    "model": "text-embedding-3-small",
-    "dimensions": 512
-  },
-  {
-    "input": [15339, 11, 1917, 0],  // Token array
-    "model": "text-embedding-3-large",
-    "dimensions": 1024
-  }
-]
+{
+  "texts": ["First request text", "Second"],
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "dimensions": 512
+}
 ```
 
-#### Response
-
-Array of embedding responses corresponding to each request.
+**Response**
+```json
+{
+  "embeddings": [[0.1, 0.2, ...], [0.05, -0.12, ...]],
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "count": 2
+}
+```
 
 ### 3. List Models
 
@@ -159,9 +176,17 @@ Array of embedding responses corresponding to each request.
 }
 ```
 
-### 4. Cache Statistics
+Note: In responses, the `model` field is the OpenAI model id for OpenAI requests. For non‑OpenAI providers, the response `model` is prefixed with the provider (e.g., `"huggingface:sentence-transformers/all-MiniLM-L6-v2"`).
 
-Not implemented as a dedicated endpoint. See `GET /api/v1/embeddings/health` and `GET /api/v1/embeddings/metrics` (admin) for cache/operational stats.
+### 4. Provider/Model Configuration
+
+**Endpoint**: `GET /api/v1/embeddings/providers-config`
+
+**Description**: Return default provider/model and the enabled providers with their models (from simplified embeddings configuration).
+
+---
+
+Cache statistics are not exposed via a dedicated endpoint. For cache/operational stats, see `GET /api/v1/embeddings/health` and `GET /api/v1/embeddings/metrics` (admin).
 
 ### 5. Clear Cache
 
@@ -173,14 +198,29 @@ Not implemented as a dedicated endpoint. See `GET /api/v1/embeddings/health` and
 
 ```json
 {
-  "message": "Cache cleared",
+  "message": "Cache cleared successfully",
   "entries_removed": 1250
 }
 ```
+Notes:
+- When the embeddings implementation is unavailable (e.g., optional dependencies not installed), this endpoint returns HTTP 503 and `status: "degraded"`.
 
-### 6. Test Endpoint
+### 6. Model Metadata
 
-**Endpoint**: `POST /api/v1/embeddings/test` (not implemented)
+**Endpoint**: `GET /api/v1/embeddings/models/{model_id}`
+
+**Description**: Return provider autodetection, dimension, and max tokens for the given model.
+
+Example response:
+```json
+{
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "dimension": 1536,
+  "max_tokens": 8192,
+  "allowed": true
+}
+```
 
 ### 7. Health Check
 
@@ -201,9 +241,50 @@ Not implemented as a dedicated endpoint. See `GET /api/v1/embeddings/health` and
 }
 ```
 
+### 8. Collections (ChromaDB)
+
+Manage per-user ChromaDB collections associated with embeddings.
+
+- Create collection (admin not required)
+  - POST `/api/v1/embeddings/collections`
+  - Body: `{ "name": "my_collection", "metadata": {"domain": "news"}, "embedding_model": "text-embedding-3-small", "provider": "openai" }`
+  - Response 201: `{ "name": "my_collection", "metadata": {"provider": "openai", "embedding_model": "text-embedding-3-small", "embedding_dimension": 1536, "domain": "news" } }`
+
+- List collections
+  - GET `/api/v1/embeddings/collections`
+  - Response 200: `[ { "name": "my_collection", "metadata": {...} }, ... ]`
+
+- Delete collection
+  - DELETE `/api/v1/embeddings/collections/{collection_name}`
+  - Response 204 (no body)
+
+- Collection stats
+  - GET `/api/v1/embeddings/collections/{collection_name}/stats`
+  - Response 200: `{ "name": "my_collection", "count": 123, "embedding_dimension": 1536, "metadata": {...} }`
+
+### 9. Circuit Breakers (admin)
+
+- Get circuit breaker status (all providers)
+  - GET `/api/v1/embeddings/circuit-breakers`
+  - Admin only; returns state, failure counts, and timestamps by provider
+
+- Reset a provider’s circuit breaker
+  - POST `/api/v1/embeddings/circuit-breakers/{provider}/reset`
+  - Admin only; returns a confirmation message
+
+### 10. Model Warmup/Download (admin)
+
+- Warmup a model (preload and validate)
+  - POST `/api/v1/embeddings/models/warmup`
+  - Body: `{ "model": "text-embedding-3-small", "provider": "openai" }`
+
+- Download/prepare a model
+  - POST `/api/v1/embeddings/models/download`
+  - Body: `{ "model": "sentence-transformers/all-MiniLM-L6-v2", "provider": "huggingface" }`
+
 ## Advanced Features
 
-### Dimension Reduction
+### Dimension Adjustment
 
 For `text-embedding-3-*` models, you can specify a lower dimension count to reduce the embedding size:
 
@@ -215,7 +296,7 @@ For `text-embedding-3-*` models, you can specify a lower dimension count to redu
 }
 ```
 
-**How it works**: The API uses truncation (following OpenAI's approach) which preserves the most important dimensions. This is based on Matryoshka Representation Learning where earlier dimensions capture more important information.
+**How it works**: The API applies the configured policy: `reduce` slices the first‑N dimensions; `pad` zero‑pads up to `dimensions`; `ignore` leaves vectors unchanged. Set policy with `EMBEDDINGS_DIMENSION_POLICY` env var. The response includes `X-Embeddings-Dimensions-Policy`.
 
 **Benefits**:
 - Reduced storage requirements
@@ -226,8 +307,8 @@ For `text-embedding-3-*` models, you can specify a lower dimension count to redu
 ### Batch Processing
 
 The API automatically processes large input lists in optimized batches:
-- Batch size: 100 items per batch
-- Parallel processing using ThreadPoolExecutor
+- Batch size: 100 items per batch (sequential across batches)
+- Provider backends may parallelize internally
 - Automatic chunking for inputs > 100 items
 
 ### Caching
@@ -294,11 +375,28 @@ response = requests.post(
         "model": "text-embedding-3-small",
         "dimensions": 512
     },
-    headers={"Authorization": "Bearer YOUR_API_KEY"}
+    headers={"Authorization": "Bearer YOUR_JWT_OR_API_KEY", "X-API-KEY": "YOUR_API_KEY_IF_SINGLE_USER"}
 )
 
 embeddings = response.json()["data"]
 ```
+
+## Errors
+
+### Input Too Long
+If an input exceeds the model’s maximum tokens, the API returns a top‑level error object:
+
+```json
+{
+  "error": "input_too_long",
+  "message": "One or more inputs exceed max tokens 8192 for model text-embedding-3-small",
+  "details": [
+    { "index": 0, "tokens": 9000 }
+  ]
+}
+```
+
+Other errors follow standard HTTP error shapes (e.g., `{ "detail": "..." }` for validation errors).
 
 ## Error Handling
 
@@ -311,11 +409,13 @@ The API returns standard HTTP status codes:
 - `429 Too Many Requests`: Rate limit exceeded
 - `500 Internal Server Error`: Server error during processing
 
-Error responses include detailed messages:
+Error responses include detailed messages. For some validation cases, a top‑level JSON error object is returned:
 
 ```json
 {
-  "detail": "Dimensions parameter is only supported for text-embedding-3-* models, not text-embedding-ada-002"
+  "error": "input_too_long",
+  "message": "One or more inputs exceed max tokens 8192 for model text-embedding-3-small",
+  "details": [{"index": 0, "tokens": 12000}]
 }
 ```
 
@@ -355,10 +455,11 @@ embedding_api_url = https://api.openai.com/v1/embeddings  # For OpenAI
 
 ### From OpenAI API
 
-This API is fully compatible with OpenAI's embeddings API. Simply:
+This API is OpenAI‑compatible. In most cases you can:
 1. Change the base URL to your tldw_server instance
-2. All existing code should work without modification
-3. Additional features (token arrays, caching) are available when needed
+2. Keep your existing payloads (string inputs, `dimensions`, `encoding_format`)
+3. Optional: use `x-provider` header or `provider:model` prefix (e.g., `huggingface:sentence-transformers/all-MiniLM-L6-v2`)
+4. Optional: use token arrays (`List[int]` or `List[List[int]]`) when pre‑tokenizing improves performance
 
 ## Best Practices
 
@@ -381,7 +482,8 @@ from typing import List, Union
 class EmbeddingsClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+        # For single-user mode, use X-API-KEY. For multi-user, use Bearer JWT.
+        self.headers = {"Authorization": f"Bearer {api_key}", "X-API-KEY": api_key}
     
     def create_embeddings(
         self, 
@@ -415,7 +517,7 @@ client = EmbeddingsClient("http://localhost:8000", "your-api-key")
 # Text input
 embeddings = client.create_embeddings("Hello, world!")
 
-# Token-array inputs are not supported by the current endpoint (strings only)
+# Token‑array inputs are supported; pass `List[int]` or `List[List[int]]` to `input` when pre‑tokenizing helps.
 
 # Batch with dimension reduction
 embeddings = client.create_embeddings(
@@ -430,13 +532,33 @@ embeddings = client.create_embeddings(
 # Single text input
 curl -X POST http://localhost:8000/api/v1/embeddings \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_JWT_OR_API_KEY" \
+  -H "X-API-KEY: YOUR_API_KEY_IF_SINGLE_USER" \
   -d '{
     "input": "Hello, world!",
     "model": "text-embedding-3-small"
   }'
 
-# Token-array input examples are intentionally omitted (not supported)
+# Token‑array input (single)
+curl -X POST http://localhost:8000/api/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_OR_API_KEY" \
+  -H "X-API-KEY: YOUR_API_KEY_IF_SINGLE_USER" \
+  -d '{
+    "input": [15339, 11, 1917, 0],
+    "model": "text-embedding-3-small"
+  }'
+
+# Token‑array input (batch)
+curl -X POST http://localhost:8000/api/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_OR_API_KEY" \
+  -H "X-API-KEY: YOUR_API_KEY_IF_SINGLE_USER" \
+  -d '{
+    "input": [[15339,11,1917,0],[1115,374,264,1296],[315,279,40188,5446]],
+    "model": "text-embedding-3-small",
+    "dimensions": 512
+  }'
 ```
 
 ## Troubleshooting
@@ -451,10 +573,9 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ### Debug Tips
 
-- Use `/api/v1/embeddings/test` endpoint to verify functionality
-- Check `/api/v1/embeddings/health` for service status
-- Monitor `/api/v1/embeddings/cache/stats` for cache performance
-- Enable debug logging for detailed request/response info
+- Check `/api/v1/embeddings/health` for service status (includes cache stats and circuit breaker states)
+- Use `/api/v1/embeddings/metrics` (admin) for detailed counters and gauges
+- Response headers may include `X-Embeddings-Provider`, `X-Embeddings-Fallback-From`, and `X-Embeddings-Dimensions-Policy`
 
 ## Related Documentation
 
@@ -464,6 +585,17 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ## Version History
 
-- **v3.0**: Added token array input support, enhanced documentation
-- **v2.0**: Added dimension reduction, batch processing, caching
-- **v1.0**: Initial OpenAI-compatible implementation
+- **v0.1**: OpenAI‑compatible endpoint, token arrays support, batch endpoint, caching, health/metrics, circuit breaker, provider fallback
+### Provider Selection
+
+Choose a provider in one of two ways:
+- Header: set `x-provider: openai | huggingface | onnx | local_api` (common options; additional providers may be available if configured)
+- Model prefix: use `provider:model` form (e.g., `huggingface:sentence-transformers/all-MiniLM-L6-v2`)
+
+If neither is supplied, the server auto‑detects from the model name (common HF patterns) or defaults to OpenAI.
+
+Notes:
+- Header `x-provider` applies to the standard create endpoint (`POST /embeddings`). The batch endpoint accepts `provider` in the request body.
+
+---
+Last Updated: October 2025

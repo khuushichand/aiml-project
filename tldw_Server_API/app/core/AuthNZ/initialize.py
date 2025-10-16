@@ -149,15 +149,11 @@ async def setup_database():
             print("✅ Database is up to date")
     else:
         # Basic Postgres bootstrap: ensure required tables exist
-        print("⚙️  Non-SQLite database detected – attempting basic schema bootstrap (users, sessions, api_keys)...")
+        print("⚙️  Non-SQLite database detected – attempting basic schema bootstrap (users, sessions, api_keys, RBAC)...")
         try:
             # Ensure connection pool and users table
             users_db = await get_users_db()
             await users_db.initialize()
-
-            # Ensure API key tables
-            api_mgr = APIKeyManager()
-            await api_mgr.initialize()
 
             # Ensure sessions and registration_codes tables (if missing)
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -173,21 +169,30 @@ async def setup_database():
                             encrypted_token TEXT,
                             encrypted_refresh TEXT,
                             expires_at TIMESTAMP NOT NULL,
+                            refresh_expires_at TIMESTAMP,
                             ip_address VARCHAR(45),
                             user_agent TEXT,
                             device_id TEXT,
                             is_active BOOLEAN DEFAULT TRUE,
+                            is_revoked BOOLEAN DEFAULT FALSE,
                             revoked_at TIMESTAMP,
                             revoked_by INTEGER,
                             revoke_reason TEXT,
+                            access_jti VARCHAR(128),
+                            refresh_jti VARCHAR(128),
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMP")
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS access_jti VARCHAR(128)")
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_jti VARCHAR(128)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)")
 
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS registration_codes (
@@ -202,13 +207,436 @@ async def setup_database():
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
                     """)
-            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes)")
+                    # RBAC core tables
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS roles (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(64) UNIQUE NOT NULL,
+                            description TEXT,
+                            is_system BOOLEAN DEFAULT FALSE
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS permissions (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(128) UNIQUE NOT NULL,
+                            description TEXT,
+                            category VARCHAR(64)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS role_permissions (
+                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                            PRIMARY KEY (role_id, permission_id)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS user_roles (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                            granted_by INTEGER,
+                            expires_at TIMESTAMP,
+                            PRIMARY KEY (user_id, role_id)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS user_permissions (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                            granted BOOLEAN NOT NULL DEFAULT TRUE,
+                            expires_at TIMESTAMP,
+                            PRIMARY KEY (user_id, permission_id)
+                        )
+                    """)
+                    # RBAC rate limits + usage
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS rbac_role_rate_limits (
+                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                            resource VARCHAR(128) NOT NULL,
+                            limit_per_min INTEGER,
+                            burst INTEGER,
+                            PRIMARY KEY (role_id, resource)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS rbac_user_rate_limits (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            resource VARCHAR(128) NOT NULL,
+                            limit_per_min INTEGER,
+                            burst INTEGER,
+                            PRIMARY KEY (user_id, resource)
+                        )
+                    """)
+                    # (moved) Usage tables will be created after api_keys schema exists
+
+                    # Organizations and Teams hierarchy
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS organizations (
+                            id SERIAL PRIMARY KEY,
+                            uuid VARCHAR(64) UNIQUE,
+                            name VARCHAR(255) UNIQUE NOT NULL,
+                            slug VARCHAR(255) UNIQUE,
+                            owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            metadata JSONB,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS org_members (
+                            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            role VARCHAR(32) DEFAULT 'member',
+                            status VARCHAR(32) DEFAULT 'active',
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (org_id, user_id)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS teams (
+                            id SERIAL PRIMARY KEY,
+                            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                            name VARCHAR(255) NOT NULL,
+                            slug VARCHAR(255),
+                            description TEXT,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            metadata JSONB,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE (org_id, name)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS team_members (
+                            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            role VARCHAR(32) DEFAULT 'member',
+                            status VARCHAR(32) DEFAULT 'active',
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (team_id, user_id)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
+
+                    # Seed baseline RBAC roles and permissions
+                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('admin','Administrator', TRUE) ON CONFLICT (name) DO NOTHING")
+                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('user','Standard User', TRUE) ON CONFLICT (name) DO NOTHING")
+                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('viewer','Read-only User', TRUE) ON CONFLICT (name) DO NOTHING")
+
+                    perm_defs = [
+                        ('media.read','Read media','media'),
+                        ('media.create','Create media','media'),
+                        ('media.delete','Delete media','media'),
+                        ('system.configure','Configure system','system'),
+                        ('users.manage_roles','Manage user roles','users'),
+                    ]
+                    for _name, _desc, _cat in perm_defs:
+                        await conn.execute(
+                            "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
+                            _name, _desc, _cat
+                        )
+                    role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
+                    perm_rows = await conn.fetch("SELECT id,name FROM permissions")
+                    role_id = {r['name']: r['id'] for r in role_rows}
+                    perm_id = {p['name']: p['id'] for p in perm_rows}
+                    # user role defaults
+                    for pname in ('media.read','media.create'):
+                        if pname in perm_id and 'user' in role_id:
+                            await conn.execute(
+                                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                                role_id['user'], perm_id[pname]
+                            )
+                    # viewer role default
+                    if 'viewer' in role_id and 'media.read' in perm_id:
+                        await conn.execute(
+                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                            role_id['viewer'], perm_id['media.read']
+                        )
+                    # admin: grant all
+                    if 'admin' in role_id:
+                        for pname in ('media.read','media.create','media.delete','system.configure','users.manage_roles'):
+                            if pname in perm_id:
+                                await conn.execute(
+                                    "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                                    role_id['admin'], perm_id[pname]
+                                )
+
+                    # (moved) api_keys column extensions will be applied after api_keys exists
+            # Ensure API key tables after org/team tables exist
+            api_mgr = APIKeyManager()
+            await api_mgr.initialize()
+
+            # Now create usage tables that reference api_keys
+            pool = await get_db_pool()
+            async with pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    # Extend api_keys with Virtual Key fields (apply after base api_keys created)
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
+                    # Store allowlists as TEXT (JSON string) for compatibility across asyncpg versions
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS usage_log (
+                            id SERIAL PRIMARY KEY,
+                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                            endpoint TEXT,
+                            status INTEGER,
+                            latency_ms INTEGER,
+                            bytes BIGINT,
+                            bytes_in BIGINT,
+                            meta JSONB,
+                            request_id TEXT
+                        )
+                    """)
+                    # Extend existing table (if created before) with request_id column
+                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS request_id TEXT")
+                    # Extend existing table with bytes_in if missing
+                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS bytes_in BIGINT")
+                    # Helpful indexes
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_endpoint ON usage_log(endpoint)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS usage_daily (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            day DATE NOT NULL,
+                            requests INTEGER DEFAULT 0,
+                            errors INTEGER DEFAULT 0,
+                            bytes_total BIGINT DEFAULT 0,
+                            bytes_in_total BIGINT DEFAULT 0,
+                            latency_avg_ms DOUBLE PRECISION,
+                            PRIMARY KEY (user_id, day)
+                        )
+                    """)
+                    # Indexes for reporting
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
+                    # Extend existing table with bytes_in_total
+                    await conn.execute("ALTER TABLE usage_daily ADD COLUMN IF NOT EXISTS bytes_in_total BIGINT")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS llm_usage_log (
+                            id SERIAL PRIMARY KEY,
+                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                            endpoint TEXT,
+                            operation TEXT,
+                            provider TEXT,
+                            model TEXT,
+                            status INTEGER,
+                            latency_ms INTEGER,
+                            prompt_tokens INTEGER,
+                            completion_tokens INTEGER,
+                            total_tokens INTEGER,
+                            prompt_cost_usd DOUBLE PRECISION,
+                            completion_cost_usd DOUBLE PRECISION,
+                            total_cost_usd DOUBLE PRECISION,
+                            currency TEXT DEFAULT 'USD',
+                            estimated BOOLEAN DEFAULT FALSE,
+                            request_id TEXT
+                        )
+                    """)
+                    # Helpful indexes
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+                            day DATE NOT NULL,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            operation TEXT NOT NULL,
+                            provider TEXT NOT NULL,
+                            model TEXT NOT NULL,
+                            requests INTEGER DEFAULT 0,
+                            errors INTEGER DEFAULT 0,
+                            input_tokens BIGINT DEFAULT 0,
+                            output_tokens BIGINT DEFAULT 0,
+                            total_tokens BIGINT DEFAULT 0,
+                            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
+                            latency_avg_ms DOUBLE PRECISION,
+                            PRIMARY KEY (day, user_id, operation, provider, model)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)")
+
+            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
         except Exception as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")
             logger.exception("Postgres schema bootstrap error")
             return False
     
     return True
+
+
+async def ensure_single_user_rbac_seed_if_needed() -> None:
+    """Ensure baseline RBAC seed exists in single-user mode for any backend.
+
+    Idempotent: inserts roles/permissions only if missing. Intended to backstop
+    environments where migrations or bootstrap did not seed RBAC yet.
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "single_user":
+        return
+    try:
+        # Acquire a connection via pool/transaction abstraction
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+        pool = await get_db_pool()
+        async with pool.transaction() as conn:
+            # Postgres path
+            if hasattr(conn, "execute"):
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS roles (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(64) UNIQUE NOT NULL,
+                        description TEXT,
+                        is_system BOOLEAN DEFAULT FALSE
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS permissions (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(128) UNIQUE NOT NULL,
+                        description TEXT,
+                        category VARCHAR(64)
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                        permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                        PRIMARY KEY (role_id, permission_id)
+                    )
+                """)
+                # Minimal seed for tests and baseline UI flows
+                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('admin','Administrator', TRUE) ON CONFLICT (name) DO NOTHING")
+                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('user','Standard User', TRUE) ON CONFLICT (name) DO NOTHING")
+                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('viewer','Read-only User', TRUE) ON CONFLICT (name) DO NOTHING")
+
+                for _name, _desc, _cat in (
+                    ('media.read','Read media','media'),
+                    ('media.create','Create media','media'),
+                    ('users.manage_roles','Manage user roles','users'),
+                ):
+                    await conn.execute(
+                        "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
+                        _name, _desc, _cat,
+                    )
+                role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
+                perm_rows = await conn.fetch("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles')")
+                role_id = {r['name']: r['id'] for r in role_rows}
+                perm_id = {p['name']: p['id'] for p in perm_rows}
+                # Grant user baseline perms
+                for pname in ('media.read','media.create'):
+                    if pname in perm_id and 'user' in role_id:
+                        await conn.execute(
+                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                            role_id['user'], perm_id[pname]
+                        )
+                # Viewer read-only
+                if 'viewer' in role_id and 'media.read' in perm_id:
+                    await conn.execute(
+                        "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                        role_id['viewer'], perm_id['media.read']
+                    )
+                # Admin elevated
+                if 'admin' in role_id:
+                    for pname in ('media.read','media.create','users.manage_roles'):
+                        if pname in perm_id:
+                            await conn.execute(
+                                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                                role_id['admin'], perm_id[pname]
+                            )
+                return
+
+        # SQLite path (pool adapters expose .execute returning cursor-like)
+        async with pool.transaction() as conn:  # type: ignore[attr-defined]
+            # Some adapters may not expose .execute; fallback to connection from pool
+            try:
+                cur = await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS roles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        is_system INTEGER DEFAULT 0
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS permissions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        category TEXT
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role_id INTEGER NOT NULL,
+                        permission_id INTEGER NOT NULL,
+                        PRIMARY KEY (role_id, permission_id)
+                    )
+                """)
+            except Exception:
+                pass
+
+            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('admin','Administrator',1)")
+            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('user','Standard User',1)")
+            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('viewer','Read-only User',1)")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.read','Read media','media')")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.create','Create media','media')")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('users.manage_roles','Manage user roles','users')")
+
+            # Map role names → ids
+            cur = await conn.execute("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
+            rows = await cur.fetchall()
+            role_id = {r[1]: r[0] for r in rows}
+            cur = await conn.execute("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles')")
+            rows = await cur.fetchall()
+            perm_id = {r[1]: r[0] for r in rows}
+
+            # Baselines
+            for pname in ('media.read','media.create'):
+                if pname in perm_id and 'user' in role_id:
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                        (role_id['user'], perm_id[pname])
+                    )
+            if 'viewer' in role_id and 'media.read' in perm_id:
+                await conn.execute(
+                    "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                    (role_id['viewer'], perm_id['media.read'])
+                )
+            if 'admin' in role_id:
+                for pname in ('media.read','media.create','users.manage_roles'):
+                    if pname in perm_id:
+                        await conn.execute(
+                            "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                            (role_id['admin'], perm_id[pname])
+                        )
+            # Commit if adapter requires it
+            try:
+                await conn.commit()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Single-user RBAC seed ensure skipped or failed: {e}")
 
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""

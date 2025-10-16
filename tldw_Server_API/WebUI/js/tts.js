@@ -10,7 +10,11 @@ const TTS = {
     isGenerating: false,
     abortController: null,
     history: [],
-    customVoices: {},
+    customVoices: [],
+    catalogVoices: [],
+    // When custom voice management is not available (501),
+    // fallback to showing provider catalog voices
+    _catalogFallback: false,
     
     // Get API token from api-client or localStorage
     getApiToken() {
@@ -59,19 +63,119 @@ const TTS = {
             supportsCloning: true,
             maxLength: 5000,
             requiresKey: true
+        },
+        neutts: {
+            name: 'NeuTTS',
+            supportsCloning: true,
+            maxLength: 1000
         }
     },
-    
+
     // Initialize the TTS module
     init() {
+        // Per-provider recording soft-cap (seconds)
+        // Persisted via localStorage using key: tts_rec_max_seconds_<provider>
+        this._recMaxByProvider = {};
         console.log('Initializing TTS module...');
         this.loadHistory();
         this.checkProviderStatus();
         this.refreshVoiceList();
         this.setupEventListeners();
-        
+
+        // Initialize per-provider recorder states
+        this._recorders = {}; // { provider: { mediaRecorder, chunks, isRecording, blob, url } }
+
+        // Initialize per-provider recording settings UI and persistence
+        this._initRecSettingsUI();
+
         // Set initial provider
         this.switchProvider('vibevoice');
+
+        // Cleanup recording object URLs on tab unload
+        try {
+            window.addEventListener('beforeunload', () => {
+                try {
+                    if (this._neuttsRecorder && this._neuttsRecorder.url) URL.revokeObjectURL(this._neuttsRecorder.url);
+                } catch (_) {}
+                try {
+                    Object.values(this._recorders || {}).forEach(r => { if (r && r.url) URL.revokeObjectURL(r.url); });
+                } catch (_) {}
+            });
+        } catch (_) {}
+    },
+
+    // Internal: initialize per-provider recording settings controls
+    _initRecSettingsUI() {
+        const providersWithMic = ['vibevoice', 'higgs', 'chatterbox', 'neutts'];
+
+        // Back-compat: if old global key exists, use as default
+        let legacyDefault = 15;
+        try {
+            const legacy = parseInt(localStorage.getItem('tts_rec_max_seconds') || '', 10);
+            if (!isNaN(legacy)) legacyDefault = Math.max(3, Math.min(60, legacy));
+        } catch(_) {}
+
+        providersWithMic.forEach((p) => {
+            // Load from per-provider key with fallback to legacy default
+            let v = legacyDefault;
+            try {
+                const k = `tts_rec_max_seconds_${p}`;
+                const persisted = parseInt(localStorage.getItem(k) || '', 10);
+                if (!isNaN(persisted)) v = Math.max(3, Math.min(60, persisted));
+            } catch(_) {}
+            this._recMaxByProvider[p] = v;
+
+            // Wire input if present
+            const input = document.getElementById(`${p}-rec-max`);
+            if (input) {
+                input.value = String(v);
+                input.addEventListener('change', () => {
+                    try {
+                        const nv = Math.max(3, Math.min(60, parseInt(input.value || '15', 10)));
+                        this.setRecMaxSec(p, nv);
+                    } catch(_) {}
+                });
+            }
+
+            // Restore collapsible state
+            try {
+                const openKey = `rec_settings_open_${p}`;
+                const open = localStorage.getItem(openKey);
+                const body = document.getElementById(`rec-settings-${p}`);
+                const caret = document.getElementById(`rec-settings-caret-${p}`);
+                if (body) {
+                    const shouldOpen = open === '1';
+                    body.style.display = shouldOpen ? 'block' : 'none';
+                    if (caret) caret.textContent = shouldOpen ? '▾' : '▸';
+                }
+            } catch(_) {}
+        });
+    },
+
+    // Helpers for per-provider rec soft-cap
+    _getRecMaxSec(provider) {
+        const v = this._recMaxByProvider?.[provider];
+        if (typeof v === 'number' && !isNaN(v)) return v;
+        return 15;
+    },
+    setRecMaxSec(provider, seconds) {
+        const v = Math.max(3, Math.min(60, parseInt(String(seconds||'15'), 10)));
+        if (!this._recMaxByProvider) this._recMaxByProvider = {};
+        this._recMaxByProvider[provider] = v;
+        try { localStorage.setItem(`tts_rec_max_seconds_${provider}`, String(v)); } catch(_) {}
+        const input = document.getElementById(`${provider}-rec-max`);
+        if (input && String(parseInt(input.value||'0',10)) !== String(v)) input.value = String(v);
+    },
+
+    // Toggle the small collapsible for Recording Settings
+    toggleRecSettings(provider) {
+        const body = document.getElementById(`rec-settings-${provider}`);
+        const caret = document.getElementById(`rec-settings-caret-${provider}`);
+        if (!body) return;
+        const show = body.style.display === 'none' || body.style.display === '';
+        body.style.display = show ? 'block' : 'none';
+        if (caret) caret.textContent = show ? '▾' : '▸';
+        try { localStorage.setItem(`rec_settings_open_${provider}`, show ? '1' : '0'); } catch(_) {}
     },
     
     // Set up event listeners
@@ -233,8 +337,13 @@ const TTS = {
         this.showStatus('Generating speech...', 'info');
         
         try {
-            // Build request based on provider
-            const request = this.buildRequest();
+        // Build request based on provider
+        let request;
+        if (this.currentProvider === 'neutts') {
+            request = await this.buildNeuTTSRequest();
+        } else {
+            request = this.buildRequest();
+        }
             
             // Make API call
             const apiToken = this.getApiToken();
@@ -330,6 +439,15 @@ const TTS = {
                 request.extra_params.background_music = document.getElementById('vibevoice-music').checked;
                 request.extra_params.enable_singing = document.getElementById('vibevoice-singing').checked;
                 request.extra_params.speaker_count = parseInt(document.getElementById('vibevoice-speakers').value);
+                // Optional one-shot voice reference (recorded or file)
+                try {
+                    const rec = this._recorders['vibevoice'];
+                    const refBlob = (rec && rec.blob) ? rec.blob : (document.getElementById('vibevoice-ref-audio')?.files?.[0] || null);
+                    if (refBlob) {
+                        const wav = await this._ensureWav(refBlob);
+                        request.voice_reference = await this._blobToBase64(wav);
+                    }
+                } catch (_) {}
                 break;
                 
             case 'kokoro':
@@ -343,6 +461,15 @@ const TTS = {
                 request.model = 'higgs';
                 request.voice = document.getElementById('higgs-voice').value;
                 request.lang_code = document.getElementById('higgs-language').value;
+                // Optional one-shot voice reference (recorded or file)
+                try {
+                    const rec = this._recorders['higgs'];
+                    const refBlob = (rec && rec.blob) ? rec.blob : (document.getElementById('higgs-voice-upload')?.files?.[0] || null);
+                    if (refBlob) {
+                        const wav = await this._ensureWav(refBlob);
+                        request.voice_reference = await this._blobToBase64(wav);
+                    }
+                } catch (_) {}
                 break;
                 
             case 'chatterbox':
@@ -352,6 +479,15 @@ const TTS = {
                     emotion: document.getElementById('chatterbox-emotion').value,
                     emotion_intensity: parseInt(document.getElementById('chatterbox-intensity').value)
                 };
+                // Optional one-shot voice reference (recorded or file)
+                try {
+                    const rec = this._recorders['chatterbox'];
+                    const refBlob = (rec && rec.blob) ? rec.blob : (document.getElementById('chatterbox-voice-upload')?.files?.[0] || null);
+                    if (refBlob) {
+                        const wav = await this._ensureWav(refBlob);
+                        request.voice_reference = await this._blobToBase64(wav);
+                    }
+                } catch (_) {}
                 break;
                 
             case 'openai':
@@ -368,9 +504,366 @@ const TTS = {
                     clarity: parseInt(document.getElementById('elevenlabs-clarity').value) / 100
                 };
                 break;
+            case 'neutts':
+                // handled in buildNeuTTSRequest (async)
+                break;
         }
         
         return request;
+    },
+
+    async buildNeuTTSRequest() {
+        const text = document.getElementById('tts-text-input').value;
+        const format = document.getElementById('tts-format').value;
+        const streaming = document.getElementById('tts-streaming').checked;
+        const model = document.getElementById('neutts-model').value;
+        const refFileInput = document.getElementById('neutts-ref-audio');
+        const refText = (document.getElementById('neutts-ref-text').value || '').trim();
+        
+        // Prefer recorded blob if available; otherwise use file input
+        const recNeutts = this._recorders['neutts'];
+        let refBlob = (recNeutts && recNeutts.blob) ? recNeutts.blob : null;
+        if (!refBlob) {
+            if (!refFileInput || !refFileInput.files || !refFileInput.files[0]) {
+                throw new Error('Please record or select a reference audio file for NeuTTS');
+            }
+            refBlob = refFileInput.files[0];
+        }
+        if (!refText) {
+            throw new Error('Please enter reference text for NeuTTS');
+        }
+        // Convert to WAV for maximum compatibility
+        const wavBlob = await this._ensureWav(refBlob);
+        const b64 = await this._blobToBase64(wavBlob);
+        
+        return {
+            input: text,
+            response_format: format,
+            stream: streaming,
+            model: model,
+            voice: 'default',
+            voice_reference: b64,
+            extra_params: { reference_text: refText }
+        };
+    },
+
+    // Generic per-provider recording controls
+    async startProviderRecording(provider) {
+        try {
+            const rec = this._recorders[provider] || (this._recorders[provider] = { mediaRecorder: null, chunks: [], isRecording: false, blob: null, url: null });
+            if (rec.isRecording) return;
+            if (!window.MediaRecorder) {
+                if (statusEl) statusEl.textContent = 'Recording not supported by this browser';
+                return;
+            }
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Choose a supported mimeType for best compatibility
+            let mr;
+            try {
+                let opts;
+                if (MediaRecorder.isTypeSupported) {
+                    const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                    for (const mt of cands) {
+                        if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                    }
+                }
+                mr = new MediaRecorder(stream, opts);
+            } catch (_) {
+                // Fallback: try without options
+                mr = new MediaRecorder(stream);
+            }
+            rec.mediaRecorder = mr;
+            rec.chunks = [];
+            rec.isRecording = true;
+            rec.blob = null;
+
+            const statusEl = document.getElementById(`${provider}-rec-status`);
+            const startBtn = document.getElementById(`${provider}-rec-start`);
+            const stopBtn = document.getElementById(`${provider}-rec-stop`);
+            if (statusEl) statusEl.textContent = 'Recording...';
+            if (startBtn) startBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = false;
+            const clearBtn0 = document.getElementById(`${provider}-rec-clear`);
+            if (clearBtn0) clearBtn0.disabled = true;
+
+            mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) rec.chunks.push(e.data); };
+            mr.onstop = async () => {
+                try { if (rec._timer) { clearInterval(rec._timer); rec._timer = null; } } catch(_) {}
+                const blob = new Blob(rec.chunks, { type: 'audio/webm' });
+                rec.blob = blob;
+                const url = URL.createObjectURL(blob);
+                rec.url = url;
+                const audioEl = document.getElementById(`${provider}-rec-playback`);
+                if (audioEl) { audioEl.src = url; audioEl.style.display = 'block'; }
+                if (statusEl) statusEl.textContent = 'Recorded';
+                if (startBtn) startBtn.disabled = false;
+                if (stopBtn) stopBtn.disabled = true;
+                try { stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+                rec.isRecording = false;
+                const badge = document.getElementById(`${provider}-recording-badge`);
+                if (badge) badge.style.display = 'inline-block';
+                const clearBtn = document.getElementById(`${provider}-rec-clear`);
+                if (clearBtn) clearBtn.disabled = false;
+                // Disable corresponding file input (if present)
+                const map = { vibevoice: 'vibevoice-ref-audio', higgs: 'higgs-voice-upload', chatterbox: 'chatterbox-voice-upload' };
+                const inputId = map[provider];
+                if (inputId) {
+                    const fi = document.getElementById(inputId);
+                    if (fi) fi.disabled = true;
+                }
+                // Informational toast and long-clip hint
+                try { TTS.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
+                try { if (blob && blob.size > 5 * 1024 * 1024) TTS.showStatus('Long recording detected (>5MB). Aim for 3–15 seconds for best performance.', 'warning'); } catch(_) {}
+            };
+            // Soft cap with countdown (per-provider)
+            try {
+                const MAX_SEC = Math.max(3, Math.min(60, parseInt((this._getRecMaxSec(provider)||15), 10)));
+                const startTs = Date.now();
+                rec._timer = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                    const left = Math.max(0, MAX_SEC - elapsed);
+                    if (statusEl) statusEl.textContent = `Recording... ${left}s left`;
+                    if (elapsed >= MAX_SEC) {
+                        try { mr.stop(); } catch(_) {}
+                    }
+                }, 250);
+            } catch(_) {}
+            mr.start();
+        } catch (e) {
+            console.error('Failed to start recording', e);
+            const statusEl = document.getElementById(`${provider}-rec-status`);
+            if (statusEl) statusEl.textContent = 'Recording failed';
+        }
+    },
+
+    stopProviderRecording(provider) {
+        try {
+            const rec = this._recorders[provider];
+            if (rec && rec.isRecording && rec.mediaRecorder) rec.mediaRecorder.stop();
+        } catch (e) {
+            console.error('Failed to stop recording', e);
+        }
+    },
+
+    clearProviderRecording(provider) {
+        const rec = this._recorders[provider];
+        if (rec) {
+            try { if (rec.url) URL.revokeObjectURL(rec.url); } catch (_) {}
+            rec.mediaRecorder = null;
+            rec.chunks = [];
+            rec.blob = null;
+            rec.url = null;
+        }
+        const audioEl = document.getElementById(`${provider}-rec-playback`);
+        if (audioEl) { try { audioEl.pause(); } catch(_){} audioEl.removeAttribute('src'); audioEl.style.display = 'none'; }
+        const badge = document.getElementById(`${provider}-recording-badge`);
+        if (badge) badge.style.display = 'none';
+        const statusEl = document.getElementById(`${provider}-rec-status`);
+        if (statusEl) statusEl.textContent = 'Idle (recording overrides file)';
+        const clearBtn = document.getElementById(`${provider}-rec-clear`);
+        if (clearBtn) clearBtn.disabled = true;
+        const startBtn = document.getElementById(`${provider}-rec-start`);
+        if (startBtn) startBtn.disabled = false;
+        const stopBtn = document.getElementById(`${provider}-rec-stop`);
+        if (stopBtn) stopBtn.disabled = true;
+        const map = { vibevoice: 'vibevoice-ref-audio', higgs: 'higgs-voice-upload', chatterbox: 'chatterbox-voice-upload' };
+        const inputId = map[provider];
+        if (inputId) {
+            const fi = document.getElementById(inputId);
+            if (fi) fi.disabled = false;
+        }
+    },
+
+    async startNeuTTSRecording() {
+        try {
+            if (this._neuttsRecorder.isRecording) return;
+            if (!window.MediaRecorder) {
+                const statusEl = document.getElementById('neutts-rec-status');
+                if (statusEl) statusEl.textContent = 'Recording not supported by this browser';
+                return;
+            }
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Choose a supported mimeType for best compatibility
+            let mr;
+            try {
+                let opts;
+                if (MediaRecorder.isTypeSupported) {
+                    const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                    for (const mt of cands) {
+                        if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                    }
+                }
+                mr = new MediaRecorder(stream, opts);
+            } catch (_) {
+                // Fallback: try without options
+                mr = new MediaRecorder(stream);
+            }
+            this._neuttsRecorder.mediaRecorder = mr;
+            this._neuttsRecorder.chunks = [];
+            this._neuttsRecorder.isRecording = true;
+            this._neuttsRecorder.blob = null;
+
+            const statusEl = document.getElementById('neutts-rec-status');
+            const startBtn = document.getElementById('neutts-rec-start');
+            const stopBtn = document.getElementById('neutts-rec-stop');
+            if (statusEl) statusEl.textContent = 'Recording...';
+            if (startBtn) startBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = false;
+
+            mr.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    this._neuttsRecorder.chunks.push(e.data);
+                }
+            };
+            mr.onstop = async () => {
+                try { if (this._neuttsRecorder._timer) { clearInterval(this._neuttsRecorder._timer); this._neuttsRecorder._timer = null; } } catch(_) {}
+                const blob = new Blob(this._neuttsRecorder.chunks, { type: 'audio/webm' });
+                this._neuttsRecorder.blob = blob;
+                const url = URL.createObjectURL(blob);
+                this._neuttsRecorder.url = url;
+                const audioEl = document.getElementById('neutts-rec-playback');
+                if (audioEl) {
+                    audioEl.src = url;
+                    audioEl.style.display = 'block';
+                }
+                if (statusEl) statusEl.textContent = 'Recorded';
+                if (startBtn) startBtn.disabled = false;
+                if (stopBtn) stopBtn.disabled = true;
+                // Stop tracks
+                stream.getTracks().forEach(t => t.stop());
+                this._neuttsRecorder.isRecording = false;
+                // Show recorded badge
+                const badge = document.getElementById('neutts-recording-badge');
+                if (badge) badge.style.display = 'inline-block';
+                // Enable clear, disable file input
+                const clearBtn = document.getElementById('neutts-rec-clear');
+                if (clearBtn) clearBtn.disabled = false;
+                const fileInput = document.getElementById('neutts-ref-audio');
+                if (fileInput) fileInput.disabled = true;
+                // Brief informational toast
+                try { this.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
+                // Hint on overly long recordings (size heuristic)
+                try { if (blob && blob.size > 5 * 1024 * 1024) this.showStatus('Long recording detected (>5MB). Processing may be slow; aim for 3–15 seconds.', 'warning'); } catch(_) {}
+            };
+            // Soft cap with countdown (NeuTTS)
+            try {
+                const MAX_SEC = Math.max(3, Math.min(60, parseInt((this._getRecMaxSec('neutts')||15), 10)));
+                const startTs = Date.now();
+                this._neuttsRecorder._timer = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                    const left = Math.max(0, MAX_SEC - elapsed);
+                    if (statusEl) statusEl.textContent = `Recording... ${left}s left`;
+                    if (elapsed >= MAX_SEC) {
+                        try { mr.stop(); } catch(_) {}
+                    }
+                }, 250);
+            } catch(_) {}
+            mr.start();
+        } catch (e) {
+            console.error('Failed to start recording', e);
+            const statusEl = document.getElementById('neutts-rec-status');
+            if (statusEl) statusEl.textContent = 'Recording failed';
+        }
+    },
+
+    stopNeuTTSRecording() {
+        try {
+            if (this._neuttsRecorder && this._neuttsRecorder.isRecording && this._neuttsRecorder.mediaRecorder) {
+                this._neuttsRecorder.mediaRecorder.stop();
+            }
+        } catch (e) {
+            console.error('Failed to stop recording', e);
+        }
+    },
+
+    clearNeuTTSRecording() {
+        try { if (this._neuttsRecorder && this._neuttsRecorder.url) URL.revokeObjectURL(this._neuttsRecorder.url); } catch (_) {}
+        this._neuttsRecorder = { mediaRecorder: null, chunks: [], isRecording: false, blob: null, url: null };
+        const audioEl = document.getElementById('neutts-rec-playback');
+        if (audioEl) { try { audioEl.pause(); } catch(_){} audioEl.removeAttribute('src'); audioEl.style.display = 'none'; }
+        const badge = document.getElementById('neutts-recording-badge');
+        if (badge) badge.style.display = 'none';
+        const statusEl = document.getElementById('neutts-rec-status');
+        if (statusEl) statusEl.textContent = 'Idle (recording overrides file)';
+        const clearBtn = document.getElementById('neutts-rec-clear');
+        if (clearBtn) clearBtn.disabled = true;
+        const startBtn = document.getElementById('neutts-rec-start');
+        if (startBtn) startBtn.disabled = false;
+        const stopBtn = document.getElementById('neutts-rec-stop');
+        if (stopBtn) stopBtn.disabled = true;
+        const fileInput = document.getElementById('neutts-ref-audio');
+        if (fileInput) fileInput.disabled = false;
+    },
+
+    async _ensureWav(blob) {
+        // If already wav, return
+        if (blob && (blob.type === 'audio/wav' || blob.type === 'audio/x-wav')) return blob;
+        // Decode and re-encode to WAV using WebAudio
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const wavBuffer = this._encodeWav(audioBuffer);
+        return new Blob([wavBuffer], { type: 'audio/wav' });
+    },
+
+    _encodeWav(audioBuffer) {
+        const numChannels = 1; // mono
+        const sampleRate = audioBuffer.sampleRate;
+        // Mixdown to mono
+        const data = audioBuffer.numberOfChannels > 1 ? this._mixToMono(audioBuffer) : audioBuffer.getChannelData(0);
+        const pcm16 = this._floatTo16BitPCM(data);
+        const wavBuffer = new ArrayBuffer(44 + pcm16.length * 2);
+        const view = new DataView(wavBuffer);
+        // RIFF header
+        this._writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + pcm16.length * 2, true);
+        this._writeString(view, 8, 'WAVE');
+        this._writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true); // PCM chunk size
+        view.setUint16(20, 1, true);  // PCM
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * numChannels * 2, true);
+        view.setUint16(32, numChannels * 2, true);
+        view.setUint16(34, 16, true); // bits per sample
+        this._writeString(view, 36, 'data');
+        view.setUint32(40, pcm16.length * 2, true);
+        // Write PCM
+        let offset = 44;
+        for (let i = 0; i < pcm16.length; i++, offset += 2) {
+            view.setInt16(offset, pcm16[i], true);
+        }
+        return view;
+    },
+
+    _mixToMono(audioBuffer) {
+        const length = audioBuffer.length;
+        const tmp = new Float32Array(length);
+        const ch0 = audioBuffer.getChannelData(0);
+        const ch1 = audioBuffer.getChannelData(1);
+        for (let i = 0; i < length; i++) tmp[i] = 0.5 * (ch0[i] + ch1[i]);
+        return tmp;
+    },
+
+    _floatTo16BitPCM(input) {
+        const output = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++) {
+            let s = Math.max(-1, Math.min(1, input[i]));
+            output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return output;
+    },
+
+    async _blobToBase64(blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        let binary = '';
+        const bytes = new Uint8Array(arrayBuffer);
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, chunk);
+        }
+        return btoa(binary);
     },
     
     // Get selected voice name
@@ -390,6 +883,8 @@ const TTS = {
                 return document.getElementById('openai-voice').value;
             case 'elevenlabs':
                 return document.getElementById('elevenlabs-voice').value;
+            case 'neutts':
+                return 'cloned';
             default:
                 return 'default';
         }
@@ -600,7 +1095,7 @@ const TTS = {
         this.openVoiceUpload(provider);
     },
     
-    // Refresh voice list
+    // Refresh voice list (both custom and catalog)
     async refreshVoiceList() {
         try {
             const apiToken = this.getApiToken();
@@ -610,55 +1105,276 @@ const TTS = {
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
             }
-            
-            const response = await fetch('/api/v1/audio/voices', {
-                headers: headers
-            });
-            
-            if (response.status === 501) {
+            // Fetch custom voices (if available)
+            let customUnavailable = false;
+            try {
+                const response = await fetch('/api/v1/audio/voices', { headers });
+                if (response.status === 501) {
+                    customUnavailable = true;
+                    this.customVoices = [];
+                } else if (!response.ok) {
+                    throw new Error('Failed to fetch voices');
+                } else {
+                    const data = await response.json();
+                    this.customVoices = data.voices || [];
+                }
+            } catch (e) {
+                console.warn('Custom voice fetch failed:', e);
                 this.customVoices = [];
-                this.displayVoiceList();
-                this.showStatus('Custom voice management is not available for this provider or build.', 'warning');
-                return;
             }
-            if (!response.ok) {
-                throw new Error('Failed to fetch voices');
+
+            // Always fetch catalog voices for current provider
+            try {
+                this.catalogVoices = await this._fetchProviderCatalogVoices(this.currentProvider);
+            } catch (e) {
+                console.warn('Catalog voice fetch failed:', e);
+                this.catalogVoices = [];
             }
-            
-            const data = await response.json();
-            this.customVoices = data.voices || [];
+
+            // Catalog fallback flag only if custom unavailable and catalog present
+            this._catalogFallback = customUnavailable && this.catalogVoices.length > 0;
+
+            // Render
             this.displayVoiceList();
+            if (customUnavailable) {
+                this.showStatus('Custom voice management is not available in this build; showing provider catalog voices.', 'warning');
+            }
             
         } catch (error) {
             console.error('Error fetching voices:', error);
         }
+    },
+
+    // Helper: fetch provider catalog voices (returns an array)
+    async _fetchProviderCatalogVoices(provider) {
+        const apiToken = this.getApiToken();
+        const headers = {};
+        if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
+        const url = provider ? `/api/v1/audio/voices/catalog?provider=${encodeURIComponent(provider)}`
+                             : '/api/v1/audio/voices/catalog';
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error(`Failed to fetch voice catalog (${res.status})`);
+        const body = await res.json();
+        // If provider specified, server returns { provider: [voices] }
+        if (provider && body && typeof body === 'object') {
+            const key = provider.toLowerCase();
+            return Array.isArray(body[key]) ? body[key] : [];
+        }
+        // If no provider specified, flatten all providers into a single list with provider tag
+        const out = [];
+        for (const [prov, list] of Object.entries(body || {})) {
+            if (Array.isArray(list)) {
+                list.forEach(v => out.push({ ...v, provider: prov }));
+            }
+        }
+        return out;
     },
     
     // Display voice list
     displayVoiceList() {
         const voiceList = document.getElementById('voice-list');
         if (!voiceList) return;
-        
-        if (this.customVoices.length === 0) {
-            voiceList.innerHTML = '<p class="text-muted">No custom voices uploaded yet</p>';
-            return;
-        }
-        
-        voiceList.innerHTML = this.customVoices.map(voice => `
-            <div class="voice-item" data-voice-id="${voice.voice_id}">
-                <h5>${voice.name}</h5>
-                <p class="text-muted">${voice.provider}</p>
-                <small>${voice.description || 'No description'}</small>
-                <div class="voice-actions">
-                    <button class="btn btn-sm btn-secondary" onclick="TTS.previewVoice('${voice.voice_id}')">
-                        <i class="fas fa-play"></i> Preview
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="TTS.deleteVoice('${voice.voice_id}')">
-                        <i class="fas fa-trash"></i>
-                    </button>
+
+        const renderCustom = () => {
+            if (!this.customVoices.length) {
+                return '<p class="text-muted">No custom voices uploaded yet</p>';
+            }
+            return this.customVoices.map(v => {
+                const id = v.voice_id;
+                const name = v.name || id || 'Voice';
+                const provider = v.provider || '';
+                const description = v.description || '';
+                return `
+                <div class="voice-item" data-voice-id="${id}" data-provider="${provider}" data-voice-name="${name}">
+                    <h5>${name} <span class="badge">Custom</span></h5>
+                    <p class="text-muted">${provider}</p>
+                    <small>${description || 'No description'}</small>
+                    <div class="voice-actions">
+                        <button class="btn btn-sm btn-primary" onclick="TTS.useCustomVoiceFromEl(this)">
+                            <i class="fas fa-check"></i> Use Voice
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="TTS.previewVoice('${id}')">
+                            <i class="fas fa-play"></i> Preview
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="TTS.deleteVoice('${id}')">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        };
+
+        const renderCatalog = () => {
+            if (!this.catalogVoices.length) {
+                return '<p class="text-muted">No catalog voices available</p>';
+            }
+            return this.catalogVoices.map(v => {
+                const id = v.id || v.name || 'voice';
+                const name = v.name || v.id || 'Voice';
+                const provider = v.provider || this.currentProvider || '';
+                const description = v.description || 'Catalog voice';
+                const meta = [v.language, v.gender].filter(Boolean).join(' · ');
+                return `
+                <div class="voice-item" data-voice-id="${id}" data-provider="${provider}" data-voice-name="${name}">
+                    <h5>${name} <span class="badge">Catalog</span></h5>
+                    <p class="text-muted">${provider}${meta ? ` • ${meta}` : ''}</p>
+                    <small>${description}</small>
+                    <div class="voice-actions">
+                        <button class="btn btn-sm btn-primary" onclick="TTS.useCatalogVoiceFromEl(this)">
+                            <i class="fas fa-check"></i> Use Voice
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        };
+
+        // Two sections side-by-side (if space allows)
+        voiceList.innerHTML = `
+            <div class="voice-sections" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+                <div class="voice-section">
+                    <h5>Your Custom Voices</h5>
+                    ${renderCustom()}
+                </div>
+                <div class="voice-section">
+                    <h5>Provider Catalog Voices</h5>
+                    ${renderCatalog()}
                 </div>
             </div>
-        `).join('');
+        `;
+    },
+
+    // Internal helper: switch UI to provider and select a voice in the correct control
+    _selectProviderVoice(provider, voiceId, name = '', isCustom = false) {
+        // Switch provider sub-tab in TTS UI
+        this.switchProvider(provider);
+
+        const selectIdMap = {
+            vibevoice: isCustom ? 'vibevoice-custom-voice' : 'vibevoice-voice',
+            kokoro: 'kokoro-voice',
+            higgs: 'higgs-voice',
+            chatterbox: 'chatterbox-voice',
+            openai: 'openai-voice',
+            elevenlabs: 'elevenlabs-voice'
+        };
+        const sid = selectIdMap[provider] || null;
+        if (!sid) return false;
+        const sel = document.getElementById(sid);
+        if (!sel) return false;
+
+        // Determine value to set
+        let value = voiceId;
+        if (provider === 'vibevoice' && isCustom) {
+            value = `custom:${voiceId}`;
+        }
+        // Ensure option exists
+        let opt = Array.from(sel.options).find(o => o.value === value || o.text === name || o.text === voiceId);
+        if (!opt) {
+            const o = document.createElement('option');
+            o.value = value;
+            o.textContent = name || voiceId;
+            sel.appendChild(o);
+        }
+        sel.value = value;
+        try { sel.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+        return true;
+    },
+
+    // Use a catalog voice in the TTS tab
+    async useCatalogVoice(provider, voiceId, name = '') {
+        try {
+            const ok = this._selectProviderVoice(provider, voiceId, name, false);
+            if (!ok) throw new Error('Voice control not found');
+            this.showStatus(`Selected voice ${name || voiceId} (${provider})`, 'success');
+            // Also sync Audio → Text to Speech panel
+            const providerSelect = document.getElementById('audioTTS_provider');
+            if (providerSelect) {
+                providerSelect.value = provider;
+                if (typeof updateTTSProviderOptions === 'function') {
+                    try { updateTTSProviderOptions(); } catch (_) { /* ignore */ }
+                }
+                if (typeof loadProviderVoices === 'function') {
+                    try { await loadProviderVoices(); } catch (_) { /* ignore */ }
+                }
+                const voiceSelect = document.getElementById('audioTTS_voice');
+                if (voiceSelect) {
+                    let opt = Array.from(voiceSelect.options).find(o => o.value === voiceId || o.text === name || o.text === voiceId);
+                    if (!opt) {
+                        const o = document.createElement('option');
+                        o.value = voiceId;
+                        o.textContent = name || voiceId;
+                        voiceSelect.appendChild(o);
+                    }
+                    voiceSelect.value = voiceId;
+                    try { voiceSelect.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to use catalog voice:', e);
+            this.showStatus('Failed to select catalog voice', 'error');
+        }
+    },
+
+    // Use a custom voice in the TTS tab
+    async useCustomVoice(provider, voiceId, name = '') {
+        try {
+            const ok = this._selectProviderVoice(provider, voiceId, name, true);
+            if (!ok) throw new Error('Custom voice control not found');
+            this.showStatus(`Selected custom voice ${name || voiceId} (${provider})`, 'success');
+            // Sync into Audio → Text to Speech panel as a generic voice selection
+            const providerSelect = document.getElementById('audioTTS_provider');
+            if (providerSelect) {
+                providerSelect.value = provider;
+                if (typeof updateTTSProviderOptions === 'function') {
+                    try { updateTTSProviderOptions(); } catch (_) { /* ignore */ }
+                }
+                if (typeof loadProviderVoices === 'function') {
+                    try { await loadProviderVoices(); } catch (_) { /* ignore */ }
+                }
+                const voiceSelect = document.getElementById('audioTTS_voice');
+                if (voiceSelect) {
+                    // We set the base voice if detectable, otherwise append a synthetic option
+                    let opt = Array.from(voiceSelect.options).find(o => o.text === name || o.value === voiceId);
+                    if (!opt) {
+                        const o = document.createElement('option');
+                        o.value = voiceId;
+                        o.textContent = name || voiceId;
+                        voiceSelect.appendChild(o);
+                    }
+                    voiceSelect.value = voiceId;
+                    try { voiceSelect.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to use custom voice:', e);
+            this.showStatus('Failed to select custom voice', 'error');
+        }
+    },
+
+    // Event hooks from voice list buttons
+    useCatalogVoiceFromEl(btn) {
+        try {
+            const item = btn.closest('.voice-item');
+            if (!item) return;
+            const provider = item.getAttribute('data-provider') || this.currentProvider;
+            const voiceId = item.getAttribute('data-voice-id');
+            const name = item.getAttribute('data-voice-name') || '';
+            return this.useCatalogVoice(provider, voiceId, name);
+        } catch (e) {
+            console.error('useCatalogVoiceFromEl error:', e);
+        }
+    },
+
+    useCustomVoiceFromEl(btn) {
+        try {
+            const item = btn.closest('.voice-item');
+            if (!item) return;
+            const provider = item.getAttribute('data-provider') || this.currentProvider;
+            const voiceId = item.getAttribute('data-voice-id');
+            const name = item.getAttribute('data-voice-name') || '';
+            return this.useCustomVoice(provider, voiceId, name);
+        } catch (e) {
+            console.error('useCustomVoiceFromEl error:', e);
+        }
     },
     
     // Load custom voices for current provider
@@ -856,13 +1572,4 @@ const TTS = {
     }
 };
 
-// Initialize when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        // Wait a bit for apiClient to be ready if it exists
-        setTimeout(() => TTS.init(), 100);
-    });
-} else {
-    // Wait a bit for apiClient to be ready if it exists
-    setTimeout(() => TTS.init(), 100);
-}
+// Initialization is triggered lazily by tts-loader.js when the Audio > TTS tab is activated.

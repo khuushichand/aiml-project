@@ -112,17 +112,21 @@ def test_audit(ctx):
     
     try:
         cli_context.load_config()
-        
-        from tldw_Server_API.app.core.Evaluations.audit_logger import audit_logger, AuditEventType, AuditSeverity
-        
-        # Log a test event
-        audit_logger.log_event(
-            event_type=AuditEventType.EVALUATION_REQUEST,
-            action="CLI test audit logging",
-            user_id="cli_test_user",
-            outcome="success",
-            severity=AuditSeverity.LOW,
-            details={"test": True}
+        from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService, AuditEventType, AuditContext
+        svc = UnifiedAuditService()
+        awaitable = getattr(svc, "initialize", None)
+        if awaitable:
+            import asyncio as _asyncio
+            _asyncio.get_event_loop().run_until_complete(svc.initialize())
+        # Log a test event to unified audit
+        import asyncio as _asyncio
+        _asyncio.get_event_loop().run_until_complete(
+            svc.log_event(
+                event_type=AuditEventType.SYSTEM_START,
+                context=AuditContext(user_id="cli_test_user"),
+                action="cli_test_audit",
+                metadata={"test": True},
+            )
         )
         
         print_success("Audit logging test successful")

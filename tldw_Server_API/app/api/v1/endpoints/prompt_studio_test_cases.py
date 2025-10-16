@@ -19,6 +19,7 @@ Security
 
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File, Form
+from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 # Local imports
@@ -36,6 +37,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io impor
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_generator import TestCaseGenerator
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, InputError, ConflictError
 from fastapi.responses import Response
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
 # Router Setup
@@ -261,9 +263,22 @@ async def create_bulk_test_cases(
             )
         
         # Create test cases
+        serialized_cases: List[Dict[str, Any]] = []
+        for tc in bulk_data.test_cases:
+            try:
+                serialized_cases.append(model_dump_compat(tc))
+            except TypeError:
+                encoded_case = jsonable_encoder(tc)
+                if not isinstance(encoded_case, dict):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid test case payload"
+                    )
+                serialized_cases.append(encoded_case)
+
         test_cases = manager.create_bulk_test_cases(
             project_id=bulk_data.project_id,
-            test_cases=[tc.dict() for tc in bulk_data.test_cases],
+            test_cases=serialized_cases,
             signature_id=bulk_data.signature_id
         )
         
@@ -442,7 +457,7 @@ async def update_test_case(
     """
     try:
         manager = TestCaseManager(db)
-        
+
         # Get test case to check project
         test_case = manager.get_test_case(test_case_id)
         if not test_case:
@@ -450,21 +465,30 @@ async def update_test_case(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Test case {test_case_id} not found"
             )
-        
+
         # Check project access
         await require_project_write_access(test_case["project_id"], user_context=user_context, db=db)
-        
+
         # Update test case
-        update_data = {k: v for k, v in updates.dict().items() if v is not None}
+        try:
+            update_data = model_dump_compat(updates, exclude_none=True)
+        except TypeError:
+            encoded_update = jsonable_encoder(updates)
+            update_data = (
+                {k: v for k, v in encoded_update.items() if v is not None}
+                if isinstance(encoded_update, dict)
+                else {}
+            )
+
         updated = manager.update_test_case(test_case_id, update_data)
-        
+
         logger.info(f"User {user_context['user_id']} updated test case {test_case_id}")
-        
+
         return StandardResponse(
             success=True,
             data=TestCaseResponse(**updated)
         )
-        
+
     except InputError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -932,9 +956,15 @@ async def export_test_cases(
         }
     }
 )
+async def _rl_generate(
+    user_context: Dict = Depends(get_prompt_studio_user),
+    security_config: SecurityConfig = Depends(get_security_config),
+) -> bool:
+    return await check_rate_limit("generate", user_context=user_context, security_config=security_config)
+
 async def generate_test_cases(
     generate_request: TestCaseGenerateRequest,
-    _rate: bool = Depends(lambda: check_rate_limit("generate")),
+    _rate: bool = Depends(_rl_generate),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user)

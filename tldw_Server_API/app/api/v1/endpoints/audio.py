@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status # For status codes
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from fastapi import Request as _FastAPIRequest  # for rate limit key typing
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -39,13 +40,49 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_U
     handle_unified_websocket,
     UnifiedStreamingConfig
 )
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    can_start_stream,
+    finish_stream,
+    check_daily_minutes_allow,
+    add_daily_minutes,
+    bytes_to_seconds,
+)
+# Expose job quota helpers at module scope for tests to monkeypatch
+try:
+    from tldw_Server_API.app.core.Usage.audio_quota import (
+        can_start_job as can_start_job,  # re-export for test monkeypatch
+        finish_job as finish_job,
+        increment_jobs_started as increment_jobs_started,
+        get_limits_for_user as get_limits_for_user,
+    )
+except Exception:
+    # In import-guarded contexts, tests may skip or endpoints not mounted
+    pass
+from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
 
 # For logging (if you use the same logger as in your PDF endpoint)
-import logging # or from your_project.utils import logger
-logger = logging.getLogger(__name__)
+from loguru import logger
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+    UsageEventLogger,
+)
 
 # Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address)
+def _rate_limit_key(request: _FastAPIRequest) -> str:
+    """Rate limit key that prefers authenticated user id over IP.
+
+    - Multi-user: per-user limits (fairness across users)
+    - Single-user or unauthenticated: fall back to client IP
+    """
+    try:
+        uid = getattr(request.state, "user_id", None)
+        if uid is not None:
+            return f"user:{uid}"
+    except Exception:
+        pass
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 
 router = APIRouter(
@@ -69,7 +106,8 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSValidationError,
     TTSProviderNotConfiguredError,
     TTSAuthenticationError,
-    TTSRateLimitError
+    TTSRateLimitError,
+    TTSQuotaExceededError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
 
@@ -87,6 +125,7 @@ async def create_speech(
     request: Request,                   # Required for rate limiter and to check for client disconnects
     tts_service: TTSServiceV2 = Depends(get_tts_service),
     current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Generates audio from the input text.
@@ -133,6 +172,14 @@ async def create_speech(
             detail=str(e)
         )
     logger.info(f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}")
+    try:
+        usage_log.log_event(
+            "audio.tts",
+            tags=[str(request_data.model or ""), str(request_data.voice or "")],
+            metadata={"stream": bool(getattr(request_data, 'stream', False)), "format": request_data.response_format},
+        )
+    except Exception:
+        pass
 
     # V2 service handles model mapping internally via the adapter factory
     # No need for manual mapping here
@@ -168,6 +215,13 @@ async def create_speech(
                     logger.info("Client disconnected, stopping audio generation.")
                     break
                 yield audio_chunk_bytes
+        except TTSValidationError as e:
+            logger.warning(f"TTS validation error during streaming: {e}")
+            # Map validation failures to 400 for both stream and non-stream
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
         except HTTPException: # Re-raise HTTPExceptions directly
             raise
         except TTSProviderNotConfiguredError as e:
@@ -187,6 +241,12 @@ async def create_speech(
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="TTS provider rate limit exceeded. Please try again later."
+            )
+        except TTSQuotaExceededError as e:
+            logger.warning(f"TTS quota exceeded: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="TTS quota exceeded. Please review your plan or quota."
             )
         except TTSError as e:
             # Handle other TTS-specific errors
@@ -213,7 +273,7 @@ async def create_speech(
                 "Cache-Control": "no-cache",
             },
         )
-    else:
+    if not is_multi_user_mode():
         # Non-streaming: Collect all chunks and send as a single response
         all_audio_bytes = b""
         try:
@@ -234,6 +294,12 @@ async def create_speech(
                     "Cache-Control": "no-cache",
                 },
             )
+        except TTSValidationError as e:
+            logger.warning(f"TTS validation error (non-streaming): {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
         except HTTPException:
             raise
         except TTSProviderNotConfiguredError as e:
@@ -253,6 +319,12 @@ async def create_speech(
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="TTS provider rate limit exceeded. Please try again later."
+            )
+        except TTSQuotaExceededError as e:
+            logger.warning(f"TTS quota exceeded: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="TTS quota exceeded. Please review your plan or quota."
             )
         except TTSError as e:
             # Handle other TTS-specific errors
@@ -279,7 +351,7 @@ async def create_transcription(
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
-    timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities (comma-separated)"),
+    timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities: 'segment', 'word' (comma-separated or JSON array)"),
     # Auto-segmentation options
     segment: bool = Form(default=False, description="If true and JSON response, also run transcript segmentation (TreeSeg)"),
     seg_K: int = Form(default=6, description="Max segments for TreeSeg (if segment=true)"),
@@ -317,23 +389,60 @@ async def create_transcription(
     
     # Authentication is enforced by dependency injection via get_request_user
     
-    # Validate file
+    # Validate file presence
     if not file:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No audio file provided"
         )
+    # Content-Type whitelist
+    allowed_types = {
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/m4a",
+        "audio/x-m4a",
+        "audio/flac",
+        "audio/ogg",
+        "audio/opus",
+        "audio/webm",
+    }
+    ctype = (file.content_type or "").lower()
+    if ctype and ctype not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported media type: {file.content_type}"
+        )
     
-    # Check file size (max 25MB for OpenAI compatibility)
-    max_file_size = 25 * 1024 * 1024  # 25MB
+    # Resolve per-tier file size limit
+    try:
+        limits = await get_limits_for_user(current_user.id)
+        max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
+    except Exception:
+        max_file_size = 25 * 1024 * 1024
     contents = await file.read()
     if len(contents) > max_file_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File size exceeds maximum of 25MB"
+            detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB"
         )
-    
-    # Save uploaded file to temporary location
+
+    # Before any heavy work, enforce concurrent jobs cap per user
+    ok_job, msg_job = await can_start_job(current_user.id)
+    if not ok_job:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=msg_job)
+
+    # Record job start (best-effort)
+    acquired_job_slot = False
+    try:
+        await increment_jobs_started(current_user.id)
+        acquired_job_slot = True
+    except Exception:
+        pass
+
+    # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
     try:
         # Create temporary file with proper extension
@@ -342,9 +451,40 @@ async def create_transcription(
             tmp_file.write(contents)
             temp_audio_path = tmp_file.name
         
-        # Load audio data
-        audio_data, sample_rate = sf.read(temp_audio_path)
+        # Convert to canonical 16k mono WAV for consistent processing
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav as _convert_to_wav
+            canonical_path = _convert_to_wav(temp_audio_path, offset=0, overwrite=False)
+        except Exception:
+            canonical_path = temp_audio_path
+
+        # Load canonical audio
+        audio_data, sample_rate = sf.read(canonical_path)
+        # Compute duration (seconds)
+        try:
+            duration_seconds = float(len(audio_data)) / float(sample_rate or 16000)
+        except Exception:
+            duration_seconds = 0.0
         
+        # Parse timestamp granularities (flexible: CSV or JSON array)
+        granularity_tokens = set()
+        try:
+            if timestamp_granularities:
+                s = str(timestamp_granularities).strip()
+                if s.startswith("["):
+                    # JSON array
+                    arr = json.loads(s)
+                    if isinstance(arr, list):
+                        granularity_tokens = {str(x).strip().lower() for x in arr}
+                else:
+                    # Comma-separated string
+                    granularity_tokens = {t.strip().lower() for t in s.split(',') if t.strip()}
+        except Exception:
+            # Non-fatal: default to {'segment'}
+            granularity_tokens = {"segment"}
+        if not granularity_tokens:
+            granularity_tokens = {"segment"}
+
         # Map OpenAI model names to our providers
         provider_map = {
             "whisper-1": "faster-whisper",
@@ -357,42 +497,94 @@ async def create_transcription(
         
         provider = provider_map.get(model.lower(), "faster-whisper")
         
-        # Import transcription function
+        # Import transcription functions
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            transcribe_audio
+            transcribe_audio,
+            speech_to_text as fw_speech_to_text,
         )
-        
+
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
         
-        # Prepare transcription parameters
-        transcribe_params = {
-            "audio_data": audio_data,
-            "sample_rate": sample_rate,
-            "transcription_provider": provider,
-            "speaker_lang": language
-        }
-        
-        # Add provider-specific parameters
-        if provider == "faster-whisper":
-            transcribe_params["whisper_model"] = "large-v3"  # Use best model by default
-            transcribed_text = transcribe_audio(**transcribe_params)
-        elif provider == "parakeet" and config:
-            variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
-            # For Parakeet, we need to use the Nemo module directly
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_parakeet
+        # Prepare quotas and transcription now that we hold the slot
+
+        # Enforce daily minutes cap by estimated duration
+        minutes_est = duration_seconds / 60.0
+        try:
+            allow, remaining_after = await check_daily_minutes_allow(current_user.id, minutes_est)
+        except Exception:
+            allow = True
+            remaining_after = None
+        if not allow:
+            # Release job slot before returning
+            try:
+                await finish_job(current_user.id)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Transcription quota exceeded (daily minutes)"
             )
-            transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
-        elif provider == "canary":
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_canary
-            )
-            transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
-        else:
-            # Use the general transcribe_audio function
-            transcribed_text = transcribe_audio(**transcribe_params)
+        detected_language: Optional[str] = None
+        # Wrap the heavy work to ensure we always release the job slot
+        try:
+            if provider == "faster-whisper":
+                # For Whisper, support word-level timestamps and language detection
+                try:
+                    # Use best model by default (consistent with prior behavior)
+                    whisper_model_name = "large-v3"
+                    result = fw_speech_to_text(
+                        canonical_path,
+                        whisper_model=whisper_model_name,
+                        selected_source_lang=language if language else None,
+                        vad_filter=False,
+                        diarize=False,
+                        word_timestamps=("word" in granularity_tokens),
+                        return_language=True,
+                    )
+                    if isinstance(result, tuple) and len(result) == 2:
+                        segments_list, detected_language = result
+                    else:
+                        # Fallback: handle as plain segments list
+                        segments_list, detected_language = result, None
+
+                    # Merge text
+                    transcribed_text = " ".join(seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict))
+                except Exception as e:
+                    logger.error(f"Whisper transcription failed: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Whisper transcription failed"
+                    )
+            elif provider == "parakeet" and config:
+                variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
+                # For Parakeet, we need to use the Nemo module directly
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+                    transcribe_with_parakeet
+                )
+                transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
+            elif provider == "canary":
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+                    transcribe_with_canary
+                )
+                transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
+            else:
+                # Use the general transcribe_audio function
+                transcribe_params = {
+                    "audio_data": audio_data,
+                    "sample_rate": sample_rate,
+                    "transcription_provider": provider,
+                    "speaker_lang": language,
+                }
+                transcribed_text = transcribe_audio(**transcribe_params)
+        finally:
+            # Make sure we always release job slot on any path
+            try:
+                if acquired_job_slot:
+                    await finish_job(current_user.id)
+            except Exception:
+                pass
         
         # Check for errors in transcription
         if transcribed_text.startswith("[Error") or transcribed_text.startswith("[Transcription error"):
@@ -402,6 +594,12 @@ async def create_transcription(
                 detail="Transcription failed. Please try again or use a different model."
             )
         
+        # On success, record minutes used
+        try:
+            await add_daily_minutes(current_user.id, minutes_est)
+        except Exception:
+            pass
+
         # Format response based on requested format
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
@@ -417,32 +615,45 @@ async def create_transcription(
             return Response(content=vtt_content, media_type="text/vtt")
         
         else:  # json or verbose_json
-            response_data = {
-                "text": transcribed_text
-            }
-            
-            # Add language if detected/specified
+            response_data: Dict[str, Any] = {"text": transcribed_text}
+
+            # Language: prefer explicit request; else detected for Whisper
             if language:
                 response_data["language"] = language
-            
-            # Calculate duration
-            duration = len(audio_data) / sample_rate
+            elif detected_language:
+                response_data["language"] = detected_language
+
+            # Duration
+            duration = duration_seconds
             response_data["duration"] = duration
-            
-            # Add segments if requested (simplified - real implementation would need actual segments)
-            if "segment" in timestamp_granularities:
-                response_data["segments"] = [{
-                    "id": 0,
-                    "seek": 0,
-                    "start": 0.0,
-                    "end": duration,
-                    "text": transcribed_text,
-                    "tokens": [],
-                    "temperature": temperature,
-                    "avg_logprob": -0.5,
-                    "compression_ratio": 1.0,
-                    "no_speech_prob": 0.01
-                }]
+
+            # Segments (prefer real segments when Whisper used)
+            if "segment" in granularity_tokens:
+                if provider == "faster-whisper" and 'segments_list' in locals() and isinstance(segments_list, list) and segments_list:
+                    segs = []
+                    for i, seg in enumerate(segments_list):
+                        start = float(seg.get("start_seconds", 0.0))
+                        end = float(seg.get("end_seconds", duration))
+                        seg_obj: Dict[str, Any] = {
+                            "id": i,
+                            "start": start,
+                            "end": end,
+                            "text": seg.get("Text", ""),
+                        }
+                        # Attach word-level timestamps if requested and available
+                        if "word" in granularity_tokens and isinstance(seg.get("words"), list):
+                            seg_obj["words"] = seg["words"]
+                        segs.append(seg_obj)
+                    response_data["segments"] = segs
+                else:
+                    # Fallback single segment
+                    response_data["segments"] = [{
+                        "id": 0,
+                        "seek": 0,
+                        "start": 0.0,
+                        "end": duration,
+                        "text": transcribed_text,
+                    }]
             
             # Optional: auto-run segmentation in JSON responses
             if segment:
@@ -514,6 +725,7 @@ async def create_translation(
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
     current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Translates audio into English.
@@ -526,7 +738,14 @@ async def create_translation(
     Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
           `Docs/API-related/Audio_Transcription_API.md`
     """
-    
+    try:
+        usage_log.log_event(
+            "audio.transcriptions",
+            tags=[str(model or "")],
+            metadata={"filename": getattr(file, 'filename', None), "language": language or None},
+        )
+    except Exception:
+        pass
     # For translation, we'll use the transcription endpoint with language detection
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model
@@ -795,91 +1014,134 @@ async def websocket_transcribe(
     """
     # Accept the WebSocket connection first
     await websocket.accept()
-    
-    # Authentication check
+
+    # Authentication
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY
-    
+
     authenticated = False
-    
-    # Check if token was provided in query parameter
-    if token:
-        if token == expected_key:
-            logger.info("WebSocket authenticated via query parameter")
-            authenticated = True
+    jwt_user_id: Optional[int] = None
+
+    if is_multi_user_mode():
+        # Prefer Authorization: Bearer <JWT>
+        auth_header = websocket.headers.get("authorization")
+        bearer = None
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                bearer = parts[1]
+        if bearer:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+                from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
+
+                jwt_service = get_jwt_service()
+                payload = jwt_service.decode_access_token(bearer)
+                uid = payload.get("user_id") or payload.get("sub")
+                if isinstance(uid, str):
+                    uid = int(uid)
+                if not uid:
+                    raise InvalidTokenError("missing user_id/sub claim")
+                # Blacklist check
+                session_manager = await get_session_manager()
+                if await session_manager.is_token_blacklisted(bearer, payload.get("jti")):
+                    raise InvalidTokenError("token revoked")
+                # Ensure user exists
+                user_row = await _get_user_by_id(int(uid))
+                if not user_row:
+                    raise InvalidTokenError("user not found")
+                jwt_user_id = int(uid)
+                authenticated = True
+            except (InvalidTokenError, TokenExpiredError) as e:
+                logger.warning(f"WS JWT auth failed: {e}")
+                await websocket.send_json({"type": "error", "message": "Invalid or expired token"})
+                await websocket.close(code=4401)
+                return
         else:
-            logger.warning(f"WebSocket: Invalid token provided in query parameter")
-            authenticated = False
-    elif not token:
-        # No token in query, wait for authentication message
-        try:
-            first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-            auth_data = json.loads(first_message)
-            
-            if auth_data.get("type") != "auth":
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
-                })
-                await websocket.close()
+            # No Authorization header; fall back to message-based auth
+            try:
+                first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                auth_data = json.loads(first_message)
+                if auth_data.get("type") != "auth" or not auth_data.get("token"):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required: Authorization: Bearer <JWT> or auth message"
+                    })
+                    await websocket.close(code=4401)
+                    return
+            except Exception as e:
+                logger.warning(f"WS JWT auth (message prelude) failed: {e}")
+                await websocket.send_json({"type": "error", "message": "Invalid authentication message"})
+                await websocket.close(code=4401)
                 return
-            
-            provided_token = auth_data.get("token")
-            
-            if provided_token != expected_key:
-                logger.warning(f"WebSocket connection with invalid token")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Invalid authentication token"
-                })
-                await websocket.close()
-                return
-            
-            # Authentication successful
+                # Accept Bearer token in first message for compatibility
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                    from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+                    from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
+                    jwt_service = get_jwt_service()
+                    payload = jwt_service.decode_access_token(auth_data.get("token"))
+                    uid = payload.get("user_id") or payload.get("sub")
+                    if isinstance(uid, str):
+                        uid = int(uid)
+                    if not uid:
+                        raise ValueError("missing user id in token")
+                    session_manager = await get_session_manager()
+                    if await session_manager.is_token_blacklisted(auth_data.get("token"), payload.get("jti")):
+                        raise ValueError("token revoked")
+                    user_row = await _get_user_by_id(int(uid))
+                    if not user_row:
+                        raise ValueError("user not found")
+                    jwt_user_id = int(uid)
+                    authenticated = True
+                except Exception as e:
+                    logger.warning(f"WS JWT auth (message) failed: {e}")
+                    await websocket.send_json({"type": "error", "message": "Invalid or expired token"})
+                    await websocket.close(code=4401)
+                    return
+    if not is_multi_user_mode():
+        # Single-user mode: API key via query or auth message
+        expected_key = settings.SINGLE_USER_API_KEY
+        if token and token == expected_key:
             authenticated = True
-            logger.info("WebSocket authenticated via auth message")
-            await websocket.send_json({"type": "status", "message": "Authenticated"})
-            
-        except asyncio.TimeoutError:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Authentication timeout. Send auth message within 5 seconds."
-            })
+        elif token and token != expected_key:
+            logger.warning("WebSocket: invalid query token")
+            await websocket.send_json({"type": "error", "message": "Invalid authentication token"})
             await websocket.close()
             return
-        except json.JSONDecodeError:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Invalid JSON in authentication message"
-            })
-            await websocket.close()
-            return
-        except Exception as e:
-            logger.error(f"Authentication error: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Authentication failed: {str(e)}"
-            })
-            await websocket.close()
-            return
-    else:
-        # Token was provided but invalid
-        logger.warning(f"WebSocket connection with invalid query token")
-        await websocket.send_json({
-            "type": "error",
-            "message": "Invalid authentication token"
-        })
-        await websocket.close()
-        return
-    
-    # If not authenticated by this point, reject (this shouldn't happen but safety check)
+        else:
+            try:
+                first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                auth_data = json.loads(first_message)
+                if auth_data.get("type") != "auth" or auth_data.get("token") != expected_key:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
+                    })
+                    await websocket.close()
+                    return
+                authenticated = True
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Authentication timeout. Send auth message within 5 seconds."
+                })
+                await websocket.close()
+                return
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid JSON in authentication message"
+                })
+                await websocket.close()
+                return
+
     if not authenticated:
-        await websocket.send_json({
-            "type": "error",
-            "message": "Authentication required"
-        })
-        await websocket.close()
+        await websocket.send_json({"type": "error", "message": "Authentication required"})
+        await websocket.close(code=4401)
         return
     
     try:
@@ -909,19 +1171,94 @@ async def websocket_transcribe(
         
         logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
         
-        # Handle the WebSocket connection with unified handler
-        await handle_unified_websocket(websocket, config)
+        # Enforce per-user streaming quotas and daily minutes during streaming
+        # Resolve user id for quotas (JWT in multi-user; fixed id in single-user)
+        if is_multi_user_mode() and jwt_user_id is not None:
+            user_id_for_usage = int(jwt_user_id)
+        else:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+            _s = _get_settings()
+            user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
+
+        ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
+        if not ok_stream:
+            await websocket.send_json({"type": "error", "message": msg_stream})
+            await websocket.close()
+            return
+
+        # Track and enforce minutes chunk-by-chunk
+        used_minutes = 0.0
+
+        def _on_audio(seconds: float, sr: int) -> None:
+            nonlocal used_minutes
+            # Check allowance before processing
+            minutes_chunk = float(seconds) / 60.0
+            # Note: async check in sync callback not ideal; fast path uses last known remaining
+            # For MVP, perform a quick synchronous budget check using a cached remaining
+            used_minutes += minutes_chunk
+
+        try:
+            # Use shared exception class so inner handler can bubble it up
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import QuotaExceeded as _QuotaExceeded
+
+            async def _on_audio_quota(seconds: float, sr: int) -> None:
+                nonlocal used_minutes
+                minutes_chunk = float(seconds) / 60.0
+                allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                if not allow:
+                    # Raise structured signal to outer scope
+                    raise _QuotaExceeded("daily_minutes")
+                used_minutes += minutes_chunk
+                await add_daily_minutes(user_id_for_usage, minutes_chunk)
+
+            try:
+                await handle_unified_websocket(websocket, config, on_audio_seconds=_on_audio_quota)
+            except _QuotaExceeded as qe:
+                # Send structured error and close with application-defined code
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error_type": "quota_exceeded",
+                        "quota": qe.quota,
+                        "message": "Streaming transcription quota exceeded (daily minutes)"
+                    })
+                except Exception:
+                    pass
+                try:
+                    await websocket.close(code=4003, reason="quota_exceeded")
+                except Exception:
+                    pass
+        finally:
+            await finish_stream(user_id_for_usage)
         
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        # Best-effort: map quota exception variants to structured error
         try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
-        except:
+            quota_name = getattr(e, "quota", None)
+            txt = str(e)
+            if not quota_name and ("daily_minutes" in txt or "concurrent_streams" in txt):
+                quota_name = "daily_minutes" if "daily_minutes" in txt else "concurrent_streams"
+            if quota_name:
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error_type": "quota_exceeded",
+                        "quota": quota_name,
+                        "message": "Streaming transcription quota exceeded"
+                    })
+                finally:
+                    try:
+                        await websocket.close(code=4003, reason="quota_exceeded")
+                    except Exception:
+                        pass
+            else:
+                # Let inner handler's error payload (if any) be the authoritative one.
+                # Avoid sending a duplicate generic error frame that could race the client.
+                pass
+        except Exception:
             pass
     finally:
         try:

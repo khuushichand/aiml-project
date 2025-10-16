@@ -7,6 +7,7 @@ This module provides all request/response models for the unified evaluation API.
 
 from typing import Dict, List, Optional, Any, Literal, Union
 from pydantic import BaseModel, Field, field_validator, model_validator, HttpUrl
+from pydantic import ConfigDict
 from datetime import datetime
 from enum import Enum
 import re
@@ -276,8 +277,7 @@ class EvaluationResponse(BaseModel):
     updated_at: Optional[int] = Field(None, description="Update timestamp (tldw-compatible)")
     metadata: Optional[Dict[str, Any]] = None
     
-    class Config:
-        allow_population_by_field_name = True  # Allow both created and created_at
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CreateRunRequest(BaseModel):
@@ -313,8 +313,7 @@ class RunResponse(BaseModel):
     results: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, int]] = None
     
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class RunResultsResponse(BaseModel):
@@ -333,7 +332,7 @@ class CreateDatasetRequest(BaseModel):
     """Create dataset request"""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
-    samples: List[DatasetSample] = Field(..., min_items=1)
+    samples: List[DatasetSample] = Field(..., min_length=1)
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -350,8 +349,7 @@ class DatasetResponse(BaseModel):
     created_by: str
     metadata: Optional[Dict[str, Any]] = None
     
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ============= OCR Evaluation Schemas =============
@@ -449,7 +447,7 @@ class GEvalResponse(BaseModel):
 class RAGEvaluationRequest(BaseModel):
     """RAG evaluation request"""
     query: str = Field(..., min_length=1, max_length=10000)
-    retrieved_contexts: List[str] = Field(..., min_items=1, max_items=20)
+    retrieved_contexts: List[str] = Field(..., min_length=1, max_length=20)
     generated_response: str = Field(..., min_length=1, max_length=50000)
     ground_truth: Optional[str] = Field(None, max_length=50000)
     metrics: Optional[List[str]] = Field(
@@ -469,8 +467,8 @@ class RAGEvaluationRequest(BaseModel):
 
 class PropositionEvaluationRequest(BaseModel):
     """Evaluate proposition extraction quality"""
-    extracted: List[str] = Field(..., min_items=1, description="Extracted propositions/claims")
-    reference: List[str] = Field(..., min_items=1, description="Reference propositions/claims")
+    extracted: List[str] = Field(..., min_length=1, description="Extracted propositions/claims")
+    reference: List[str] = Field(..., min_length=1, description="Reference propositions/claims")
     method: Optional[Literal['semantic', 'jaccard']] = Field('semantic', description="Matching method")
     threshold: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Match threshold")
 
@@ -580,7 +578,7 @@ class RetrieverSweepConfig(BaseModel):
 
 class RerankerSweepConfig(BaseModel):
     """Reranker parameters to sweep."""
-    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "none"], List[Literal["flashrank", "cross_encoder", "hybrid", "none"]]]] = Field(default=None)
+    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"], List[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"]]]] = Field(default=None)
     top_k: Optional[Union[int, List[int]]] = Field(default=None)
     model: Optional[Union[str, List[str]]] = Field(default=None, description="Optional reranker model")
 
@@ -695,7 +693,7 @@ class QA3Item(BaseModel):
 
 
 class QA3Request(BaseModel):
-    items: List[QA3Item] = Field(..., min_items=1)
+    items: List[QA3Item] = Field(..., min_length=1)
     allowed_labels: Optional[List[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"]) 
     label_mapping: Optional[Dict[str, str]] = Field(None, description="Normalize gold labels, e.g., {'true':'SUPPORTED','false':'REFUTED'}")
     generate_predictions: Optional[bool] = Field(False, description="If true, call LLM to predict; else expect item.prediction and score-only")
@@ -722,8 +720,8 @@ class QA3Response(BaseModel):
 
 class BatchEvaluationRequest(BaseModel):
     """Batch evaluation request"""
-    evaluation_type: Literal["geval", "rag", "response_quality"]
-    items: List[Dict[str, Any]] = Field(..., min_items=1, max_items=1000)
+    evaluation_type: Literal["geval", "rag", "response_quality", "ocr", "propositions"]
+    items: List[Dict[str, Any]] = Field(..., min_length=1, max_length=1000)
     parallel_workers: int = Field(4, ge=1, le=20)
     continue_on_error: bool = Field(True)
 
@@ -758,7 +756,7 @@ class CustomMetricResponse(BaseModel):
 
 class EvaluationComparisonRequest(BaseModel):
     """Evaluation comparison request"""
-    evaluation_ids: List[str] = Field(..., min_items=2, max_items=10)
+    evaluation_ids: List[str] = Field(..., min_length=2, max_length=10)
     metrics_to_compare: Optional[List[str]] = None
 
 
@@ -793,7 +791,7 @@ class EvaluationHistoryResponse(BaseModel):
 class WebhookRegistrationRequest(BaseModel):
     """Webhook registration request"""
     url: HttpUrl = Field(..., description="Webhook endpoint URL")
-    events: List[WebhookEventType] = Field(..., min_items=1)
+    events: List[WebhookEventType] = Field(..., min_length=1)
     secret: Optional[str] = Field(None, min_length=32)
 
 

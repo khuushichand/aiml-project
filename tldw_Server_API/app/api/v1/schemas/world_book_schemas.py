@@ -10,12 +10,12 @@ API endpoints, ensuring proper validation and serialization.
 
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class WorldBookEntryBase(BaseModel):
     """Base schema for world book entries."""
-    keywords: List[str] = Field(..., min_items=1, description="Keywords to match")
+    keywords: List[str] = Field(..., min_length=1, description="Keywords to match")
     content: str = Field(..., min_length=1, description="Content to inject when matched")
     priority: int = Field(0, description="Priority for ordering (higher = more important)")
     enabled: bool = Field(True, description="Whether entry is active")
@@ -32,8 +32,8 @@ class WorldBookEntryCreate(WorldBookEntryBase):
 
 class WorldBookEntryUpdate(BaseModel):
     """Schema for updating a world book entry."""
-    keywords: Optional[List[str]] = Field(None, min_items=1, description="New keywords")
-    content: Optional[str] = Field(None, min_length=1, description="New content")
+    keywords: Optional[List[str]] = Field(None, description="New keywords")
+    content: Optional[str] = Field(None, description="New content (empty string allowed; validated server-side)")
     priority: Optional[int] = Field(None, description="New priority")
     enabled: Optional[bool] = Field(None, description="New enabled status")
     case_sensitive: Optional[bool] = Field(None, description="New case sensitivity")
@@ -49,8 +49,7 @@ class WorldBookEntryResponse(WorldBookEntryBase):
     created_at: datetime = Field(..., description="Creation timestamp")
     last_modified: datetime = Field(..., description="Last modification timestamp")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorldBookBase(BaseModel):
@@ -91,8 +90,7 @@ class WorldBookResponse(WorldBookBase):
     version: int = Field(..., description="Version number for optimistic locking")
     entry_count: Optional[int] = Field(None, description="Number of entries in the world book")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorldBookWithEntries(WorldBookResponse):
@@ -188,7 +186,7 @@ class WorldBookStatistics(BaseModel):
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""
-    entry_ids: List[int] = Field(..., min_items=1, description="List of entry IDs")
+    entry_ids: List[int] = Field(..., min_length=1, description="List of entry IDs")
     operation: str = Field(..., pattern="^(enable|disable|delete|set_priority)$", description="Operation to perform")
     priority: Optional[int] = Field(None, description="New priority (for set_priority operation)")
 

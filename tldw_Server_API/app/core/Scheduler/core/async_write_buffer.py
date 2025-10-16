@@ -9,7 +9,7 @@ import asyncio
 import json
 from typing import List, Optional, Any, Deque
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
@@ -58,7 +58,8 @@ class AsyncWriteBuffer:
                  backend: QueueBackend,
                  config: SchedulerConfig,
                  flush_strategy: FlushStrategy = FlushStrategy.BLOCK,
-                 max_queue_size: int = 10000):
+                 max_queue_size: int = 10000,
+                 auto_start: bool = True):
         """
         Initialize async write buffer.
         
@@ -90,7 +91,8 @@ class AsyncWriteBuffer:
         # Disk spill for overflow (if using SPILL_TO_DISK strategy)
         self.spill_path = config.base_path / 'buffer_spill'
         self.spill_files: List[Path] = []
-        
+        self._auto_start = auto_start
+        self._workers_running = False
         # Background tasks
         self._flush_worker: Optional[asyncio.Task] = None
         self._timer_task: Optional[asyncio.Task] = None
@@ -109,13 +111,23 @@ class AsyncWriteBuffer:
             f"interval={self.base_flush_interval}s, strategy={flush_strategy.value}"
         )
     
-    async def start(self):
-        """Start background workers"""
+    async def start(self, run_workers: Optional[bool] = None):
+        """Start background workers.
+        
+        Args:
+            run_workers: When False, do not start flush/timer workers (deterministic tests).
+                         Defaults to constructor's auto_start when None.
+        """
         if self._flush_worker:
             return
-        
+        start_flag = self._auto_start if run_workers is None else run_workers
+        if not start_flag:
+            logger.debug("AsyncWriteBuffer workers not started (run_workers=False)")
+            self._workers_running = False
+            return
         self._flush_worker = asyncio.create_task(self._flush_worker_loop())
         self._timer_task = asyncio.create_task(self._flush_timer_loop())
+        self._workers_running = True
         logger.debug("AsyncWriteBuffer workers started")
     
     async def add(self, task: Task) -> str:
@@ -138,33 +150,47 @@ class AsyncWriteBuffer:
         if self._closed:
             raise BufferClosedError("Buffer is closed")
         
-        # Handle backpressure based on strategy
-        if self.flush_queue_size >= self.max_queue_size:
-            if self.flush_strategy == FlushStrategy.BLOCK:
-                # Wait for space in queue
-                logger.debug("Buffer full, waiting for space...")
-                await self._backpressure_event.wait()
-                
-            elif self.flush_strategy == FlushStrategy.DROP_OLDEST:
-                # Drop oldest batch from queue
-                if self.flush_queue:
-                    dropped = self.flush_queue.popleft()
-                    self.flush_queue_size -= len(dropped)
-                    self.metrics.total_dropped += len(dropped)
-                    logger.warning(f"Dropped {len(dropped)} oldest tasks due to overflow")
-                    
-            elif self.flush_strategy == FlushStrategy.SPILL_TO_DISK:
-                # Spill oldest batch to disk
-                await self._spill_to_disk()
-                
-            elif self.flush_strategy == FlushStrategy.REJECT:
-                self.metrics.buffer_overflows += 1
-                raise BufferError(f"Buffer full, rejecting task (queue size: {self.flush_queue_size})")
-        
+        # For REJECT strategy, if flush queue is already at capacity, reject early
+        if self.flush_strategy == FlushStrategy.REJECT and len(self.flush_queue) >= self.max_queue_size:
+            self.metrics.buffer_overflows += 1
+            raise BufferError(f"Buffer full, rejecting task (batches: {len(self.flush_queue)})")
+
         # Add to active buffer (fast operation)
         async with self.active_lock:
             self.active_buffer.append(task)
             self.metrics.total_added += 1
+            
+            # Compute projected number of queued batches including active buffer
+            projected_batches = len(self.flush_queue) + (1 if len(self.active_buffer) >= self.flush_size else 0)
+            if projected_batches > self.max_queue_size:
+                # Handle according to strategy
+                if self.flush_strategy == FlushStrategy.BLOCK:
+                    logger.debug("Buffer full (projected), waiting for space...")
+                    # Release lock briefly to allow flush worker to progress
+                    self.active_buffer.pop()  # temporarily remove
+                    self.metrics.total_added -= 1
+                    self._backpressure_event.clear()
+                    await asyncio.sleep(0)
+                    self._backpressure_event.set()
+                    # Re-add and proceed (best effort)
+                    self.active_buffer.append(task)
+                    self.metrics.total_added += 1
+                elif self.flush_strategy == FlushStrategy.DROP_OLDEST:
+                    if self.flush_queue:
+                        dropped = self.flush_queue.popleft()
+                        self.flush_queue_size -= len(dropped)
+                        self.metrics.total_dropped += len(dropped)
+                        logger.warning(f"Dropped {len(dropped)} oldest tasks due to overflow (projected)")
+                elif self.flush_strategy == FlushStrategy.SPILL_TO_DISK:
+                    await self._spill_to_disk()
+                elif self.flush_strategy == FlushStrategy.REJECT:
+                    # Reject this task
+                    self.active_buffer.pop()
+                    self.metrics.total_added -= 1
+                    self.metrics.buffer_overflows += 1
+                    raise BufferError(
+                        f"Buffer full, rejecting task (batches: {len(self.flush_queue)})"
+                    )
             
             # Check if we should trigger flush
             if len(self.active_buffer) >= self.flush_size:
@@ -331,11 +357,11 @@ class AsyncWriteBuffer:
             self.spill_path.mkdir(parents=True, exist_ok=True)
             
             # Write batch to disk
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')
             spill_file = self.spill_path / f"spill_{timestamp}.json"
             
             spill_data = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'task_count': len(batch),
                 'tasks': [task.to_dict() for task in batch]
             }
@@ -386,7 +412,7 @@ class AsyncWriteBuffer:
             if self.active_buffer:
                 await self._queue_for_flush()
     
-    async def close(self):
+    async def close(self, timeout: float = 30):
         """
         Gracefully close the buffer.
         Ensures all tasks are flushed before closing.
@@ -416,7 +442,6 @@ class AsyncWriteBuffer:
             await self._recover_from_spill()
         
         # Wait for flush queue to empty (with timeout)
-        timeout = 30  # seconds
         start_time = asyncio.get_event_loop().time()
         
         while self.flush_queue:
@@ -464,11 +489,11 @@ class AsyncWriteBuffer:
             backup_path = self.config.emergency_backup_path
             backup_path.parent.mkdir(parents=True, exist_ok=True)
             
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             final_path = backup_path.parent / f"async_buffer_backup_{timestamp}.json"
             
             backup_data = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'task_count': len(all_tasks),
                 'tasks': [task.to_dict() for task in all_tasks]
             }

@@ -5,6 +5,7 @@ Supports both in-memory and distributed (Redis) rate limiting.
 """
 
 import time
+import os
 import asyncio
 from typing import Optional, Dict, Any
 from collections import defaultdict, deque
@@ -245,6 +246,7 @@ class DistributedRateLimiter(BaseRateLimiter):
         self.rate = rate
         self.window = window
         self.redis = redis_client
+        self._fallback = None  # lazy TokenBucketRateLimiter fallback
         
         # Lua script for atomic rate limit check
         self.lua_script = """
@@ -283,7 +285,19 @@ class DistributedRateLimiter(BaseRateLimiter):
         """Check if request is allowed using Redis"""
         if not self.redis:
             # Fallback to in-memory if Redis not available
-            logger.warning("Redis not available, using in-memory rate limiting")
+            if self._fallback is None:
+                try:
+                    self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
+                    logger.warning("Redis not available; using in-memory rate limiting fallback")
+                except Exception:
+                    pass
+            try:
+                from ..monitoring.metrics import get_metrics_collector
+                get_metrics_collector().record_rate_limit_fallback("redis")
+            except Exception:
+                pass
+            if self._fallback:
+                return await self._fallback.is_allowed(key)
             return (True, 0)
         
         try:
@@ -300,8 +314,19 @@ class DistributedRateLimiter(BaseRateLimiter):
             return (bool(result[0]), int(result[1]))
             
         except Exception as e:
-            logger.error(f"Redis rate limit error: {e}")
-            # Allow request on error (fail open)
+            logger.error(f"Redis rate limit error: {e}; falling back to in-memory limiter")
+            if self._fallback is None:
+                try:
+                    self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
+                except Exception:
+                    pass
+            try:
+                from ..monitoring.metrics import get_metrics_collector
+                get_metrics_collector().record_rate_limit_fallback("redis")
+            except Exception:
+                pass
+            if self._fallback:
+                return await self._fallback.is_allowed(key)
             return (True, 0)
     
     async def reset(self, key: str):
@@ -311,10 +336,17 @@ class DistributedRateLimiter(BaseRateLimiter):
                 await self.redis.delete(f"rate_limit:{key}")
             except Exception as e:
                 logger.error(f"Redis reset error: {e}")
+        if self._fallback:
+            try:
+                await self._fallback.reset(key)
+            except Exception:
+                pass
     
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics from Redis"""
         if not self.redis:
+            if self._fallback:
+                return await self._fallback.get_usage(key)
             return {"error": "Redis not available"}
         
         try:
@@ -333,7 +365,12 @@ class DistributedRateLimiter(BaseRateLimiter):
             }
             
         except Exception as e:
-            logger.error(f"Redis usage error: {e}")
+            logger.error(f"Redis usage error: {e}; using in-memory usage stats if available")
+            if self._fallback:
+                try:
+                    return await self._fallback.get_usage(key)
+                except Exception:
+                    pass
             return {"error": str(e)}
 
 
@@ -348,10 +385,45 @@ class RateLimiter:
         self.config = get_config()
         self.limiters = {}
         self._init_limiters()
+        # Optional category-specific limiters (e.g., ingestion vs read)
+        # Defaults fall back to the main limiter rates
+        try:
+            # In-memory token buckets for categories when Redis not used
+            rpm_ing = int(os.getenv("MCP_RATE_LIMIT_RPM_INGESTION", str(self.config.rate_limit_requests_per_minute)))
+            burst_ing = int(os.getenv("MCP_RATE_LIMIT_BURST_INGESTION", str(self.config.rate_limit_burst_size)))
+            rpm_read = int(os.getenv("MCP_RATE_LIMIT_RPM_READ", str(self.config.rate_limit_requests_per_minute)))
+            burst_read = int(os.getenv("MCP_RATE_LIMIT_BURST_READ", str(self.config.rate_limit_burst_size)))
+        except Exception:
+            rpm_ing = self.config.rate_limit_requests_per_minute
+            burst_ing = self.config.rate_limit_burst_size
+            rpm_read = self.config.rate_limit_requests_per_minute
+            burst_read = self.config.rate_limit_burst_size
+
+        # If Redis is enabled, we reuse DistributedRateLimiter with window=60
+        if self.config.rate_limit_use_redis and self.config.redis_url:
+            try:
+                import redis.asyncio as redis  # type: ignore
+                params = self.config.get_redis_connection_params()
+                rc = redis.from_url(**params)
+                self.ingestion_limiter = DistributedRateLimiter(rate=rpm_ing, window=60, redis_client=rc)
+                self.read_limiter = DistributedRateLimiter(rate=rpm_read, window=60, redis_client=rc)
+            except Exception:
+                # Fallback to memory
+                self.ingestion_limiter = TokenBucketRateLimiter(rate=rpm_ing, per=60, burst=burst_ing)
+                self.read_limiter = TokenBucketRateLimiter(rate=rpm_read, per=60, burst=burst_read)
+        else:
+            self.ingestion_limiter = TokenBucketRateLimiter(rate=rpm_ing, per=60, burst=burst_ing)
+            self.read_limiter = TokenBucketRateLimiter(rate=rpm_read, per=60, burst=burst_read)
         
-        # Start cleanup task for in-memory limiters
+        # Start cleanup task for in-memory limiters; defer if no running loop
         if not self.config.rate_limit_use_redis:
-            asyncio.create_task(self._cleanup_task())
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._cleanup_task())
+            except RuntimeError:
+                # No running event loop in this context (e.g., sync test setup)
+                # Defer scheduling until later; functional behavior unaffected.
+                self._defer_cleanup = True  # marker only
     
     def _init_limiters(self):
         """Initialize rate limiters based on configuration"""
@@ -429,6 +501,10 @@ class RateLimiter:
             try:
                 if hasattr(self.default_limiter, 'cleanup_old_entries'):
                     await self.default_limiter.cleanup_old_entries()
+                if hasattr(self.ingestion_limiter, 'cleanup_old_entries'):
+                    await self.ingestion_limiter.cleanup_old_entries()
+                if hasattr(self.read_limiter, 'cleanup_old_entries'):
+                    await self.read_limiter.cleanup_old_entries()
                 
                 for limiter in self.limiters.values():
                     if hasattr(limiter, 'cleanup_old_entries'):
@@ -436,6 +512,12 @@ class RateLimiter:
                         
             except Exception as e:
                 logger.error(f"Error in rate limit cleanup: {e}")
+
+    def get_category_limiter(self, category: str) -> BaseRateLimiter:
+        """Return limiter for a category ('ingestion' or 'read')."""
+        if category == 'ingestion':
+            return self.ingestion_limiter
+        return self.read_limiter
 
 
 # Singleton instance

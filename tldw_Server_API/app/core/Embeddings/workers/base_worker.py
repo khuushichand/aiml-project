@@ -10,12 +10,18 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type, TypeVar
+import random
 
 import redis.asyncio as redis
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..queue_schemas import EmbeddingJobMessage, JobInfo, JobStatus, WorkerMetrics
+from prometheus_client import Histogram
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+from ..messages import build_dedupe_key, classify_failure, validate_schema
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from ..dlq_crypto import encrypt_payload_if_configured
 
 
 T = TypeVar('T', bound=EmbeddingJobMessage)
@@ -51,12 +57,33 @@ class BaseWorker(ABC):
         self.processing_times: List[float] = []
         self._tasks: List[asyncio.Task] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._active_stream_for_batch: Optional[str] = None
+        # Priority queues (optional)
+        self._priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
+        self._priority_weights = self._parse_priority_weights(os.getenv("EMBEDDINGS_PRIORITY_WEIGHTS", "high:5,normal:3,low:1"))
+        self._priority_schedule = self._build_priority_schedule(self._priority_weights)
+        self._priority_index = 0
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         logger.info(f"Initialized {self.config.worker_type} worker: {self.config.worker_id}")
+
+    # Prometheus histograms (module-level singletons)
+    # Observes XREADGROUP batch sizes per stage
+    _H_STAGE_BATCH_SIZE = Histogram(
+        "embedding_stage_batch_size",
+        "Observed Redis batch size per stage",
+        ["stage"],
+    )
+    # Observes individual message payload sizes (JSON-serialized) per stage
+    _H_STAGE_PAYLOAD_BYTES = Histogram(
+        "embedding_stage_payload_bytes",
+        "Observed message payload size in bytes per stage",
+        ["stage"],
+        buckets=(128, 512, 1024, 4096, 16384, 65536, 262144, 1048576, float("inf")),
+    )
     
     def _log_signal_notice(self, signum: int):
         """Log signal notice outside of signal handler context."""
@@ -131,18 +158,43 @@ class BaseWorker(ABC):
         """Main message processing loop"""
         while self.running:
             try:
-                # Read messages from stream
+                # Respect per-stage pause/drain flag
+                try:
+                    if await self._is_stage_paused():
+                        await asyncio.sleep(max(0.01, self.config.poll_interval_ms / 1000))
+                        continue
+                except Exception:
+                    # Do not fail loop on control check
+                    pass
+                # Read messages from stream(s) with optional priority routing
+                if self._priority_enabled:
+                    base = self.config.queue_name
+                    suffix = self._priority_schedule[self._priority_index % len(self._priority_schedule)]
+                    self._priority_index += 1
+                    stream_to_read = f"{base}:{suffix}"
+                    read_from = {stream_to_read: '>'}
+                else:
+                    read_from = {self.config.queue_name: '>'}
+
                 messages = await self.redis_client.xreadgroup(
                     self.config.consumer_group,
                     self.config.worker_id,
-                    {self.config.queue_name: '>'},
+                    read_from,
                     count=self.config.batch_size,
                     block=self.config.poll_interval_ms
                 )
                 
                 if messages:
                     for stream_name, stream_messages in messages:
+                        # Record batch size per stage
+                        try:
+                            self._H_STAGE_BATCH_SIZE.labels(stage=self._stage_name()).observe(len(stream_messages))
+                        except Exception:
+                            pass
+                        # Set active stream for ACKs during this batch
+                        self._active_stream_for_batch = stream_name
                         await self._process_batch(stream_messages)
+                        self._active_stream_for_batch = None
                         
             except Exception as e:
                 logger.error(f"Error in message processing loop: {e}")
@@ -154,14 +206,87 @@ class BaseWorker(ABC):
             start_time = time.time()
             
             try:
+                # Trace one span per message process
+                tm = get_tracing_manager()
+                span_attrs = {
+                    "emb.stage": self._stage_name(),
+                    "emb.queue": self.config.queue_name,
+                    "emb.worker_id": self.config.worker_id,
+                }
+                # Validate envelope early using JSON Schema bundle (best-effort)
+                try:
+                    validate_schema(self._stage_name(), data)
+                except Exception as ve:
+                    # Treat schema invalid as permanent failure
+                    raise ValueError(str(ve))
+
                 # Parse message
                 message = self._parse_message(data)
+                # Enrich span attributes with job_id if available
+                try:
+                    span_attrs["emb.job_id"] = getattr(message, "job_id", "")
+                except Exception:
+                    pass
+                # Observe payload size
+                try:
+                    payload_bytes = len(json.dumps(data, default=str).encode("utf-8")) if isinstance(data, dict) else 0
+                    self._H_STAGE_PAYLOAD_BYTES.labels(stage=self._stage_name()).observe(float(payload_bytes))
+                except Exception:
+                    pass
+                # Operation-level dedupe via operation_id if present
+                try:
+                    op_id = (data.get("operation_id") if isinstance(data, dict) else None) or getattr(message, "operation_id", None)
+                    if op_id:
+                        first = await self._dedupe_mark_operation_once(str(op_id))
+                        if not first:
+                            await self.redis_client.xack(
+                                self._active_stream_for_batch or self.config.queue_name,
+                                self.config.consumer_group,
+                                message_id
+                            )
+                            continue
+                except Exception:
+                    pass
+                # Operator skip registry: allow skipping known-poison jobs
+                try:
+                    if await self._is_job_skipped(message.job_id):
+                        # Mark cancelled and acknowledge
+                        await self._update_job_status(message.job_id, JobStatus.CANCELLED, error_message="Skipped by operator")
+                        await self.redis_client.xack(
+                            self._active_stream_for_batch or self.config.queue_name,
+                            self.config.consumer_group,
+                            message_id
+                        )
+                        continue
+                except Exception:
+                    # Non-fatal
+                    pass
+                # Deduplicate within a short window to guard against replays
+                try:
+                    dkey = build_dedupe_key(self._stage_name(), data)
+                    if dkey:
+                        should_process = await self._dedupe_mark_once(dkey)
+                        if not should_process:
+                            # Already seen recently; ack and skip
+                            await self.redis_client.xack(
+                                self.config.queue_name,
+                                self.config.consumer_group,
+                                message_id
+                            )
+                            continue
+                except Exception:
+                    # Non-fatal; proceed without dedupe
+                    pass
                 
                 # Update job status
                 await self._update_job_status(message.job_id, JobStatus.CHUNKING)
                 
-                # Process the message
-                result = await self.process_message(message)
+                # Process the message within a tracing span
+                async with tm.async_span(
+                    f"embeddings.{self._stage_name()}.process",
+                    attributes=span_attrs,
+                ):
+                    result = await self.process_message(message)
                 
                 # Send to next stage
                 if result:
@@ -169,7 +294,7 @@ class BaseWorker(ABC):
                 
                 # Acknowledge message
                 await self.redis_client.xack(
-                    self.config.queue_name,
+                    self._active_stream_for_batch or self.config.queue_name,
                     self.config.consumer_group,
                     message_id
                 )
@@ -203,39 +328,82 @@ class BaseWorker(ABC):
         try:
             message = self._parse_message(data)
             
-            if message.retry_count < message.max_retries:
-                # Increment retry count and requeue
+            failure_type, error_code = classify_failure(error)
+
+            should_retry = failure_type == "transient" and (message.retry_count < message.max_retries)
+
+            if should_retry:
+                # Increment retry count and requeue with exponential backoff + jitter
                 message.retry_count += 1
                 message.updated_at = datetime.utcnow()
-                
-                # Add back to queue with exponential backoff
-                backoff_ms = (2 ** message.retry_count) * 1000
-                await asyncio.sleep(backoff_ms / 1000)
-                
-                await self.redis_client.xadd(
-                    self.config.queue_name,
-                    message.dict()
+                base = (2 ** message.retry_count) * 1000
+                jitter = random.randint(0, 1000)
+                delay_ms = base + jitter
+                await self._schedule_retry(message, delay_ms)
+                logger.warning(
+                    f"Scheduled retry for {message.job_id} in ~{delay_ms}ms (retry {message.retry_count}, error_code={error_code})"
                 )
-                
-                logger.warning(f"Requeued message {message.job_id} (retry {message.retry_count})")
             else:
-                # Max retries exceeded, mark as failed
+                # Permanent failure or retries exhausted → DLQ
                 await self._update_job_status(
                     message.job_id,
                     JobStatus.FAILED,
-                    error_message=str(error)
+                    error_message=f"{error_code}: {str(error)}"
                 )
-                logger.error(f"Message {message.job_id} failed after {message.max_retries} retries")
+                # Publish to DLQ stream for operator intervention
+                try:
+                    dlq_stream = f"{self.config.queue_name}:dlq"
+                    payload = model_dump_compat(message)
+                    fields = {
+                        "original_queue": self.config.queue_name,
+                        "consumer_group": self.config.consumer_group,
+                        "worker_id": self.config.worker_id,
+                        "job_id": getattr(message, "job_id", ""),
+                        "job_type": self.config.worker_type,
+                        "error": str(error),
+                        "error_code": error_code,
+                        "failure_type": failure_type,
+                        "dlq_state": "quarantined",
+                        "retry_count": str(getattr(message, "retry_count", 0)),
+                        "max_retries": str(getattr(message, "max_retries", 0)),
+                        "failed_at": datetime.utcnow().isoformat(),
+                    }
+                    enc = None
+                    try:
+                        enc = encrypt_payload_if_configured(payload)
+                    except Exception:
+                        enc = None
+                    if enc:
+                        fields["payload_enc"] = enc
+                    else:
+                        fields["payload"] = json.dumps(payload, default=str)
+                    await self.redis_client.xadd(dlq_stream, fields)
+                except Exception as dlq_err:
+                    logger.error(f"Failed to publish message {message.job_id} to DLQ: {dlq_err}")
+                logger.error(
+                    f"Message {message.job_id} sent to DLQ (retries={message.retry_count}/{message.max_retries}, type={failure_type}, code={error_code})"
+                )
                 
             # Always acknowledge to prevent reprocessing
             await self.redis_client.xack(
-                self.config.queue_name,
+                self._active_stream_for_batch or self.config.queue_name,
                 self.config.consumer_group,
                 message_id
             )
             
         except Exception as e:
             logger.error(f"Error handling failed message: {e}")
+
+    async def _is_job_skipped(self, job_id: str) -> bool:
+        """Return True if the job_id is marked as skipped by operator."""
+        if not self.redis_client:
+            return False
+        try:
+            key = f"embeddings:skip:job:{job_id}"
+            val = await self.redis_client.get(key)
+            return str(val).lower() in ("1", "true", "yes")
+        except Exception:
+            return False
     
     async def _update_job_status(self, job_id: str, status: JobStatus, error_message: Optional[str] = None):
         """Update job status in Redis"""
@@ -260,7 +428,11 @@ class BaseWorker(ABC):
         
         # Set TTL for completed/failed jobs
         if status in [JobStatus.COMPLETED, JobStatus.FAILED]:
-            await self.redis_client.expire(job_key, 86400)  # 24 hours
+            try:
+                await self.redis_client.expire(job_key, 86400)  # 24 hours
+            except Exception:
+                # Some in-memory fakes used by tests may not implement expire
+                pass
     
     async def _heartbeat_loop(self):
         """Send periodic heartbeats"""
@@ -297,6 +469,7 @@ class BaseWorker(ABC):
             sum(self.processing_times) / len(self.processing_times)
             if self.processing_times else 0
         )
+        last_proc = self.processing_times[-1] if self.processing_times else 0.0
         
         metrics = WorkerMetrics(
             worker_id=self.config.worker_id,
@@ -309,10 +482,12 @@ class BaseWorker(ABC):
         )
         
         metrics_key = f"worker:metrics:{self.config.worker_id}"
+        payload = json.loads(metrics.json())
+        payload["last_processing_time_ms"] = last_proc * 1000.0
         await self.redis_client.setex(
             metrics_key,
             self.config.metrics_interval * 2,
-            metrics.json()
+            json.dumps(payload)
         )
         
         # Reset processing times to prevent unbounded growth
@@ -338,3 +513,101 @@ class BaseWorker(ABC):
         await asyncio.gather(*self._tasks, return_exceptions=True)
         
         logger.info(f"Worker {self.config.worker_id} shutdown complete")
+
+    # ---------------------------
+    # Control & dedupe helpers
+    # ---------------------------
+    def _stage_name(self) -> str:
+        try:
+            wt = (self.config.worker_type or "").lower()
+            if wt in ("chunking", "embedding", "storage"):
+                return wt
+            # Fallback from queue name
+            if ":" in self.config.queue_name:
+                return self.config.queue_name.split(":", 1)[1]
+        except Exception:
+            pass
+        return (self.config.worker_type or "").lower()
+
+    def _parse_priority_weights(self, spec: str) -> dict:
+        try:
+            out = {"high": 5, "normal": 3, "low": 1}
+            parts = [p.strip() for p in (spec or "").split(",") if p.strip()]
+            for p in parts:
+                if ":" in p:
+                    k, v = p.split(":", 1)
+                    k = k.strip().lower(); v = v.strip()
+                    if k in out:
+                        out[k] = max(1, int(v))
+            return out
+        except Exception:
+            return {"high": 5, "normal": 3, "low": 1}
+
+    def _build_priority_schedule(self, weights: dict) -> list[str]:
+        sched: list[str] = []
+        try:
+            for label in ("high", "normal", "low"):
+                w = int(weights.get(label, 0) or 0)
+                sched.extend([label] * max(0, w))
+            if not sched:
+                sched = ["high", "normal", "low"]
+        except Exception:
+            sched = ["high", "normal", "low"]
+        return sched
+
+    async def _is_stage_paused(self) -> bool:
+        key = f"embeddings:stage:{self._stage_name()}:paused"
+        try:
+            val = await self.redis_client.get(key)
+            return str(val).lower() in ("1", "true", "yes")
+        except Exception:
+            return False
+
+    async def _dedupe_mark_once(self, dkey: str) -> bool:
+        ttl = int(os.getenv("EMBEDDINGS_DEDUPE_TTL_SECONDS", "3600") or 3600)
+        key = f"embeddings:dedupe:{dkey}"
+        try:
+            # SET NX with TTL
+            # redis-py asyncio supports: set(name, value, ex=seconds, nx=True)
+            ok = await self.redis_client.set(key, "1", ex=ttl, nx=True)
+            return bool(ok)
+        except Exception:
+            return True
+
+    async def _dedupe_mark_operation_once(self, operation_id: str) -> bool:
+        """Mark an operation_id once using RedisBloom (if available) or SET NX.
+
+        Returns True if first time seen; False if duplicate.
+        """
+        if not self.redis_client:
+            return True
+        try:
+            # Try RedisBloom first
+            try:
+                res = await self.redis_client.execute_command("BF.ADD", "embeddings:dedupe:opbf", operation_id)
+                if res == 0:
+                    return False
+                return True
+            except Exception:
+                pass
+            # Fallback to SET NX
+            ttl = int(os.getenv("EMBEDDINGS_DEDUPE_TTL_SECONDS", "3600") or 3600)
+            key = f"embeddings:dedupe:op:{operation_id}"
+            ok = await self.redis_client.set(key, "1", ex=ttl, nx=True)
+            return bool(ok)
+        except Exception:
+            return True
+
+    async def _schedule_retry(self, message: EmbeddingJobMessage, delay_ms: int):
+        """Push a message into the delayed ZSET for this stage/queue."""
+        if not self.redis_client:
+            return
+        delayed_key = f"{self.config.queue_name}:delayed"
+        score = int(time.time() * 1000) + int(max(0, delay_ms))
+        payload = model_dump_compat(message)
+        try:
+            await self.redis_client.zadd(delayed_key, {json.dumps(payload, default=str): score})
+        except Exception as e:
+            # Fallback: best effort immediate requeue
+            logger.warning(f"Delayed queue unavailable, immediate requeue: {e}")
+            await self.redis_client.xadd(self.config.queue_name, payload)

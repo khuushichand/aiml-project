@@ -12,7 +12,7 @@ import os
 import socket
 from typing import Dict, Any, Optional, List
 from contextlib import contextmanager
-import logging
+from loguru import logger
 
 from loguru import logger
 
@@ -57,6 +57,9 @@ except ImportError as e:
     # Provide dummy classes for fallback
     class DummyTracer:
         def start_span(self, name, **kwargs):
+            return DummySpan()
+        def start_as_current_span(self, name, **kwargs):
+            # Provide a context manager compatible method used by trace_context
             return DummySpan()
     
     class DummySpan:

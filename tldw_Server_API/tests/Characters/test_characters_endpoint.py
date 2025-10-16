@@ -17,7 +17,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterUpdate
 #
 # Local Imports
-from tldw_Server_API.app.main import app  # Your FastAPI app instance
+from tldw_Server_API.app.main import app as fastapi_app  # Your FastAPI app instance
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     ConflictError,
@@ -68,14 +68,14 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
     original_csrf_setting = global_settings.get('CSRF_ENABLED', None)
     global_settings['CSRF_ENABLED'] = False
     
-    app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
-    with TestClient(app) as c:
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
+    with TestClient(fastapi_app) as c:
         # Set authentication header for single-user mode
         c.headers["X-API-KEY"] = TestConfig.TEST_API_KEY
         yield c
     
     # Restore original settings
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
     if original_csrf_setting is None:
         global_settings.pop('CSRF_ENABLED', None)
     else:
@@ -98,9 +98,9 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
         finally:
             pass
 
-    app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
     
-    with TestClient(app) as c:
+    with TestClient(fastapi_app) as c:
         # Set authentication header for single-user mode
         c.headers["X-API-KEY"] = TestConfig.TEST_API_KEY
         
@@ -115,7 +115,7 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
         
         yield c
     
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
 def create_dummy_image_base64(width=10, height=10, image_format="PNG") -> str:

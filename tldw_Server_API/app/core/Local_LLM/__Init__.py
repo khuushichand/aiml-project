@@ -1,14 +1,36 @@
-################################################################################
-# File: llm_inference_lib/__init__.py
-################################################################################
-# from .manager import LLMInferenceManager
-# from .config_model import LLMManagerConfig, OllamaConfig, HuggingFaceConfig, LlamafileConfig
-# from .exceptions import LLMInfereceLibError, ModelNotFoundError, ModelDownloadError, ServerError, InferenceError
-# from .utils_loader import logging, project_utils # To make them accessible if needed
+"""Local LLM package exports.
 
-# __all__ = [
-#     "LLMInferenceManager",
-#     "LLMManagerConfig", "OllamaConfig", "HuggingFaceConfig", "LlamafileConfig",
-#     "LLMInfereceLibError", "ModelNotFoundError", "ModelDownloadError", "ServerError", "InferenceError",
-#     "logging", "project_utils"
-# ]
+This module bundles the primary manager, config models, and exceptions
+to make it simpler to import from the Local_LLM namespace.
+"""
+
+from .LLM_Inference_Manager import LLMInferenceManager
+from .LLM_Inference_Schemas import (
+    LLMManagerConfig,
+    OllamaConfig,
+    HuggingFaceConfig,
+    LlamafileConfig,
+    LlamaCppConfig,
+)
+from .LLM_Inference_Exceptions import (
+    LLMInferenceLibError,
+    ModelNotFoundError,
+    ModelDownloadError,
+    ServerError,
+    InferenceError,
+)
+
+__all__ = [
+    "LLMInferenceManager",
+    "LLMManagerConfig",
+    "OllamaConfig",
+    "HuggingFaceConfig",
+    "LlamafileConfig",
+    "LlamaCppConfig",
+    "LLMInferenceLibError",
+    "ModelNotFoundError",
+    "ModelDownloadError",
+    "ServerError",
+    "InferenceError",
+]
+

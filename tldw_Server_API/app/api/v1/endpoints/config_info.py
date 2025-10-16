@@ -5,6 +5,7 @@ Only exposes non-sensitive configuration suitable for documentation.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.responses import RedirectResponse, HTMLResponse
 from typing import Dict, List, Optional
 import configparser
@@ -14,6 +15,7 @@ from pathlib import Path
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import settings as global_settings
 from loguru import logger
 import os
 
@@ -65,12 +67,18 @@ def load_safe_config() -> Dict:
     
     # In single-user mode, we can expose the API key for documentation
     if auth_mode == 'single_user':
-        api_key = config.get('Authentication', 'single_user_api_key', 
-                           fallback='default-secret-key-for-single-user')
-        safe_config["api_key_for_docs"] = api_key
+        api_key = config.get('Authentication', 'single_user_api_key', fallback='').strip()
+        placeholders = {
+            "",
+            "your_api_key_here",
+            "YOUR_API_KEY_HERE",
+            "change-me-in-production",
+            "CHANGE_ME_TO_SECURE_API_KEY",
+            "test-api-key-12345",
+        }
+        safe_config["api_key_for_docs"] = "" if api_key in placeholders else api_key
     else:
-        # In multi-user mode, provide a placeholder
-        safe_config["api_key_for_docs"] = "YOUR_API_KEY_HERE"
+        safe_config["api_key_for_docs"] = ""
     
     # Check which LLM providers are configured (without exposing keys)
     configured_providers = []
@@ -93,6 +101,19 @@ def load_safe_config() -> Dict:
                 configured_providers.append(provider_name)
     
     safe_config["configured_llm_providers"] = configured_providers
+    
+    # Feature flags / capabilities (safe to expose)
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings
+        caps = {
+            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True)),
+            "persona": bool(_settings.get("PERSONA_ENABLED", True)),
+        }
+        # expose both for backward-compat and forward-looking UI
+        safe_config["supported_features"] = caps
+        safe_config["capabilities"] = caps
+    except Exception:
+        pass
     
     return safe_config
 
@@ -125,20 +146,24 @@ async def get_documentation_config():
     return {
         "configured": config.get("configured", False),
         "auth_mode": config.get("auth_mode", "single_user"),
-        "api_key": config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+        "api_key": config.get("api_key_for_docs") or "YOUR_API_KEY",
         "base_url": base_url,
         "configured_providers": config.get("configured_llm_providers", []),
+        # Surface capabilities map so WebUI can dynamically hide/show experimental tabs
+        "capabilities": config.get("capabilities", config.get("supported_features", {})),
+        # Keep supported_features for older clients
+        "supported_features": config.get("supported_features", {}),
         "examples": {
             "python": generate_python_example(
-                config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+                config.get("api_key_for_docs") or "YOUR_API_KEY",
                 base_url
             ),
             "curl": generate_curl_example(
-                config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+                config.get("api_key_for_docs") or "YOUR_API_KEY",
                 base_url
             ),
             "javascript": generate_js_example(
-                config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+                config.get("api_key_for_docs") or "YOUR_API_KEY",
                 base_url
             )
         }
@@ -236,6 +261,68 @@ const response = await fetch(`${{BASE_URL}}/api/v1/evals`, {{
 
 const data = await response.json();
 console.log('Created evaluation:', data.id);"""
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer configuration readout and selection
+# ---------------------------------------------------------------------------
+
+class TokenizerConfig(BaseModel):
+    mode: str = Field(..., description="Current tokenizer mode: whitespace|char_approx")
+    divisor: int = Field(..., description="Char-based approx divisor (if applicable)")
+    available_modes: list[str] = Field(default_factory=lambda: ["whitespace", "char_approx"])
+
+
+class TokenizerUpdate(BaseModel):
+    mode: str = Field(..., pattern="^(whitespace|char_approx)$", description="New tokenizer mode")
+    divisor: int = Field(4, ge=1, description="Char-based approx divisor")
+
+
+@router.get("/config/tokenizer", response_model=TokenizerConfig)
+async def get_tokenizer_config() -> TokenizerConfig:
+    mode = str(global_settings.get("TOKEN_ESTIMATOR_MODE", "whitespace")).lower()
+    divisor = int(global_settings.get("TOKEN_CHAR_APPROX_DIVISOR", 4))
+    return TokenizerConfig(mode=mode, divisor=divisor)
+
+
+@router.put("/config/tokenizer", response_model=TokenizerConfig)
+async def update_tokenizer_config(update: TokenizerUpdate) -> TokenizerConfig:
+    # Update in-memory settings; non-persistent across restarts
+    global_settings["TOKEN_ESTIMATOR_MODE"] = update.mode
+    global_settings["TOKEN_CHAR_APPROX_DIVISOR"] = int(update.divisor)
+    return TokenizerConfig(mode=update.mode, divisor=int(update.divisor))
+
+
+@router.get("/config/jobs")
+async def get_jobs_config_info():
+    """Expose non-sensitive Jobs backend configuration and tuning flags.
+
+    Returns current backend selection (sqlite|postgres) and key lease/backoff parameters. Does not expose DSN.
+    """
+    backend = "postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else "sqlite"
+    def _to_int(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except Exception:
+            return default
+    def _to_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except Exception:
+            return default
+    return {
+        "backend": backend,
+        "configured": bool(os.getenv("JOBS_DB_URL")) or backend == "sqlite",
+        "standard_queues": ["default", "high", "low"],
+        "flags": {
+            "JOBS_LEASE_SECONDS": _to_int("JOBS_LEASE_SECONDS", 60),
+            "JOBS_LEASE_RENEW_SECONDS": _to_int("JOBS_LEASE_RENEW_SECONDS", 30),
+            "JOBS_LEASE_RENEW_JITTER_SECONDS": _to_int("JOBS_LEASE_RENEW_JITTER_SECONDS", 5),
+            "JOBS_LEASE_MAX_SECONDS": _to_int("JOBS_LEASE_MAX_SECONDS", 3600),
+            "JOBS_ENFORCE_LEASE_ACK": str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"},
+        },
+        "notes": "DSN is not exposed for security. Configure via the environment (PostgreSQL DSN) to use a Postgres backend."
+    }
 
 
 @router.get("/config/quickstart")

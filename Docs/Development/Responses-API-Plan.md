@@ -780,7 +780,7 @@ async def file_search(query: str, filters: Dict = None) -> Dict:
 
 ### 4. Streaming and Progress Updates
 - Implement Server-Sent Events (SSE) for real-time updates
-- Follow pattern from existing `evals_openai.py` implementation
+- Follow unified router patterns in `evaluations_unified.py`
 - Support progress events, completion events, and errors
 
 ## Additional Critical Issues Found in Deep Review
@@ -1108,8 +1108,8 @@ class TestResponsesIntegration:
 
 ### Code Reuse Strategy
 1. **Runner Pattern**: Copy EvaluationRunner pattern for ResponseRunner
-2. **SSE Streaming**: Reuse SSE implementation from evals_openai.py
-3. **Authentication**: Use exact same pattern from evals_openai.py
+2. **SSE Streaming**: Use unified streaming approach in evaluations_unified.py
+3. **Authentication**: Use pattern from evaluations_unified.py
 4. **RAG Integration**: Direct integration with enhanced_rag_service.py
 5. **LLM Calls**: Use existing Chat_Functions.chat_api_call
 

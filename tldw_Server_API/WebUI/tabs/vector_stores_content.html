@@ -82,6 +82,13 @@
                     <label for="vs_media_keywords">Keywords (comma-separated):</label>
                     <input id="vs_media_keywords" placeholder="finance, earnings">
                 </div>
+                <div class="form-group">
+                    <label for="vs_media_keyword_match">Keyword Match:</label>
+                    <select id="vs_media_keyword_match">
+                        <option value="any" selected>Any (union)</option>
+                        <option value="all">All (intersection)</option>
+                    </select>
+                </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center;">
                     <button class="api-button" onclick="uiCreateStoreFromMedia()">Create New Store</button>
                     <input id="vs_media_existing_store_id" placeholder="Existing Store ID (vs_...)" style="flex:1;"/>
@@ -123,9 +130,11 @@
         <h3>Vectors</h3>
         <div class="columns">
             <div class="column">
-                <div class="form-group">
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_id">Store ID:</label>
-                    <input id="vs_id" placeholder="vs_...">
+                    <input id="vs_id" placeholder="vs_..." onblur="vsUpdateIndexBadgeFromId()">
+                    <span id="vs_index_badge" style="padding:2px 6px; border-radius:10px; font-size:12px; background:#ccc; color:#222; display:none;">index: n/a</span>
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="vsUpdateIndexBadgeFromId()">Refresh Badge</button>
                 </div>
                 <div class="form-group">
                     <label for="vec_text">Content (auto-embed) or Values (JSON array):</label>
@@ -133,13 +142,21 @@
                     <input id="vec_values" placeholder='[0.1, 0.2, ...]' style="margin-top:8px;">
                 </div>
                 <button class="api-button" onclick="vsUpsertVector()">Upsert Vector</button>
-                <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <button class="api-button" onclick="vsListVectors()">List Vectors</button>
                     <label for="vs_limit" style="margin-left:8px;">Page Size:</label>
                     <input id="vs_limit" type="number" value="50" min="1" max="1000" style="width:80px;">
                     <button class="api-button" onclick="vsPrevPage()">Prev</button>
                     <button class="api-button" onclick="vsNextPage()">Next</button>
                     <span id="vs_page_info" style="color: var(--color-text-muted);"></span>
+                </div>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label for="vs_filter">Filter (JSON):</label>
+                    <input id="vs_filter" placeholder='{"$and":[{"genre":"a"},{"score":{"$gte":0.8}}]}' style="min-width:360px; flex:1;">
+                    <label for="vs_order_by">Order By:</label>
+                    <input id="vs_order_by" placeholder='id or metadata.score' style="width:200px;">
+                    <label for="vs_order_dir">Dir:</label>
+                    <select id="vs_order_dir"><option>asc</option><option>desc</option></select>
                 </div>
                 <button class="api-button" onclick="vsQuery()">Query</button>
                 <div class="form-group" style="margin-top:12px;">
@@ -152,11 +169,46 @@
                     <input id="vec_delete_id" placeholder="vector id">
                     <button class="api-button btn-danger" onclick="vsDeleteVector()">Delete Vector</button>
                 </div>
+                <div class="form-group">
+                    <label for="vs_delete_filter">Delete By Filter (JSON):</label>
+                    <input id="vs_delete_filter" placeholder='{"media_id":"42"}'>
+                    <button class="api-button btn-danger" onclick="vsDeleteByFilter()">Delete by Filter</button>
+                </div>
             </div>
             <div class="column">
                 <h4>Result</h4>
                 <pre id="vs_result">---</pre>
                 <div id="vs_vector_list"></div>
+            </div>
+        </div>
+        <hr>
+        <h3>Admin (Index & Tuning)</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label for="vs_admin_id">Store ID:</label>
+                    <input id="vs_admin_id" placeholder="vs_..." style="width:240px;" onblur="vsUpdateIndexBadgeFromId()">
+                    <button class="api-button" onclick="vsAdminIndexInfo()">Index Info</button>
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="vsUpdateIndexBadgeFromId()">Refresh Badge</button>
+                </div>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                    <label for="vs_ef_search">ef_search:</label>
+                    <input id="vs_ef_search" type="number" value="64" min="1" style="width:120px;">
+                    <button class="api-button" onclick="vsAdminSetEfSearch()">Set ef_search</button>
+                </div>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label for="vs_index_type">Index Type:</label>
+                    <select id="vs_index_type"><option>hnsw</option><option>ivfflat</option><option>drop</option></select>
+                    <label for="vs_index_metric">Metric:</label>
+                    <select id="vs_index_metric"><option>cosine</option><option>euclidean</option><option>ip</option></select>
+                    <label for="vs_index_m">M:</label>
+                    <input id="vs_index_m" type="number" value="16" min="2" style="width:100px;">
+                    <label for="vs_index_efc">ef_construction:</label>
+                    <input id="vs_index_efc" type="number" value="200" min="1" style="width:120px;">
+                    <label for="vs_index_lists">lists (IVF):</label>
+                    <input id="vs_index_lists" type="number" value="100" min="1" style="width:100px;">
+                    <button class="api-button btn-danger" onclick="vsAdminRebuildIndex()">Rebuild Index</button>
+                </div>
             </div>
         </div>
     </div>
@@ -184,6 +236,27 @@ async function vsList(){
     li.innerHTML = `${s.name} (<code>${s.id}</code>) — dim=${s.dimensions} ` +
                    `<button class="btn-small" onclick="vsRenameQuick('${s.id}')">Rename</button>` +
                    ` <button class="btn-small" onclick="vsSelect('${s.id}','${s.name.replace(/"/g,'&quot;')}')">Select</button>`;
+    // Add inline index-type badge and manual refresh button
+    try {
+      const rowBadge = document.createElement('span');
+      rowBadge.id = `vs_row_badge_${s.id}`;
+      rowBadge.className = 'vs-row-badge';
+      rowBadge.style.cssText = 'margin-left:6px; padding:2px 6px; border-radius:10px; font-size:12px; background:#eee; color:#444;';
+      rowBadge.textContent = 'index: …';
+      li.appendChild(rowBadge);
+      const refreshBtn = document.createElement('button');
+      refreshBtn.className = 'btn-small';
+      refreshBtn.textContent = 'Refresh';
+      refreshBtn.onclick = (ev) => { ev.stopPropagation(); vsRefreshRowBadge(s.id); };
+      li.appendChild(refreshBtn);
+      // Lazy-load badge on first hover
+      li.addEventListener('mouseenter', () => {
+        const badgeEl = document.getElementById(`vs_row_badge_${s.id}`);
+        if (badgeEl && !badgeEl.dataset.loaded) {
+          vsFetchIndexBadgeForStore(s.id, badgeEl).catch(()=>{});
+        }
+      }, { once: true });
+    } catch {}
     li.style.cursor = 'pointer';
     li.onclick = () => {
       document.getElementById('vs_edit_id').value = s.id;
@@ -251,7 +324,16 @@ async function vsListVectors(){
   if(!id){ alert('Enter vector store id'); return; }
   const limit = parseInt(document.getElementById('vs_limit').value || '50');
   const offset = window.__vs_offset || 0;
-  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, { limit, offset });
+  const query = { limit, offset };
+  const filterText = (document.getElementById('vs_filter')?.value || '').trim();
+  if (filterText){
+    try { JSON.parse(filterText); query.filter = filterText; } catch(e){ alert('Invalid filter JSON'); return; }
+  }
+  const orderBy = (document.getElementById('vs_order_by')?.value || '').trim();
+  const orderDir = (document.getElementById('vs_order_dir')?.value || 'asc').trim();
+  if (orderBy){ query.order_by = orderBy; }
+  if (orderDir){ query.order_dir = orderDir; }
+  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, query);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
   renderVectorList(res.data || []);
   const pageInfo = document.getElementById('vs_page_info');
@@ -270,6 +352,119 @@ async function vsQuery(){
   const body = { query: q, top_k: 5 };
   const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/query`, body);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsAdminIndexInfo(){
+  const id = (document.getElementById('vs_admin_id')?.value || document.getElementById('vs_id')?.value || '').trim();
+  if (!id){ alert('Enter store id'); return; }
+  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/index_info`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  vsRenderIndexBadge(res);
+}
+
+async function vsAdminSetEfSearch(){
+  const value = parseInt(document.getElementById('vs_ef_search')?.value || '64');
+  const res = await apiClient.post('/api/v1/vector_stores/admin/hnsw_ef_search', { ef_search: value });
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsAdminRebuildIndex(){
+  const id = (document.getElementById('vs_admin_id')?.value || document.getElementById('vs_id')?.value || '').trim();
+  if (!id){ alert('Enter store id'); return; }
+  const index_type = (document.getElementById('vs_index_type')?.value || 'hnsw');
+  const metric = (document.getElementById('vs_index_metric')?.value || 'cosine');
+  const m = parseInt(document.getElementById('vs_index_m')?.value || '16');
+  const ef_construction = parseInt(document.getElementById('vs_index_efc')?.value || '200');
+  const lists = parseInt(document.getElementById('vs_index_lists')?.value || '100');
+  // Styled danger modal instead of confirm
+  const notes = `
+    <div style="border-left:4px solid var(--color-error); padding:8px 12px; background: var(--color-surface-alt); margin-bottom:10px;">
+      <div style="font-weight:600; color: var(--color-error); margin-bottom:6px;">Danger: Rebuild Index</div>
+      <div style="color: var(--color-text-secondary);">
+        This operation will drop and recreate the ANN index for <code>${Utils.escapeHtml(id)}</code>.<br>
+        During rebuild, query performance may degrade. For large datasets, consider running off-peak.<br>
+        Settings:<br>
+        • Type: <b>${Utils.escapeHtml(index_type)}</b> • Metric: <b>${Utils.escapeHtml(metric)}</b><br>
+        • HNSW → m=<b>${m}</b>, ef_construction=<b>${ef_construction}</b> • IVFFLAT → lists=<b>${lists}</b>
+      </div>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" type="button" id="rb_cancel">Cancel</button>
+    <button class="btn btn-danger" type="button" id="rb_confirm">Rebuild Index</button>
+  `;
+  const modal = new Modal({ title: 'Confirm Rebuild', content: notes, size: 'medium', footer });
+  modal.show();
+  const onConfirm = async () => {
+    try {
+      const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/rebuild_index`, { index_type, metric, m, ef_construction, lists });
+      document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+      vsRenderIndexBadge(res);
+      try { vsRefreshRowBadge(id); } catch {}
+      if (typeof Toast !== 'undefined') Toast.success('Index rebuild started');
+    } catch(e){
+      if (typeof Toast !== 'undefined') Toast.error(`Rebuild failed: ${e?.message||e}`);
+    } finally {
+      modal.close();
+    }
+  };
+  const onCancel = () => modal.close();
+  modal.modal.querySelector('#rb_confirm').onclick = onConfirm;
+  modal.modal.querySelector('#rb_cancel').onclick = onCancel;
+}
+
+async function vsUpdateIndexBadgeFromId(){
+  const id = (document.getElementById('vs_admin_id')?.value || document.getElementById('vs_id')?.value || '').trim();
+  const badge = document.getElementById('vs_index_badge');
+  if (!id || !badge){ return; }
+  try {
+    const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/index_info`);
+    vsRenderIndexBadge(res);
+  } catch(e) { badge.style.display = 'none'; }
+}
+
+function vsRenderIndexBadge(info){
+  const badge = document.getElementById('vs_index_badge');
+  if (!badge) return;
+  const t = (info.index_type || info.backend || 'n/a').toString().toLowerCase();
+  let text = `index: ${t}`;
+  if (info.ops) text += ` (${info.ops})`;
+  badge.textContent = text;
+  badge.style.display = 'inline-block';
+  let bg = '#ccc', fg = '#222';
+  if (t === 'hnsw') { bg = '#d1f2d1'; fg = '#195c19'; }
+  else if (t === 'ivfflat') { bg = '#ffe0b3'; fg = '#5c3c19'; }
+  else if (t === 'managed') { bg = '#d9e7ff'; fg = '#123c7a'; }
+  badge.style.background = bg;
+  badge.style.color = fg;
+}
+
+async function vsFetchIndexBadgeForStore(storeId, badgeEl){
+  try {
+    if (!badgeEl) badgeEl = document.getElementById(`vs_row_badge_${storeId}`);
+    if (!badgeEl) return;
+    badgeEl.textContent = 'index: …';
+    const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/admin/index_info`);
+    const t = (res.index_type || 'n/a').toString().toLowerCase();
+    const backend = (res.backend || 'n/a').toString().toLowerCase();
+    let text = `index: ${t} • backend: ${backend}`;
+    if (res.ops) text += ` (${res.ops})`;
+    badgeEl.textContent = text;
+    let bg = '#eee', fg = '#444';
+    if (t === 'hnsw') { bg = '#d1f2d1'; fg = '#195c19'; }
+    else if (t === 'ivfflat') { bg = '#ffe0b3'; fg = '#5c3c19'; }
+    else if (t === 'managed') { bg = '#d9e7ff'; fg = '#123c7a'; }
+    badgeEl.style.background = bg; badgeEl.style.color = fg;
+    badgeEl.dataset.loaded = '1';
+  } catch (e){
+    if (badgeEl) { badgeEl.textContent = 'index: n/a'; badgeEl.style.background = '#eee'; badgeEl.style.color = '#888'; }
+  }
+}
+
+function vsRefreshRowBadge(storeId){
+  const badgeEl = document.getElementById(`vs_row_badge_${storeId}`);
+  if (badgeEl) { delete badgeEl.dataset.loaded; }
+  vsFetchIndexBadgeForStore(storeId, badgeEl);
 }
 
 async function vsBulkUpsert(){
@@ -300,6 +495,17 @@ async function vsDeleteVector(){
   const vecId = document.getElementById('vec_delete_id').value.trim();
   if (!storeId || !vecId){ alert('Enter store id and vector id'); return; }
   const res = await apiClient.delete(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/vectors/${encodeURIComponent(vecId)}`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsDeleteByFilter(){
+  const storeId = document.getElementById('vs_id').value.trim();
+  if (!storeId){ alert('Enter store id'); return; }
+  const txt = (document.getElementById('vs_delete_filter')?.value || '').trim();
+  if (!txt){ alert('Enter filter JSON'); return; }
+  let filt = {};
+  try { filt = JSON.parse(txt); } catch(e){ alert('Invalid filter JSON'); return; }
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/admin/delete_by_filter`, { filter: filt });
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
 }
 
@@ -396,12 +602,13 @@ async function uiCreateStoreFromMedia(){
   const model = document.getElementById('vs_media_model')?.value.trim();
   const ids = (document.getElementById('vs_media_ids')?.value || '').split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
   const kws = (document.getElementById('vs_media_keywords')?.value || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const kwMatch = (document.getElementById('vs_media_keyword_match')?.value || 'any');
   const chunk_size = parseInt(document.getElementById('vs_media_chunk_size')?.value || '500');
   const chunk_overlap = parseInt(document.getElementById('vs_media_chunk_overlap')?.value || '100');
   const chunk_method = (document.getElementById('vs_media_chunk_method')?.value || 'words');
   const use_existing_embeddings = document.getElementById('vs_media_use_existing')?.checked || false;
   const language = (document.getElementById('vs_media_language')?.value || '').trim() || undefined;
-  const body = { store_name: name, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings };
+  const body = { store_name: name, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, keyword_match: kwMatch, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings };
   const res = await apiClient.post('/api/v1/vector_stores/create_from_media', body);
   const out = document.getElementById('vs_media_result'); if (out) out.textContent = JSON.stringify(res, null, 2);
 }
@@ -416,12 +623,13 @@ async function uiUpdateStoreFromMedia(){
   const model = document.getElementById('vs_media_model')?.value.trim();
   const ids = (document.getElementById('vs_media_ids')?.value || '').split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
   const kws = (document.getElementById('vs_media_keywords')?.value || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const kwMatch = (document.getElementById('vs_media_keyword_match')?.value || 'any');
   const chunk_size = parseInt(document.getElementById('vs_media_chunk_size')?.value || '500');
   const chunk_overlap = parseInt(document.getElementById('vs_media_chunk_overlap')?.value || '100');
   const chunk_method = (document.getElementById('vs_media_chunk_method')?.value || 'words');
   const use_existing_embeddings = document.getElementById('vs_media_use_existing')?.checked || false;
   const language = (document.getElementById('vs_media_language')?.value || '').trim() || undefined;
-  const body = { store_name: name || existing, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings, update_existing_store_id: existing };
+  const body = { store_name: name || existing, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, keyword_match: kwMatch, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings, update_existing_store_id: existing };
   const res = await apiClient.post('/api/v1/vector_stores/create_from_media', body);
   const out = document.getElementById('vs_media_result'); if (out) out.textContent = JSON.stringify(res, null, 2);
 }

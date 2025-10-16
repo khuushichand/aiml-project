@@ -2,13 +2,17 @@
 # Event broadcasting system for Prompt Studio real-time updates
 
 import json
+import uuid
 import asyncio
 from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
 from enum import Enum
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
+    PromptStudioDatabase,
+    DatabaseError,
+)
 
 ########################################################################################################################
 # Event Types
@@ -420,23 +424,18 @@ class EventBroadcaster:
         
         try:
             if job_type == "evaluation":
-                cursor.execute(
-                    "SELECT project_id FROM prompt_studio_evaluations WHERE id = ?",
-                    (entity_id,)
-                )
-            elif job_type == "optimization":
-                cursor.execute(
-                    "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
-                    (entity_id,)
-                )
-            else:
-                return None
-            
-            row = cursor.fetchone()
-            return row[0] if row else None
-            
-        except Exception as e:
-            logger.error(f"Error getting project for job: {e}")
+                evaluation = self.db.get_evaluation(entity_id)
+                return evaluation.get("project_id") if evaluation else None
+            if job_type == "optimization":
+                optimization = self.db.get_optimization(entity_id)
+                return optimization.get("project_id") if optimization else None
+            return None
+
+        except DatabaseError as exc:
+            logger.error(f"Database error resolving project for job {entity_id}: {exc}")
+            return None
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"Error getting project for job: {exc}")
             return None
     
     async def _log_event(self, event_type: EventType, data: Dict[str, Any],
@@ -450,27 +449,21 @@ class EventBroadcaster:
             project_id: Associated project ID
         """
         try:
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            
-            # Store in sync_log for now (could add dedicated event log table)
-            cursor.execute("""
-                INSERT INTO sync_log (
-                    table_name, operation, entity_id, 
-                    entity_data, client_id, synced_at
-                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (
-                "prompt_studio_events",
-                event_type.value,
-                project_id or 0,
-                json.dumps(data),
-                self.client_id
-            ))
-            
-            conn.commit()
-            
+            # Route through DB helper to keep schema consistent across backends
+            payload = dict(data or {})
+            if project_id is not None:
+                payload.setdefault("project_id", project_id)
+            event_uuid = str(uuid.uuid4())
+            # _log_sync_event(entity, entity_uuid, operation, payload)
+            # The helper handles missing sync_log gracefully.
+            self.db._log_sync_event(
+                entity="prompt_studio_event",
+                entity_uuid=event_uuid,
+                operation=event_type.value,
+                payload=payload,
+            )
         except Exception as e:
-            logger.error(f"Failed to log event: {e}")
+            logger.debug(f"Failed to log event to sync_log (non-fatal): {e}")
 
 ########################################################################################################################
 # Event Hooks for Integration

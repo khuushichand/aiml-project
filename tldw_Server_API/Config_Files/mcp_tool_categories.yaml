@@ -1,0 +1,22 @@
+# Sample tool → category mapping for MCP per-tool rate limits
+#
+# Categories are arbitrary strings; this project recognizes at least:
+#   - ingestion: write/expensive operations (e.g., ingest, update, delete)
+#   - read: read-only/retrieval operations
+#
+# You can override or extend categories as needed.
+
+ingest_media: ingestion
+update_media: ingestion
+delete_media: ingestion
+
+media.search: read
+knowledge.search: read
+notes.search: read
+chats.search: read
+prompts.search: read
+
+# Example of custom tool names (if your modules define them):
+# mock_ingest: ingestion
+# mock_read: read
+

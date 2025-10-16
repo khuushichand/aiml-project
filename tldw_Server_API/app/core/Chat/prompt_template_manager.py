@@ -106,10 +106,36 @@ _SANDBOX = SandboxedEnvironment(
     enable_async=False,             # no await, no async callables
 )
 
+def _normalize_template_syntax(template_str: str) -> str:
+    """
+    Best-effort normalization to support common JS-like operators inside Jinja blocks.
+    Converts logical '||' to 'or' and '&&' to 'and' within {{ ... }} or {% ... %} segments.
+    Leaves content outside of Jinja blocks untouched.
+    """
+    import re as _re
+
+    def _norm_block(prefix: str, suffix: str, s: str) -> str:
+        pattern = _re.compile(_re.escape(prefix) + r"\s*(.*?)\s*" + _re.escape(suffix), _re.DOTALL)
+
+        def repl(m):
+            inner = m.group(1)
+            inner = inner.replace("||", " or ").replace("&&", " and ")
+            return f"{prefix} {inner} {suffix}"
+
+        return pattern.sub(repl, s)
+
+    # Normalize expression and statement blocks
+    out = template_str
+    out = _norm_block("{{", "}}", out)
+    out = _norm_block("{%", "%}", out)
+    return out
+
+
 def safe_render(template_str: str, data: dict[str, Any]) -> str:
-    """Render with a locked-down Jinja sandbox."""
+    """Render with a locked-down Jinja sandbox (with light syntax normalization)."""
     try:
-        tmpl = _SANDBOX.from_string(template_str)
+        normalized = _normalize_template_syntax(template_str)
+        tmpl = _SANDBOX.from_string(normalized)
         return tmpl.render(**data)
     except Exception as exc:
         logger.error("Template render error %s", exc, exc_info=False)

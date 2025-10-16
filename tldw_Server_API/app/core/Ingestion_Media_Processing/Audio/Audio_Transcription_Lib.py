@@ -31,14 +31,31 @@ from typing import Optional, Union, List, Dict, Any
 # DEBUG Imports
 #from memory_profiler import profile
 # Third-Party Imports
-import pyaudio
+# Optional desktop audio deps (guarded to avoid server import failures)
+try:
+    import pyaudio  # type: ignore
+    HAS_PYAUDIO = True
+except Exception:
+    pyaudio = None  # type: ignore
+    HAS_PYAUDIO = False
+
 from faster_whisper import WhisperModel as OriginalWhisperModel
 import numpy as np
 import torch
 from scipy.io import wavfile
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
-import sounddevice as sd
-import wave
+try:
+    import sounddevice as sd  # type: ignore
+    HAS_SOUNDDEVICE = True
+except Exception:
+    sd = None  # type: ignore
+    HAS_SOUNDDEVICE = False
+try:
+    import wave  # type: ignore
+    HAS_WAVE = True
+except Exception:
+    wave = None  # type: ignore
+    HAS_WAVE = False
 
 # Import diarization module (optional dependency)
 try:
@@ -1892,7 +1909,10 @@ def speech_to_text(
     whisper_model: str = 'distil-large-v3',
     selected_source_lang: str = 'en',  # Changed order of parameters
     vad_filter: bool = False,
-    diarize: bool = False
+    diarize: bool = False,
+    *,
+    word_timestamps: bool = False,
+    return_language: bool = False,
 ):
     """
     Transcribes an audio file to text using a specified faster-Whisper model.
@@ -1919,6 +1939,8 @@ def speech_to_text(
         - "start_seconds" (float): Start time of the segment in seconds.
         - "end_seconds" (float): End time of the segment in seconds.
         - "Text" (str): The transcribed text of the segment.
+        - Optional "words" (list): When word_timestamps=True, a list of
+          {"start": float, "end": float, "word": str} entries per segment.
         The first segment may include metadata about the transcription model
         and detected language prepended to its "Text" field.
 
@@ -2007,8 +2029,9 @@ def speech_to_text(
         # FIXME - was 10? Evaluate...
         if selected_source_lang:
             options["language"] = selected_source_lang
-        # Add word_timestamps=True if needed later for more granular data
-        # options["word_timestamps"] = True
+        # Enable word-level timestamps if requested
+        if word_timestamps:
+            options["word_timestamps"] = True
 
         transcribe_options = dict(task="transcribe", **options)
 
@@ -2046,6 +2069,22 @@ def speech_to_text(
                 "end_seconds": segment_chunk.end,
                 "Text": segment_chunk.text.strip() # Strip whitespace from text
             }
+            # Include word-level timestamps if available/requested
+            if word_timestamps and hasattr(segment_chunk, 'words') and segment_chunk.words:
+                try:
+                    words_list = []
+                    for w in segment_chunk.words:
+                        # Some versions may return None for start/end; guard it
+                        words_list.append({
+                            "start": float(w.start) if w.start is not None else None,
+                            "end": float(w.end) if w.end is not None else None,
+                            "word": getattr(w, 'word', getattr(w, 'text', '')).strip(),
+                        })
+                    if words_list:
+                        chunk["words"] = words_list
+                except Exception:
+                    # Non-fatal if words parsing fails
+                    pass
             logging.debug(f"Segment: {chunk}")
             segments.append(chunk)
             # Log with limited precision for readability
@@ -2073,6 +2112,9 @@ def speech_to_text(
         log_counter("speech_to_text_success", labels={"file_path": str(file_path), "model": whisper_model, "segments": len(segments)})
 
         gc.collect() # Suggest garbage collection
+        # Return either segments or (segments, detected_lang)
+        if return_language:
+            return segments, detected_lang
         return segments # Return the list of segment dictionaries
 
     except Exception as e:

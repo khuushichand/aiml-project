@@ -98,6 +98,7 @@ def improved_chunking_process(text: str,
     max_size = options.get('max_size', 400)
     overlap = options.get('overlap', 200)
     language = options.get('language', 'en')
+    code_mode = str(options.get('code_mode', 'auto')).lower() if str(method).lower() == 'code' else None
     
     # Create chunker with LLM support if provided
     chunker = Chunker(llm_call_func=llm_call_func, llm_config=llm_api_config)
@@ -124,6 +125,11 @@ def improved_chunking_process(text: str,
                 'end_index': chunk.metadata.end_char,
                 'word_count': chunk.metadata.word_count,
                 'language': chunk.metadata.language,
+                # Standardized keys for consistency across endpoints
+                'chunk_method': method,
+                'max_size': max_size,
+                'overlap': overlap,
+                **({'code_mode_used': code_mode} if code_mode is not None else {}),
             }
         })
     
@@ -164,7 +170,30 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
     
     # Format for embedding
     result = []
+    import hashlib as _hashlib
     for chunk in chunks:
+        # Stable chunk UID constructed from file name, offsets, and content hash
+        try:
+            start_c = getattr(chunk.metadata, 'start_char', None)
+        except Exception:
+            start_c = None
+        try:
+            end_c = getattr(chunk.metadata, 'end_char', None)
+        except Exception:
+            end_c = None
+        txt = chunk.text
+        content_sig = _hashlib.sha1((txt or '').encode('utf-8')).hexdigest()[:12]
+        file_sig = _hashlib.md5((file_name or '').encode('utf-8')).hexdigest()[:8]
+        chunk_uid = f"ck_{file_sig}_{start_c if start_c is not None else 's'}_{end_c if end_c is not None else 'e'}_{content_sig}"
+        # Fielded metadata
+        try:
+            # Prefer v2 Chunker fields when present
+            ancestry_titles = list(getattr(chunk.metadata, 'ancestry_titles', []) or [])
+        except Exception:
+            ancestry_titles = []
+        headings = ancestry_titles if isinstance(ancestry_titles, list) else []
+        # Basic captions placeholder (can be filled by upstream parsers)
+        captions = []
         result.append({
             'text': chunk.text,
             'text_for_embedding': f"File: {file_name}\n{chunk.text}",
@@ -173,6 +202,10 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
                 'chunk_index': chunk.metadata.index,
                 'start_char': chunk.metadata.start_char,
                 'end_char': chunk.metadata.end_char,
+                'chunk_uid': chunk_uid,
+                # Structured/fielded metadata for indexing/boosting
+                'headings': headings,
+                'captions': captions,
             }
         })
     

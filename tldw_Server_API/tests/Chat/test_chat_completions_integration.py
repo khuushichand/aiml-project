@@ -34,7 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 
 
 # --- Fixtures defined locally in this file ---
-API_BEARER="default-secret-key-for-single-user"
+API_BEARER = os.getenv("API_BEARER", "test-api-key-12345")
 
 @pytest.fixture
 def mock_user():
@@ -145,7 +145,7 @@ def valid_auth_token() -> str:
             return api_bearer
         else:
             # Default token for single-user mode with Bearer prefix
-            return "Bearer default-secret-key-for-single-user"
+            return f"Bearer {API_BEARER}"
 
 
 # --- Provider lists and helpers defined locally for this test file ---
@@ -153,7 +153,7 @@ try:
     # These are used to determine which providers are configured and have keys.
     # The actual APP_API_KEYS should be loaded by your application's schema/config logic.
     from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import API_KEYS as APP_API_KEYS_FROM_SCHEMA
-    from tldw_Server_API.app.core.Chat.Chat_Functions import API_CALL_HANDLERS as APP_API_CALL_HANDLERS
+    from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as APP_API_CALL_HANDLERS
 
     ALL_CONFIGURED_PROVIDERS_FROM_APP = list(APP_API_CALL_HANDLERS.keys())
 except ImportError:
@@ -167,7 +167,14 @@ def get_commercial_providers_with_keys_integration():
     """
     Returns a list of commercial providers for which API keys are actually set
     and non-empty, as understood by the application's schema.
+
+    This integration test set is gated by RUN_COMMERCIAL_CHAT_TESTS. If not enabled,
+    returns an empty list to skip these tests in environments without network access
+    or valid provider credentials.
     """
+    # Require explicit opt-in to run commercial provider tests
+    if os.getenv("RUN_COMMERCIAL_CHAT_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return []
     potentially_commercial = [
         "openai", "anthropic", "cohere", "groq", "openrouter",
         "deepseek", "mistral", "google", "huggingface", "qwen"
@@ -289,13 +296,13 @@ def test_commercial_provider_non_streaming_no_template(
 
     model_map = {
         "openai": "gpt-4o-mini",
-        "anthropic": "claude-3-haiku-20240307",
-        "cohere": "command-r",
-        "groq": "llama3-8b-8192",
-        "openrouter": "mistralai/mistral-7b-instruct:free",
+        "anthropic": "claude-4-sonnet",
+        "cohere": "command-a",
+        "groq": "llama-3.1-8b-instant",
+        "openrouter": "deepseek/deepseek-chat-v3.1:free",
         "deepseek": "deepseek-chat",
         "mistral": "mistral-tiny",
-        "google": "gemini-1.5-flash-latest",
+        "google": "gemini-flash-2.5",
         "huggingface": os.getenv("HF_TEST_MODEL", "mistralai/Mistral-7B-Instruct-v0.1")
     }
     default_test_model = "test-model-default"  # Fallback, though ideally map should cover all in COMMERCIAL_PROVIDERS_FOR_TEST

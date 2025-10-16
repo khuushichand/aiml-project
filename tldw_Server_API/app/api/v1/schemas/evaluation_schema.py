@@ -155,8 +155,8 @@ class RAGEvaluationRequest(BaseModel):
     retrieved_contexts: List[str] = Field(
         ...,
         description="Retrieved context chunks",
-        min_items=1,
-        max_items=20  # Limit number of contexts
+        min_length=1,
+        max_length=20  # Limit number of contexts
     )
     generated_response: str = Field(
         ...,
@@ -282,8 +282,8 @@ class BatchEvaluationRequest(BaseModel):
     items: List[Dict[str, Any]] = Field(
         ...,
         description="Items to evaluate",
-        min_items=1,
-        max_items=100  # Limit batch size
+        min_length=1,
+        max_length=100  # Limit batch size
     )
     metrics: Optional[List[str]] = Field(None, description="Metrics to compute")
     api_name: Optional[str] = Field("openai", description="LLM API to use")
@@ -356,7 +356,7 @@ class CustomMetricResponse(BaseModel):
 
 class EvaluationComparisonRequest(BaseModel):
     """Request to compare multiple evaluations"""
-    evaluation_ids: List[str] = Field(..., min_items=2, description="Evaluation IDs to compare")
+    evaluation_ids: List[str] = Field(..., min_length=2, description="Evaluation IDs to compare")
     metrics_to_compare: Optional[List[str]] = Field(None, description="Specific metrics to compare")
 
 

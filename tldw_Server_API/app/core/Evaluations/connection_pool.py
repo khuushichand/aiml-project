@@ -575,8 +575,9 @@ class EvaluationsConnectionManager:
             db_path: Path to database file
         """
         if db_path is None:
-            db_dir = Path(__file__).parent.parent.parent.parent / "Databases"
-            db_path = db_dir / "evaluations.db"
+            # Default to per-user evaluations DB (single-user ID)
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+            db_path = _DP.get_evaluations_db_path(_DP.get_single_user_id())
         
         # Load pool configuration
         db_config = get_config("database.connection", {})

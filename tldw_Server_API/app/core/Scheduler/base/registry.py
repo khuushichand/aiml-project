@@ -92,6 +92,45 @@ class TaskRegistry:
             return wrapper
         
         return decorator
+
+    def register(self,
+                 name: str,
+                 func: Callable,
+                 max_retries: int = 3,
+                 timeout: int = 300,
+                 queue: str = "default") -> None:
+        """
+        Register a task handler directly (convenience for tests).
+
+        Args:
+            name: Handler name
+            func: Callable to execute for the task
+            max_retries: Max retries
+            timeout: Timeout seconds
+            queue: Default queue
+        """
+        import inspect
+        # Basic validation mirrors decorator behavior
+        if not callable(func):
+            raise ValueError("Handler must be callable")
+        sig = inspect.signature(func)
+        if not sig.parameters and not inspect.iscoroutinefunction(func):
+            pass
+        elif len(sig.parameters) < 1:
+            raise ValueError(
+                f"Handler {name} must accept at least one parameter (payload)"
+            )
+        self._handlers[name] = func
+        self._metadata[name] = {
+            'max_retries': max_retries,
+            'timeout': timeout,
+            'queue': queue,
+            'is_async': inspect.iscoroutinefunction(func),
+            'signature': sig,
+            'module': getattr(func, '__module__', ''),
+            'function': getattr(func, '__name__', str(func))
+        }
+        logger.debug(f"Registered task handler: {name}")
     
     def get_handler(self, name: str) -> Callable:
         """

@@ -7,8 +7,9 @@ import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from heapq import heappush, heappop
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable, Tuple
 from loguru import logger
+from collections import deque
 
 #######################################################################################################################
 #
@@ -31,6 +32,13 @@ class QueuedRequest:
     future: asyncio.Future = field(compare=False)
     client_id: str = field(compare=False)
     estimated_tokens: int = field(compare=False, default=0)
+    # Optional processor for actual work execution
+    processor: Optional[Callable[..., Any]] = field(compare=False, default=None)
+    processor_args: Tuple[Any, ...] = field(compare=False, default_factory=tuple)
+    processor_kwargs: Dict[str, Any] = field(compare=False, default_factory=dict)
+    streaming: bool = field(compare=False, default=False)
+    # For streaming jobs, a channel to emit provider chunks (bytes or str). Sentinel None indicates end.
+    stream_channel: Optional[asyncio.Queue] = field(compare=False, default=None)
 
 #######################################################################################################################
 #
@@ -68,6 +76,8 @@ class RequestQueue:
         self._processing_semaphore = asyncio.Semaphore(max_concurrent)
         self._workers = []
         self._running = False
+        # Rolling recent activity (last N jobs)
+        self._recent_activity = deque(maxlen=200)
     
     async def start(self, num_workers: int = 4):
         """
@@ -166,14 +176,162 @@ class RequestQueue:
         Returns:
             Processing result
         """
-        # This would be replaced with actual chat processing logic
-        logger.debug(f"Processing request {request.request_id}")
-        
-        # Simulate processing time based on estimated tokens
-        processing_time = 0.001 * request.estimated_tokens
-        await asyncio.sleep(processing_time)
-        
-        return {"status": "completed", "request_id": request.request_id}
+        # If a processor is provided, execute it; otherwise perform placeholder work
+        start_ts = time.time()
+        if request.processor is None:
+            logger.debug(f"Processing request {request.request_id} (no processor; placeholder)")
+            processing_time = 0.001 * request.estimated_tokens
+            await asyncio.sleep(processing_time)
+            duration = time.time() - start_ts
+            # record activity
+            self._recent_activity.append({
+                "request_id": request.request_id,
+                "client_id": request.client_id,
+                "priority": request.priority,
+                "streaming": request.streaming,
+                "duration": duration,
+                "result": "completed",
+                "ts": time.time(),
+            })
+            return {"status": "completed", "request_id": request.request_id}
+
+        logger.debug(f"Processing request {request.request_id} with processor; streaming={request.streaming}")
+        loop = asyncio.get_running_loop()
+
+        # Non-streaming: run processor in thread executor to avoid blocking loop
+        if not request.streaming:
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: request.processor(*request.processor_args, **request.processor_kwargs)
+                )
+                duration = time.time() - start_ts
+                self._recent_activity.append({
+                    "request_id": request.request_id,
+                    "client_id": request.client_id,
+                    "priority": request.priority,
+                    "streaming": False,
+                    "duration": duration,
+                    "result": "completed",
+                    "ts": time.time(),
+                })
+                return result
+            except Exception as e:
+                logger.error(f"Processor error for request {request.request_id}: {e}")
+                self._recent_activity.append({
+                    "request_id": request.request_id,
+                    "client_id": request.client_id,
+                    "priority": request.priority,
+                    "streaming": False,
+                    "duration": time.time() - start_ts,
+                    "result": "error",
+                    "error": str(e),
+                    "ts": time.time(),
+                })
+                raise
+
+        # Streaming path: processor should return an iterator (sync or async) that yields chunks
+        if request.stream_channel is None:
+            logger.error(f"Streaming job {request.request_id} missing stream_channel")
+            raise RuntimeError("Streaming channel not provided for streaming job")
+
+        async def _pump_async_iterator(async_iter):
+            try:
+                async for chunk in async_iter:
+                    try:
+                        await request.stream_channel.put(chunk)
+                    except Exception as ch_e:
+                        logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
+                        break
+            finally:
+                # Signal completion
+                try:
+                    await request.stream_channel.put(None)
+                except Exception:
+                    pass
+
+        def _pump_sync_iterator(sync_iter):
+            try:
+                for chunk in sync_iter:
+                    try:
+                        asyncio.run_coroutine_threadsafe(request.stream_channel.put(chunk), loop)
+                    except Exception as ch_e:
+                        logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
+                        break
+            finally:
+                try:
+                    asyncio.run_coroutine_threadsafe(request.stream_channel.put(None), loop)
+                except Exception:
+                    pass
+
+        # Run the processor to obtain the stream (potentially blocking)
+        try:
+            stream = await loop.run_in_executor(
+                None, lambda: request.processor(*request.processor_args, **request.processor_kwargs)
+            )
+        except Exception as e:
+            # Emit SSE-style error payload to channel to gracefully end downstream streaming
+            err_msg = f"data: {{\"error\": {{\"message\": \"{str(e).replace('\\', ' ').replace('\n', ' ')}\"}}}}\n\n"
+            try:
+                await request.stream_channel.put(err_msg)
+                await request.stream_channel.put("data: [DONE]\n\n")
+                await request.stream_channel.put(None)
+            except Exception:
+                pass
+            logger.error(f"Processor error starting stream for {request.request_id}: {e}")
+            self._recent_activity.append({
+                "request_id": request.request_id,
+                "client_id": request.client_id,
+                "priority": request.priority,
+                "streaming": True,
+                "duration": time.time() - start_ts,
+                "result": "error",
+                "error": str(e),
+                "ts": time.time(),
+            })
+            raise
+
+        # Pump stream depending on iterator type
+        try:
+            if hasattr(stream, "__aiter__"):
+                await _pump_async_iterator(stream)
+            else:
+                # Sync iterator; run pumping in thread
+                await loop.run_in_executor(None, _pump_sync_iterator, stream)
+            # For streaming jobs, return a simple status when pumping completes
+            duration = time.time() - start_ts
+            self._recent_activity.append({
+                "request_id": request.request_id,
+                "client_id": request.client_id,
+                "priority": request.priority,
+                "streaming": True,
+                "duration": duration,
+                "result": "stream_completed",
+                "ts": time.time(),
+            })
+            return {"status": "stream_completed", "request_id": request.request_id}
+        except Exception as e:
+            # Best-effort to signal error and completion downstream
+            try:
+                await request.stream_channel.put(
+                    f"data: {{\"error\": {{\"message\": \"Stream error: {str(e).replace('\\', ' ').replace('\n', ' ')}\"}}}}\n\n"
+                )
+                await request.stream_channel.put("data: [DONE]\n\n")
+                await request.stream_channel.put(None)
+            except Exception:
+                pass
+            logger.error(f"Streaming processor error for {request.request_id}: {e}")
+            self._recent_activity.append({
+                "request_id": request.request_id,
+                "client_id": request.client_id,
+                "priority": request.priority,
+                "streaming": True,
+                "duration": time.time() - start_ts,
+                "result": "error",
+                "error": str(e),
+                "ts": time.time(),
+            })
+            raise
     
     async def enqueue(
         self,
@@ -181,7 +339,13 @@ class RequestQueue:
         request_data: Any,
         client_id: str,
         priority: RequestPriority = RequestPriority.NORMAL,
-        estimated_tokens: int = 0
+        estimated_tokens: int = 0,
+        *,
+        processor: Optional[Callable[..., Any]] = None,
+        processor_args: Tuple[Any, ...] = (),
+        processor_kwargs: Optional[Dict[str, Any]] = None,
+        streaming: bool = False,
+        stream_channel: Optional[asyncio.Queue] = None,
     ) -> asyncio.Future:
         """
         Add a request to the queue.
@@ -207,6 +371,8 @@ class RequestQueue:
             
             # Create queued request
             future = asyncio.Future()
+            if processor_kwargs is None:
+                processor_kwargs = {}
             request = QueuedRequest(
                 priority=priority.value,
                 timestamp=time.time(),
@@ -214,7 +380,12 @@ class RequestQueue:
                 request_data=request_data,
                 future=future,
                 client_id=client_id,
-                estimated_tokens=estimated_tokens
+                estimated_tokens=estimated_tokens,
+                processor=processor,
+                processor_args=processor_args,
+                processor_kwargs=processor_kwargs,
+                streaming=streaming,
+                stream_channel=stream_channel,
             )
             
             # Add to priority queue
@@ -240,6 +411,13 @@ class RequestQueue:
             "total_rejected": self.total_rejected,
             "is_running": self._running
         }
+
+    def get_recent_activity(self, limit: Optional[int] = None) -> Any:
+        """Return recent processed job summaries (most recent last)."""
+        items = list(self._recent_activity)
+        if limit is not None:
+            items = items[-int(limit):]
+        return items
     
     async def clear_queue(self):
         """Clear all pending requests."""

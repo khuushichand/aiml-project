@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
+from pydantic import ConfigDict
 
 
 class DocumentType(str, Enum):
@@ -107,8 +108,7 @@ class GeneratedDocument(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentListResponse(BaseModel):
@@ -142,8 +142,8 @@ class PromptConfigResponse(BaseModel):
 
 class BulkGenerateRequest(BaseModel):
     """Request schema for bulk document generation."""
-    conversation_ids: List[int] = Field(..., min_items=1, max_items=50, description="List of conversation IDs")
-    document_types: List[DocumentType] = Field(..., min_items=1, description="Types of documents to generate")
+    conversation_ids: List[int] = Field(..., min_length=1, max_length=50, description="List of conversation IDs")
+    document_types: List[DocumentType] = Field(..., min_length=1, description="Types of documents to generate")
     provider: str = Field(..., min_length=1, description="LLM provider name")
     model: str = Field(..., min_length=1, description="Model name")
     api_key: str = Field(..., min_length=1, description="API key for the provider")
@@ -191,8 +191,7 @@ class DocumentTemplateResponse(DocumentTemplateBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     usage_count: int = Field(0, description="Number of times used")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TemplateListResponse(BaseModel):

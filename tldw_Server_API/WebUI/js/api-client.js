@@ -10,6 +10,7 @@ class APIClient {
         this.maxHistorySize = 50;
         this.configLoaded = false;
         this.authMode = 'unknown'; // 'single-user', 'multi-user', or 'unknown'
+        this.preferApiKeyInMultiUser = false; // prefer X-API-KEY in multi-user when supported
         this.websockets = new Map(); // Store active WebSocket connections
         this.activeRequests = new Map(); // Track active fetch requests
         this.init();
@@ -90,6 +91,17 @@ class APIClient {
                     
                     // Store the authentication mode
                     this.authMode = config.mode || 'unknown';
+                    // Load multi-user API-key preference
+                    try {
+                        if (config.auth && typeof config.auth.preferApiKeyInMultiUser !== 'undefined') {
+                            const saved = Utils.getFromStorage('api-auth-prefs');
+                            if (saved && typeof saved.preferApiKeyInMultiUser === 'boolean') {
+                                this.preferApiKeyInMultiUser = saved.preferApiKeyInMultiUser;
+                            } else {
+                                this.preferApiKeyInMultiUser = !!config.auth.preferApiKeyInMultiUser;
+                            }
+                        }
+                    } catch (e) { /* ignore */ }
                     
                     // Check for API key (will be present in single user mode)
                     if (config.apiKey && config.apiKey !== '') {
@@ -158,6 +170,14 @@ class APIClient {
             }
         }
 
+        // Load saved auth prefs if present
+        try {
+            const savedAuth = Utils.getFromStorage('api-auth-prefs');
+            if (savedAuth && typeof savedAuth.preferApiKeyInMultiUser === 'boolean') {
+                this.preferApiKeyInMultiUser = savedAuth.preferApiKeyInMultiUser;
+            }
+        } catch (e) { /* ignore */ }
+
         // Load request history
         const savedHistory = Utils.getFromStorage('request-history');
         if (savedHistory && Array.isArray(savedHistory)) {
@@ -179,6 +199,13 @@ class APIClient {
         Utils.saveToStorage('api-config', {
             baseUrl: this.baseUrl,
             token: this.token
+        });
+    }
+
+    setPreferApiKeyInMultiUser(val) {
+        this.preferApiKeyInMultiUser = !!val;
+        Utils.saveToStorage('api-auth-prefs', {
+            preferApiKeyInMultiUser: this.preferApiKeyInMultiUser
         });
     }
 
@@ -243,14 +270,16 @@ class APIClient {
         
         // Add appropriate authentication header based on mode
         if (this.token) {
-            // Use X-API-KEY header for single-user mode, Authorization Bearer for multi-user mode
             if (this.authMode === 'single-user') {
                 fetchOptions.headers['X-API-KEY'] = this.token;
             } else if (this.authMode === 'multi-user') {
-                // Multi-user mode uses Bearer token
-                fetchOptions.headers['Authorization'] = `Bearer ${this.token}`;
+                if (this.preferApiKeyInMultiUser) {
+                    fetchOptions.headers['X-API-KEY'] = this.token;
+                } else {
+                    fetchOptions.headers['Authorization'] = `Bearer ${this.token}`;
+                }
             } else {
-                // Unknown mode - try X-API-KEY first (most common for manual setup)
+                // Unknown mode - try X-API-KEY first (common for manual setup)
                 fetchOptions.headers['X-API-KEY'] = this.token;
             }
         }
@@ -483,6 +512,12 @@ class APIClient {
 
     // Generate cURL command for a request
     generateCurl(method, path, options = {}) {
+        return this.generateCurlV2(method, path, options);
+    }
+
+
+    // Generate cURL command (auth-aware)
+    generateCurlV2(method, path, options = {}) {
         const { body = null, query = {}, headers = {} } = options;
 
         // Build URL with query parameters
@@ -496,27 +531,47 @@ class APIClient {
         let curl = `curl -X ${method} "${url.toString()}"`;
 
         // Add headers
-        curl += ` \\\n  -H "Accept: application/json"`;
-        curl += ` \\\n  -H "Token: ${this.token}"`;
+        curl += ` \\
+  -H "Accept: application/json"`;
+
+        // Auth header mirrors request behavior
+        if (this.token) {
+            if (this.authMode === 'single-user' || (this.authMode === 'multi-user' && this.preferApiKeyInMultiUser)) {
+                curl += ` \\
+  -H "X-API-KEY: ${this.token}"`;
+            } else if (this.authMode === 'multi-user') {
+                curl += ` \\
+  -H "Authorization: Bearer ${this.token}"`;
+            } else {
+                // Unknown mode — default to API key header
+                curl += ` \\
+  -H "X-API-KEY: ${this.token}"`;
+            }
+        }
         
         Object.keys(headers).forEach(key => {
-            curl += ` \\\n  -H "${key}: ${headers[key]}"`;
+            curl += ` \\
+  -H "${key}: ${headers[key]}"`;
         });
 
         // Add body
         if (body) {
             if (body instanceof FormData) {
-                for (let [key, value] of body.entries()) {
+                for (let [k, value] of body.entries()) {
                     if (value instanceof File) {
-                        curl += ` \\\n  -F "${key}=@${value.name}"`;
+                        curl += ` \\
+  -F "${k}=@${value.name}"`;
                     } else {
-                        curl += ` \\\n  -F "${key}=${value}"`;
+                        curl += ` \\
+  -F "${k}=${value}"`;
                     }
                 }
             } else {
-                curl += ` \\\n  -H "Content-Type: application/json"`;
+                curl += ` \\
+  -H "Content-Type: application/json"`;
                 const bodyStr = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
-                curl += ` \\\n  -d '${Utils.escapeCurlData(bodyStr)}'`;
+                curl += ` \\
+  -d '${Utils.escapeCurlData(bodyStr)}'`;
             }
         }
 

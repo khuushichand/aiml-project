@@ -7,6 +7,8 @@
 // Audio Tab Functions (TTS and STT)
 // ============================================================================
 
+let _audioTTSAbort = null;
+
 function updateTTSProviderOptions() {
     const provider = document.getElementById('audioTTS_provider').value;
     const modelSelect = document.getElementById('audioTTS_model');
@@ -186,6 +188,96 @@ function updateTTSProviderOptions() {
     }
 }
 
+// Build and send request for Audio → TTS panel
+async function audioTTSGenerate() {
+    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+    const provider = document.getElementById('audioTTS_provider')?.value || '';
+    const model = document.getElementById('audioTTS_model')?.value || '';
+    const voice = document.getElementById('audioTTS_voice')?.value || '';
+    const input = document.getElementById('audioTTS_input')?.value || '';
+    const response_format = document.getElementById('audioTTS_response_format')?.value || 'mp3';
+    const speed = parseFloat(document.getElementById('audioTTS_speed')?.value || '1.0');
+    const stream = !!(document.getElementById('audioTTS_stream')?.checked);
+
+    const req = { model, input, voice, response_format, speed, stream };
+
+    // Prefer recorded mic sample for voice cloning; else use file input if present
+    try {
+        if (window._audioTTSRec && _audioTTSRec.blob) {
+            req.voice_reference = await _audioBlobToBase64Wav(_audioTTSRec.blob);
+        } else {
+            const fileInput = document.getElementById('audioTTS_voiceReference');
+            if (fileInput && fileInput.files && fileInput.files[0]) {
+                const arr = await fileInput.files[0].arrayBuffer();
+                const bytes = new Uint8Array(arr);
+                let bin=''; const step=0x8000;
+                for(let i=0;i<bytes.length;i+=step){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+step)); }
+                req.voice_reference = btoa(bin);
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to attach voice reference', e);
+    }
+
+    const status = document.getElementById('audioTTS_status');
+    if (status) status.textContent = 'Generating...';
+    const stopBtn = document.getElementById('stopButton');
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+    _audioTTSAbort = new AbortController();
+
+    try {
+        const res = await fetch(`${baseUrl}/api/v1/audio/speech`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(req),
+            signal: _audioTTSAbort.signal
+        });
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const player = document.getElementById('audioTTS_player');
+        if (player) { player.src = url; player.style.display = 'block'; }
+        const dlBtn = document.getElementById('downloadButton');
+        if (dlBtn) dlBtn.style.display = 'inline-block';
+        if (status) status.textContent = `Done (${(blob.size/1024).toFixed(1)} KB)`;
+    } catch (e) {
+        console.error('Audio TTS failed', e);
+        if (status) status.textContent = (e.name === 'AbortError') ? 'Cancelled' : `Error: ${e.message}`;
+    }
+    finally {
+        const stopBtn = document.getElementById('stopButton');
+        if (stopBtn) stopBtn.style.display = 'none';
+        _audioTTSAbort = null;
+    }
+}
+
+// Button handlers wired in audio_content.html
+async function generateTTS() {
+    return audioTTSGenerate();
+}
+
+function stopTTS() {
+    try { if (_audioTTSAbort) _audioTTSAbort.abort(); } catch (_) {}
+}
+
+function downloadAudio() {
+    const player = document.getElementById('audioTTS_player');
+    if (!player || !player.src) return;
+    const a = document.createElement('a');
+    a.href = player.src;
+    a.download = 'speech.' + ((document.getElementById('audioTTS_response_format')?.value) || 'mp3');
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ try { a.remove(); } catch(_){} }, 0);
+}
+
 function checkTTSProviderStatus() {
     // This function would check the status of TTS providers
     // For now, just update the UI to show checking
@@ -225,6 +317,322 @@ function segParseEntries() {
         }
     }
     return raw.split('\n').map(line => ({ composite: line.trim() })).filter(e => e.composite);
+}
+
+// ----------------------------------------------------------------------------
+// Embeddings DLQ Admin Functions
+// ----------------------------------------------------------------------------
+
+let embeddingsDLQTimer = null;
+
+async function embeddingsListDLQ() {
+    const stageEl = document.getElementById('embeddingsDLQ_stage');
+    const countEl = document.getElementById('embeddingsDLQ_count');
+    const out = document.getElementById('embeddingsDLQ_results');
+    if (!out) return;
+    out.textContent = 'Loading...';
+    try {
+        const stage = stageEl.value;
+        const count = parseInt(countEl.value || '50', 10);
+        const res = await apiClient.get(`/api/v1/embeddings/dlq?stage=${encodeURIComponent(stage)}&count=${count}`);
+        // Render a minimal table with requeue buttons
+        const items = (res && res.items) ? res.items : [];
+        const rows = items.map(item => {
+            const eid = item.entry_id;
+            const job = item.job_id || '';
+            const err = (item.error || '').toString().slice(0, 120);
+            const code = (item.fields && item.fields.error_code) ? item.fields.error_code : '-';
+            const ftype = (item.fields && item.fields.failure_type) ? item.fields.failure_type : '-';
+            const state = (item.dlq_state || '-');
+            const note = (item.operator_note || '');
+            return `<tr>
+                <td><code>${eid}</code></td>
+                <td>${job}</td>
+                <td class="text-muted">${Utils.escapeHtml(err)}</td>
+                <td>${Utils.escapeHtml(code)}</td>
+                <td>${Utils.escapeHtml(ftype)}</td>
+                <td>${Utils.escapeHtml(state)}</td>
+                <td>${Utils.escapeHtml(note)}</td>
+                <td>
+                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <div class="btn-group" style="margin-top:4px">
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
+                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+        out.innerHTML = `
+            <table class="table">
+                <thead>
+                    <tr><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
+                </thead>
+                <tbody>${rows || '<tr><td colspan="8">No DLQ items</td></tr>'}</tbody>
+            </table>
+            <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
+        `;
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to list DLQ');
+    }
+}
+
+async function embeddingsRequeueDLQ(entryId) {
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    const out = document.getElementById('embeddingsDLQ_results');
+    try {
+        const res = await apiClient.post('/api/v1/embeddings/dlq/requeue', {
+            stage,
+            entry_id: entryId,
+            delete_from_dlq: true
+        });
+        if (res && res.warning) {
+            Toast.warn(`Requeued with warning: ${res.warning}`);
+        } else {
+            Toast.success('Requeued DLQ item');
+        }
+        // Refresh list
+        embeddingsListDLQ();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to requeue DLQ item');
+    }
+}
+
+// Enhanced DLQ list with job_id filter, selection, and stage badges
+async function embeddingsListDLQ2() {
+    const stageEl = document.getElementById('embeddingsDLQ_stage');
+    const countEl = document.getElementById('embeddingsDLQ_count');
+    const jobIdEl = document.getElementById('embeddingsDLQ_job_id');
+    const out = document.getElementById('embeddingsDLQ_results');
+    if (!out) return;
+    out.textContent = 'Loading...';
+    try {
+        const stage = stageEl.value;
+        const count = parseInt(countEl.value || '50', 10);
+        const jobId = (jobIdEl && jobIdEl.value || '').trim();
+        const q = new URLSearchParams({ stage, count: String(count) });
+        if (jobId) q.set('job_id', jobId);
+        const res = await apiClient.get(`/api/v1/embeddings/dlq?${q.toString()}`);
+        try { await embeddingsRefreshDLQBadges(); } catch (e) { /* ignore */ }
+        const items = (res && res.items) ? res.items : [];
+        const rows = items.map(item => {
+            const eid = item.entry_id;
+            const job = item.job_id || '';
+            const err = (item.error || '').toString().slice(0, 120);
+            const code = (item.fields && item.fields.error_code) ? item.fields.error_code : '-';
+            const ftype = (item.fields && item.fields.failure_type) ? item.fields.failure_type : '-';
+            const state = (item.dlq_state || '-');
+            const note = (item.operator_note || '');
+            return `<tr>
+                <td><input type="checkbox" class="dlq-select" data-entry-id="${eid}" /></td>
+                <td><code>${eid}</code></td>
+                <td>${job}</td>
+                <td class="text-muted">${Utils.escapeHtml(err)}</td>
+                <td>${Utils.escapeHtml(code)}</td>
+                <td>${Utils.escapeHtml(ftype)}</td>
+                <td>${Utils.escapeHtml(state)}</td>
+                <td>${Utils.escapeHtml(note)}</td>
+                <td>
+                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <div class="btn-group" style="margin-top:4px">
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
+                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+        out.innerHTML = `
+            <table class="table">
+                <thead>
+                    <tr><th></th><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
+                </thead>
+                <tbody>${rows || '<tr><td colspan="9">No DLQ items</td></tr>'}</tbody>
+            </table>
+            <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
+        `;
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to list DLQ');
+    }
+}
+
+async function embeddingsSkipJob(jobId) {
+    if (!jobId) return;
+    if (!confirm(`Mark job ${jobId} as skipped?`)) return;
+    try {
+        await apiClient.post('/api/v1/embeddings/job/skip', { job_id: jobId, ttl_seconds: 7*24*3600 });
+        Toast.success(`Job ${jobId} marked as skipped`);
+    } catch (e) {
+        Toast.error('Failed to mark job as skipped');
+    }
+}
+
+function embeddingsDLQToggleSelectAll(cb) {
+    try {
+        const out = document.getElementById('embeddingsDLQ_results');
+        if (!out) return;
+        const boxes = out.querySelectorAll('input.dlq-select');
+        boxes.forEach(b => b.checked = !!cb.checked);
+    } catch (e) { /* ignore */ }
+}
+
+async function embeddingsRequeueDLQSelected() {
+    const out = document.getElementById('embeddingsDLQ_results');
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    if (!out) return;
+    try {
+        const selected = Array.from(out.querySelectorAll('input.dlq-select:checked')).map(b => b.getAttribute('data-entry-id')).filter(Boolean);
+        if (selected.length === 0) {
+            Toast.error('No DLQ entries selected');
+            return;
+        }
+        const res = await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
+            stage,
+            entry_ids: selected,
+            delete_from_dlq: true
+        });
+        if (res && Array.isArray(res.results) && res.results.some(r => r.warning)) {
+            Toast.warn('Some entries requeued with validation warnings');
+        } else {
+            Toast.success(`Requeued ${selected.length} DLQ item(s)`);
+        }
+        embeddingsListDLQ2();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to bulk requeue');
+    }
+}
+
+async function embeddingsRequeueDLQAllFiltered() {
+    const out = document.getElementById('embeddingsDLQ_results');
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    if (!out) return;
+    try {
+        const all = Array.from(out.querySelectorAll('input.dlq-select')).map(b => b.getAttribute('data-entry-id')).filter(Boolean);
+        if (all.length === 0) {
+            Toast.error('No DLQ entries listed');
+            return;
+        }
+        const res = await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
+            stage,
+            entry_ids: all,
+            delete_from_dlq: true
+        });
+        if (res && Array.isArray(res.results) && res.results.some(r => r.warning)) {
+            Toast.warn('Some entries requeued with validation warnings');
+        } else {
+            Toast.success(`Requeued ${all.length} DLQ item(s)`);
+        }
+        embeddingsListDLQ2();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to bulk requeue (all filtered)');
+    }
+}
+
+async function embeddingsRefreshDLQBadges() {
+    try {
+        const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+        const dlq = (res && res.dlq) || {};
+        const map = {
+            embedding: dlq['embeddings:embedding:dlq'] || 0,
+            chunking: dlq['embeddings:chunking:dlq'] || 0,
+            storage: dlq['embeddings:storage:dlq'] || 0,
+        };
+        const badgeE = document.getElementById('dlq-badge-embedding');
+        const badgeC = document.getElementById('dlq-badge-chunking');
+        const badgeS = document.getElementById('dlq-badge-storage');
+        const badgeE2 = document.getElementById('dlq-badge-embedding2');
+        const badgeC2 = document.getElementById('dlq-badge-chunking2');
+        const badgeS2 = document.getElementById('dlq-badge-storage2');
+        const apply = (el, label, v) => {
+            if (!el) return;
+            el.textContent = `${label}: ${v}`;
+            el.classList.remove('badge-warn', 'badge-crit');
+            if (v >= 100) el.classList.add('badge-crit'); else if (v >= 10) el.classList.add('badge-warn');
+        };
+        apply(badgeE, 'embedding', map.embedding);
+        apply(badgeC, 'chunking', map.chunking);
+        apply(badgeS, 'storage', map.storage);
+        apply(badgeE2, 'embedding', map.embedding);
+        apply(badgeC2, 'chunking', map.chunking);
+        apply(badgeS2, 'storage', map.storage);
+    } catch (e) { /* ignore */ }
+}
+
+async function embeddingsSetDLQState(entryId, state) {
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    let operator_note = undefined;
+    if (state === 'approved_for_requeue') {
+        operator_note = prompt('Approval note (required):', 'Reviewed and safe to requeue');
+        if (!operator_note || !operator_note.trim()) {
+            Toast.error('Approval note is required');
+            return;
+        }
+    }
+    try {
+        await apiClient.post('/api/v1/embeddings/dlq/state', { stage, entry_id: entryId, state, operator_note });
+        Toast.success('DLQ state updated');
+        embeddingsListDLQ2();
+    } catch (e) {
+        Toast.error('Failed to update DLQ state');
+    }
+}
+
+async function embeddingsApproveDLQ(entryId) {
+    return embeddingsSetDLQState(entryId, 'approved_for_requeue');
+}
+
+// ----------------------------------------------------------------------------
+// Embeddings Stage Controls (pause/resume/drain)
+// ----------------------------------------------------------------------------
+
+async function embeddingsStageStatus() {
+    const out = document.getElementById('embeddingsStage_status');
+    try {
+        const res = await apiClient.get('/api/v1/embeddings/stage/status');
+        out.textContent = Utils.syntaxHighlight(res);
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to fetch stage status');
+    }
+}
+
+async function embeddingsStageControl(action) {
+    const stage = document.getElementById('embeddingsStage_stage').value;
+    const out = document.getElementById('embeddingsStage_status');
+    try {
+        await apiClient.post('/api/v1/embeddings/stage/control', { stage, action });
+        Toast.success(`${action} sent to ${stage}`);
+        await embeddingsStageStatus();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error(`Failed to ${action} stage`);
+    }
+}
+
+async function embeddingsStagePause() { return embeddingsStageControl('pause'); }
+async function embeddingsStageResume() { return embeddingsStageControl('resume'); }
+async function embeddingsStageDrain() { return embeddingsStageControl('drain'); }
+
+function embeddingsStartDLQAutoRefresh() {
+    try { embeddingsStopDLQAutoRefresh(); } catch (e) { /* ignore */ }
+    embeddingsRefreshDLQBadges();
+    embeddingsDLQTimer = setInterval(embeddingsRefreshDLQBadges, 10000);
+    try { Utils.saveToStorage('embeddings-dlq-auto-refresh', true); } catch (e) { /* ignore */ }
+}
+
+function embeddingsStopDLQAutoRefresh() {
+    if (embeddingsDLQTimer) {
+        clearInterval(embeddingsDLQTimer);
+        embeddingsDLQTimer = null;
+    }
+    try { Utils.saveToStorage('embeddings-dlq-auto-refresh', false); } catch (e) { /* ignore */ }
 }
 
 async function segmentTranscriptRun() {
@@ -362,11 +770,20 @@ async function loadProviderVoices() {
                 voiceList.innerHTML = '<span class="text-muted">No voices reported by provider.</span>';
             } else {
                 const items = voices.map(v => {
+                    const id = v.id || v.name || 'voice';
+                    const name = v.name || v.id || 'Voice';
                     const meta = [v.language, v.gender].filter(Boolean).join(' · ');
-                    return `<div class="voice-item" style="padding:4px 0; border-bottom: 1px dashed var(--color-border);">
-                        <strong>${v.name || v.id}</strong>
-                        <div class="text-muted" style="font-size: 0.85em;">${meta || ''}</div>
-                        <div style="font-size: 0.85em;">${v.description || ''}</div>
+                    return `<div class="voice-item" style="padding:6px 0; border-bottom: 1px dashed var(--color-border); display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                        <div class="voice-meta">
+                            <strong>${name}</strong>
+                            <div class="text-muted" style="font-size: 0.85em;">${meta || ''}</div>
+                            <div style="font-size: 0.85em;">${v.description || ''}</div>
+                        </div>
+                        <div class="voice-actions">
+                            <button class="btn-small" onclick="apiTTSUseVoice('${provider}','${id}','${name.replace(/"/g, '&quot;')}')">
+                                <i class="icon-check"></i> Use Voice
+                            </button>
+                        </div>
                     </div>`;
                 }).join('');
                 voiceList.innerHTML = items;
@@ -382,6 +799,49 @@ async function loadProviderVoices() {
     }
 }
 
+// Use voice helper for Audio → Text to Speech panel
+async function apiTTSUseVoice(provider, voiceId, name) {
+    try {
+        const providerSelect = document.getElementById('audioTTS_provider');
+        if (providerSelect) {
+            providerSelect.value = provider;
+            if (typeof updateTTSProviderOptions === 'function') {
+                try { updateTTSProviderOptions(); } catch (_) { /* ignore */ }
+            }
+        }
+        // Reload the provider voices to keep dropdown consistent
+        try { await loadProviderVoices(); } catch (_) { /* ignore */ }
+        const voiceSelect = document.getElementById('audioTTS_voice');
+        if (voiceSelect) {
+            let opt = Array.from(voiceSelect.options).find(o => o.value === voiceId || o.text === name || o.text === voiceId);
+            if (!opt) {
+                const o = document.createElement('option');
+                o.value = voiceId;
+                o.textContent = name || voiceId;
+                voiceSelect.appendChild(o);
+            }
+            voiceSelect.value = voiceId;
+            try { voiceSelect.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+        }
+        // Brief inline confirmation
+        const voiceList = document.getElementById('audioTTS_voiceList');
+        if (voiceList) {
+            const msg = document.createElement('div');
+            msg.className = 'text-success';
+            msg.style.marginBottom = '6px';
+            msg.textContent = `Selected voice ${name || voiceId} (${provider})`;
+            voiceList.prepend(msg);
+            setTimeout(() => { try { msg.remove(); } catch (_) {} }, 2000);
+        }
+        // Sync selection into TTS tab as well
+        if (window.TTS && typeof TTS._selectProviderVoice === 'function') {
+            try { TTS._selectProviderVoice(provider, voiceId, name, false); } catch (_) { /* ignore */ }
+        }
+    } catch (e) {
+        console.error('apiTTSUseVoice failed:', e);
+    }
+}
+
 function clearVoiceReference() {
     const voiceRefInfo = document.getElementById('voiceRefInfo');
     const voiceRefInput = document.getElementById('audioTTS_voiceReference');
@@ -390,6 +850,231 @@ function clearVoiceReference() {
     if (voiceRefInfo) voiceRefInfo.style.display = 'none';
     if (voiceRefInput) voiceRefInput.value = '';
     if (voiceRefPlayer) voiceRefPlayer.src = '';
+}
+
+// ----------------------------------------------------------------------------
+// Audio TTS: Quick mic recording for voice reference
+// ----------------------------------------------------------------------------
+let _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
+
+async function startAudioTTSRecording() {
+    try {
+        if (_audioTTSRec.mr) return;
+        if (!window.MediaRecorder) {
+            const s = document.getElementById('audioTTS_rec_status');
+            if (s) s.textContent = 'Recording not supported by this browser';
+            return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Choose a supported mimeType
+        let mr;
+        try {
+            let opts;
+            if (MediaRecorder.isTypeSupported) {
+                const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                for (const mt of cands) {
+                    if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                }
+            }
+            mr = new MediaRecorder(stream, opts);
+        } catch (_) {
+            mr = new MediaRecorder(stream);
+        }
+        _audioTTSRec = { mr, chunks: [], blob: null, url: null };
+        const s = document.getElementById('audioTTS_rec_status');
+        const b1 = document.getElementById('audioTTS_rec_start');
+        const b2 = document.getElementById('audioTTS_rec_stop');
+        if (s) s.textContent = 'Recording...';
+        if (b1) b1.disabled = true;
+        if (b2) b2.disabled = false;
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _audioTTSRec.chunks.push(e.data); };
+        mr.onstop = () => {
+            try { if (_audioTTSRec._timer) { clearInterval(_audioTTSRec._timer); _audioTTSRec._timer = null; } } catch(_){}
+            const blob = new Blob(_audioTTSRec.chunks, { type: 'audio/webm' });
+            _audioTTSRec.blob = blob;
+            const url = URL.createObjectURL(blob);
+            _audioTTSRec.url = url;
+            const p = document.getElementById('audioTTS_rec_playback');
+            if (p) { p.src = url; p.style.display = 'block'; }
+            if (s) s.textContent = 'Recorded';
+            if (b1) b1.disabled = false;
+            if (b2) b2.disabled = true;
+            const badge = document.getElementById('audioTTS_recording_badge');
+            if (badge) badge.style.display = 'inline-block';
+            const clr = document.getElementById('audioTTS_rec_clear');
+            if (clr) clr.disabled = false;
+            const fileInput = document.getElementById('audioTTS_voiceReference');
+            if (fileInput) fileInput.disabled = true;
+            try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
+        };
+        // Soft cap with countdown
+        try {
+            const MAX_SEC = Math.max(3, Math.min(60, parseInt((window._audioRecMaxSec||15), 10)));
+            const startTs = Date.now();
+            _audioTTSRec._timer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                const left = Math.max(0, MAX_SEC - elapsed);
+                if (s) s.textContent = `Recording... ${left}s left`;
+                if (elapsed >= MAX_SEC) {
+                    try { mr.stop(); } catch(_){}
+                }
+            }, 250);
+        } catch(_){}
+        mr.start();
+    } catch (e) {
+        console.error('AudioTTS recording failed', e);
+        const s = document.getElementById('audioTTS_rec_status');
+        if (s) s.textContent = 'Recording failed';
+    }
+}
+
+function stopAudioTTSRecording() {
+    try { if (_audioTTSRec.mr) _audioTTSRec.mr.stop(); } catch(e){ console.error(e); }
+}
+
+function clearAudioTTSRecording() {
+    try { if (_audioTTSRec && _audioTTSRec.url) URL.revokeObjectURL(_audioTTSRec.url); } catch(_) {}
+    _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
+    const p = document.getElementById('audioTTS_rec_playback');
+    if (p) { try { p.pause(); } catch(_){} p.removeAttribute('src'); p.style.display='none'; }
+    const badge = document.getElementById('audioTTS_recording_badge');
+    if (badge) badge.style.display = 'none';
+    const s = document.getElementById('audioTTS_rec_status');
+    if (s) s.textContent = 'Idle (recording overrides file)';
+    const clr = document.getElementById('audioTTS_rec_clear');
+    if (clr) clr.disabled = true;
+    const b1 = document.getElementById('audioTTS_rec_start');
+    if (b1) b1.disabled = false;
+    const b2 = document.getElementById('audioTTS_rec_stop');
+    if (b2) b2.disabled = true;
+    const fileInput = document.getElementById('audioTTS_voiceReference');
+    if (fileInput) fileInput.disabled = false;
+}
+
+async function _audioBlobToBase64Wav(blob) {
+    // Convert to WAV for server compatibility
+    const buf = await blob.arrayBuffer();
+    const ac = new (window.AudioContext||window.webkitAudioContext)();
+    const audioBuffer = await ac.decodeAudioData(buf);
+    const wavView = _encodeWavFromBuffer(audioBuffer);
+    const wavBlob = new Blob([wavView], { type: 'audio/wav' });
+    const wavBuf = await wavBlob.arrayBuffer();
+    const bytes = new Uint8Array(wavBuf);
+    let binary=''; const step=0x8000;
+    for(let i=0;i<bytes.length;i+=step) binary+=String.fromCharCode.apply(null, bytes.subarray(i,i+step));
+    return btoa(binary);
+}
+
+function _encodeWavFromBuffer(audioBuffer){
+    const data = audioBuffer.numberOfChannels>1? _mixToMono(audioBuffer): audioBuffer.getChannelData(0);
+    const sr = audioBuffer.sampleRate;
+    const pcm = _floatTo16(data);
+    const ab = new ArrayBuffer(44 + pcm.length*2); const view = new DataView(ab);
+    _writeStr(view,0,'RIFF'); view.setUint32(4,36+pcm.length*2,true); _writeStr(view,8,'WAVE');
+    _writeStr(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+    view.setUint16(22,1,true); view.setUint32(24,sr,true); view.setUint32(28,sr*2,true);
+    view.setUint16(32,2,true); view.setUint16(34,16,true); _writeStr(view,36,'data'); view.setUint32(40,pcm.length*2,true);
+    let off=44; for(let i=0;i<pcm.length;i++,off+=2) view.setInt16(off, pcm[i], true);
+    return view;
+}
+function _floatTo16(input){ const out=new Int16Array(input.length); for(let i=0;i<input.length;i++){ let s=Math.max(-1,Math.min(1,input[i])); out[i]=s<0?s*0x8000:s*0x7FFF;} return out; }
+function _mixToMono(buf){ const l=buf.length; const a=buf.getChannelData(0), b=buf.getChannelData(1), o=new Float32Array(l); for(let i=0;i<l;i++) o[i]=0.5*(a[i]+b[i]); return o; }
+function _writeStr(view, offset, str){ for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
+
+// File Transcription: Quick mic recording
+let _fileTransRec = { mr: null, chunks: [], blob: null, url: null };
+async function startFileTransRecording() {
+    try {
+        if (_fileTransRec.mr) return;
+        if (!window.MediaRecorder) {
+            const s = document.getElementById('fileTrans_rec_status');
+            if (s) s.textContent = 'Recording not supported by this browser';
+            return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Choose a supported mimeType
+        let mr;
+        try {
+            let opts;
+            if (MediaRecorder.isTypeSupported) {
+                const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                for (const mt of cands) {
+                    if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                }
+            }
+            mr = new MediaRecorder(stream, opts);
+        } catch (_) {
+            mr = new MediaRecorder(stream);
+        }
+        _fileTransRec = { mr, chunks: [], blob: null, url: null };
+        const s = document.getElementById('fileTrans_rec_status');
+        const b1 = document.getElementById('fileTrans_rec_start');
+        const b2 = document.getElementById('fileTrans_rec_stop');
+        if (s) s.textContent = 'Recording...';
+        if (b1) b1.disabled = true;
+        if (b2) b2.disabled = false;
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _fileTransRec.chunks.push(e.data); };
+        mr.onstop = () => {
+            try { if (_fileTransRec._timer) { clearInterval(_fileTransRec._timer); _fileTransRec._timer = null; } } catch(_){}
+            const blob = new Blob(_fileTransRec.chunks, { type: 'audio/webm' });
+            _fileTransRec.blob = blob;
+            const url = URL.createObjectURL(blob);
+            _fileTransRec.url = url;
+            const p = document.getElementById('fileTrans_rec_playback');
+            if (p) { p.src = url; p.style.display = 'block'; }
+            if (s) s.textContent = 'Recorded';
+            if (b1) b1.disabled = false;
+            if (b2) b2.disabled = true;
+            const badge = document.getElementById('fileTrans_recording_badge');
+            if (badge) badge.style.display = 'inline-block';
+            const clr = document.getElementById('fileTrans_rec_clear');
+            if (clr) clr.disabled = false;
+            const file = document.getElementById('fileTrans_audio');
+            if (file) file.disabled = true;
+            try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
+        };
+        // Soft cap with countdown
+        try {
+            const MAX_SEC = Math.max(3, Math.min(60, parseInt((window._fileTransRecMaxSec||15), 10)));
+            const startTs = Date.now();
+            _fileTransRec._timer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                const left = Math.max(0, MAX_SEC - elapsed);
+                if (s) s.textContent = `Recording... ${left}s left`;
+                if (elapsed >= MAX_SEC) {
+                    try { mr.stop(); } catch(_){}
+                }
+            }, 250);
+        } catch(_){}
+        mr.start();
+    } catch (e) {
+        console.error('FileTrans recording failed', e);
+        const s = document.getElementById('fileTrans_rec_status');
+        if (s) s.textContent = 'Recording failed';
+    }
+}
+
+function stopFileTransRecording() {
+    try { if (_fileTransRec.mr) _fileTransRec.mr.stop(); } catch(e){ console.error(e); }
+}
+
+function clearFileTransRecording() {
+    try { if (_fileTransRec && _fileTransRec.url) URL.revokeObjectURL(_fileTransRec.url); } catch(_) {}
+    _fileTransRec = { mr: null, chunks: [], blob: null, url: null };
+    const p = document.getElementById('fileTrans_rec_playback');
+    if (p) { try { p.pause(); } catch(_){} p.removeAttribute('src'); p.style.display='none'; }
+    const badge = document.getElementById('fileTrans_recording_badge');
+    if (badge) badge.style.display = 'none';
+    const s = document.getElementById('fileTrans_rec_status');
+    if (s) s.textContent = 'Idle (recording overrides file)';
+    const clr = document.getElementById('fileTrans_rec_clear');
+    if (clr) clr.disabled = true;
+    const b1 = document.getElementById('fileTrans_rec_start');
+    if (b1) b1.disabled = false;
+    const b2 = document.getElementById('fileTrans_rec_stop');
+    if (b2) b2.disabled = true;
+    const file = document.getElementById('fileTrans_audio');
+    if (file) file.disabled = false;
 }
 
 // Streaming STT Functions
@@ -439,6 +1124,80 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }, 500);
 });
+
+// ----------------------------------------------------------------------------
+// Audio TTS: Quick mic recording for voice reference
+// ----------------------------------------------------------------------------
+let _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
+
+async function startAudioTTSRecording() {
+    try {
+        if (_audioTTSRec.mr) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        _audioTTSRec = { mr, chunks: [], blob: null, url: null };
+        const s = document.getElementById('audioTTS_rec_status');
+        const b1 = document.getElementById('audioTTS_rec_start');
+        const b2 = document.getElementById('audioTTS_rec_stop');
+        if (s) s.textContent = 'Recording...';
+        if (b1) b1.disabled = true;
+        if (b2) b2.disabled = false;
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _audioTTSRec.chunks.push(e.data); };
+        mr.onstop = () => {
+            const blob = new Blob(_audioTTSRec.chunks, { type: 'audio/webm' });
+            _audioTTSRec.blob = blob;
+            const url = URL.createObjectURL(blob);
+            _audioTTSRec.url = url;
+            const p = document.getElementById('audioTTS_rec_playback');
+            if (p) { p.src = url; p.style.display = 'block'; }
+            if (s) s.textContent = 'Recorded';
+            if (b1) b1.disabled = false;
+            if (b2) b2.disabled = true;
+            const badge = document.getElementById('audioTTS_recording_badge');
+            if (badge) badge.style.display = 'inline-block';
+            try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
+        };
+        mr.start();
+    } catch (e) {
+        console.error('AudioTTS recording failed', e);
+        const s = document.getElementById('audioTTS_rec_status');
+        if (s) s.textContent = 'Recording failed';
+    }
+}
+
+function stopAudioTTSRecording() {
+    try { if (_audioTTSRec.mr) _audioTTSRec.mr.stop(); } catch(e){ console.error(e); }
+}
+
+async function _audioBlobToBase64Wav(blob) {
+    // Convert to WAV for server compatibility
+    const buf = await blob.arrayBuffer();
+    const ac = new (window.AudioContext||window.webkitAudioContext)();
+    const audioBuffer = await ac.decodeAudioData(buf);
+    const wavView = _encodeWavFromBuffer(audioBuffer);
+    const wavBlob = new Blob([wavView], { type: 'audio/wav' });
+    const wavBuf = await wavBlob.arrayBuffer();
+    const bytes = new Uint8Array(wavBuf);
+    let binary=''; const step=0x8000;
+    for(let i=0;i<bytes.length;i+=step) binary+=String.fromCharCode.apply(null, bytes.subarray(i,i+step));
+    return btoa(binary);
+}
+
+function _encodeWavFromBuffer(audioBuffer){
+    const data = audioBuffer.numberOfChannels>1? _mixToMono(audioBuffer): audioBuffer.getChannelData(0);
+    const sr = audioBuffer.sampleRate;
+    const pcm = _floatTo16(data);
+    const ab = new ArrayBuffer(44 + pcm.length*2); const view = new DataView(ab);
+    _writeStr(view,0,'RIFF'); view.setUint32(4,36+pcm.length*2,true); _writeStr(view,8,'WAVE');
+    _writeStr(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+    view.setUint16(22,1,true); view.setUint32(24,sr,true); view.setUint32(28,sr*2,true);
+    view.setUint16(32,2,true); view.setUint16(34,16,true); _writeStr(view,36,'data'); view.setUint32(40,pcm.length*2,true);
+    let off=44; for(let i=0;i<pcm.length;i++,off+=2) view.setInt16(off, pcm[i], true);
+    return view;
+}
+function _floatTo16(input){ const out=new Int16Array(input.length); for(let i=0;i<input.length;i++){ let s=Math.max(-1,Math.min(1,input[i])); out[i]=s<0?s*0x8000:s*0x7FFF;} return out; }
+function _mixToMono(buf){ const l=buf.length; const a=buf.getChannelData(0), b=buf.getChannelData(1), o=new Float32Array(l); for(let i=0;i<l;i++) o[i]=0.5*(a[i]+b[i]); return o; }
+function _writeStr(view, offset, str){ for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
 
 // ----------------------------------------------------------------------------
 // File-based Transcription UI
@@ -2593,7 +3352,9 @@ async function createPrompt() {
         responseEl.textContent = 'Creating prompt...';
         
         // Generate cURL command
-        const curlCommand = apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload });
+        const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
+            ? apiClient.generateCurlV2('POST', '/api/v1/prompts', { body: payload })
+            : apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload }));
         if (curlEl) {
             curlEl.textContent = curlCommand;
         }
@@ -2622,5 +3383,214 @@ async function createPrompt() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Embeddings Ledger Admin
+// ---------------------------------------------------------------------------
+
+async function embeddingsQueryLedgerStatus() {
+    const idk = (document.getElementById('embeddingsLedger_idemp')?.value || '').trim();
+    const ddk = (document.getElementById('embeddingsLedger_dedupe')?.value || '').trim();
+    const out = document.getElementById('embeddingsLedgerStatus_response');
+    if (!out) return;
+    if (!idk && !ddk) {
+        if (typeof Toast !== 'undefined' && Toast.warn) Toast.warn('Provide idempotency_key and/or dedupe_key');
+        return;
+    }
+    try {
+        const q = new URLSearchParams();
+        if (idk) q.set('idempotency_key', idk);
+        if (ddk) q.set('dedupe_key', ddk);
+        const res = await apiClient.get(`/api/v1/embeddings/ledger/status?${q.toString()}`);
+        out.textContent = Utils.syntaxHighlight(res);
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Failed to fetch ledger status');
+    }
+}
+
 // Make sure functions are globally available
 console.log('Tab functions loaded successfully');
+
+// ---------------------------------------------------------------------------
+// Re-embed Scheduler (Admin)
+// ---------------------------------------------------------------------------
+
+async function embeddingsScheduleReembed() {
+    const midEl = document.getElementById('embeddingsReembed_media_id');
+    const priEl = document.getElementById('embeddingsReembed_priority');
+    const out = document.getElementById('embeddingsReembed_response');
+    if (!midEl || !out) return;
+    const media_id = parseInt(midEl.value || '0', 10);
+    const priority = parseInt(priEl?.value || '50', 10);
+    if (!media_id || media_id <= 0) {
+        if (typeof Toast !== 'undefined' && Toast.warn) Toast.warn('Enter a valid media_id');
+        return;
+    }
+    out.textContent = 'Scheduling...';
+    try {
+        const res = await apiClient.post('/api/v1/embeddings/reembed/schedule', { media_id, priority });
+        out.textContent = Utils.syntaxHighlight(res);
+        if (typeof Toast !== 'undefined' && Toast.success) Toast.success('Re-embed job scheduled');
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Failed to schedule re-embed');
+    }
+}
+
+// Quick helper to schedule re-embed for a specific media id from other tabs
+async function scheduleReembedForMedia(media_id, priority = 50) {
+    try {
+        // Admin-only guard
+        const ok = await isAdminCached();
+        if (!ok) {
+            if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Admin required to schedule re-embed');
+            return;
+        }
+        const res = await apiClient.post('/api/v1/embeddings/reembed/schedule', { media_id, priority });
+        if (typeof Toast !== 'undefined' && Toast.success) Toast.success(`Re-embed scheduled for media ${media_id}`);
+        return res;
+    } catch (e) {
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error(`Failed to schedule re-embed: ${(e && e.message) || 'error'}`);
+        throw e;
+    }
+}
+
+// ------------------------------
+// Admin-only detection and reveal
+// ------------------------------
+let __isAdminFlag = null;
+async function isAdminCached() {
+    if (__isAdminFlag !== null) return __isAdminFlag;
+    try {
+        // Try an admin-only endpoint
+        await apiClient.makeRequest('GET', '/api/v1/embeddings/stage/status');
+        __isAdminFlag = true;
+    } catch (e) {
+        __isAdminFlag = false;
+    }
+    try { window.isAdminFlag = __isAdminFlag; } catch (_) {}
+    return __isAdminFlag;
+}
+
+function revealAdminOnlyElements() {
+    isAdminCached().then((isAdmin) => {
+        if (!isAdmin) return;
+        try {
+            document.querySelectorAll('.admin-only').forEach(el => { el.style.display = ''; });
+        } catch (e) { /* ignore */ }
+    }).catch(() => {});
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Try to reveal admin-only controls after initial load
+    setTimeout(revealAdminOnlyElements, 600);
+    // Restore recording caps from localStorage and bind change events
+    try {
+        const ttsMax = parseInt(localStorage.getItem('audio_tts_rec_max_seconds') || '', 10);
+        if (!isNaN(ttsMax)) {
+            window._audioRecMaxSec = Math.max(3, Math.min(60, ttsMax));
+            const el = document.getElementById('audioTTS_rec_max');
+            if (el) el.value = String(window._audioRecMaxSec);
+        }
+        const ttsMaxEl = document.getElementById('audioTTS_rec_max');
+        if (ttsMaxEl) {
+            ttsMaxEl.addEventListener('change', () => {
+                try {
+                    const v = Math.max(3, Math.min(60, parseInt(ttsMaxEl.value || '15', 10)));
+                    window._audioRecMaxSec = v;
+                    localStorage.setItem('audio_tts_rec_max_seconds', String(v));
+                } catch(_) {}
+            });
+        }
+    } catch (_) {}
+    try {
+        const ftMax = parseInt(localStorage.getItem('file_trans_rec_max_seconds') || '', 10);
+        if (!isNaN(ftMax)) {
+            window._fileTransRecMaxSec = Math.max(3, Math.min(60, ftMax));
+            const el2 = document.getElementById('fileTrans_rec_max');
+            if (el2) el2.value = String(window._fileTransRecMaxSec);
+        }
+        const ftMaxEl = document.getElementById('fileTrans_rec_max');
+        if (ftMaxEl) {
+            ftMaxEl.addEventListener('change', () => {
+                try {
+                    const v = Math.max(3, Math.min(60, parseInt(ftMaxEl.value || '15', 10)));
+                    window._fileTransRecMaxSec = v;
+                    localStorage.setItem('file_trans_rec_max_seconds', String(v));
+                } catch(_) {}
+            });
+        }
+    } catch (_) {}
+    // Restore rec-settings collapsed state
+    try {
+        const openTTS = localStorage.getItem('rec_settings_open_audioTTS');
+        const bodyTTS = document.getElementById('rec-settings-audioTTS');
+        const caretTTS = document.getElementById('rec-settings-caret-audioTTS');
+        if (bodyTTS) {
+            const open = openTTS === '1';
+            bodyTTS.style.display = open ? 'block' : 'none';
+            if (caretTTS) caretTTS.textContent = open ? '▾' : '▸';
+        }
+    } catch(_) {}
+    try {
+        const openFT = localStorage.getItem('rec_settings_open_fileTrans');
+        const bodyFT = document.getElementById('rec-settings-fileTrans');
+        const caretFT = document.getElementById('rec-settings-caret-fileTrans');
+        if (bodyFT) {
+            const open = openFT === '1';
+            bodyFT.style.display = open ? 'block' : 'none';
+            if (caretFT) caretFT.textContent = open ? '▾' : '▸';
+        }
+    } catch(_) {}
+});
+
+// Toggle helpers for collapsible Recording Settings
+function toggleAudioTTSRecSettings() {
+    try {
+        const body = document.getElementById('rec-settings-audioTTS');
+        const caret = document.getElementById('rec-settings-caret-audioTTS');
+        if (!body) return;
+        const show = body.style.display === 'none' || body.style.display === '';
+        body.style.display = show ? 'block' : 'none';
+        if (caret) caret.textContent = show ? '▾' : '▸';
+        try { localStorage.setItem('rec_settings_open_audioTTS', show ? '1' : '0'); } catch(_) {}
+    } catch (_) {}
+}
+
+function toggleFileTransRecSettings() {
+    try {
+        const body = document.getElementById('rec-settings-fileTrans');
+        const caret = document.getElementById('rec-settings-caret-fileTrans');
+        if (!body) return;
+        const show = body.style.display === 'none' || body.style.display === '';
+        body.style.display = show ? 'block' : 'none';
+        if (caret) caret.textContent = show ? '▾' : '▸';
+        try { localStorage.setItem('rec_settings_open_fileTrans', show ? '1' : '0'); } catch(_) {}
+    } catch (_) {}
+}
+
+// Reset helpers
+function resetAudioTTSRecMax() {
+    try {
+        window._audioRecMaxSec = 15;
+        localStorage.setItem('audio_tts_rec_max_seconds', '15');
+        const el = document.getElementById('audioTTS_rec_max');
+        if (el) el.value = '15';
+    } catch(_) {}
+}
+function resetFileTransRecMax() {
+    try {
+        window._fileTransRecMaxSec = 15;
+        localStorage.setItem('file_trans_rec_max_seconds', '15');
+        const el = document.getElementById('fileTrans_rec_max');
+        if (el) el.value = '15';
+    } catch(_) {}
+}
+
+// Best-effort: revoke any recording object URLs on tab unload to prevent leaks
+try {
+    window.addEventListener('beforeunload', () => {
+        try { if (typeof _audioTTSRec !== 'undefined' && _audioTTSRec && _audioTTSRec.url) URL.revokeObjectURL(_audioTTSRec.url); } catch(_) {}
+        try { if (typeof _fileTransRec !== 'undefined' && _fileTransRec && _fileTransRec.url) URL.revokeObjectURL(_fileTransRec.url); } catch(_) {}
+    });
+} catch (_) {}

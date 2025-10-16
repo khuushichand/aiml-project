@@ -1,0 +1,8 @@
+embedding_stage_batch_size_bucket
+embedding_stage_payload_bytes_bucket
+orchestrator_sse_connections
+orchestrator_sse_disconnects_total
+orchestrator_summary_failures_total
+embedding_queue_age_current_seconds
+embedding_stage_flag
+

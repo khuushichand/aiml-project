@@ -121,6 +121,19 @@ class QueueBackend(ABC):
             Task or None if not found
         """
         pass
+
+    @abstractmethod
+    async def get_task_by_idempotency_key(self, idempotency_key: str) -> Optional[str]:
+        """
+        Get a task ID by idempotency key, if it exists.
+
+        Args:
+            idempotency_key: Idempotency key to look up
+
+        Returns:
+            Task ID if found, otherwise None
+        """
+        pass
     
     @abstractmethod
     async def update_task(self, task: Task) -> bool:
@@ -218,13 +231,13 @@ class QueueBackend(ABC):
         pass
     
     @abstractmethod
-    async def renew_lease(self, lease_id: str, expires_at: datetime) -> bool:
+    async def renew_lease(self, task_id: str, lease_id: str) -> bool:
         """
         Renew an existing lease.
         
         Args:
-            lease_id: Lease to renew
-            expires_at: New expiration time
+            task_id: Task whose lease should be renewed
+            lease_id: Lease identifier
             
         Returns:
             True if lease was renewed

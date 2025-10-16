@@ -5,6 +5,8 @@
 from tldw_Server_API.app.core.Utils.Utils import logger
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from fastapi import HTTPException
 # from App_Function_Libraries.Books.Book_Ingestion_Lib import import_epub, ...
 
 async def process_ebook_task(
@@ -22,6 +24,9 @@ async def process_ebook_task(
     """
     Ingest an e-book (EPUB, etc.), optionally summarize it, and return data for ephemeral or DB storage.
     """
+    s = get_settings()
+    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
+        raise HTTPException(status_code=503, detail="Ebook placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
     try:
         logger.info(f"Processing e-book from file: {file_path}")
 

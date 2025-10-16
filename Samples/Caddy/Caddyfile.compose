@@ -1,0 +1,23 @@
+# Caddyfile for Docker Compose (proxies to service "app:8000")
+
+your.domain.com {
+  encode zstd gzip
+
+  reverse_proxy app:8000 {
+    transport http {
+      read_timeout  3600s
+      write_timeout 3600s
+      dial_timeout   60s
+    }
+  }
+
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    Content-Security-Policy "default-src 'self'; img-src 'self' data:; object-src 'none'"
+  }
+
+  tls you@example.com
+}
+

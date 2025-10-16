@@ -1,0 +1,2 @@
+"""Persona core package (scaffold)."""
+

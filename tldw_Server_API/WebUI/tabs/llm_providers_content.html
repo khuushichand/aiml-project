@@ -10,6 +10,10 @@
         <button class="api-button" onclick="makeRequest('llmProvidersList', 'GET', '/api/v1/llm/providers', 'none')">
             Get Providers
         </button>
+        <div id="llmProvidersQueueBadge" style="display:inline-block; margin-left: 10px; font-family: monospace; font-size: 12px;"></div>
+        <label style="margin-left:10px; font-family: monospace; font-size: 12px;">
+            <input id="llmProvidersQueueAuto" type="checkbox" onchange="toggleQueueBadgeAuto(this.checked)"> Auto-update (30s)
+        </label>
         
         <h3>Response:</h3>
         <pre id="llmProvidersList_response">---</pre>
@@ -19,6 +23,16 @@
             <div id="llmProvidersStatus" style="margin-top: 10px;">
                 <p>Click "Get Providers" to see provider status...</p>
             </div>
+        </div>
+
+        <div class="info-box" style="margin-top: 16px;">
+            <h4>Severity Thresholds</h4>
+            <div style="display:flex; gap:10px; align-items:center; font-family: monospace; font-size: 13px;">
+                <label>LOW &lt; <input id="sevLowPct" type="number" min="0" max="100" step="0.1" style="width:80px;"> %</label>
+                <label>HIGH ≥ <input id="sevHighPct" type="number" min="0" max="100" step="0.1" style="width:80px;"> %</label>
+                <button class="api-button" onclick="saveSeverityThresholds()">Save</button>
+            </div>
+            <p style="margin-top:8px; color:#666">Values between LOW and HIGH are considered 🟠 MED.</p>
         </div>
     </div>
 
@@ -33,23 +47,27 @@
             <label for="llmProviderDetail_name">Provider Name <span class="required">*</span>:</label>
             <select id="llmProviderDetail_name">
                 <option value="">Select a provider...</option>
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="cohere">Cohere</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="google">Google</option>
-                <option value="groq">Groq</option>
-                <option value="huggingface">HuggingFace</option>
-                <option value="mistral">Mistral</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="llamacpp">Llama.cpp</option>
-                <option value="koboldcpp">Kobold.cpp</option>
-                <option value="oobabooga">Oobabooga</option>
-                <option value="tabbyapi">TabbyAPI</option>
-                <option value="vllm">vLLM</option>
-                <option value="ollama">Ollama</option>
-                <option value="aphrodite">Aphrodite</option>
-                <option value="custom_openai">Custom OpenAI</option>
+                <option value="openai">openai</option>
+                <option value="bedrock">bedrock</option>
+                <option value="anthropic">anthropic</option>
+                <option value="cohere">cohere</option>
+                <option value="groq">groq</option>
+                <option value="qwen">qwen</option>
+                <option value="openrouter">openrouter</option>
+                <option value="deepseek">deepseek</option>
+                <option value="mistral">mistral</option>
+                <option value="google">google</option>
+                <option value="huggingface">huggingface</option>
+                <option value="llama.cpp">llama.cpp</option>
+                <option value="kobold">kobold</option>
+                <option value="ooba">ooba</option>
+                <option value="tabbyapi">tabbyapi</option>
+                <option value="vllm">vllm</option>
+                <option value="local-llm">local-llm</option>
+                <option value="ollama">ollama</option>
+                <option value="aphrodite">aphrodite</option>
+                <option value="custom-openai-api">custom-openai-api</option>
+                <option value="custom-openai-api-2">custom-openai-api-2</option>
             </select>
         </div>
         
@@ -184,7 +202,13 @@ window.makeRequest = function(sectionId, method, endpoint, bodyType) {
             if (responseElement && responseElement.textContent !== '---') {
                 try {
                     const data = JSON.parse(responseElement.textContent);
-                    displayProvidersStatus(data);
+                    if (typeof displayProvidersStatusEnhanced === 'function') {
+                        displayProvidersStatusEnhanced(data);
+                    } else {
+                        displayProvidersStatus(data);
+                    }
+                    // Fetch queue badge
+                    loadQueueBadge();
                 } catch (e) {
                     console.error('Error parsing providers response:', e);
                 }
@@ -202,6 +226,20 @@ window.makeRequest = function(sectionId, method, endpoint, bodyType) {
                 }
             }
         }, 100);
+    } else if (sectionId === 'llmProviderDetail') {
+        setTimeout(() => {
+            const responseElement = document.getElementById('llmProviderDetail_response');
+            if (responseElement && responseElement.textContent !== '---') {
+                try {
+                    const data = JSON.parse(responseElement.textContent);
+                    if (typeof displayProviderDetailStatus === 'function') {
+                        displayProviderDetailStatus(data);
+                    }
+                } catch (e) {
+                    console.error('Error parsing provider detail response:', e);
+                }
+            }
+        }, 100);
     }
     
     return result;
@@ -215,6 +253,22 @@ function initializeLLMProvidersTab() {
     if (document.querySelector('#tabLLMProviders.active')) {
         makeRequest('llmProvidersList', 'GET', '/api/v1/llm/providers', 'none');
     }
+    // Initialize thresholds UI with saved values or defaults
+    try {
+        const low = parseFloat(localStorage.getItem('llm_severity_low') || '5');
+        const high = parseFloat(localStorage.getItem('llm_severity_high') || '20');
+        const lowEl = document.getElementById('sevLowPct');
+        const highEl = document.getElementById('sevHighPct');
+        if (lowEl) lowEl.value = low;
+        if (highEl) highEl.value = high;
+    } catch (e) { /* ignore */ }
+    // restore queue badge auto pref
+    const autoEl = document.getElementById('llmProvidersQueueAuto');
+    if (autoEl) {
+        const saved = localStorage.getItem('llm_providers_queue_auto') === '1';
+        autoEl.checked = saved;
+        if (saved) toggleQueueBadgeAuto(true);
+    }
 }
 
 // Call initialization when DOM is ready
@@ -223,6 +277,180 @@ document.addEventListener('DOMContentLoaded', () => {
         initializeLLMProvidersTab();
     }
 });
+
+// Enhanced status table with health/capabilities
+function displayProvidersStatusEnhanced(data) {
+    const statusDiv = document.getElementById('llmProvidersStatus');
+    if (!data || !data.providers) {
+        statusDiv.innerHTML = '<p>No provider data available</p>';
+        return;
+    }
+    let html = '<table class="status-table" style="width: 100%; border-collapse: collapse;">';
+    html += '<thead><tr>';
+    html += '<th style="text-align: left; padding: 8px; border-bottom: 2px solid #ddd;">Provider</th>';
+    html += '<th style="text-align: left; padding: 8px; border-bottom: 2px solid #ddd;">Configured</th>';
+    html += '<th style="text-align: left; padding: 8px; border-bottom: 2px solid #ddd;">Health</th>';
+    html += '<th style="text-align: left; padding: 8px; border-bottom: 2px solid #ddd;">Models</th>';
+    html += '<th style="text-align: left; padding: 8px; border-bottom: 2px solid #ddd;">Auth</th>';
+    html += '<th style="text-align: left; padding: 8px; border-bottom: 2px solid #ddd;">Capabilities</th>';
+    html += '</tr></thead><tbody>';
+
+    // read thresholds
+    const thresholds = getSeverityThresholds();
+    data.providers.forEach(provider => {
+        const isConfigured = provider.is_configured === true;
+        const configuredColor = isConfigured ? 'green' : 'gray';
+        const configuredText = isConfigured ? 'Yes' : 'No';
+        const requiresKey = provider.requires_api_key === true;
+        const authText = requiresKey ? (isConfigured ? '✓ Present' : '✗ Missing') : 'Not Required';
+        const health = provider.health || {};
+        const healthStatus = (health.status || 'unknown').toString();
+        const healthColor = healthStatus.includes('healthy') ? 'green' : (healthStatus.includes('degraded') ? 'orange' : (healthStatus.includes('unhealthy') || healthStatus.includes('open') ? 'red' : 'gray'));
+        const circuit = health.circuit_breaker_state ? ` <span style=\"color:#888\">(${health.circuit_breaker_state})</span>` : '';
+        const caps = provider.capabilities || {};
+        const capsBits = [];
+        if (caps.supports_streaming !== undefined) capsBits.push(caps.supports_streaming ? 'streaming' : 'no-stream');
+        if (caps.supports_tools !== undefined) capsBits.push(caps.supports_tools ? 'tools' : 'no-tools');
+        if (caps.default_timeout_seconds !== undefined) capsBits.push(`timeout=${caps.default_timeout_seconds}s`);
+        if (caps.max_output_tokens_default !== undefined && caps.max_output_tokens_default !== null) capsBits.push(`max_out=${caps.max_output_tokens_default}`);
+        const capsText = capsBits.join(', ');
+
+        html += '<tr>';
+        html += `<td style=\"padding: 8px; border-bottom: 1px solid #eee;\"><strong>${provider.name}</strong></td>`;
+        html += `<td style=\"padding: 8px; border-bottom: 1px solid #eee;\"><span style=\"color: ${configuredColor};\">● ${configuredText}</span></td>`;
+        // Compose health tooltip
+        const totalCalls = (health.success_count || 0) + (health.failure_count || 0);
+        const errRate = totalCalls > 0 ? Math.round((health.failure_count || 0) * 1000 / totalCalls)/10 : 0;
+        const low = thresholds.low, high = thresholds.high;
+        let sevEmoji = '🟢', sevLabel = 'LOW';
+        if (errRate >= high) { sevEmoji = '🔴'; sevLabel = 'HIGH'; }
+        else if (errRate >= low) { sevEmoji = '🟠'; sevLabel = 'MED'; }
+        const tooltip = `severity: ${sevEmoji} ${sevLabel}\n` +
+                        `status: ${healthStatus}\n` +
+                        (health.circuit_breaker_state ? `circuit: ${health.circuit_breaker_state}\n` : '') +
+                        `success: ${health.success_count || 0}, failure: ${health.failure_count || 0}\n` +
+                        `error_rate: ${errRate}%\n` +
+                        (health.average_response_time != null ? `avg_rt: ${Math.round(health.average_response_time*1000)}ms` : '');
+        // Click to fetch provider details
+        const onClick = `makeRequest('llmProviderDetail', 'GET', '/api/v1/llm/providers/${provider.name}', 'none');`;
+        html += `<td style=\"padding: 8px; border-bottom: 1px solid #eee;\"><span class=\\"health-badge\\" title=\\"${tooltip}\\" style=\\"background-color:${healthColor}; cursor:pointer;\\" onclick=\\"${onClick}\\">${healthStatus}</span>${circuit}</td>`;
+        html += `<td style=\"padding: 8px; border-bottom: 1px solid #eee;\">${provider.models ? provider.models.length : 0} models</td>`;
+        html += `<td style=\"padding: 8px; border-bottom: 1px solid #eee;\">${authText}</td>`;
+        html += `<td style=\"padding: 8px; border-bottom: 1px solid #eee;\">${capsText || '-'}</td>`;
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    if (data.default_provider) {
+        html += `<p style=\"margin-top: 10px;\"><strong>Default Provider:</strong> ${data.default_provider}</p>`;
+    }
+    if (data.total_configured !== undefined) {
+        html += `<p><strong>Total Configured Providers:</strong> ${data.total_configured}</p>`;
+    }
+    // Add mini legend for severity (dynamic thresholds)
+    const thr = getSeverityThresholds();
+    html += '<div class="legend" style="margin-top:8px; font-family: monospace; font-size: 12px; color:#555">'
+          + `<span title="error rate < ${thr.low}%">🟢 LOW</span> `
+          + `<span title="${thr.low}–${thr.high - 0.1}% error rate" style="margin-left:10px;">🟠 MED</span> `
+          + `<span title=">= ${thr.high}% error rate" style="margin-left:10px;">🔴 HIGH</span>`
+          + '</div>';
+    statusDiv.innerHTML = html;
+}
+
+function getSeverityThresholds() {
+    const low = parseFloat(localStorage.getItem('llm_severity_low') || '5');
+    const high = parseFloat(localStorage.getItem('llm_severity_high') || '20');
+    return { low: isNaN(low) ? 5 : low, high: isNaN(high) ? 20 : high };
+}
+
+function saveSeverityThresholds() {
+    const lowEl = document.getElementById('sevLowPct');
+    const highEl = document.getElementById('sevHighPct');
+    const low = parseFloat(lowEl && lowEl.value ? lowEl.value : '5');
+    const high = parseFloat(highEl && highEl.value ? highEl.value : '20');
+    if (!isNaN(low)) localStorage.setItem('llm_severity_low', String(low));
+    if (!isNaN(high)) localStorage.setItem('llm_severity_high', String(high));
+    // Re-render providers list if present
+    try {
+        const responseElement = document.getElementById('llmProvidersList_response');
+        if (responseElement && responseElement.textContent !== '---') {
+            const data = JSON.parse(responseElement.textContent);
+            displayProvidersStatusEnhanced(data);
+        }
+    } catch (e) { /* ignore */ }
+}
+
+async function loadQueueBadge() {
+    try {
+        const badge = document.getElementById('llmProvidersQueueBadge');
+        if (!badge) return;
+        const res = await fetch('/api/v1/chat/queue/status', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data && data.enabled) {
+            const q = data.queue_size || 0;
+            const running = data.is_running ? 'running' : 'stopped';
+            badge.innerHTML = `<span class="health-badge" title="Queue status: ${running}" style="background-color:#4f7cac;">Queue: ${q}</span>`;
+        } else {
+            badge.innerHTML = `<span class="health-badge" style="background-color:#777;">Queue: n/a</span>`;
+        }
+    } catch (e) {
+        // ignore errors for badge
+    }
+}
+
+let __llmProvidersQueueBadgeTimer = null;
+function toggleQueueBadgeAuto(enabled) {
+    if (enabled) {
+        if (__llmProvidersQueueBadgeTimer) clearInterval(__llmProvidersQueueBadgeTimer);
+        loadQueueBadge();
+        __llmProvidersQueueBadgeTimer = setInterval(loadQueueBadge, 30000);
+        try { localStorage.setItem('llm_providers_queue_auto', '1'); } catch (e) {}
+    } else {
+        if (__llmProvidersQueueBadgeTimer) clearInterval(__llmProvidersQueueBadgeTimer);
+        __llmProvidersQueueBadgeTimer = null;
+        try { localStorage.removeItem('llm_providers_queue_auto'); } catch (e) {}
+    }
+}
+
+// Render provider detail health/capabilities
+function displayProviderDetailStatus(provider) {
+    const containerId = 'llmProviderDetail_status';
+    let statusDiv = document.getElementById(containerId);
+    if (!statusDiv) {
+        const parent = document.getElementById('llmProviderDetail');
+        if (parent) {
+            const box = document.createElement('div');
+            box.className = 'info-box';
+            box.innerHTML = `<h4>Provider Health & Capabilities</h4><div id="${containerId}" style="margin-top: 10px;"></div>`;
+            parent.appendChild(box);
+            statusDiv = document.getElementById(containerId);
+        }
+    }
+    if (!statusDiv) return;
+    if (!provider || !provider.name) {
+        statusDiv.innerHTML = '<p>No provider selected</p>';
+        return;
+    }
+    const caps = provider.capabilities || {};
+    const health = provider.health || {};
+    const healthStatus = (health.status || 'unknown').toString();
+    const healthColor = healthStatus.includes('healthy') ? 'green' : (healthStatus.includes('degraded') ? 'orange' : (healthStatus.includes('unhealthy') || healthStatus.includes('open') ? 'red' : 'gray'));
+    const circuit = health.circuit_breaker_state ? ` (${health.circuit_breaker_state})` : '';
+    
+    let html = '';
+    html += `<p><strong>Name:</strong> ${provider.display_name || provider.name}</p>`;
+    html += `<p><strong>Configured:</strong> ${provider.is_configured ? 'Yes' : 'No'}</p>`;
+    html += `<p><strong>Requires API Key:</strong> ${provider.requires_api_key ? 'Yes' : 'No'}</p>`;
+    html += `<p><strong>Health:</strong> <span class=\"health-badge\" style=\"background-color:${healthColor}\">${healthStatus}</span>${circuit}</p>`;
+    html += '<p><strong>Capabilities:</strong></p>';
+    html += '<ul>';
+    if (caps.supports_streaming !== undefined) html += `<li>Streaming: ${caps.supports_streaming ? 'Yes' : 'No'}</li>`;
+    if (caps.supports_tools !== undefined) html += `<li>Tools: ${caps.supports_tools ? 'Yes' : 'No'}</li>`;
+    if (caps.default_timeout_seconds !== undefined) html += `<li>Default Timeout: ${caps.default_timeout_seconds}s</li>`;
+    if (caps.max_output_tokens_default !== undefined && caps.max_output_tokens_default !== null) html += `<li>Default Max Output Tokens: ${caps.max_output_tokens_default}</li>`;
+    html += '</ul>';
+    statusDiv.innerHTML = html;
+}
 </script>
 
 <style>
@@ -246,5 +474,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 details summary:hover {
     background-color: #e8e8e8 !important;
+}
+
+.health-badge {
+    display: inline-block;
+    color: #fff;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 12px;
+    text-transform: capitalize;
 }
 </style>

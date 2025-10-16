@@ -28,6 +28,10 @@ from ..queue_schemas import (
 from .base_worker import BaseWorker, WorkerConfig
 from fnmatch import fnmatch
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from ..messages import normalize_message
+from ..hyde import generate_questions, question_hash, normalize_question
+import json as _json
 
 
 class EmbeddingWorkerConfig(WorkerConfig):
@@ -188,7 +192,8 @@ class EmbeddingWorker(BaseWorker):
     
     def _parse_message(self, data: Dict[str, Any]) -> EmbeddingMessage:
         """Parse raw message data into EmbeddingMessage"""
-        return EmbeddingMessage(**data)
+        norm = normalize_message("embedding", data)
+        return EmbeddingMessage(**norm)
     
     def _detect_language(self, text: str) -> str:
         """Detect language of text"""
@@ -279,7 +284,9 @@ class EmbeddingWorker(BaseWorker):
     
     async def process_message(self, message: EmbeddingMessage) -> Optional[StorageMessage]:
         """Process embedding message and generate embeddings"""
-        logger.info(f"Processing embedding job {message.job_id} with {len(message.chunks)} chunks")
+        logger.bind(job_id=message.job_id, stage="embedding").info(
+            f"Processing embedding job {message.job_id} with {len(message.chunks)} chunks"
+        )
         
         start_time = time.time()
         cache_hits = 0
@@ -322,14 +329,47 @@ class EmbeddingWorker(BaseWorker):
                             model_name = model_config.model_name_or_path
                     
                     models_used.add(f"{model_provider}:{model_name}")
-                    
-                    # Check cache first
-                    if self.cache and self.embedding_config.enable_caching:
+
+                    chunk_metadata_src = dict(chunk.metadata or {})
+                    detected_language = chunk_metadata_src.get("language")
+                    if not detected_language:
+                        try:
+                            detected_language = self._detect_language(chunk.content)
+                        except Exception:
+                            detected_language = None
+                    if detected_language:
+                        chunk_metadata_src.setdefault("language", detected_language)
+                    chunk_cached = False
+
+                    # Check Redis content-hash cache first (cross-run)
+                    try:
+                        if self.redis_client and chunk_metadata_src:
+                            chash = chunk_metadata_src.get("content_hash")
+                            if chash:
+                                rkey = f"embeddings:contentcache:v1:{model_name}:{chash}"
+                                redis_raw = await self.redis_client.get(rkey)
+                                if redis_raw:
+                                    try:
+                                        payload = _json.loads(redis_raw)
+                                        vec = payload.get("embedding")
+                                        if isinstance(vec, list):
+                                            embedding = vec
+                                            chunk_cached = True
+                                            cache_hits += 1
+                                            logger.debug(f"Redis cache hit for chunk {chunk.chunk_id}")
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+
+                    # Then check in‑process LRU cache
+                    if embedding is None and self.cache and self.embedding_config.enable_caching:
                         cached_embedding = self.cache.get(chunk.content, model_name)
                         if cached_embedding:
                             embedding = cached_embedding
+                            chunk_cached = True
                             cache_hits += 1
-                            logger.debug(f"Cache hit for chunk {chunk.chunk_id}")
+                            logger.debug(f"LRU cache hit for chunk {chunk.chunk_id}")
                         else:
                             cache_misses += 1
                     
@@ -364,20 +404,120 @@ class EmbeddingWorker(BaseWorker):
                         if self.cache and self.embedding_config.enable_caching:
                             embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
                             self.cache.put(chunk.content, model_name, embedding_list)
+                        # Populate Redis cache for content_hash
+                        try:
+                            if self.redis_client and isinstance(chunk.metadata, dict):
+                                chash = chunk.metadata.get("content_hash")
+                                if chash:
+                                    rkey = f"embeddings:contentcache:v1:{model_name}:{chash}"
+                                    vec = embedding.tolist() if hasattr(embedding, 'tolist') else embedding
+                                    ttl = int(os.getenv("EMBEDDINGS_CONTENT_CACHE_TTL_SECONDS", "86400") or 86400)
+                                    await self.redis_client.set(rkey, _json.dumps({
+                                        "embedding": vec,
+                                        "dimensions": len(vec),
+                                        "model": model_name,
+                                        "provider": model_provider,
+                                        "ts": int(time.time())
+                                    }), ex=ttl)
+                        except Exception:
+                            pass
                     
                     # Create embedding data object
+                    # Tag embedder and content hash in metadata
+                    embedder_name = model_provider
+                    embedder_version = model_name
                     embedding_data = EmbeddingData(
                         chunk_id=chunk.chunk_id,
                         embedding=embedding if isinstance(embedding, list) else embedding.tolist(),
                         model_used=model_name,
                         dimensions=len(embedding) if isinstance(embedding, list) else len(embedding.tolist()),
                         metadata={
-                            **(chunk.metadata or {}),
+                            **chunk_metadata_src,
+                            "kind": "chunk",
                             "model_provider": model_provider,
-                            "cached": embedding is not None and cache_hits > cache_misses
+                            "embedder_name": embedder_name,
+                            "embedder_version": embedder_version,
+                            "cached": chunk_cached
                         }
                     )
                     embedding_data_list.append(embedding_data)
+
+                    # HYDE/doc2query generation (Option A: inline in embedding worker)
+                    try:
+                        if bool(settings.get("HYDE_ENABLED", False)):
+                            try:
+                                hyde_n = int(settings.get("HYDE_QUESTIONS_PER_CHUNK", 0) or 0)
+                            except Exception:
+                                hyde_n = 0
+                            if hyde_n > 0:
+                                # Choose language: override from settings unless 'auto'
+                                lang_cfg = str(settings.get("HYDE_LANGUAGE", "auto") or "auto").lower()
+                                if lang_cfg == "auto":
+                                    language = detected_language
+                                else:
+                                    language = lang_cfg
+                                # Provider/model for HYDE question generation
+                                hyde_provider = settings.get("HYDE_PROVIDER")
+                                hyde_model = settings.get("HYDE_MODEL")
+                                hyde_temp = float(settings.get("HYDE_TEMPERATURE", 0.2) or 0.2)
+                                hyde_max_tokens = int(settings.get("HYDE_MAX_TOKENS", 96) or 96)
+                                hyde_prompt_ver = settings.get("HYDE_PROMPT_VERSION", 1)
+
+                                questions = generate_questions(
+                                    text=chunk.content,
+                                    n=hyde_n,
+                                    provider=hyde_provider,
+                                    model=hyde_model,
+                                    temperature=hyde_temp,
+                                    max_tokens=hyde_max_tokens,
+                                    language=language,
+                                    prompt_version=hyde_prompt_ver,
+                                )
+                                if questions:
+                                    # Embed questions using the same embedder used for the parent chunk
+                                    q_embeddings = await self._generate_embeddings(
+                                        questions,
+                                        model_config,
+                                        model_provider,
+                                    )
+                                    for qi, qtext in enumerate(questions):
+                                        try:
+                                            qvec = q_embeddings[qi]
+                                        except Exception:
+                                            continue
+                                        qh = question_hash(qtext)
+                                        qid = f"{chunk.chunk_id}:q:{qh[:8]}"
+                                        meta = {
+                                            **chunk_metadata_src,
+                                            "kind": "hyde_q",
+                                            "parent_chunk_id": chunk.chunk_id,
+                                            "hyde_rank": qi,
+                                            "question_hash": qh,
+                                            "model_provider": model_provider,
+                                            "embedder_name": embedder_name,
+                                            "embedder_version": embedder_version,
+                                            "hyde_prompt_version": hyde_prompt_ver,
+                                            "hyde_generator": f"{hyde_provider}:{hyde_model}" if (hyde_provider and hyde_model) else "",
+                                        }
+                                        if language:
+                                            meta["language"] = language
+                                        elif detected_language:
+                                            meta["language"] = detected_language
+                                        # Create embedding data for HYDE question
+                                        qvec_list = qvec.tolist() if hasattr(qvec, 'tolist') else qvec
+                                        embedding_data_list.append(
+                                            EmbeddingData(
+                                                chunk_id=qid,
+                                                embedding=qvec_list,
+                                                model_used=model_name,
+                                                dimensions=len(qvec_list) if hasattr(qvec_list, '__len__') else len(qvec),
+                                                metadata=meta,
+                                            )
+                                        )
+                                    logger.debug(f"HYDE: added {len(questions)} question embeddings for chunk {chunk.chunk_id}")
+                    except Exception as _hyde_err:
+                        # Never block the pipeline on HYDE
+                        logger.debug(f"HYDE generation skipped/failed for chunk {chunk.chunk_id}: {_hyde_err}")
                 
                 # Update progress
                 progress = 25 + (50 * (i + len(batch_chunks)) / len(message.chunks))
@@ -392,7 +532,7 @@ class EmbeddingWorker(BaseWorker):
             # Log cache statistics
             if self.cache:
                 cache_stats = self.cache.get_stats()
-                logger.info(
+                logger.bind(job_id=message.job_id, stage="embedding").info(
                     f"Cache stats for job {message.job_id}: "
                     f"Hits: {cache_hits}, Misses: {cache_misses}, "
                     f"Total hit rate: {cache_stats['hit_rate']:.2%}"
@@ -406,6 +546,10 @@ class EmbeddingWorker(BaseWorker):
                 priority=message.priority,
                 user_tier=message.user_tier,
                 created_at=message.created_at,
+                idempotency_key=message.idempotency_key,
+                dedupe_key=message.dedupe_key,
+                operation_id=message.operation_id,
+                trace_id=message.trace_id,
                 embeddings=embedding_data_list,
                 collection_name=f"user_{message.user_id}_media_{message.media_id}",
                 total_chunks=len(message.chunks),
@@ -418,7 +562,7 @@ class EmbeddingWorker(BaseWorker):
                 }
             )
             
-            logger.info(
+            logger.bind(job_id=message.job_id, stage="embedding").info(
                 f"Generated {len(embedding_data_list)} embeddings for job {message.job_id} "
                 f"in {processing_time_ms}ms using models: {', '.join(models_used)}"
             )
@@ -430,9 +574,31 @@ class EmbeddingWorker(BaseWorker):
     
     async def _send_to_next_stage(self, result: StorageMessage):
         """Send embeddings to storage queue"""
+        target_queue = self.storage_queue
+        try:
+            if str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes"):
+                # Operator override takes precedence
+                pr = None
+                try:
+                    key = f"embeddings:priority:override:{result.job_id}"
+                    pr = await self.redis_client.get(key)
+                except Exception:
+                    pr = None
+                if not pr:
+                    p = int(getattr(result, 'priority', 50) or 50)
+                    if p >= 75:
+                        pr = 'high'
+                    elif p <= 25:
+                        pr = 'low'
+                    else:
+                        pr = 'normal'
+                target_queue = f"{self.storage_queue}:{pr}"
+        except Exception:
+            target_queue = self.storage_queue
+
         await self.redis_client.xadd(
-            self.storage_queue,
-            result.dict()
+            target_queue,
+            model_dump_compat(result)
         )
         logger.debug(f"Sent job {result.job_id} to storage queue")
     
@@ -480,6 +646,13 @@ class EmbeddingWorker(BaseWorker):
                     "models": {model_id: cfg_obj},
                 }
             }
+            # Best-effort hint for HTTP connection pooling/rate limiting to provider wrappers
+            try:
+                from ..connection_pool import get_pool_manager
+                pool = get_pool_manager().get_pool(prov)
+                app_config["http_connection_pool"] = pool  # consumers may opt-in to reuse
+            except Exception:
+                pass
             return app_config
 
         # Resolve create_embeddings_batch at runtime to respect test patches
@@ -510,11 +683,33 @@ class EmbeddingWorker(BaseWorker):
                 api_key = getattr(cfg_obj, "api_key", None) or os.getenv("OPENAI_API_KEY")
                 return fn(batch_texts, model_id, prov, api_url, api_key)
 
-        # Batching and retry logic
+        # Batching and retry logic (adaptive batch sizing)
         max_attempts = 3
         results: List[Any] = []
         # Start with configured max_batch_size or len(texts)
         target_batch = min(getattr(self.embedding_config, "max_batch_size", len(texts)) or len(texts), len(texts))
+        # Track a simple moving window of per-item latency
+        latency_per_item_ms: float = 0.0
+        def _adapt_batch(last_elapsed_s: float, n_items: int) -> int:
+            nonlocal latency_per_item_ms, target_batch
+            if n_items <= 0:
+                return target_batch
+            per_item = (last_elapsed_s * 1000.0) / float(n_items)
+            # exponential moving average
+            if latency_per_item_ms <= 0.0:
+                latency_per_item_ms = per_item
+            else:
+                latency_per_item_ms = 0.7 * latency_per_item_ms + 0.3 * per_item
+            # If fast, increase batch modestly; if slow, reduce
+            try:
+                max_b = max(1, int(getattr(self.embedding_config, "max_batch_size", target_batch) or target_batch))
+            except Exception:
+                max_b = target_batch
+            if latency_per_item_ms < 12.0 and target_batch < max_b:
+                target_batch = min(max_b, target_batch + 2)
+            elif latency_per_item_ms > 120.0 and target_batch > 1:
+                target_batch = max(1, target_batch // 2)
+            return target_batch
 
         idx = 0
         while idx < len(texts):
@@ -526,6 +721,8 @@ class EmbeddingWorker(BaseWorker):
             attempt = 0
             while True:
                 try:
+                    import time as _time
+                    t0 = _time.perf_counter()
                     embeddings = await loop.run_in_executor(
                         None,
                         _call_create,
@@ -536,8 +733,14 @@ class EmbeddingWorker(BaseWorker):
                         provider,
                         config,
                     )
+                    t1 = _time.perf_counter()
                     # Append and move to next batch
                     results.extend(embeddings)
+                    # Adapt batch size based on observed latency
+                    try:
+                        _adapt_batch(t1 - t0, len(batch))
+                    except Exception:
+                        pass
                     idx = end
                     break
                 except MemoryError as me:
@@ -552,6 +755,15 @@ class EmbeddingWorker(BaseWorker):
                     continue
                 except Exception as e:
                     attempt += 1
+                    # On likely rate-limit/network classes, back off batch size
+                    try:
+                        if target_batch > 1 and ("rate limit" in str(e).lower() or "429" in str(e).lower()):
+                            target_batch = max(1, target_batch // 2)
+                            end = min(idx + target_batch, len(texts))
+                            batch = texts[idx:end]
+                            app_cfg = _build_app_config(config.model_name_or_path, provider, config)
+                    except Exception:
+                        pass
                     if attempt < max_attempts:
                         logger.warning(f"Embedding attempt {attempt} failed; retrying: {e}")
                         continue

@@ -1,0 +1,84 @@
+name: Prompt Studio (sqlite/pg)
+
+on:
+  push:
+    paths:
+      - 'tldw_Server_API/**'
+      - '.github/workflows/prompt-studio.yml'
+  pull_request:
+    paths:
+      - 'tldw_Server_API/**'
+      - '.github/workflows/prompt-studio.yml'
+
+jobs:
+  tests:
+    name: prompt-studio (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw_user
+          POSTGRES_PASSWORD: TestPassword123!
+          POSTGRES_DB: tldw_users
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U tldw_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: 1
+      PYTHONUNBUFFERED: 1
+      # Keep tests close to prod, but avoid heavy startup in tests
+      DISABLE_HEAVY_STARTUP: '1'
+      TEST_MODE: 'true'
+      # Prompt Studio matrix plumbing
+      TLDW_PS_BACKEND: ${{ matrix.backend }}
+      # Postgres test env (used by fixtures). For sqlite these are harmless; PG tests will skip quickly unless required.
+      POSTGRES_TEST_HOST: 127.0.0.1
+      POSTGRES_TEST_PORT: '5432'
+      POSTGRES_TEST_DB: tldw_users
+      POSTGRES_TEST_USER: tldw_user
+      POSTGRES_TEST_PASSWORD: TestPassword123!
+      # Require PG in the postgres leg so PG-only tests run; allow skip in sqlite leg
+      TLDW_TEST_POSTGRES_REQUIRED: ${{ matrix.backend == 'postgres' && '1' || '0' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('tldw_Server_API/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tldw_Server_API/requirements.txt
+          # Ensure PG driver present
+          pip install "psycopg[binary]" psycopg-pool
+
+      - name: Run Prompt Studio unit tests
+        run: |
+          pytest -q tldw_Server_API/tests/prompt_studio/unit
+
+      - name: Run Prompt Studio integration tests (non-slow)
+        run: |
+          pytest -q -m "not slow" tldw_Server_API/tests/prompt_studio/integration

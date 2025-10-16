@@ -527,7 +527,9 @@ class ChatUI {
             responseArea.textContent = '';
 
             // Generate and display cURL command
-            const curlCommand = apiClient.generateCurl('POST', '/api/v1/chat/completions', { body: payload });
+            const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
+                ? apiClient.generateCurlV2('POST', '/api/v1/chat/completions', { body: payload })
+                : apiClient.generateCurl('POST', '/api/v1/chat/completions', { body: payload }));
             const curlEl = document.getElementById('chatCompletions_curl');
             if (curlEl) {
                 curlEl.textContent = curlCommand;

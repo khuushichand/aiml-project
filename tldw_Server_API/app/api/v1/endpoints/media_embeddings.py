@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 from loguru import logger
 
 # Local imports
@@ -92,15 +93,14 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class BatchMediaEmbeddingsRequest(BaseModel):
-    media_ids: List[int] = Field(..., min_items=1, description="List of media IDs to embed")
+    media_ids: List[int] = Field(..., min_length=1, description="List of media IDs to embed")
     embedding_model: Optional[str] = Field(None, alias="model")
     embedding_provider: Optional[str] = Field(None, alias="provider")
     chunk_size: int = Field(1000, description="Chunk size to use for each media item")
     chunk_overlap: int = Field(200, description="Chunk overlap to use for each media item")
     force_regenerate: bool = Field(False, description="Force regeneration even if embeddings exist")
 
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class BatchMediaEmbeddingsResponse(BaseModel):
@@ -117,8 +117,7 @@ class EmbeddingsSearchRequest(BaseModel):
     embedding_provider: Optional[str] = Field(None, alias="provider")
     filters: Optional[Dict[str, Any]] = Field(None, description="Optional metadata filters")
 
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class EmbeddingsSearchResult(BaseModel):

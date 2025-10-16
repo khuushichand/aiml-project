@@ -166,6 +166,112 @@ class PromptStudioMetrics:
                 buckets=[1, 5, 10, 30, 60, 300, 600, 1800]
             )
         )
+
+        # Additional job metrics
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.queue_latency_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Time spent in queue before processing",
+                unit="s",
+                labels=["job_type"],
+                buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60, 300]
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.retries_total",
+                type=MetricType.COUNTER,
+                description="Total job retries",
+                labels=["job_type"]
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.failures_total",
+                type=MetricType.COUNTER,
+                description="Total job failures",
+                labels=["job_type", "reason"]
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.lease_renewals_total",
+                type=MetricType.COUNTER,
+                description="Total lease renewals during processing",
+                labels=["job_type"]
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.reclaims_total",
+                type=MetricType.COUNTER,
+                description="Total jobs reclaimed after lease expiry",
+                labels=["job_type"]
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.stale_processing",
+                type=MetricType.GAUGE,
+                description="Jobs in processing with missing/expired lease (aggregate)"
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.jobs.backlog",
+                type=MetricType.GAUGE,
+                description="Backlog = queued - processing",
+                labels=["job_type"]
+            )
+        )
+
+        # Idempotency
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.idempotency.hit_total",
+                type=MetricType.COUNTER,
+                description="Idempotency key hits",
+                labels=["entity_type"]
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.idempotency.miss_total",
+                type=MetricType.COUNTER,
+                description="Idempotency key misses",
+                labels=["entity_type"]
+            )
+        )
+
+        # Postgres advisory locks
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.pg_advisory.lock_attempts_total",
+                type=MetricType.COUNTER,
+                description="Advisory lock attempts"
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.pg_advisory.locks_acquired_total",
+                type=MetricType.COUNTER,
+                description="Advisory locks acquired"
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.pg_advisory.unlocks_total",
+                type=MetricType.COUNTER,
+                description="Advisory locks released"
+            )
+        )
         
         # WebSocket metrics
         self.metrics_manager.register_metric(

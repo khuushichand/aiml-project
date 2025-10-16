@@ -154,7 +154,7 @@ def test_chat_completion_unauthorized(mock_chacha_db):
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db):
+def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db, setup_dependencies):
     """Test handling of invalid model requests."""
     
     # Use a valid provider but configure it to fail

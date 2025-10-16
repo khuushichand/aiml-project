@@ -140,8 +140,7 @@ def test_api_token(actual_test_api_key: str): # Depends on the actual_test_api_k
         # We can set this key in settings for the test session if it's not already there.
         # This assumes your settings["SINGLE_USER_API_KEY"] is the source of truth.
         # If settings() are reloaded per test function (via `client` fixture),
-        # then settings["SINGLE_USER_API_KEY"] might default to "default-secret-key-for-single-user"
-        # unless explicitly patched for the test.
+        # ensure SINGLE_USER_API_KEY is explicitly set (tests default to "test-api-key-12345").
         # Using actual_test_api_key makes it consistent.
         return actual_test_api_key
     # For multi-user mode, this is a placeholder, as real JWTs are complex.

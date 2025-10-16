@@ -47,6 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_ps_evaluations_status ON prompt_studio_evaluation
 -- Optimizations table indexes
 CREATE INDEX IF NOT EXISTS idx_ps_optimizations_project ON prompt_studio_optimizations(project_id);
 CREATE INDEX IF NOT EXISTS idx_ps_optimizations_status ON prompt_studio_optimizations(status);
+CREATE INDEX IF NOT EXISTS idx_ps_optimizations_created ON prompt_studio_optimizations(created_at);
 
 -- Job queue table indexes
 CREATE INDEX IF NOT EXISTS idx_ps_job_queue_status ON prompt_studio_job_queue(status, priority);
@@ -54,3 +55,6 @@ CREATE INDEX IF NOT EXISTS idx_ps_job_queue_type ON prompt_studio_job_queue(job_
 CREATE INDEX IF NOT EXISTS idx_ps_job_queue_entity ON prompt_studio_job_queue(entity_id, job_type);
 CREATE INDEX IF NOT EXISTS idx_ps_job_queue_client ON prompt_studio_job_queue(client_id);
 CREATE INDEX IF NOT EXISTS idx_ps_job_queue_created ON prompt_studio_job_queue(created_at);
+
+-- Optimization iterations table indexes (ensure time-sorted fetches are fast)
+CREATE INDEX IF NOT EXISTS idx_ps_opt_iter_created ON prompt_studio_optimization_iterations(created_at);

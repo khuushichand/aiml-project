@@ -96,7 +96,8 @@ class MockAdapter(TTSAdapter):
 class TestTTSServiceV2:
     """Tests for TTSServiceV2"""
     
-    @pytest.fixture
+    import pytest_asyncio
+    @pytest_asyncio.fixture
     async def service(self):
         """Create a test service instance"""
         config = {

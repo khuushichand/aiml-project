@@ -1,0 +1,45 @@
+# Production-leaning overrides for docker-compose.yml
+#
+# Usage:
+#   1) Copy `.env.example` to `.env` and set secure values
+#   2) docker compose up -d --build
+#
+# Notes:
+# - Sets production flags and conservative defaults
+# - Keeps app port exposed for simplicity; pair with a reverse proxy (Nginx/Traefik/Caddy)
+# - To run behind a reverse proxy container, remove the `ports` line from `app` and publish the proxy instead
+
+services:
+  app:
+    restart: unless-stopped
+    environment:
+      # Security & mode
+      AUTH_MODE: ${AUTH_MODE:-multi_user}
+      tldw_production: ${tldw_production:-true}
+      SHOW_API_KEY_ON_STARTUP: ${SHOW_API_KEY_ON_STARTUP:-false}
+
+      # AuthNZ
+      SINGLE_USER_API_KEY: ${SINGLE_USER_API_KEY:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://tldw_user:${POSTGRES_PASSWORD:-ChangeMeStrong123!}@postgres:5432/${POSTGRES_DB:-tldw_users}}
+
+      # Networking / CORS
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://your.domain.com}
+
+      # Runtime
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-4}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Optional: route Jobs backend to Postgres
+      JOBS_DB_URL: ${JOBS_DB_URL:-}
+
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
+      POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeMeStrong123!}
+
+  redis:
+    restart: unless-stopped
+

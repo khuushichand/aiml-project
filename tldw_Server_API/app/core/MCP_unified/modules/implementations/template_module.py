@@ -39,10 +39,9 @@ class TemplateModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         # Sanitize inputs and dispatch
         args = self.sanitize_input(arguments)
         if tool_name == "echo":
             return args.get("message", "")
         raise ValueError(f"Unknown tool: {tool_name}")
-

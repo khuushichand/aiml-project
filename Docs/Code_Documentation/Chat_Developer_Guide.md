@@ -10,11 +10,22 @@ This guide explains the Chat module’s architecture, key components, and how to
 - Optional rate limiting, queuing/back‑pressure, and metrics/tracing
 - Character sessions, dictionaries, world books integration through adjacent subsystems
 
+## Authentication
+
+- Supports `Authorization: Bearer <token>`, legacy `Token: <token>`, and single‑user `X-API-KEY` headers.
+- Actual enforcement depends on deployment settings (`AUTH_MODE`, config flags). See `main.py` auth wiring and `core/Auth` utilities.
+
+## Persistence
+
+- Requests are ephemeral by default; set `save_to_db: true` to persist conversations/messages.
+- Config toggles for default persistence are read from `[Chat-Module]` and environment (e.g., `CHAT_SAVE_DEFAULT`).
+- Non‑stream responses include `tldw_conversation_id` in the JSON payload for client state.
+
 ## Directory Map
 
-- `tldw_Server_API/app/core/Chat/`
-  - `Chat_Functions.py` – Legacy central dispatcher used by the API endpoint today; also contains a duplicate provider mapping kept for back‑compat
-  - `chat_orchestrator.py` – Modern dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
+ - `tldw_Server_API/app/core/Chat/`
+  - `Chat_Functions.py` – Legacy shim + utilities (e.g., ChatDictionary, helpers). The API endpoint dispatches via `chat_orchestrator`; this file forwards to it for test/backward compatibility. Provider mappings are not duplicated here.
+  - `chat_orchestrator.py` – Primary dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
   - `chat_helpers.py` – Request shaping helpers, conversion from API schemas, dictionary/character hooks
   - `provider_manager.py` & `provider_config.py` – Provider health/fallback management and authoritative handler/parameter mappings
   - `rate_limiter.py` – Module‑level rate limiting primitives & startup initialization
@@ -39,7 +50,7 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint currently dispatches via `Chat_Functions.chat_api_call(...)`. The next‑gen dispatcher in `chat_orchestrator.py` performs the same role but sources mappings from `provider_config.py`.
+3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Mappings are sourced from `provider_config.py`. A compatibility shim remains in `Chat_Functions.chat_api_call` for legacy callers and tests.
 4. `LLM_Calls/*` executes the provider‑specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.
@@ -49,8 +60,12 @@ Related:
 - Authoritative mappings live in `provider_config.py`:
   - `API_CALL_HANDLERS` maps provider keys (e.g., `openai`, `anthropic`, `groq`, `mistral`, `vllm`, `ollama`) to call functions in `core/LLM_Calls`.
   - `PROVIDER_PARAM_MAP` translates generic chat arguments (e.g., `messages_payload`, `system_message`, `top_p`, `max_tokens`) into each provider’s expected keyword names.
-- `Chat_Functions.py` retains a duplicate of these mappings for backward compatibility with the current endpoint. New work should reference `provider_config.py`.
-- At app startup, `main.py` uses `Chat_Functions.API_CALL_HANDLERS` to seed the `provider_manager` for health/fallback.
+- `Chat_Functions.py` no longer duplicates these mappings. `provider_config.py` is the single source of truth for handler/parameter mappings.
+- At app startup, `main.py` seeds the `provider_manager` from `provider_config.API_CALL_HANDLERS` to avoid drift with the endpoint mappings.
+
+Provider selection notes:
+- Requests may specify models with a provider prefix (e.g., `anthropic/claude-3-opus`). The endpoint extracts the provider and model automatically.
+- Provider fallback is available via `provider_manager`; controlled by `[Chat-Module].enable_provider_fallback` (disabled by default for stability).
 
 ### Adding a Provider (Checklist)
 
@@ -71,6 +86,7 @@ Related:
   - Tool definitions size limits
   - Request size limits (`MAX_REQUEST_SIZE`), see `chat_validators.py`
   - Model strings with provider prefixes like `anthropic/claude-3-opus` (provider extracted automatically)
+  - Image inputs on user messages via `image_url` content parts (expects data URI with base64; validated/sanitized)
 
 ## Error Handling
 
@@ -85,12 +101,17 @@ Related:
 - `streaming_utils.py` normalizes provider chunks and emits OpenAI‑style Server‑Sent Events (`text/event-stream`).
 - The endpoint wraps streams with heartbeats, idle timeouts, and finalization signals.
 - Errors in streams are emitted as SSE error frames and logged with context.
+- Event framing:
+  - Emits an initial `event: stream_start` with `{ conversation_id, model, timestamp }`.
+  - Emits `: heartbeat ...` comments at intervals.
+  - Emits `data: {"choices":[{"delta":{"content":"..."}}]}` for token deltas and a `[DONE]` equivalent on completion.
 
 ## Rate Limiting & Queuing
 
-- `rate_limiter.py` exposes a `RateLimitConfig` and `initialize_rate_limiter()` called on app startup (see `main.py`), and is enforced in the chat endpoint.
-- `request_queue.py` exists for back‑pressure and concurrency control; it is initialized in `main.py` but not yet wired into the chat endpoint (integration planned).
-- Apply limits to high‑cost routes (completions, tools) and consider per‑user/per‑IP strategies.
+- Chat rate limiter (`core/Chat/rate_limiter.py`) provides global, per‑user, per‑conversation, and tokens/minute controls and is enforced in the endpoint.
+- RBAC guard: the endpoint includes `Depends(rbac_rate_limit("chat.create"))` to scope/limit access by permission.
+- Optional queued execution: set `CHAT_QUEUED_EXECUTION=true` to route calls through `request_queue` for cooperative back‑pressure.
+- TEST_MODE supports deterministic overrides via `TEST_CHAT_*` env vars (e.g., `TEST_CHAT_PER_USER_RPM`) with burst defaulting to 1.0.
 
 ## Metrics & Tracing
 
@@ -106,6 +127,12 @@ Related:
 - `provider_config.py` defines handler/parameter mappings; `provider_manager.py` manages health/circuit‑breaker/fallback.
 - Common toggles: default provider/model, streaming timeouts, max tokens, safety filters, rate‑limit config, request queue sizes.
 
+## Images & Multimodal Input
+
+- User messages support mixed content: text parts and `image_url` parts with data URIs.
+- Image data (base64) is validated and can be persisted when `save_to_db` is enabled.
+- Large images are processed via the chunked image processor when available.
+
 ## Character, Dictionaries, and World Books
 
 - Character sessions and world books live primarily under `api/v1/endpoints/characters_endpoint.py` and the notes DB layer. The Chat module consumes their outputs to enrich prompts (`chat_helpers.py`).
@@ -114,23 +141,30 @@ Related:
 ## Testing
 
 - Unit tests:
-  - Schema validation (`tests/Chat/test_chat_request_schemas.py`)
-  - Prompt templates (`tests/Chat/test_prompt_template_manager.py`)
-  - Dispatch shape and mapping (update tests when changing provider mappings)
+  - Schema validation: `tldw_Server_API/tests/Chat/test_chat_request_schemas.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py`
+  - Chat functions: `tldw_Server_API/tests/Chat/test_chat_functions.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_functions.py`
+  - Dispatch shape/mapping: update tests when changing `provider_config`
 - Integration tests:
-  - Endpoint flow for `/api/v1/chat/completions` (`tests/Chat/test_chat_completions_integration.py`, `tests/Chat/test_chat_endpoint.py`)
-  - Streaming normalization (`tests/Chat/test_chat_endpoint_streaming_normalization.py`)
+  - Endpoint flow for `/api/v1/chat/completions`: `tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`, `tldw_Server_API/tests/Chat/test_chat_completions_integration.py`
+  - Streaming normalization: `tldw_Server_API/tests/Chat/test_chat_endpoint_streaming_normalization.py`
   - Consider provider mocks for deterministic behavior
 
 ## Maintenance Notes
 
-- Treat `provider_config.py` as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. `Chat_Functions.py` retains a copy for backward compatibility.
+- Treat `provider_config.py` as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. The legacy duplicate in `Chat_Functions.py` has been removed to prevent drift.
 - Log safe: escape curly braces and large payloads before logging (see existing patterns in exception handling).
 - Preserve OpenAI response compatibility in streaming and non‑streaming outputs to avoid client regressions.
 - Be careful when altering schema constraints; downstream clients (UI and tools) rely on them.
 
 Additional endpoint behavior to note:
-- Non‑stream responses include `tldw_conversation_id` in the JSON body for ease of client‑side state tracking.
+- Non‑stream responses include `tldw_conversation_id` in the JSON body for client‑side state tracking.
+- Streaming responses send a `stream_start` event and normalized `data:` deltas; periodic heartbeats keep connections alive; a `stream_end` event is emitted on success.
+
+## Rate Limiting
+
+- Global SlowAPI middleware (production) provides coarse IP‑based limits.
+- Chat limiter enforces per‑user, per‑conversation, and tokens‑per‑minute limits and is the primary control.
+- RBAC dependency guards `chat.create`.
 
 ---
 

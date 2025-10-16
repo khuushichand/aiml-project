@@ -91,8 +91,8 @@ class VibeVoiceAdapter(TTSAdapter):
         else:
             self.device = "cpu"
         
-        # Audio configuration
-        self.sample_rate = self.config.get("vibevoice_sample_rate", 22050)
+        # Audio configuration (VibeVoice typically uses 24 kHz)
+        self.sample_rate = self.config.get("vibevoice_sample_rate", 24000)
         
         # Model instances
         self.model = None
@@ -114,8 +114,9 @@ class VibeVoiceAdapter(TTSAdapter):
         self.use_fp16 = self.config.get("vibevoice_use_fp16", True) and self.device in ["cuda", "mps"]
         self.batch_size = self.config.get("vibevoice_batch_size", 1)
         
-        # Memory optimization settings
-        self.use_quantization = self.config.get("vibevoice_use_quantization", False)
+        # Memory optimization settings (4-bit quantization is effectively CUDA-only)
+        requested_quant = bool(self.config.get("vibevoice_use_quantization", False))
+        self.use_quantization = requested_quant and self.device == "cuda"
         self.auto_cleanup = self.config.get("vibevoice_auto_cleanup", True)
         # Auto-download behavior: config override > env overrides > default True
         def _parse_bool(val, default=True):
@@ -161,6 +162,8 @@ class VibeVoiceAdapter(TTSAdapter):
         # Voice samples folder for 1-shot cloning (like VibeVoice demo)
         self.voices_dir = Path(self.config.get("vibevoice_voices_dir", "./voices"))
         self.available_voices = {}  # Maps voice names to file paths
+        # Optional default mapping for speakers to voices (ids or file paths)
+        self.default_speakers_to_voices = self.config.get("vibevoice_speakers_to_voices")
         
         # Cancellation support
         self._generation_cancelled = False
@@ -345,7 +348,7 @@ class VibeVoiceAdapter(TTSAdapter):
                         self.model = VibeVoiceForConditionalGenerationInference.from_pretrained(
                             self.model_path,
                             quantization_config=quantization_config,
-                            device_map=self.device if self.device != "cpu" else "auto",
+                            device_map="auto" if self.device != "cpu" else None,
                             attn_implementation=attn_impl
                         )
                         # Calculate memory savings
@@ -357,14 +360,14 @@ class VibeVoiceAdapter(TTSAdapter):
                         self.model = VibeVoiceForConditionalGenerationInference.from_pretrained(
                             self.model_path,
                             torch_dtype=load_dtype,
-                            device_map=self.device if self.device != "cpu" else None,
+                            device_map="auto" if self.device != "cpu" else None,
                             attn_implementation=attn_impl
                         )
                 else:
                     self.model = VibeVoiceForConditionalGenerationInference.from_pretrained(
                         self.model_path,
                         torch_dtype=load_dtype,
-                        device_map=self.device if self.device != "cpu" else None,
+                        device_map="auto" if self.device != "cpu" else None,
                         attn_implementation=attn_impl
                     )
                 
@@ -381,8 +384,8 @@ class VibeVoiceAdapter(TTSAdapter):
                     f"To use VibeVoice, follow these steps:\n"
                     f"1. Ensure VibeVoice is installed:\n"
                     f"   cd libs/VibeVoice && pip install -e .\n"
-                    f"2. Or clone and install:\n"
-                    f"   git clone https://github.com/great-wind/MicroSoft_VibeVoice.git libs/VibeVoice\n"
+                    f"2. Or clone and install (community reference):\n"
+                    f"   git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice\n"
                     f"   cd libs/VibeVoice && pip install -e .\n"
                     f"3. The {self.variant} model will auto-download on first use from:\n"
                     f"   {self.model_path}"
@@ -439,25 +442,47 @@ class VibeVoiceAdapter(TTSAdapter):
             )
     
     def _check_model_files(self) -> bool:
-        """Check if model files exist locally"""
+        """Check if model files exist locally."""
         required_files = [
             "config.json",
             "model.safetensors",
             "tokenizer_config.json",
             "vibe_encoder.pt"
         ]
-        
-        if not self.model_dir.exists():
+
+        # If model_path is a local directory, validate there first
+        try_path = None
+        try:
+            mp = Path(self.model_path)
+            if mp.exists() and mp.is_dir():
+                try_path = mp
+        except Exception:
+            try_path = None
+
+        search_dir = try_path or self.model_dir
+        if not search_dir.exists():
             return False
-        
+
         for file in required_files:
-            if not (self.model_dir / file).exists():
+            if not (search_dir / file).exists():
                 return False
-        
+
+        # Align model_path to local directory if we validated against model_dir
+        if not try_path:
+            self.model_path = str(self.model_dir)
         return True
     
     async def _download_models(self):
         """Download VibeVoice models if not present with progress tracking"""
+        # If model_path is already a local directory, don't attempt network download
+        try:
+            mp = Path(self.model_path)
+            if mp.exists() and mp.is_dir():
+                logger.info(f"{self.provider_name}: Using existing local model at {mp}")
+                return True
+        except Exception:
+            pass
+
         if not self.auto_download:
             logger.info(f"{self.provider_name}: Auto-download disabled, skipping model download")
             return False
@@ -472,37 +497,27 @@ class VibeVoiceAdapter(TTSAdapter):
             
             logger.info(f"{self.provider_name}: Downloading {self.variant} model from {self.model_path}...")
             
-            # Create a progress callback
             class DownloadProgress:
                 def __init__(self):
                     self.pbar = None
-                    self.total = 0
-                    
                 def __call__(self, num_bytes):
                     if self.pbar is None:
                         self.pbar = tqdm(unit='B', unit_scale=True, desc="Downloading VibeVoice")
                     self.pbar.update(num_bytes)
-            
             progress = DownloadProgress()
             
-            # Download the model from HuggingFace with progress
             local_dir = snapshot_download(
                 repo_id=self.model_path,
                 local_dir=str(self.model_dir),
                 cache_dir=str(self.cache_dir),
-                resume_download=True,  # Resume if interrupted
-                local_dir_use_symlinks=False  # Avoid symlink issues
+                resume_download=True,
+                local_dir_use_symlinks=False
             )
-            
             if progress.pbar:
                 progress.pbar.close()
-            
             logger.info(f"{self.provider_name}: Model download complete at {local_dir}")
-            
-            # Update model path to local directory
             self.model_path = local_dir
             return True
-            
         except ImportError:
             logger.error(f"{self.provider_name}: huggingface_hub not installed. Run: pip install huggingface-hub")
             return False
@@ -517,16 +532,99 @@ class VibeVoiceAdapter(TTSAdapter):
         
         try:
             logger.debug(f"{self.provider_name}: Warming up model...")
-            test_text = "Hello, this is a test."
-            test_request = TTSRequest(
-                text=test_text,
-                voice="aurora",
-                format=AudioFormat.WAV
-            )
-            # Would do actual generation here
+            # Optional, guarded micro-forward to catch lazy init issues
+            if self.config.get("vibevoice_enable_warmup_forward", False) and self.processor:
+                tiny_inputs = self.processor(
+                    text=["Speaker 1: warmup.\n Speech output:\n"],
+                    padding=True,
+                    return_tensors="pt",
+                    return_attention_mask=True,
+                )
+                for k, v in tiny_inputs.items():
+                    if torch.is_tensor(v):
+                        tiny_inputs[k] = v.to(self.device)
+                with torch.no_grad():
+                    _ = self.model.generate(
+                        **tiny_inputs,
+                        max_new_tokens=32,
+                        cfg_scale=1.0,
+                        tokenizer=self.processor.tokenizer,
+                        generation_config={"do_sample": False},
+                        show_progress_bar=False,
+                        verbose=False,
+                    )
             logger.debug(f"{self.provider_name}: Model warmup complete")
         except Exception as e:
             logger.warning(f"{self.provider_name}: Warmup failed: {e}")
+
+    def _build_voice_samples(
+        self,
+        formatted_text: str,
+        voice_reference_path: Optional[str],
+        primary_voice: str,
+        speakers_to_voices: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
+        """Build ordered voice sample list aligned to speakers in formatted_text.
+
+        speakers_to_voices: mapping of speaker id (str or int) to either a voice id in available_voices
+        or a file path. Speaker ids may be 0- or 1-based; mapping will be normalized.
+        """
+        # Detect speakers in text
+        speakers = re.findall(r"^\s*Speaker\s+(\d+)\s*:\s*", formatted_text, flags=re.IGNORECASE | re.MULTILINE)
+        unique_speakers = sorted({int(s) for s in speakers}) if speakers else [1]
+        min_spk = min(unique_speakers) if unique_speakers else 1
+        num_speakers = len(unique_speakers) if unique_speakers else 1
+
+        # Collect available files from voices dir
+        available_voice_files: List[str] = []
+        if self.voices_dir.exists():
+            for ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"):
+                for p in self.voices_dir.glob(f"*{ext}"):
+                    available_voice_files.append(str(p))
+
+        # Normalize provided mapping
+        mapping: Dict[int, str] = {}
+        if speakers_to_voices:
+            for k, v in speakers_to_voices.items():
+                try:
+                    spk = int(k)
+                except Exception:
+                    continue
+                # Normalize to 0-based index used by processor enumeration
+                idx = spk - min_spk if spk >= min_spk else spk
+                mapping[idx] = v
+
+        # Build voice samples list
+        voice_samples: List[str] = [None] * num_speakers  # type: ignore
+        # Fill from mapping first
+        for idx, val in mapping.items():
+            if 0 <= idx < num_speakers:
+                # Resolve via available_voices id if present, else treat as path
+                if val in self.available_voices:
+                    voice_samples[idx] = self.available_voices[val]
+                else:
+                    voice_samples[idx] = val
+        # Ensure first speaker has a voice
+        if voice_samples and voice_samples[0] is None:
+            if voice_reference_path:
+                voice_samples[0] = voice_reference_path
+            elif primary_voice in self.available_voices:
+                voice_samples[0] = self.available_voices[primary_voice]
+            elif available_voice_files:
+                voice_samples[0] = available_voice_files[0]
+        # Fill remaining speakers from available files if unset
+        for idx in range(1, num_speakers):
+            if voice_samples[idx] is None:
+                pick = available_voice_files[idx] if len(available_voice_files) > idx else None
+                if pick is None:
+                    # Not enough samples; disable cloning
+                    return []
+                voice_samples[idx] = pick
+
+        # Replace any remaining None with first available, else return empty to disable
+        if any(v is None for v in voice_samples):
+            return []
+        return voice_samples  # type: ignore
     
     async def get_capabilities(self) -> TTSCapabilities:
         """Get VibeVoice TTS capabilities"""
@@ -577,7 +675,7 @@ class VibeVoiceAdapter(TTSAdapter):
             raise
         
         # Check if a different model variant was requested
-        requested_model = request.model or request.extra_params.get("model")
+        requested_model = getattr(request, "model", None) or request.extra_params.get("model")
         if requested_model and requested_model in self.MODEL_VARIANTS:
             if requested_model != self.variant:
                 logger.info(f"Switching VibeVoice model from {self.variant} to {requested_model}")
@@ -669,7 +767,8 @@ class VibeVoiceAdapter(TTSAdapter):
                 "seed": seed,
                 "attention_type": attention_type,
                 "speaker_mapping": speaker_mapping,
-                "voice_references": voice_references
+                "voice_references": voice_references,
+                "speakers_to_voices": request.extra_params.get("speakers_to_voices") if hasattr(request, 'extra_params') else None,
             }
             
             if request.stream:
@@ -770,18 +869,21 @@ class VibeVoiceAdapter(TTSAdapter):
             # Prepare input data for generation
             # VibeVoice uses voice samples directly, not embeddings
             
-            # Prepare voice samples list
-            voice_samples = []
-            if voice_reference_path:
-                voice_samples = [voice_reference_path]
-            elif voice in self.custom_voices:
-                voice_samples = [self.custom_voices[voice]]
-            else:
-                # Use default voice from Voices folder if available
-                if self.voices_dir.exists():
-                    default_voices = list(self.voices_dir.glob("*.wav"))
-                    if default_voices:
-                        voice_samples = [str(default_voices[0])]
+            # Merge default mapping from config with request-provided mapping
+            merged_mapping = None
+            if isinstance(self.default_speakers_to_voices, dict):
+                merged_mapping = dict(self.default_speakers_to_voices)
+            req_mapping = gen_config.get("speakers_to_voices") if isinstance(gen_config, dict) else None
+            if isinstance(req_mapping, dict):
+                merged_mapping = {**(merged_mapping or {}), **req_mapping}
+
+            # Prepare voice samples list ordered by speaker index expected by VibeVoice
+            voice_samples = self._build_voice_samples(
+                input_data["text"],
+                voice_reference_path,
+                voice,
+                merged_mapping,
+            )
             
             # Prepare inputs for the model
             inputs = self.processor(
@@ -828,10 +930,14 @@ class VibeVoiceAdapter(TTSAdapter):
                 
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=None,
+                    # Bound generation to prevent runaway
+                    max_new_tokens=self.context_length,
                     cfg_scale=cfg_scale,
                     tokenizer=self.processor.tokenizer,
                     generation_config=generation_config,
+                    is_prefill=bool(voice_samples),
+                    refresh_negative=True,
+                    show_progress_bar=False,
                     verbose=False
                 )
                 
@@ -881,7 +987,7 @@ class VibeVoiceAdapter(TTSAdapter):
         finally:
             writer.close()
             # Clean up voice reference file if used (but not custom voices from Voices folder)
-            if voice_reference_path and voice_reference_path not in self.custom_voices.values():
+            if voice_reference_path and voice_reference_path not in self.available_voices.values():
                 try:
                     from pathlib import Path
                     Path(voice_reference_path).unlink(missing_ok=True)
@@ -910,9 +1016,9 @@ class VibeVoiceAdapter(TTSAdapter):
         speaker_id: int
     ) -> Dict[str, Any]:
         """Prepare input for VibeVoice with speaker settings"""
-        # Process text with SSML if present
+        # Ensure text is formatted as expected by VibeVoiceProcessor
         text = self.preprocess_text(request.text)
-        
+
         return {
             "text": text,
             "voice": voice,
@@ -1056,15 +1162,22 @@ class VibeVoiceAdapter(TTSAdapter):
         return cleaned_text, speaker_mapping
     
     def preprocess_text(self, text: str, **kwargs) -> str:
-        """Preprocess text for VibeVoice"""
-        # Basic preprocessing
+        """Preprocess and format text for VibeVoice."""
+        # Basic cleanup
         text = super().preprocess_text(text)
-        
-        # VibeVoice supports multi-speaker dialogue markers
-        # Parse and clean them
-        cleaned_text, _ = self._parse_multi_speaker_text(text)
-        
-        return cleaned_text
+        # If already in "Speaker N:" format, leave as is
+        if re.search(r"^\s*Speaker\s+\d+\s*:", text, flags=re.IGNORECASE | re.MULTILINE):
+            return text
+        # Attempt to convert bracketed markers like [1]: to Speaker 1:
+        # Replace occurrences at line starts
+        text_conv = re.sub(r"^\s*\[(?:Speaker\s*)?(\d+)\]\s*:\s*",
+                           lambda m: f"Speaker {m.group(1)}: ",
+                           text,
+                           flags=re.IGNORECASE | re.MULTILINE)
+        if re.search(r"^\s*Speaker\s+\d+\s*:", text_conv, flags=re.IGNORECASE | re.MULTILINE):
+            return text_conv
+        # As a safe fallback, wrap entire text as a single-speaker script
+        return f"Speaker 1: {text.strip()}"
     
     async def _generate_synthetic_voice(self, speaker_id: int) -> Optional[str]:
         """Generate a synthetic voice sample for a speaker when no reference is available."""

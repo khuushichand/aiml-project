@@ -1,0 +1,267 @@
+apiVersion: 1
+groups:
+  - name: tldw-app-observability
+    interval: 1m
+    rules:
+      - uid: app_http_p95_high
+        title: HTTP p95 latency high
+        condition: C
+        annotations:
+          summary: "HTTP p95 latency > 1s for one or more endpoints"
+          description: "Investigate slow handlers, upstream dependencies, or resource saturation"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, endpoint))
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+              type: classic_conditions
+
+      - uid: app_http_5xx_elevated
+        title: HTTP 5xx rate elevated
+        condition: D
+        annotations:
+          summary: "5xx error rate elevated (>0.5/s)"
+          description: "Check application logs, upstream services, and recent deployments"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(http_requests_total{status=~"5.."}[5m]))
+              instant: true
+              refId: A
+          - refId: D
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+                  type: query
+              refId: D
+              type: classic_conditions
+
+      - uid: app_rag_cache_ratio_low
+        title: RAG cache hit ratio low
+        condition: D
+        annotations:
+          summary: "RAG cache hit ratio < 60%"
+          description: "Investigate cache configuration, eviction policy, or workload changes"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(rag_cache_hits_total[5m]))
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(rag_cache_misses_total[5m]))
+              instant: true
+              refId: B
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions: []
+              expression: A / (A + B)
+              refId: C
+              type: math
+          - refId: D
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.6
+                      - 0
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: D
+              type: classic_conditions
+
+      - uid: app_llm_p95_high
+        title: LLM p95 latency high
+        condition: C
+        annotations:
+          summary: "LLM p95 latency > 3s (provider/model)"
+          description: "Investigate provider performance or model saturation"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, sum(rate(llm_request_duration_seconds_bucket[5m])) by (le, provider, model))
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 3
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+              type: classic_conditions
+
+      - uid: app_llm_cost_spike
+        title: LLM cost rate spike (USD/min)
+        condition: D
+        annotations:
+          summary: "LLM cost rate > $0.5/min (sum across providers)"
+          description: "Validate workload, model selection and budgets"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(llm_cost_dollars[5m]))
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions: []
+              expression: A * 60
+              refId: C
+              type: math
+          - refId: D
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: D
+              type: classic_conditions
+
+      - uid: app_chat_timeouts_elevated
+        title: Chat streaming timeouts elevated
+        condition: D
+        annotations:
+          summary: "Chat streaming timeouts > 0.05/s"
+          description: "Check provider stability and streaming pipeline"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(chat_streaming_timeouts_total[5m]))
+              instant: true
+              refId: A
+          - refId: D
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.05
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+                  type: query
+              refId: D
+              type: classic_conditions

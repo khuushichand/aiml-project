@@ -60,6 +60,9 @@ def test_env_vars(monkeypatch):
     monkeypatch.setenv("TTS_DEFAULT_PROVIDER", "openai")
     monkeypatch.setenv("TTS_DEFAULT_MODEL", "tts-1")
     monkeypatch.setenv("TTS_DEFAULT_VOICE", "alloy")
+    # Ensure TTS providers considered configured in tests
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test-123")
     yield
 
 # =====================================================================
@@ -275,19 +278,25 @@ def mock_adapter_factory():
 # Service Fixtures
 # =====================================================================
 
-@pytest.fixture
+import pytest_asyncio
+@pytest_asyncio.fixture
 async def tts_service(mock_adapter_factory):
     """Create a TTS service instance with mocked adapters."""
-    service = TTSServiceV2()
-    # Override the adapter factory
+    # Pass mock factory into constructor to match current TTSServiceV2 API
+    service = TTSServiceV2(factory=mock_adapter_factory)
+    # Keep backward-compat for tests that reference _factory explicitly
     service._factory = mock_adapter_factory
     yield service
     await service.shutdown()
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def real_tts_service():
     """Create a real TTS service for integration tests."""
-    service = TTSServiceV2()
+    # Use a minimal mock factory to satisfy constructor requirements in tests
+    minimal_factory = MagicMock()
+    minimal_factory.get_adapter = Mock(side_effect=lambda prov: MagicMock(generate=AsyncMock(return_value=TTSResponse(audio_content=b"mock_audio"))))
+    minimal_factory.registry = MagicMock()
+    service = TTSServiceV2(factory=minimal_factory)
     yield service
     await service.shutdown()
 
@@ -355,10 +364,19 @@ def invalid_requests():
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app."""
+    """Create a test client for the FastAPI app with auth override."""
     from tldw_Server_API.app.main import app
-    with TestClient(app) as client:
-        yield client
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
+    async def _override_user():
+        return User(id=1, username="tester", email="t@example.com", is_active=True)
+
+    app.dependency_overrides[get_request_user] = _override_user
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.pop(get_request_user, None)
 
 @pytest.fixture
 def auth_headers():

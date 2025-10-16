@@ -1,17 +1,70 @@
-# WebScraping Pipeline
+# Web Scraping Architecture
 
-### Overview
-Page describing design and implementation of the web scraping pipeline
+## Overview
+The Web_Scraping module powers article and site content extraction, as well as the guided WebSearch workflow. It consists of:
 
+- Enhanced asynchronous pipeline with job queue, rate limiting, session/cookie management, and multiple extraction strategies (`enhanced_web_scraping.py`).
+- Legacy utilities maintained for compatibility and offline/synchronous flows (`Article_Extractor_Lib.py`).
+- Search orchestration and relevance evaluation (`WebSearch_APIs.py`).
 
-### Flow
+This document explains the production pipeline, fallbacks, configuration, and operational guidance.
 
+## Enhanced Pipeline
+- Rate limiting across second/minute/hour windows to avoid throttling.
+- Priority job queue with retry/backoff and resumability hooks.
+- Session and cookie management (per-domain sessions with user-agent and header scoping; supports Playwright-style cookies and plain name/value cookies).
+- Deduplication via normalized content hashing.
+- Multiple extraction methods:
+  - `trafilatura` (fast, robust for static pages)
+  - `playwright` (JavaScript-rendered sites; guarded fallback to `trafilatura` if Playwright isn’t initialized)
+  - `beautifulsoup` (lightweight HTML parsing when appropriate)
 
-### Link Dump
-https://github.com/scrapinghub/article-extraction-benchmark
-https://github.com/D4Vinci/Scrapling
-https://github.com/rmusser01/nicar-2025-scraping
-https://www.diffordsguide.com/
-https://github.com/ulixee/hero
-https://github.com/devflowinc/firecrawl-simple?tab=readme-ov-file
+Start/stop lifecycle initializes Playwright if available; absence of Playwright no longer breaks scraping—`playwright` calls transparently fall back to `trafilatura`.
 
+## Legacy Helpers and Fallbacks
+Some flows still need synchronous execution (e.g., sitemap and URL-level crawling from worker threads). To prevent async/sync mixups:
+
+- `scrape_article_blocking(url)` fetches with `requests` and extracts via `trafilatura`, used by:
+  - `scrape_from_sitemap`
+  - `scrape_by_url_level`
+  - `scrape_from_filtered_sitemap`
+
+- `async_scrape_and_no_summarize_then_ingest(...)` is the async-safe variant. The old `scrape_and_no_summarize_then_ingest` is a thin sync wrapper and must not be called from async contexts.
+
+These changes remove nested event loop errors and eliminate returning coroutines from sync code.
+
+## Configuration
+Configuration is loaded via `load_and_log_configs()` and normalized before use.
+
+- `web_scraper_retry_count` — integer retry attempts.
+- `web_scraper_retry_timeout` — seconds per navigation; converted to milliseconds for Playwright.
+- `web_scraper_stealth_playwright` — boolean; string values like "true", "1", "yes" are accepted.
+
+Stealth waits are configurable via `STEALTH_WAIT_MS` if present; otherwise default 5000 ms.
+
+## WebSearch Orchestration
+The WebSearch pipeline supports subquery generation, filtering, and aggregation. To remove interactive code from runtime:
+
+- The module-level test/demos were moved to the test suite).
+- `review_and_select_results` now accepts an optional selector callback. If none is provided, no interactive prompts are used and all results are forwarded.
+
+## Operational Guidance
+- Production should prefer the enhanced scraper. If Playwright is unavailable, the system gracefully falls back to static extraction.
+- Rate limits and concurrency are tunable in config; adjust for resource-constrained environments.
+- Cookies can be provided as Playwright-style dicts ({name, value, ...}) or as plain mappings.
+- Use the article extraction benchmark (Docs/Evals/WebScraping_Article_Benchmark.md) to quantify changes to extraction logic.
+
+## Testing
+Key regression tests cover:
+- Sitemap and URL-level flows using blocking extraction helpers.
+- Non-interactive selection in WebSearch.
+- Playwright guard fallback to `trafilatura`.
+- Cookie injection using name/value dicts.
+
+## References
+- https://github.com/scrapinghub/article-extraction-benchmark
+- https://github.com/D4Vinci/Scrapling
+- https://github.com/rmusser01/nicar-2025-scraping
+- https://www.diffordsguide.com/
+- https://github.com/ulixee/hero
+- https://github.com/devflowinc/firecrawl-simple

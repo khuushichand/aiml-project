@@ -1,0 +1,92 @@
+apiVersion: 1
+groups:
+  - name: mcp-unified
+    interval: 1m
+    rules:
+      - uid: mcp_p95_high
+        title: MCP p95 latency high
+        condition: C
+        annotations:
+          summary: "p95 latency > 1s for one or more methods"
+          description: "Investigate slow MCP handlers or upstream services"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, sum(rate(mcp_request_duration_seconds_bucket[5m])) by (le, method))
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions: []
+              expression: 1
+              refId: B
+              type: math
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+              type: classic_conditions
+      - uid: mcp_ws_errors
+        title: MCP WebSocket errors elevated
+        condition: D
+        annotations:
+          summary: "WebSocket error rate elevated"
+          description: "Check client connectivity or server health"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(mcp_connection_errors_total[5m])) by (error)
+              instant: true
+              refId: A
+          - refId: D
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: -100
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: sum
+                  type: query
+              refId: D
+              type: classic_conditions
+

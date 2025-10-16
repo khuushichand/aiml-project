@@ -15,7 +15,7 @@
 ####################
 
 import os
-import logging
+from loguru import logger
 import tempfile
 from typing import Optional, Dict, Any, Union, Tuple
 from pathlib import Path
@@ -28,7 +28,7 @@ import json
 import base64
 from urllib.parse import urlparse, urljoin
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 @dataclass
@@ -310,21 +310,28 @@ def transcribe_with_external_provider(
         Transcribed text or error message
     """
     try:
-        # Run async function in sync context
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If loop is already running (e.g., in Jupyter), create a task
+        # Run async function in sync context, handling various loop states robustly
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop and running_loop.is_running():
+            # We are in a running loop (e.g., notebook, async context). Use a worker thread
+            # to run a fresh event loop and avoid cross-loop issues.
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run,
+            def _run_in_fresh_loop():
+                return asyncio.run(
                     transcribe_with_external_provider_async(
                         audio_data, sample_rate, provider_name, config, **kwargs
                     )
                 )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_run_in_fresh_loop)
                 return future.result()
         else:
-            # Normal case - run the async function
+            # Normal case - no loop running in this thread
             return asyncio.run(
                 transcribe_with_external_provider_async(
                     audio_data, sample_rate, provider_name, config, **kwargs

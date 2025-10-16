@@ -4,6 +4,33 @@
 
 This document outlines the design for refactoring the current synchronous audio processing pipeline into a scalable, distributed fan-out architecture. The new design will enable horizontal scaling, prevent resource exhaustion, and improve overall system throughput while maintaining reliability and fault tolerance.
 
+## Implementation Status (WIP)
+
+- MVP fan‑out is implemented using the existing Jobs module under the `audio` domain.
+- New endpoints: Audio Jobs API (`/api/v1/audio/jobs/...`) for submit/status/admin list/summary.
+- An in‑process Audio Jobs worker is wired to app startup behind `AUDIO_JOBS_WORKER_ENABLED` and supports stage chaining:
+  `audio_download → audio_convert → audio_transcribe → audio_chunk → audio_analyze → audio_store`.
+- File‑based STT remains available synchronously at `/api/v1/audio/transcriptions`; real‑time STT remains via WebSocket (`/api/v1/audio/stream/transcribe`).
+- The Jobs-based pipeline complements, not replaces, the synchronous and WS paths.
+
+### Practical Migration Path (suggested)
+
+1) Phase 0: Align with existing Jobs module
+- Define an Audio domain in Jobs with queues: `audio-download`, `audio-convert`, `audio-transcribe`, `audio-chunk`, `audio-analyze`, `audio-store`.
+- Add a thin “AudioJobManager” wrapper that emits stage tasks to the Jobs table and reuses the existing leasing/renewal patterns.
+
+2) Phase 1: Implement workers as FastAPI background tasks (single process)
+- Status: Completed. In‑process worker polls the Jobs table; stage boundaries and retries are handled via Jobs.
+- Next: add a dedicated GPU worker process/container for `audio_transcribe` under a separate deployment unit.
+
+3) Phase 2: Move heavy stages to separate worker processes/containers
+- Split GPU-bound transcription to a separate deployment unit with concurrency limits.
+- Keep Job orchestration in the main API or a dedicated orchestrator service.
+
+4) Phase 3: Optional Redis Streams adoption
+- If/when throughput requires, substitute the Jobs DB backend with Redis Streams for the audio domain only, retaining the same stage contracts.
+- This keeps the API stable while enabling higher fan-out baselines.
+
 ## Table of Contents
 
 1. [Current State Analysis](#current-state-analysis)

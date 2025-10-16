@@ -1,249 +1,130 @@
 # API Design
 
 ## Introduction
-Design document to outline the design of the API for the tldw Project.
+This document outlines the current API design for the TL;DW Server (tldw_server).
 
-## API Design
-The API will be designed to be RESTful.
+## Principles
+- RESTful JSON over HTTP (OpenAPI 3.0 with FastAPI)
+- Streaming where applicable (Chat, Audio)
+- Prefer capability toggles via request payloads over endpoint sprawl
+- Liberal input acceptance, strict parsing, explicit errors
 
-## Overview
-- First stab at a mapping of the API endpoints and their functionality
+## Base URLs
+- API base path: `/api/v1` (host depends on deployment)
+- Local development:
+  - OpenAPI docs: `http://127.0.0.1:8000/docs`
+  - ReDoc: `http://127.0.0.1:8000/redoc`
+  - Web UI: `http://127.0.0.1:8000/webui/`
 
-- Very much a WIP, not complete and not all functionality is defined yet.
+## Auth Modes
+- Single user: header `X-API-KEY: <key>`
+- Multi user: `Authorization: Bearer <JWT>` with OAuth2 login
 
-HTTP Everywhere.
-Passing JSON data.
-Overly descriptive vs asbtract.
-Complexity hides in payloads vs endpoints
-Liberal in allowed input, strict in parsing/operations on parsed data. (If it isn't valid, its junk)
-- **URLs**
-    - Main page: http://tldwproject.com
-    - API Documentation page: http://tldwproject.com/docs
-    - API Redoc page: http://tldwproject.com/redoc
-    - API url: http://tldwproject.com/api/v1/
-- **Endpoints**
-- 
----------------------------------
-### Resources
-- The following resources will be available in the API:
-    - **Auth/Users**
-        * Manages accounts and permissions.
-    - **Media**
-        * Central resource for all ingested content (video, audio, docs).
-    - **Chats**
-        * For RAG, LLM, or character-based conversations.
-    - **Characters**
-        * Manages character “cards” (metadata) used in specialized chats.
-    - **Prompts**
-        * Manages prompt templates, cloning, and versioning.
-    - **Keywords**
-        * Tags for classification.
-    - **Import/Export**
-        * Managing data flows in/out.
-    - **Trash**
-        * Soft-deleted items.
-    - **Tools**
-        * Utility endpoints (mind maps, web search, YouTube DL, etc.).
-    - **LLM** 
-        * Local/remote model endpoints for text generation.
-    - **Evaluations**
-        * Evals to test or benchmark models.
-    - **Search**
-        * (Optional) A single place to handle multi-resource search if desired, or rely on resource-specific endpoints.
-    - **Third Party**
-        * Endpoints for 3rd party services/integrations
-        * e.g. Arxiv, BioRxiv, etc.
-
-### Endpoints
-- **Overview of Available Endpoints**
-    - Auth/Users:
-        * Manages accounts and permissions.
-    - Media:
-        * Central resource for all ingested content (video, audio, docs).
-    - Chats: For RAG, LLM, or character-based conversations.
-    - Characters: Manages character “cards” (metadata) used in specialized chats.
-    - Prompts: Manages prompt templates, cloning, and versioning.
-    - Keywords: Tags for classification.
-    - Import/Export: Managing data flows in/out.
-    - Trash: Soft-deleted items.
-    - Tools: Utility endpoints (mind maps, web search, YouTube DL, etc.).
-    - LLM: Local/remote model endpoints for text generation.
-    - Evaluations: Evals to test or benchmark models.
-    - Search: (Optional) A single place to handle multi-resource search if desired, or rely on resource-specific endpoints.
-    - 3rd_party: Endpoints for 3rd party services/integrations
-
-
-
-#### The following endpoints will be available in the API:
-- `Auth / Users - /api/v1/auth`
-    * What it covers: User registration, login, logout, password management, user profiles, etc.
-    - Endpoints could include:
-        * `POST /api/v1/auth/register`
-        * `POST /api/v1/auth/login`
-        * `POST /api/v1/auth/logout`
-        * `GET /api/v1/auth/me` (fetching current user’s details)
-        * etc.
-- `Media - /api/v1/media`
-    * What it covers: All ingested or processed content—videos, audio, documents, PDF, text, and so on.
-    - Endpoints typically include:
-        * `GET /api/v1/media` — list/search media
-        * `GET /api/v1/media/{id}` — get a single media item
-        * `POST /api/v1/media` — create/ingest a new media item
-        * `PUT /api/v1/media/{id}` — update media metadata, summary, etc.
-        * `DELETE /api/v1/media/{id}` — remove media item (potentially into trash first)
-    - Sub-resources (examples):
-        * `/api/v1/media/{id}/embeddings` (create, retrieve, or delete embeddings)
-        * `/api/v1/media/search` (search with query params)
-        * `/api/v1/media/{id}/process` (to re-process a file or generate transcripts, if separate from the main create)
-- `Chats - /api/v1/chats`
-    - What it covers: 
-        * All chat sessions, including RAG QA Chat, LLM chat, character chat, and notes.
-    - Endpoints typically include:
-        * `GET /api/v1/chats` — list or search chats
-        * `GET /api/v1/chats/{id}` — get a single chat’s history
-        * `POST /api/v1/chats` — create a new chat (whether RAG, LLM, or character-based)
-        * `POST /api/v1/chats/{id}/message` — add a message to an existing chat
-        * `PUT /api/v1/chats/{id}/message/{messageId}` — edit a message
-        * `DELETE /api/v1/chats/{id}/message/{messageId}` — remove a message
-    - Possible sub-resources:
-        * `/api/v1/chats/{id}/notes`
-        * `/api/v1/chats/{id}/metadata`
-- Characters
-    - What it covers: 
-        * Character “cards,” multi-character chat, creation, validation.
-    - Endpoints typically include:
-        * `GET /api/v1/characters` — list/search available characters
-        * `GET /api/v1/characters/{id}` — get details for one character
-        * `POST /api/v1/characters` — create a new character card
-        * `PUT /api/v1/characters/{id}` — update character details
-        * `DELETE /api/v1/characters/{id}` — delete a character 
-    - Sub-resources or expansions:
-        * `/api/v1/characters/{id}/chat` — might tie in with “Chats” if you want specialized conversation endpoints for a given character.
-- `Prompts - /api/v1/prompts`
-    - What it covers: 
-        * A database of prompts that can be searched, edited, cloned, or exported.
-    - Endpoints typically include:
-        * `GET /api/v1/prompts` — list/search all prompts
-        * `GET /api/v1/prompts/{id}` — get one prompt
-        * `POST /api/v1/prompts` — create new prompt
-        * `PUT /api/v1/prompts/{id}` — edit an existing prompt
-        * `DELETE /api/v1/prompts/{id}` — remove a prompt
-    - Extras:
-        * Cloning or exporting might be separate calls, e.g. POST /api/v1/prompts/{id}/clone or POST /api/v1/prompts/export.
-- `Keywords - /api/v1/keywords`
-    - What it covers: 
-        * The tags or keywords associated with media, prompts, or other data.
-    - Endpoints might include:
-        * `GET /api/v1/keywords` — get the full list
-        * `POST /api/v1/keywords` — create a new keyword
-        * `DELETE /api/v1/keywords/{keyword}` — delete a keyword
-    - Possibly integrated with other resources:
-        * Because keywords often belong with media, prompts, or other objects, you might treat them as a separate resource or handle them within each object’s payload (e.g., adding a keywords array to the POST /api/v1/media body).
-- `Import/Export - /api/v1/import, /api/v1/export`
-    - What it covers: 
-        * Bringing data in (Markdown, text, Obsidian vaults, MediaWiki, etc.) or sending data out (prompts, DB entries, conversation logs).
-    - Endpoints might include:
-        * `POST /api/v1/import` — import content (payload or config-driven)
-        * `POST /api/v1/export` — export content (specify formats, filters)
-    - Sub-resources if needed:
-        * `/api/v1/import/obsidian`
-        * `/api/v1/export/media`
-- `Trash - /api/v1/trash`
-    - What it covers: 
-        * Items (media, prompts, chats, etc.) marked as “deleted,” but not permanently removed.
-    - Endpoints might include:
-        * `GET /api/v1/trash` — view items in trash
-        * `POST /api/v1/trash/{id}/restore` — restore from trash
-        * `DELETE /api/v1/trash/{id}` — permanently delete
-- `Tools - /api/v1/tools`
-    - What it covers: 
-        * Miscellaneous “utility” features like mind map generation, web search, YouTube downloading, etc.
-    - Endpoints might include:
-        * `/api/v1/tools/mindmap`
-        * `/api/v1/tools/websearch`
-        * `/api/v1/tools/anki`
-        * `/api/v1/tools/youtube_dl`
-    * Each sub-route is basically a specialized operation. If these grow too large or too domain-specific, you might break them out into separate resources (e.g., /api/v1/anki, /api/v1/mindmap).
-- `LLM - /api/v1/llm`
-    - What it covers:
-        * Local LLM or Ollama-based model serving endpoints for generation and config.
-    - Endpoints:
-        * `GET /api/v1/llm` — list available local LLM models
-        * `POST /api/v1/llm` — configure and load a model
-        * `POST /api/v1/llm/generate` — produce text from a local model
-    * Similarly for Ollama, e.g. `POST /api/v1/llm/ollama/generate`.
-- `Evaluations - /api/v1/evals`
-    - What it covers: 
-        * Evals like G-Eval, Infinite Bench, etc.
-    - Endpoints:
-        * `GET /api/v1/evals` — list all evals or configurations
-        * `POST /api/v1/evals` — run an eval against a model or piece of content
-- `Search - /api/v1/search` (Optional as its own resource)
-    * You may unify search under each resource (e.g., `GET /api/v1/media?search=foo`), or you can have a universal endpoint that queries multiple resources at once (e.g., `GET /api/v1/search?query=foo&type=media,chats,prompts`).
-    * If you do unify, you might omit a “search” resource and just rely on query parameters. If you want a single endpoint searching across all data, you might define something like `GET /api/v1/search` with resource-type filters.
- - `Paper Search - /api/v1/paper-search` (Provider-specific)
-    - What it covers:
-        * Direct search endpoints per provider (arXiv, BioRxiv/MedRxiv, Semantic Scholar).
-    - Endpoints:
-        - `GET /api/v1/paper-search/arxiv` — search arXiv
-        - `GET /api/v1/paper-search/biorxiv` — search BioRxiv/MedRxiv
-        - `GET /api/v1/paper-search/semantic-scholar` — search Semantic Scholar
 ----------------------------------
 
+## Resource Map (Current)
+- Authentication & Users
+  - `/api/v1/auth/*` (login, refresh, logout, register)
+  - `/api/v1/users/*` (profile, password, sessions, storage)
+- Chat (OpenAI-compatible)
+  - `/api/v1/chat/completions`
+  - Additional: per-user dictionaries, document generator
+- Audio (STT/TTS)
+  - `/api/v1/audio/speech` (TTS)
+  - `/api/v1/audio/transcriptions`, `/api/v1/audio/translations` (STT)
+  - WebSocket: `/api/v1/audio/stream/transcribe`
+- Media
+  - `/api/v1/media` (ingest/list/update/delete)
+  - `/api/v1/media/search` (POST)
+  - Rich ingestion/processing sub-operations
+- RAG (Unified)
+  - `/api/v1/rag/search` (hybrid FTS5 + embeddings + re-ranking)
+  - `/api/v1/rag/capabilities`
+  - Convenience: `/api/v1/rag/simple` and `/api/v1/rag/advanced`
+- Embeddings & Vector Stores (OpenAI-compatible)
+  - `/api/v1/embeddings`
+  - `/api/v1/vector-stores/*` (indexes, vectors, batches)
+- Characters & Chats
+  - `/api/v1/characters/*`
+  - Character chat sessions/messages under `/api/v1/chats` and related paths
+- Prompts & Prompt Studio
+  - `/api/v1/prompts/*` (library)
+  - Prompt Studio: projects, prompts, tests, optimization, websocket
+  - Keywords for prompts: `/api/v1/prompts/keywords/*` (no global `/keywords`)
+- Notes
+  - `/api/v1/notes/*`
+- Evaluations (Unified)
+  - `/api/v1/evaluations/*` (OpenAI-compatible shapes + TL;DW-specific)
+- LLM Providers & Local LLM
+  - `/api/v1/llm/providers`, `/api/v1/llm/models/metadata`
+  - Llama.cpp helpers: `/api/v1/llamacpp/*`
+- Research & Paper Search
+  - `/api/v1/research/websearch`
+  - `/api/v1/paper-search/{arxiv|biorxiv|semantic-scholar}`
+- Chatbooks (Import/Export)
+  - `/api/v1/chatbooks/export`, `/api/v1/chatbooks/import` (+ job/status)
+- System, Health & Monitoring
+  - `/health`, `/ready`
+  - `/metrics` (Prometheus), `/api/v1/metrics` (JSON)
+  - MCP Unified, config info, sync, admin
 
+----------------------------------
+
+## Notes and Clarifications
+- OpenAI compatibility:
+  - Chat: `/api/v1/chat/completions`
+  - Embeddings: `/api/v1/embeddings`
+  - Audio STT/TTS: `/api/v1/audio/transcriptions`, `/api/v1/audio/speech`
+- Keywords:
+  - No global `/api/v1/keywords`. Prompt keywords live under `/api/v1/prompts/keywords/*`. Media keywords are provided via media payloads/DB.
+- Import/Export:
+  - Use Chatbooks: `/api/v1/chatbooks/export` and `/api/v1/chatbooks/import`.
+- Tools:
+  - The `tools` router is minimal; web/paper search live under `research` and `paper-search`.
+- Trash:
+  - Soft delete exists in DBs, but a public `/api/v1/trash` surface is not exposed yet.
+- LLM:
+  - Text generation flows through Chat completions. `/api/v1/llm/generate` is not present.
+
+----------------------------------
+
+## Representative Endpoints
+- Auth & Users
+  - `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`
+  - `POST /api/v1/auth/register`
+  - `GET /api/v1/users/me`, `PUT /api/v1/users/me`
+- Chat
+  - `POST /api/v1/chat/completions`
+- Media
+  - `GET /api/v1/media`, `GET /api/v1/media/{id}`
+  - `POST /api/v1/media`, `PUT /api/v1/media/{id}`, `DELETE /api/v1/media/{id}`
+  - `POST /api/v1/media/search`
+- RAG
+  - `POST /api/v1/rag/search`, `GET /api/v1/rag/capabilities`
+- Embeddings & Vector Stores
+  - `POST /api/v1/embeddings`
+  - `POST /api/v1/vector-stores/indexes`, `GET /api/v1/vector-stores/indexes/{id}` (and related)
+- Audio
+  - `POST /api/v1/audio/speech`, `POST /api/v1/audio/transcriptions`
+  - `WS /api/v1/audio/stream/transcribe`
+- Prompts & Prompt Studio
+  - `GET /api/v1/prompts`, `POST /api/v1/prompts`
+  - `GET /api/v1/prompts/keywords`, `POST /api/v1/prompts/keywords`
+- Evaluations
+  - `POST /api/v1/evaluations`, `GET /api/v1/evaluations/runs`
+- LLM Providers & Local LLM
+  - `GET /api/v1/llm/providers`, `GET /api/v1/llm/models/metadata`
+  - `POST /api/v1/llamacpp/start_server`, `POST /api/v1/llamacpp/stop_server`
+- Research & Paper Search
+  - `POST /api/v1/research/websearch`
+  - `GET /api/v1/paper-search/arxiv`, `GET /api/v1/paper-search/biorxiv`, `GET /api/v1/paper-search/semantic-scholar`
+- Chatbooks
+  - `POST /api/v1/chatbooks/export`, `POST /api/v1/chatbooks/import`
+- Health & Monitoring
+  - `GET /health`, `GET /ready`, `GET /metrics`, `GET /api/v1/metrics`
+
+----------------------------------
 
 ## Links
 https://levelup.gitconnected.com/great-api-design-comprehensive-guide-from-basics-to-best-practices-9b4e0b613a44
 https://github.com/TypeError/secure
-
-
-
-.
-├── Server_API
-│   └── app
-│       ├── main.py             # The main FastAPI application
-│       ├── api                 # API package that houses routers
-│       │   └── v1
-│       │       ├── endpoints   # Directory for endpoint files (one file per resource, typically)
-│       │       │   ├── media.py
-│       │       │   ├── auth.py
-│       │       │   ├── chats.py
-│       │       │   ├── ... (etc. for each resource)
-│       │       │   └── __init__.py
-│       │       └── __init__.py
-│       ├── core                # Could remain for your specialized logic, like config, exceptions, logging
-│       │   ├── config.py
-│       │   ├── exceptions.py
-│       │   ├── logging.py
-│       │   ├── ... (other domain-specific directories can remain if you want)
-│       │   └── __init__.py
-│       ├── db                  # Database-specific setup (SQLAlchemy models, session, etc.)
-│       │   ├── database.py
-│       │   ├── models          # If you separate out models from database logic
-│       │   │   ├── media.py
-│       │   │   ├── user.py
-│       │   │   └── __init__.py
-│       │   └── __init__.py
-│       ├── schemas             # Pydantic models (request/response schemas)
-│       │   ├── media.py
-│       │   ├── user.py
-│       │   └── __init__.py
-│       ├── services            # Additional “services” or “managers” that handle business logic
-│       │   ├── media.py
-│       │   ├── video_processing_service.py
-│       │   └── ...
-│       └── __init__.py
-└── ...
-Structure Explained:
-    1. main.py is small. It sets up the FastAPI instance, includes routers, and handles any global configuration (e.g., custom exception handlers).
-    2. api/v1/endpoints/ has one file per resource. For example, auth.py for authentication endpoints, media.py for the media endpoints, etc.
-    3. core/ can house your existing modules or specialized logic (like local LLM management, RAG logic) if it doesn't fit neatly in “services.” Some people call this internal or usecases.
-    4. db/ has database.py (your engine, session, Base = declarative_base()) and possibly a separate models/ folder for each SQLAlchemy model (e.g., Media, User, etc.).
-    5. schemas/ contains all Pydantic models for request/response validation. This helps keep the “shape of your data” separate from the database representation.
-    6. services/ (optional) can hold the more sophisticated logic that orchestrates multiple pieces, such as your video ingestion or summarization flows.
-
-
-
-
-
-    

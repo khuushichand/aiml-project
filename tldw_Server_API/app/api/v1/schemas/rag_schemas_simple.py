@@ -7,6 +7,7 @@ for search and agent functionality.
 
 from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field, field_validator
+from pydantic import ConfigDict
 from uuid import UUID, uuid4
 from enum import Enum
 
@@ -141,24 +142,23 @@ class SimpleSearchResponse(BaseModel):
         description="The search type that was used"
     )
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "results": [
-                    {
-                        "id": "doc_123",
-                        "title": "Introduction to RAG",
-                        "content": "Retrieval-Augmented Generation combines...",
-                        "score": 0.95,
-                        "source": "media_db",
-                        "metadata": {"author": "AI Expert", "date": "2024-01-15"}
-                    }
-                ],
-                "total_results": 1,
-                "query_id": "550e8400-e29b-41d4-a716-446655440000",
-                "search_type_used": "hybrid"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "results": [
+                {
+                    "id": "doc_123",
+                    "title": "Introduction to RAG",
+                    "content": "Retrieval-Augmented Generation combines...",
+                    "score": 0.95,
+                    "source": "media_db",
+                    "metadata": {"author": "AI Expert", "date": "2024-01-15"}
+                }
+            ],
+            "total_results": 1,
+            "query_id": "550e8400-e29b-41d4-a716-446655440000",
+            "search_type_used": "hybrid"
         }
+    })
 
 
 # ============= Advanced Search Schemas =============
@@ -317,21 +317,20 @@ class SimpleAgentResponse(BaseModel):
         description="Sources used to generate the response"
     )
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "response": "Machine learning is a subset of artificial intelligence...",
-                "conversation_id": "conv_123456",
-                "sources": [
-                    {
-                        "title": "ML Basics",
-                        "content": "Machine learning enables computers to learn...",
-                        "database": "media_db",
-                        "relevance_score": 0.92
-                    }
-                ]
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "response": "Machine learning is a subset of artificial intelligence...",
+            "conversation_id": "conv_123456",
+            "sources": [
+                {
+                    "title": "ML Basics",
+                    "content": "Machine learning enables computers to learn...",
+                    "database": "media_db",
+                    "relevance_score": 0.92
+                }
+            ]
         }
+    })
 
 
 # ============= Advanced Agent Schemas =============
@@ -413,14 +412,13 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = Field(None, description="Detailed error information")
     code: Optional[str] = Field(None, description="Error code")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "error": "Invalid search type",
-                "detail": "Search type 'invalid' is not supported. Use: hybrid, semantic, or fulltext",
-                "code": "INVALID_SEARCH_TYPE"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "error": "Invalid search type",
+            "detail": "Search type 'invalid' is not supported. Use: hybrid, semantic, or fulltext",
+            "code": "INVALID_SEARCH_TYPE"
         }
+    })
 
 
 # ============= Compatibility Classes for Tests =============

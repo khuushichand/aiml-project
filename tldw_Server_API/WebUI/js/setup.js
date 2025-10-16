@@ -233,6 +233,7 @@
     MCP: 'Manage Model Context Protocol host settings, tokens, and exposed tools.',
     'MCP-Unified': 'Unified MCP service configuration including tool registry and RBAC.',
     Logging: 'Direct logs to files or services, adjust verbosity, and enable observability hooks.',
+    Moderation: 'Configure chat guardrails: enablement, input/output actions, redact replacement, blocklist path, and per-user overrides file. Managed blocklist uses ETag/If-Match headers to protect concurrent edits.',
   };
   const MODULE_WALKTHROUGHS = {
     chat: {
@@ -271,6 +272,22 @@
             { section: 'Chat-Module', key: 'enable_provider_fallback' },
             { section: 'Chat-Module', key: 'chat_save_default' },
             { section: 'Chat-Module', key: 'rate_limit_per_minute' },
+          ],
+        },
+        {
+          title: 'Review moderation & guardrails',
+          description: 'Enable moderation and set how violations are handled globally (block, redact, or warn). You can also provide a blocklist file and per-user overrides file.',
+          points: [
+            'Toggle Moderation.enabled on to enforce guardrails.',
+            'Choose input_action and output_action (block, redact, warn).',
+            'Set redact_replacement and point to your blocklist file.',
+          ],
+          focus: [
+            { section: 'Moderation', key: 'enabled' },
+            { section: 'Moderation', key: 'input_action' },
+            { section: 'Moderation', key: 'output_action' },
+            { section: 'Moderation', key: 'blocklist_file' },
+            { section: 'Moderation', key: 'user_overrides_file' },
           ],
         },
       ],
@@ -557,8 +574,7 @@
         : [],
       customInput: typeof embeddings.customInput === 'string'
         ? embeddings.customInput
-        : (Array.isArray(embeddings.custom) ? embeddings.custom.join('
-') : ''),
+        : (Array.isArray(embeddings.custom) ? embeddings.custom.join('') : ''),
       onnx: Array.isArray(embeddings.onnx) ? [...new Set(embeddings.onnx)] : [],
     };
 
@@ -689,8 +705,7 @@
     }
     return Array.from(new Set(
       value
-        .split(/
-|,/)
+        .split(/ |,/)
         .map((entry) => entry.trim())
         .filter(Boolean),
     ));
@@ -698,8 +713,7 @@
 
   function getCustomEmbeddingInputValue() {
     ensureInstallState();
-    return state.install.embeddings.customInput || state.install.embeddings.custom.join('
-');
+    return state.install.embeddings.customInput || state.install.embeddings.custom.join('');
   }
 
   function getEmbeddingPresetOptions() {
@@ -1129,6 +1143,17 @@
     hideConfigSection();
     setLoading(true);
 
+    // Watchdog to avoid indefinite "Loading…" if the browser aborts the request
+    let initWatchdogFired = false;
+    const initWatchdog = setTimeout(() => {
+      initWatchdogFired = true;
+      setMessage('error', 'Timed out loading setup status. If this repeats, try a different browser or disable extensions, then reload.');
+      if (elements.configPath) {
+        elements.configPath.textContent = 'Error';
+      }
+      setLoading(false);
+    }, 12000);
+
     try {
       const status = await fetchJson(`${API_BASE}/status`);
       state.status = status;
@@ -1150,7 +1175,10 @@
       console.error('Setup initialisation failed', error);
       setMessage('error', `Failed to load setup data: ${error.message || error}`);
     } finally {
-      setLoading(false);
+      clearTimeout(initWatchdog);
+      if (!initWatchdogFired) {
+        setLoading(false);
+      }
     }
   }
 
@@ -2108,10 +2136,20 @@ function renderWizardSummary() {
     }
 
     setLoading(true);
+    // Watchdog for configuration snapshot
+    let cfgWatchdogFired = false;
+    const cfgWatchdog = setTimeout(() => {
+      cfgWatchdogFired = true;
+      setMessage('error', 'Timed out loading configuration snapshot. Ensure localhost access is allowed and reload.');
+      setLoading(false);
+    }, 12000);
     try {
       await loadConfig();
     } finally {
-      setLoading(false);
+      clearTimeout(cfgWatchdog);
+      if (!cfgWatchdogFired) {
+        setLoading(false);
+      }
     }
   }
 
@@ -2758,7 +2796,49 @@ function renderWizardSummary() {
     hint.className = 'field-hint';
     hint.textContent = hintText || fallbackHint;
     wrapper.appendChild(hint);
+
+    // Provide quick "Copy .env snippet" for likely credential fields
+    try {
+      if (shouldShowEnvSnippet(sectionName, field)) {
+        const actions = document.createElement('div');
+        actions.className = 'field-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn subtle';
+        copyBtn.textContent = 'Copy .env snippet';
+        copyBtn.addEventListener('click', async () => {
+          const snippet = buildEnvSnippet(field);
+          try {
+            await navigator.clipboard.writeText(snippet);
+            setMessage('info', `Copied snippet for ${field.key} to clipboard`);
+          } catch (e) {
+            setMessage('error', 'Failed to copy to clipboard');
+          }
+        });
+        actions.appendChild(copyBtn);
+        wrapper.appendChild(actions);
+      }
+    } catch (e) { /* no-op */ }
     return wrapper;
+  }
+
+  function likelyCredentialKey(key) {
+    const k = String(key || '').toUpperCase();
+    return /API_KEY|TOKEN|SECRET|CLIENT_SECRET|ACCESS_TOKEN|BEARER/i.test(k);
+  }
+
+  function shouldShowEnvSnippet(sectionName, field) {
+    if (!sectionName || !field) return false;
+    const inApiSection = String(sectionName).toLowerCase() === 'api';
+    const looksSecret = !!field.is_secret || likelyCredentialKey(field.key);
+    const isPlaceholder = !!field.placeholder || !String(field.value || '').trim();
+    return inApiSection && looksSecret && isPlaceholder;
+  }
+
+  function buildEnvSnippet(field) {
+    const key = String(field.key || 'KEY').toUpperCase();
+    // Do not include actual values to avoid leaking secrets
+    return `# Add to your .env file\n${key}=<your_value_here>`;
   }
 
   function createInputForField(field) {
@@ -3074,13 +3154,68 @@ function renderWizardSummary() {
     elements.actionMessage.textContent += `\n${additional}`;
   }
 
-  async function fetchJson(url, options) {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || response.statusText);
+  async function handleResetSetup() {
+    const confirmed = window.confirm('This will reset setup flags and require a server restart. Continue?');
+    if (!confirmed) return;
+
+    setSaving(true);
+    try {
+      const response = await fetchJson(`${API_BASE}/reset`, { method: 'POST' });
+      const message = response && response.message ? response.message : 'Setup flags reset. Restart the server and revisit /setup.';
+      setMessage('success', message);
+    } catch (error) {
+      const text = String(error && error.message ? error.message : error || 'Unknown error');
+      if (/401|403/.test(text)) {
+        setMessage('error', 'Reset denied: admin access required.');
+      } else {
+        setMessage('error', `Reset failed: ${text}`);
+      }
+    } finally {
+      setSaving(false);
     }
-    return response.json();
+  }
+
+  async function fetchJson(url, options = {}, retries = 2) {
+    // More resilient fetch with timeout, no-store cache, and retry on AbortError/network glitches
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs || 10000; // default 10s
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    const init = {
+      method: options.method || 'GET',
+      cache: options.cache || 'no-store',
+      credentials: options.credentials || 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        ...(options.headers || {}),
+      },
+      body: options.body,
+      signal: controller.signal,
+    };
+
+    try {
+      const response = await fetch(url, init);
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        const err = new Error(text || response.statusText);
+        err.status = response.status;
+        throw err;
+      }
+      // Try JSON first
+      return await response.json();
+    } catch (err) {
+      const message = String(err && err.message ? err.message : err || '');
+      const isAbort = err && (err.name === 'AbortError' || /AbortError/i.test(message));
+      const isTransient = isAbort || /NetworkError|TypeError: Failed to fetch/i.test(message);
+      if ((isTransient) && retries > 0) {
+        // small backoff before retry
+        await new Promise((r) => setTimeout(r, 250 * (3 - retries)));
+        return fetchJson(url, options, retries - 1);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function toBoolean(value) {

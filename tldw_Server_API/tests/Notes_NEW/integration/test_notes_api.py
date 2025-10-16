@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app
+from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -32,13 +32,13 @@ def client_with_notes_db(tmp_path):
     def override_db_dep():
         return db
 
-    app.dependency_overrides[get_request_user] = override_user
-    app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
+    fastapi_app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
 
-    with TestClient(app) as client:
+    with TestClient(fastapi_app) as client:
         yield client
 
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
 def test_create_get_update_delete_note(client_with_notes_db: TestClient):
@@ -161,10 +161,12 @@ def test_list_and_search_pagination_and_404s(client_with_notes_db: TestClient):
     page1 = client.get("/api/v1/notes/", params={"limit": 2, "offset": 0})
     page2 = client.get("/api/v1/notes/", params={"limit": 2, "offset": 2})
     assert page1.status_code == 200 and page2.status_code == 200
-    assert isinstance(page1.json(), list) and isinstance(page2.json(), list)
+    d1, d2 = page1.json(), page2.json()
+    assert isinstance(d1, dict) and isinstance(d2, dict)
+    assert isinstance(d1.get("notes"), list) and isinstance(d2.get("notes"), list)
     # Verify disjointness of pages by IDs
-    ids1 = {n.get("id") for n in page1.json()}
-    ids2 = {n.get("id") for n in page2.json()}
+    ids1 = {n.get("id") for n in d1.get("notes", [])}
+    ids2 = {n.get("id") for n in d2.get("notes", [])}
     assert ids1.isdisjoint(ids2)
     # If both pages are full, combined count equals sum
     if len(ids1) == 2 and len(ids2) == 2:

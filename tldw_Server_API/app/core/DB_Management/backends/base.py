@@ -87,6 +87,99 @@ class DatabaseConfig:
         """Convert config to dictionary."""
         return {k: v for k, v in self.__dict__.items() if v is not None}
 
+    # Backwards-compatible helpers expected by some modules/tests
+    @property
+    def backend(self) -> BackendType:
+        """Alias for backend_type for older call sites."""
+        return self.backend_type
+
+    @classmethod
+    def from_env(cls) -> "DatabaseConfig":
+        """
+        Build a DatabaseConfig from common environment variables.
+
+        Supports:
+          - DATABASE_URL (postgresql://..., postgres://..., sqlite:///path)
+          - TLDW_DB_BACKEND ("sqlite" | "postgresql") and related TLDW_* vars
+          - PG* variables (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD)
+        """
+        import os
+        import urllib.parse as _url
+
+        db_url = os.getenv("DATABASE_URL", "").strip()
+        if db_url:
+            parsed = _url.urlparse(db_url)
+            scheme = (parsed.scheme or "").lower()
+            # Normalize common aliases
+            if scheme in {"postgres", "postgresql"}:
+                cfg = cls(backend_type=BackendType.POSTGRESQL)
+                cfg.connection_string = db_url
+                cfg.pg_host = parsed.hostname or "localhost"
+                try:
+                    cfg.pg_port = int(parsed.port or 5432)
+                except Exception:
+                    cfg.pg_port = 5432
+                cfg.pg_database = (parsed.path or "/").lstrip("/") or None
+                cfg.pg_user = parsed.username or None
+                cfg.pg_password = parsed.password or None
+                # sslmode from query if present
+                q = _url.parse_qs(parsed.query or "")
+                if "sslmode" in q and q["sslmode"]:
+                    cfg.pg_sslmode = q["sslmode"][0]
+                return cfg
+            elif scheme.startswith("sqlite"):
+                # sqlite:///absolute/path or sqlite:///:memory:
+                cfg = cls(backend_type=BackendType.SQLITE)
+                cfg.connection_string = db_url
+                # urlparse returns path with leading '/', handle windows drive too
+                raw_path = parsed.path or ""
+                # Treat sqlite:///./relative/path as relative './relative/path'
+                if raw_path.startswith("/./"):
+                    cfg.sqlite_path = raw_path[1:]
+                elif raw_path.startswith("/") and raw_path != "/:memory:":
+                    cfg.sqlite_path = raw_path
+                else:
+                    cfg.sqlite_path = raw_path or "./Databases/Media_DB_v2.db"
+                return cfg
+            # Fallback to TLDW_* handling if unknown scheme
+
+        # TLDW_* environment style
+        backend_env = os.getenv("TLDW_DB_BACKEND", "sqlite").lower()
+        try:
+            backend_type = BackendType(backend_env)
+        except ValueError:
+            backend_type = BackendType.SQLITE
+
+        cfg = cls(backend_type=backend_type)
+        # Common settings
+        try:
+            cfg.pool_size = int(os.getenv("TLDW_DB_POOL_SIZE", "10"))
+        except Exception:
+            cfg.pool_size = 10
+        try:
+            cfg.pool_timeout = float(os.getenv("TLDW_DB_POOL_TIMEOUT", "30.0"))
+        except Exception:
+            cfg.pool_timeout = 30.0
+        cfg.echo = os.getenv("TLDW_DB_ECHO", "false").lower() in {"1", "true", "yes", "on"}
+
+        if backend_type == BackendType.SQLITE:
+            cfg.sqlite_path = os.getenv("TLDW_SQLITE_PATH", "./Databases/Media_DB_v2.db")
+            cfg.sqlite_wal_mode = os.getenv("TLDW_SQLITE_WAL_MODE", "true").lower() in {"1", "true", "yes", "on"}
+            cfg.sqlite_foreign_keys = os.getenv("TLDW_SQLITE_FOREIGN_KEYS", "true").lower() in {"1", "true", "yes", "on"}
+        elif backend_type == BackendType.POSTGRESQL:
+            # Prefer explicit PG* envs when DATABASE_URL not set
+            cfg.pg_host = os.getenv("TLDW_PG_HOST") or os.getenv("PGHOST") or "localhost"
+            try:
+                cfg.pg_port = int(os.getenv("TLDW_PG_PORT") or os.getenv("PGPORT") or "5432")
+            except Exception:
+                cfg.pg_port = 5432
+            cfg.pg_database = os.getenv("TLDW_PG_DATABASE") or os.getenv("PGDATABASE") or "tldw"
+            cfg.pg_user = os.getenv("TLDW_PG_USER") or os.getenv("PGUSER") or None
+            cfg.pg_password = os.getenv("TLDW_PG_PASSWORD") or os.getenv("PGPASSWORD") or None
+            cfg.pg_sslmode = os.getenv("TLDW_PG_SSLMODE") or os.getenv("PGSSLMODE") or cfg.pg_sslmode
+
+        return cfg
+
 
 @dataclass
 class QueryResult:

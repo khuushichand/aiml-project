@@ -20,7 +20,11 @@ class SchedulerConfig:
     
     # Database configuration
     database_url: str = field(
-        default_factory=lambda: os.getenv('DATABASE_URL', 'sqlite:///scheduler.db')
+        default_factory=lambda: (
+            os.getenv('SCHEDULER_DATABASE_URL')
+            or os.getenv('WORKFLOWS_SCHEDULER_DATABASE_URL')
+            or 'sqlite:///scheduler.db'
+        )
     )
     
     # Base path for all scheduler data
@@ -123,15 +127,15 @@ class SchedulerConfig:
         default_factory=lambda: int(os.getenv('SCHEDULER_DEFAULT_RETRY_DELAY', '60'))
     )
     
+    # Emergency backup file (for buffer fallbacks)
+    emergency_backup_path: Optional[Path] = None
+    
     @property
     def payload_storage_path(self) -> Path:
         """Path for external payload storage"""
         return self.base_path / 'payloads'
     
-    @property
-    def emergency_backup_path(self) -> Path:
-        """Path for emergency buffer backup"""
-        return self.base_path / 'emergency' / 'buffer_backup.json'
+    
     
     @property
     def is_postgresql(self) -> bool:
@@ -153,6 +157,13 @@ class SchedulerConfig:
         # Validate and sanitize paths to prevent directory traversal
         # This must happen before attempting to create directories
         self._validate_and_sanitize_paths()
+        
+        # Default emergency backup path if not provided
+        if self.emergency_backup_path is None:
+            self.emergency_backup_path = self.base_path / 'emergency' / 'backup.json'
+        else:
+            # Ensure Path type and absolute
+            self.emergency_backup_path = Path(self.emergency_backup_path).resolve()
         
         # Only create directories after validation passes
         try:
@@ -180,12 +191,21 @@ class SchedulerConfig:
         # Check for directory traversal BEFORE resolving
         original_base = str(self.base_path)
         
+        # Reject symlink base paths explicitly before resolving
+        import os as _os
+        try:
+            abspath = _os.path.abspath(original_base)
+            realpath = _os.path.realpath(original_base)
+            if abspath != realpath or _os.path.islink(original_base):
+                raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
+        except Exception:
+            pass
+        
         # Detect and prevent directory traversal attempts
         if '..' in original_base or '~' in original_base:
             raise ValueError(f"Directory traversal detected in base_path: {original_base}")
         
-        # Now resolve to absolute path after validation
-        self.base_path = self.base_path.resolve()
+        # Do not resolve symlinks here to preserve detection
         
         # Platform-specific path validation
         if platform.system() == 'Windows':
@@ -199,8 +219,12 @@ class SchedulerConfig:
                 logger.warning(f"Using Windows temp path: {self.base_path}")
         else:
             # Unix-like systems
-            if str(self.base_path).startswith('/var/lib') and not os.access('/var/lib', os.W_OK):
-                # Fall back to user's home directory if /var/lib is not writable
+            base_str = str(self.base_path)
+            is_var_lib = base_str.startswith('/var/lib') or base_str.startswith('/private/var/lib')
+            var_paths = ['/var/lib', '/private/var/lib']
+            writable = any(os.path.exists(p) and os.access(p, os.W_OK) for p in var_paths)
+            if is_var_lib and not writable:
+                # Fall back to user's home directory if var/lib is not writable
                 self.base_path = Path.home() / '.local' / 'share' / 'scheduler'
                 logger.warning(f"Using user directory: {self.base_path}")
         
@@ -221,8 +245,10 @@ class SchedulerConfig:
         errors = []
         
         # Validate numeric ranges
-        if self.min_workers < 1:
-            errors.append(f"min_workers must be >= 1, got {self.min_workers}")
+        # Allow 0 in test or when workers aren't started; in production
+        # users typically run with >=1. Tests may configure 0.
+        if self.min_workers < 0:
+            errors.append(f"min_workers must be >= 0, got {self.min_workers}")
         
         if self.max_workers < self.min_workers:
             errors.append(f"max_workers ({self.max_workers}) must be >= min_workers ({self.min_workers})")

@@ -1,4 +1,19 @@
-# LLM_API_Calls.py
+"""
+LLM_API_Calls
+General LLM API calling library for commercial providers.
+
+This module implements provider-specific chat/embeddings calls while returning
+OpenAI-compatible request/response formats whenever feasible. Streaming
+responses are normalized to Server-Sent Events (SSE) semantics: lines prefixed
+with "data: " and separated by a blank line. Provider errors are mapped to
+ChatAPIError subclasses so FastAPI endpoints can return appropriate status
+codes without leaking internal exceptions.
+
+Notes
+- Avoid logging secrets; this module only logs high-level metadata.
+- Timeouts and retries are per-provider configurable via config.
+- Use environment variables to override base URLs for testing/mocking.
+"""
 #########################################
 # General LLM API Calling Library
 # This library is used to perform API Calls against commercial LLM endpoints.
@@ -28,9 +43,9 @@ from typing import List, Any, Optional, Tuple, Dict, Union
 #
 # Import 3rd-Party Libraries
 import requests
-from loguru import logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import httpx
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 #
@@ -39,6 +54,8 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError, ChatRateLimitError, \
     ChatBadRequestError, ChatProviderError, ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.sse import sse_data, sse_done, ensure_sse_line, openai_delta_chunk, finalize_stream
+from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries
 #
 #######################################################################################################################
 # Function Definitions
@@ -404,7 +421,10 @@ def chat_with_openai(
     }
     logging.debug(f"OpenAI Request Payload (excluding messages): {{k: v for k, v in payload.items() if k != 'messages'}}")
 
-    api_url = openai_config.get('api_base_url', 'https://api.openai.com/v1').rstrip('/') + '/chat/completions'
+    # Allow environment override for API base URL (useful for mock servers in tests)
+    env_api_base = os.getenv('OPENAI_API_BASE_URL') or os.getenv('MOCK_OPENAI_BASE_URL')
+    api_base = env_api_base or openai_config.get('api_base_url', 'https://api.openai.com/v1')
+    api_url = api_base.rstrip('/') + '/chat/completions'
     try:
         if final_streaming:
             logging.debug("OpenAI: Posting request (streaming)")
@@ -412,48 +432,47 @@ def chat_with_openai(
                 response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=180)
                 response.raise_for_status()
 
-                def stream_generator():
+            def stream_generator():
+                    done_sent = False
                     try:
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip():
-                                yield line + "\n\n"  # Adhere to SSE format for client
-                        # OpenAI stream itself does not send a final [DONE] in this way,
-                        # but our endpoint wrapper expects it.
-                        # The actual DONE event should be data: [DONE]\n\n
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            # Normalize to SSE framing
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                yield openai_delta_chunk(l)
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
                     except requests.exceptions.ChunkedEncodingError as e_chunk:
                         logging.error(f"OpenAI: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
-                        error_content = json.dumps({"error": {"message": f"Stream connection error: {str(e_chunk)}",
-                                                              "type": "openai_stream_error"}})
-                        yield f"data: {error_content}\n\n"
+                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "openai_stream_error"}})
                     except Exception as e_stream:
                         logging.error(f"OpenAI: Error during stream iteration: {e_stream}", exc_info=True)
-                        error_content = json.dumps({"error": {"message": f"Stream iteration error: {str(e_stream)}",
-                                                              "type": "openai_stream_error"}})
-                        yield f"data: {error_content}\n\n"
+                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "openai_stream_error"}})
                     finally:
-                        # Close the response; do not yield in finally
-                        if response:
-                            response.close()
+                        for tail in finalize_stream(response, done_already=done_sent):
+                            yield tail
 
-                return stream_generator()
+            return stream_generator()
 
         else:  # Non-streaming
             logging.debug("OpenAI: Posting request (non-streaming)")
-            retry_count = int(openai_config.get('api_retries', 3))
-            retry_delay = float(openai_config.get('api_retry_delay', 1.0))  # Ensure float
-
-            retry_strategy = Retry(
-                total=retry_count,
-                backoff_factor=retry_delay,
+            session = create_session_with_retries(
+                total=int(openai_config.get('api_retries', 3)),
+                backoff_factor=float(openai_config.get('api_retry_delay', 1.0)),
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"]  # Changed from method_whitelist
+                allowed_methods=["POST"],
             )
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                session.mount("http://", adapter)  # Though OpenAI is https
-                response = session.post(api_url, headers=headers, json=payload,
-                                        timeout=float(openai_config.get('api_timeout', 90.0)))
+            response = session.post(api_url, headers=headers, json=payload,
+                                    timeout=float(openai_config.get('api_timeout', 90.0)))
 
             logging.debug(f"OpenAI: Full API response status: {response.status_code}")
             response.raise_for_status()  # Raise HTTPError for 4xx/5xx AFTER retries
@@ -504,6 +523,702 @@ def chat_with_openai(
     except Exception as e: # Catch any other unexpected error
         logging.error(f"OpenAI: Unexpected error in chat_with_openai: {e}", exc_info=True)
         raise ChatProviderError(provider="openai", message=f"Unexpected error: {e}")
+
+
+async def chat_with_openai_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        user: Optional[str] = None,
+        custom_prompt_arg: Optional[str] = None,
+):
+    """Async variant of chat_with_openai using httpx.AsyncClient.
+
+    Returns JSON dict for non-streaming, and an async iterator of SSE lines for streaming.
+    """
+    loaded_config_data = load_and_log_configs()
+    openai_config = loaded_config_data.get('openai_api', {})
+    final_api_key = api_key or openai_config.get('api_key')
+    if not final_api_key:
+        raise ChatConfigurationError(provider="openai", message="OpenAI API Key is required but not found.")
+
+    final_model = model if model is not None else openai_config.get('model', 'gpt-4o-mini')
+    final_temp = temp if temp is not None else float(openai_config.get('temperature', 0.7))
+    final_top_p = maxp if maxp is not None else float(openai_config.get('top_p', 0.95))
+    final_streaming_cfg = openai_config.get('streaming', False)
+    final_streaming = bool(streaming if streaming is not None else (
+        str(final_streaming_cfg).lower() == 'true' if isinstance(final_streaming_cfg, str) else final_streaming_cfg))
+
+    api_messages: List[Dict[str, Any]] = []
+    if system_message:
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+
+    payload: Dict[str, Any] = {
+        "model": final_model,
+        "messages": api_messages,
+        "stream": final_streaming,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+    }
+    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
+    if logit_bias is not None: payload["logit_bias"] = logit_bias
+    if logprobs is not None: payload["logprobs"] = logprobs
+    if top_logprobs is not None and payload.get("logprobs"): payload["top_logprobs"] = top_logprobs
+    if max_tokens is not None: payload["max_tokens"] = max_tokens
+    if n is not None: payload["n"] = n
+    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
+    if response_format is not None: payload["response_format"] = response_format
+    if seed is not None: payload["seed"] = seed
+    if stop is not None: payload["stop"] = stop
+    if tools is not None: payload["tools"] = tools
+    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    if user is not None: payload["user"] = user
+
+    env_api_base = os.getenv('OPENAI_API_BASE_URL') or os.getenv('MOCK_OPENAI_BASE_URL')
+    api_base = env_api_base or openai_config.get('api_base_url', 'https://api.openai.com/v1')
+    api_url = api_base.rstrip('/') + '/chat/completions'
+    headers = {"Authorization": f"Bearer {final_api_key}", "Content-Type": "application/json"}
+
+    try:
+        timeout = float(openai_config.get('api_timeout', 90.0))
+        if final_streaming:
+            async def _stream_async():
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
+                        try:
+                            resp.raise_for_status()
+                        except httpx.HTTPStatusError as e:
+                            status_code = e.response.status_code
+                            text = e.response.text
+                            if status_code in (400, 404, 422):
+                                raise ChatBadRequestError(provider="openai", message=text)
+                            elif status_code in (401, 403):
+                                raise ChatAuthenticationError(provider="openai", message=text)
+                            elif status_code == 429:
+                                raise ChatRateLimitError(provider="openai", message=text)
+                            elif status_code in (500, 502, 503, 504):
+                                raise ChatProviderError(provider="openai", message=text, status_code=status_code)
+                            else:
+                                raise ChatAPIError(provider="openai", message=text, status_code=status_code)
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            ls = line.strip()
+                            if not ls:
+                                continue
+                            if ls.startswith("data:"):
+                                yield ensure_sse_line(ls)
+                            else:
+                                yield openai_delta_chunk(ls)
+                        # Ensure final sentinel
+                        yield sse_done()
+            return _stream_async()
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(api_url, headers=headers, json=payload)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    status_code = e.response.status_code
+                    text = e.response.text
+                    if status_code in (400, 404, 422):
+                        raise ChatBadRequestError(provider="openai", message=text)
+                    elif status_code in (401, 403):
+                        raise ChatAuthenticationError(provider="openai", message=text)
+                    elif status_code == 429:
+                        raise ChatRateLimitError(provider="openai", message=text)
+                    elif status_code in (500, 502, 503, 504):
+                        raise ChatProviderError(provider="openai", message=text, status_code=status_code)
+                    else:
+                        raise ChatAPIError(provider="openai", message=text, status_code=status_code)
+                return resp.json()
+    except httpx.RequestError as e:
+        raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        if isinstance(e, ChatAPIError):
+            raise
+        raise ChatProviderError(provider="openai", message=f"Unexpected error: {e}")
+
+
+async def chat_with_groq_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+):
+    """Async Groq provider using httpx.AsyncClient with SSE normalization."""
+    cfg = load_and_log_configs().get('groq_api', {})
+    final_api_key = api_key or cfg.get('api_key')
+    if not final_api_key:
+        raise ChatConfigurationError(provider="groq", message="Groq API Key required.")
+    current_model = model or cfg.get('model', 'llama3-8b-8192')
+    current_temp = temp if temp is not None else _safe_cast(cfg.get('temperature'), float, 0.2)
+    current_top_p = maxp if maxp is not None else _safe_cast(cfg.get('top_p'), float, None)
+    stream_cfg = cfg.get('streaming', False)
+    current_streaming = streaming if streaming is not None else (str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
+    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(cfg.get('max_tokens'), int, None)
+
+    api_messages: List[Dict[str, Any]] = []
+    if system_message:
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+    payload: Dict[str, Any] = {"model": current_model, "messages": api_messages, "stream": current_streaming}
+    if current_temp is not None: payload["temperature"] = current_temp
+    if current_top_p is not None: payload["top_p"] = current_top_p
+    if current_max_tokens is not None: payload["max_tokens"] = current_max_tokens
+    if seed is not None: payload["seed"] = seed
+    if stop is not None: payload["stop"] = stop
+    if response_format is not None: payload["response_format"] = response_format
+    if n is not None: payload["n"] = n
+    if user is not None: payload["user"] = user
+    if tools is not None: payload["tools"] = tools
+    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    if logit_bias is not None: payload["logit_bias"] = logit_bias
+    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
+    if logprobs is not None: payload["logprobs"] = logprobs
+    if top_logprobs is not None and payload.get("logprobs"): payload["top_logprobs"] = top_logprobs
+
+    api_url = (cfg.get('api_base_url', 'https://api.groq.com/openai/v1').rstrip('/') + '/chat/completions')
+    headers = {"Authorization": f"Bearer {final_api_key}", "Content-Type": "application/json"}
+    timeout = float(cfg.get('api_timeout', 90.0))
+    try:
+        if current_streaming:
+            async def _stream():
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
+                        try:
+                            resp.raise_for_status()
+                        except httpx.HTTPStatusError as e:
+                            sc = e.response.status_code
+                            text = e.response.text
+                            if sc in (400, 404, 422):
+                                raise ChatBadRequestError(provider="groq", message=text)
+                            elif sc in (401, 403):
+                                raise ChatAuthenticationError(provider="groq", message=text)
+                            elif sc == 429:
+                                raise ChatRateLimitError(provider="groq", message=text)
+                            elif sc in (500, 502, 503, 504):
+                                raise ChatProviderError(provider="groq", message=text, status_code=sc)
+                            else:
+                                raise ChatAPIError(provider="groq", message=text, status_code=sc)
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            ls = line.strip()
+                            if not ls:
+                                continue
+                            if ls.startswith("data:"):
+                                yield ensure_sse_line(ls)
+                            else:
+                                yield openai_delta_chunk(ls)
+                        yield sse_done()
+            return _stream()
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(api_url, headers=headers, json=payload)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    sc = e.response.status_code
+                    text = e.response.text
+                    if sc in (400, 404, 422):
+                        raise ChatBadRequestError(provider="groq", message=text)
+                    elif sc in (401, 403):
+                        raise ChatAuthenticationError(provider="groq", message=text)
+                    elif sc == 429:
+                        raise ChatRateLimitError(provider="groq", message=text)
+                    elif sc in (500, 502, 503, 504):
+                        raise ChatProviderError(provider="groq", message=text, status_code=sc)
+                    else:
+                        raise ChatAPIError(provider="groq", message=text, status_code=sc)
+                return resp.json()
+    except httpx.RequestError as e:
+        raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        if isinstance(e, ChatAPIError):
+            raise
+        raise ChatProviderError(provider="groq", message=f"Unexpected error: {e}")
+
+
+async def chat_with_anthropic_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+):
+    """Async Anthropic messages API with SSE normalization."""
+    cfg = load_and_log_configs().get('anthropic_api', {})
+    final_api_key = api_key or cfg.get('api_key')
+    if not final_api_key:
+        raise ChatConfigurationError(provider="anthropic", message="Anthropic API Key is required.")
+    current_model = model or cfg.get('model', 'claude-3-haiku-20240307')
+    current_temp = temp if temp is not None else _safe_cast(cfg.get('temperature'), float, 0.7)
+    stream_cfg = cfg.get('streaming', False)
+    current_streaming = streaming if streaming is not None else (str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
+    default_max_tokens = int(cfg.get('max_tokens_to_sample', cfg.get('max_tokens', 4096)))
+    current_max_tokens = max_tokens if max_tokens is not None else default_max_tokens
+
+    anthropic_messages: List[Dict[str, Any]] = []
+    for msg in input_data:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role not in ["user", "assistant"]:
+            continue
+        parts = []
+        if isinstance(content, str):
+            parts.append({"type": "text", "text": content})
+        elif isinstance(content, list):
+            for p in content:
+                if p.get("type") == "text":
+                    parts.append({"type": "text", "text": p.get("text", "")})
+                elif p.get("type") == "image_url":
+                    parsed = _parse_data_url_for_multimodal(p.get("image_url", {}).get("url", ""))
+                    if parsed:
+                        mime, b64d = parsed
+                        parts.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64d}})
+        if parts:
+            anthropic_messages.append({"role": role, "content": parts})
+    if not any(m['role'] == 'user' for m in anthropic_messages):
+        raise ChatBadRequestError(provider="anthropic", message="No valid user messages found.")
+
+    headers = {
+        'x-api-key': final_api_key,
+        'anthropic-version': cfg.get('api_version', '2023-06-01'),
+        'Content-Type': 'application/json'
+    }
+    payload: Dict[str, Any] = {
+        "model": current_model,
+        "max_tokens": current_max_tokens,
+        "messages": anthropic_messages,
+        "stream": current_streaming,
+    }
+    if system_prompt is not None: payload["system"] = system_prompt
+    if current_temp is not None: payload["temperature"] = current_temp
+    if topp is not None: payload["top_p"] = topp
+    if topk is not None: payload["top_k"] = topk
+    if stop_sequences is not None: payload["stop_sequences"] = stop_sequences
+    if tools is not None: payload["tools"] = tools
+
+    api_url = (cfg.get('api_base_url', 'https://api.anthropic.com/v1').rstrip('/') + '/messages')
+    timeout = float(cfg.get('api_timeout', 90.0))
+    try:
+        if current_streaming:
+            async def _stream():
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
+                        try:
+                            resp.raise_for_status()
+                        except httpx.HTTPStatusError as e:
+                            sc = e.response.status_code
+                            text = e.response.text
+                            if sc in (400, 404, 422):
+                                raise ChatBadRequestError(provider="anthropic", message=text)
+                            elif sc in (401, 403):
+                                raise ChatAuthenticationError(provider="anthropic", message=text)
+                            elif sc == 429:
+                                raise ChatRateLimitError(provider="anthropic", message=text)
+                            elif sc in (500, 502, 503, 504):
+                                raise ChatProviderError(provider="anthropic", message=text, status_code=sc)
+                            else:
+                                raise ChatAPIError(provider="anthropic", message=text, status_code=sc)
+                        # Parse SSE-like stream with event/data pairs
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            ls = line.strip()
+                            if not ls:
+                                continue
+                            if ls.startswith('data:'):
+                                event_data_str = ls[len('data:'):].strip()
+                                try:
+                                    ev = json.loads(event_data_str)
+                                except Exception:
+                                    continue
+                                # Map known events to OpenAI-style deltas
+                                if ev.get('type') == 'content_block_delta':
+                                    delta = ev.get('delta', {})
+                                    if delta.get('type') == 'text_delta' and 'text' in delta:
+                                        yield openai_delta_chunk(delta.get('text', ''))
+                                elif ev.get('type') == 'message_delta':
+                                    stop_reason = (ev.get('delta') or {}).get('stop_reason')
+                                    if stop_reason:
+                                        # Emit a finish marker chunk then DONE
+                                        yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": stop_reason}]})
+                                # ignore other event types for now
+                        yield sse_done()
+            return _stream()
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(api_url, headers=headers, json=payload)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    sc = e.response.status_code
+                    text = e.response.text
+                    if sc in (400, 404, 422):
+                        raise ChatBadRequestError(provider="anthropic", message=text)
+                    elif sc in (401, 403):
+                        raise ChatAuthenticationError(provider="anthropic", message=text)
+                    elif sc == 429:
+                        raise ChatRateLimitError(provider="anthropic", message=text)
+                    elif sc in (500, 502, 503, 504):
+                        raise ChatProviderError(provider="anthropic", message=text, status_code=sc)
+                    else:
+                        raise ChatAPIError(provider="anthropic", message=text, status_code=sc)
+                return resp.json()
+    except httpx.RequestError as e:
+        raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        if isinstance(e, ChatAPIError):
+            raise
+        raise ChatProviderError(provider="anthropic", message=f"Unexpected error: {e}")
+
+
+async def chat_with_openrouter_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+):
+    cfg = load_and_log_configs().get('openrouter_api', {})
+    final_api_key = api_key or cfg.get('api_key')
+    if not final_api_key:
+        raise ChatConfigurationError(provider='openrouter', message='OpenRouter API Key required.')
+    current_model = model or cfg.get('model', 'mistralai/mistral-7b-instruct:free')
+    stream_cfg = cfg.get('streaming', False)
+    current_streaming = streaming if streaming is not None else (str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
+
+    api_messages = []
+    if system_message:
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+
+    payload: Dict[str, Any] = {"model": current_model, "messages": api_messages, "stream": current_streaming}
+    if temp is not None: payload["temperature"] = temp
+    if top_p is not None: payload["top_p"] = top_p
+    if top_k is not None: payload["top_k"] = top_k
+    if min_p is not None: payload["min_p"] = min_p
+    if max_tokens is not None: payload["max_tokens"] = max_tokens
+    if seed is not None: payload["seed"] = seed
+    if stop is not None: payload["stop"] = stop
+    if response_format is not None: payload["response_format"] = response_format
+    if n is not None: payload["n"] = n
+    if user is not None: payload["user"] = user
+    if tools is not None: payload["tools"] = tools
+    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    if logit_bias is not None: payload["logit_bias"] = logit_bias
+    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
+    if logprobs is not None: payload["logprobs"] = logprobs
+    if top_logprobs is not None and payload.get("logprobs"): payload["top_logprobs"] = top_logprobs
+
+    base_url = cfg.get('api_base_url', 'https://openrouter.ai/api/v1')
+    api_url = base_url.rstrip('/') + '/chat/completions'
+    headers = {
+        "Authorization": f"Bearer {final_api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": cfg.get("site_url", "http://localhost"),
+        "X-Title": cfg.get("site_name", "TLDW-API"),
+    }
+    timeout = float(cfg.get('api_timeout', 90.0))
+
+    try:
+        if current_streaming:
+            async def _stream():
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
+                        try:
+                            resp.raise_for_status()
+                        except httpx.HTTPStatusError as e:
+                            sc = e.response.status_code
+                            text = e.response.text
+                            if sc in (400, 404, 422):
+                                raise ChatBadRequestError(provider="openrouter", message=text)
+                            elif sc in (401, 403):
+                                raise ChatAuthenticationError(provider="openrouter", message=text)
+                            elif sc == 429:
+                                raise ChatRateLimitError(provider="openrouter", message=text)
+                            elif sc in (500, 502, 503, 504):
+                                raise ChatProviderError(provider="openrouter", message=text, status_code=sc)
+                            else:
+                                raise ChatAPIError(provider="openrouter", message=text, status_code=sc)
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            ls = line.strip()
+                            if not ls:
+                                continue
+                            if ls.startswith("data:"):
+                                yield ensure_sse_line(ls)
+                            else:
+                                yield openai_delta_chunk(ls)
+                        yield sse_done()
+            return _stream()
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(api_url, headers=headers, json=payload)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    sc = e.response.status_code
+                    text = e.response.text
+                    if sc in (400, 404, 422):
+                        raise ChatBadRequestError(provider="openrouter", message=text)
+                    elif sc in (401, 403):
+                        raise ChatAuthenticationError(provider="openrouter", message=text)
+                    elif sc == 429:
+                        raise ChatRateLimitError(provider="openrouter", message=text)
+                    elif sc in (500, 502, 503, 504):
+                        raise ChatProviderError(provider="openrouter", message=text, status_code=sc)
+                    else:
+                        raise ChatAPIError(provider="openrouter", message=text, status_code=sc)
+                return resp.json()
+    except httpx.RequestError as e:
+        raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        if isinstance(e, ChatAPIError):
+            raise
+        raise ChatProviderError(provider="openrouter", message=f"Unexpected error: {e}")
+
+
+def chat_with_bedrock(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,  # top_p
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        seed: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        user: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+):
+    """
+    AWS Bedrock via OpenAI-compatible Chat Completions endpoint.
+
+    Uses Bedrock Runtime OpenAI compatibility layer:
+    https://bedrock-runtime.<region>.amazonaws.com/openai/v1/chat/completions
+
+    Auth supports Bedrock API key (Bearer). AWS SigV4 is not implemented here.
+    """
+    loaded_config_data = load_and_log_configs()
+    if loaded_config_data is None:
+        raise ChatConfigurationError(provider="bedrock", message="Configuration not available.")
+
+    br_cfg = loaded_config_data.get('bedrock_api', {})
+    final_api_key = api_key or br_cfg.get('api_key') or os.getenv('BEDROCK_API_KEY')
+    if not final_api_key:
+        # Support the AWS docs' bearer token env var as a fallback
+        final_api_key = os.getenv('AWS_BEARER_TOKEN_BEDROCK')
+    if not final_api_key:
+        raise ChatConfigurationError(provider="bedrock", message="Bedrock API key is required (BEDROCK_API_KEY or AWS_BEARER_TOKEN_BEDROCK).")
+
+    # Determine endpoint
+    runtime_endpoint = br_cfg.get('runtime_endpoint')  # e.g., https://bedrock-runtime.us-west-2.amazonaws.com
+    region = br_cfg.get('region') or os.getenv('BEDROCK_REGION') or 'us-west-2'
+    api_base_url = br_cfg.get('api_base_url')
+    if not api_base_url:
+        if runtime_endpoint:
+            api_base_url = runtime_endpoint.rstrip('/') + '/openai'
+        else:
+            api_base_url = f"https://bedrock-runtime.{region}.amazonaws.com/openai"
+
+    current_model = model or br_cfg.get('model')
+    if not current_model:
+        raise ChatConfigurationError(provider="bedrock", message="Bedrock model is required (set model or configure bedrock_model).")
+
+    current_temp = temp if temp is not None else _safe_cast(br_cfg.get('temperature'), float, 0.7)
+    current_streaming = streaming if streaming is not None else (
+        str(br_cfg.get('streaming', 'false')).lower() == 'true'
+    )
+    current_top_p = maxp if maxp is not None else _safe_cast(br_cfg.get('top_p'), float, None)
+    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(br_cfg.get('max_tokens'), int, None)
+
+    headers = {
+        'Authorization': f'Bearer {final_api_key}',
+        'Content-Type': 'application/json'
+    }
+
+    # Build messages list and payload
+    api_messages: List[Dict[str, Any]] = []
+    if system_message:
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+
+    payload: Dict[str, Any] = {
+        "model": current_model,
+        "messages": api_messages,
+        "stream": current_streaming,
+    }
+    if current_temp is not None: payload["temperature"] = current_temp
+    if current_top_p is not None: payload["top_p"] = current_top_p
+    if current_max_tokens is not None: payload["max_tokens"] = current_max_tokens
+    if n is not None: payload["n"] = n
+    if stop is not None: payload["stop"] = stop
+    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
+    if logit_bias is not None: payload["logit_bias"] = logit_bias
+    if seed is not None: payload["seed"] = seed
+    if response_format is not None: payload["response_format"] = response_format
+    if tools is not None: payload["tools"] = tools
+    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    if logprobs is not None: payload["logprobs"] = logprobs
+    if top_logprobs is not None: payload["top_logprobs"] = top_logprobs
+    if user is not None: payload["user"] = user
+    if extra_headers is not None: payload["extra_headers"] = extra_headers
+    if extra_body is not None: payload["extra_body"] = extra_body
+
+    # Endpoint path
+    api_url = api_base_url.rstrip('/') + '/v1/chat/completions'
+
+    retry_count = _safe_cast(br_cfg.get('api_retries'), int, 3)
+    retry_delay = _safe_cast(br_cfg.get('api_retry_delay'), float, 1.0)
+    timeout = _safe_cast(br_cfg.get('api_timeout'), float, 90.0)
+
+    logging.debug(f"Bedrock: POST {api_url} (stream={current_streaming})")
+
+    try:
+        session = create_session_with_retries(
+            total=retry_count,
+            backoff_factor=retry_delay,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+        )
+
+        if current_streaming:
+            response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=timeout + 60)
+            response.raise_for_status()
+
+            def stream_generator():
+                done_sent = False
+                try:
+                    for raw in response.iter_lines():
+                        if not raw:
+                            continue
+                        try:
+                            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            # Fallback best-effort
+                            line = str(raw)
+                        l = line.strip()
+                        if not l:
+                            continue
+                        if l.startswith("data:"):
+                            if l.strip().lower() == "data: [done]".lower():
+                                done_sent = True
+                            yield ensure_sse_line(l)
+                        else:
+                            yield openai_delta_chunk(l)
+                    if not done_sent:
+                        done_sent = True
+                        yield sse_done()
+                except requests.exceptions.ChunkedEncodingError as e_chunk:
+                    logging.error(f"Bedrock stream chunked encoding error: {e_chunk}")
+                    yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "bedrock_stream_error"}})
+                except Exception as e_stream:
+                    logging.error(f"Bedrock stream iteration error: {e_stream}", exc_info=True)
+                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "bedrock_stream_error"}})
+                finally:
+                    for tail in finalize_stream(response, done_already=done_sent):
+                        yield tail
+            return stream_generator()
+        else:
+            response = session.post(api_url, headers=headers, json=payload, timeout=timeout)
+            logging.debug(f"Bedrock: status={response.status_code}")
+            response.raise_for_status()
+            return response.json()
+
+    except requests.exceptions.HTTPError as e:
+        status_code = getattr(e.response, 'status_code', None)
+        error_text = getattr(e.response, 'text', str(e))
+        logging.error(f"Bedrock HTTPError {status_code}: {repr(error_text[:500])}")
+        if status_code in (400, 404, 422):
+            raise ChatBadRequestError(provider="bedrock", message=error_text)
+        elif status_code in (401, 403):
+            raise ChatAuthenticationError(provider="bedrock", message=error_text)
+        elif status_code == 429:
+            raise ChatRateLimitError(provider="bedrock", message=error_text)
+        elif status_code in (500, 502, 503, 504):
+            raise ChatProviderError(provider="bedrock", message=error_text, status_code=status_code)
+        else:
+            raise ChatAPIError(provider="bedrock", message=error_text, status_code=(status_code or 500))
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Bedrock RequestException: {e}", exc_info=True)
+        raise ChatProviderError(provider="bedrock", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        logging.error(f"Bedrock unexpected error: {e}", exc_info=True)
+        raise ChatProviderError(provider="bedrock", message=f"Unexpected error: {e}")
 
 
 def chat_with_anthropic(
@@ -600,13 +1315,13 @@ def chat_with_anthropic(
     logging.debug(f"Anthropic Request Payload (excluding messages): {{k: v for k, v in data.items() if k != 'messages'}}")
 
     try:
-        retry_count = int(anthropic_config.get('api_retries', 3))
-        retry_delay = float(anthropic_config.get('api_retry_delay', 1))
-        retry_strategy = Retry(total=retry_count, backoff_factor=retry_delay, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["POST"])
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        with requests.Session() as session:
-            session.mount("https://", adapter)
-            response = session.post(api_url, headers=headers, json=data, stream=current_streaming, timeout=180)
+        session = create_session_with_retries(
+            total=int(anthropic_config.get('api_retries', 3)),
+            backoff_factor=float(anthropic_config.get('api_retry_delay', 1)),
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+        )
+        response = session.post(api_url, headers=headers, json=data, stream=current_streaming, timeout=180)
         response.raise_for_status()
 
         if current_streaming:
@@ -617,6 +1332,7 @@ def chat_with_anthropic(
 
                 event_name = None
                 data_buffer = []
+                done_sent = False
 
                 try:
                     for line_bytes in response.iter_lines():  # iter_lines gives bytes
@@ -649,6 +1365,9 @@ def chat_with_anthropic(
                                 if finish_reason:
                                     sse_chunk = {"id": completion_id, "object": "chat.completion.chunk", "created": created_time, "model": current_model, "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]}
                                     yield f"data: {json.dumps(sse_chunk)}\n\n"
+                                    yield sse_done()
+                                    done_sent = True
+                                    return
                             except json.JSONDecodeError:
                                 logging.warning(f"Anthropic Stream: Could not decode JSON: {event_data_str}")
                 except GeneratorExit:
@@ -661,8 +1380,8 @@ def chat_with_anthropic(
                     logging.error(f"Anthropic: Error during stream iteration: {e}", exc_info=True)
                     yield f"data: {json.dumps({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'anthropic_stream_error'}})}\n\n"
                 finally:
-                    # Close the response; do not yield in finally
-                    if response: response.close()
+                    for tail in finalize_stream(response, done_already=done_sent):
+                        yield tail
             return stream_generator()
         else:
             # ... (non-streaming logic remains the same) ...
@@ -837,19 +1556,12 @@ def chat_with_cohere(
     logging.debug(f"Cohere Request URL: {COHERE_CHAT_URL}")
 
     # --- Retry Mechanism ---
-    session = requests.Session()
-    retry_count = int(cohere_config.get('api_retries', 3))
-    retry_delay = float(cohere_config.get('api_retry_delay', 1.0)) # Ensure float for backoff_factor
-
-    retry_strategy = Retry(
-        total=retry_count,
-        backoff_factor=retry_delay,
-        status_forcelist=[429, 500, 502, 503, 504], # Standard retry statuses
-        allowed_methods=["POST"] # Retry only for POST requests
+    session = create_session_with_retries(
+        total=int(cohere_config.get('api_retries', 3)),
+        backoff_factor=float(cohere_config.get('api_retry_delay', 1.0)),
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["POST"],
     )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
     # --- End Retry Mechanism ---
 
     try:
@@ -860,63 +1572,56 @@ def chat_with_cohere(
             response.raise_for_status() # Check for HTTP errors on initial connection
             logging.debug("Cohere: Streaming response connection established.")
 
-            def stream_generator_cohere_text_chunks(response_iterator): # Removed unused model_name_for_event
+            def stream_generator_cohere_text_chunks(response_iterator):
                 stream_properly_closed = False
-                accumulated_text_for_log = []
                 try:
                     for line_bytes in response_iterator:
-                        if not line_bytes: continue
-                        decoded_line = line_bytes.decode('utf-8').strip()
-                        if not decoded_line: continue
+                        if not line_bytes:
+                            continue
+                        # Handle bytes or str from iter_lines()
+                        decoded_line = (line_bytes.decode('utf-8', errors='replace')
+                                        if isinstance(line_bytes, (bytes, bytearray))
+                                        else str(line_bytes))
+                        decoded_line = decoded_line.strip()
+                        if not decoded_line:
+                            continue
 
-                        # Cohere's /v1/chat SSE format:
-                        # It often sends events like:
-                        # event: text-generation\ndata: {"text": "...", ...}\n\n
-                        # event: stream-end\ndata: {"finish_reason": "...", ...}\n\n
-                        # Sometimes, there's no explicit 'event:' line, and the data line itself contains 'event_type'.
-                        # We need to handle lines starting with 'data:' primarily.
-
+                        # Cohere stream uses event+data pairs where data JSON contains event_type
                         if decoded_line.startswith("data:"):
                             json_data_str = decoded_line[len("data:"):].strip()
-                            if not json_data_str: continue
+                            if not json_data_str:
+                                continue
                             try:
                                 cohere_event = json.loads(json_data_str)
-                                event_type = cohere_event.get("event_type")
-
-                                if event_type == "text-generation":
-                                    text_chunk = cohere_event.get("text")
-                                    if text_chunk:
-                                        accumulated_text_for_log.append(text_chunk)
-                                        yield text_chunk
-                                elif event_type == "stream-end":
-                                    stream_properly_closed = True
-                                    final_response_details = cohere_event.get("response", {})
-                                    finish_reason = final_response_details.get("finish_reason") or cohere_event.get("finish_reason", "UNKNOWN")
-                                    logging.info(f"Cohere stream: 'stream-end' event. Finish: {finish_reason}. Fragments: {len(accumulated_text_for_log)}")
-                                    return
-                                elif event_type == "stream-start": # Cohere sends this
-                                    logging.debug(f"Cohere stream: 'stream-start' event. Gen ID: {cohere_event.get('generation_id')}")
-                                elif event_type: # Log other known event types if curious
-                                     logging.debug(f"Cohere stream event type: {event_type}, data: {cohere_event}")
-
                             except json.JSONDecodeError:
-                                logging.warning(f"Cohere Stream: JSON decode error for data: '{json_data_str}' from line: '{decoded_line}'")
-                        elif decoded_line.startswith("event:"):
-                            # This line just declares the event type, data line follows.
-                            # logging.trace(f"Cohere stream saw event line: {decoded_line}")
-                            pass # Handled by the data line's event_type
+                                logging.warning(f"Cohere Stream: JSON decode error for data: '{json_data_str}'")
+                                continue
+
+                            event_type = cohere_event.get("event_type")
+                            if event_type == "text-generation":
+                                text_chunk = cohere_event.get("text")
+                                if text_chunk:
+                                    yield openai_delta_chunk(str(text_chunk))
+                            elif event_type == "stream-end":
+                                stream_properly_closed = True
+                                yield sse_done()
+                                return
+                            else:
+                                # stream-start or other events: ignore
+                                continue
                         else:
-                            logging.warning(f"Cohere Stream: Unexpected line format: '{decoded_line}'")
+                            # Plain text fallback — wrap as OpenAI-style delta
+                            yield openai_delta_chunk(decoded_line)
 
                 except requests.exceptions.ChunkedEncodingError as e:
-                    logging.warning(f"Cohere stream: ChunkedEncodingError: {e}. Stream may have been interrupted.")
+                    logging.warning(f"Cohere stream: ChunkedEncodingError: {e}")
+                    yield sse_data({"error": {"message": f"Stream connection error: {str(e)}", "type": "cohere_stream_error"}})
                 except Exception as e_stream:
                     logging.error(f"Cohere stream: Error during streaming: {e_stream}", exc_info=True)
+                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "cohere_stream_error"}})
                 finally:
-                    if not stream_properly_closed:
-                        logging.warning("Cohere stream generator loop finished without explicit 'stream-end'.")
-                    logging.debug(f"Cohere stream_generator for {final_model} finished. Total text: {''.join(accumulated_text_for_log)[:100]}...")
-                    if response: response.close()
+                    for tail in finalize_stream(response, done_already=stream_properly_closed):
+                        yield tail
             return stream_generator_cohere_text_chunks(response.iter_lines())
         else:  # Non-streaming
             # The session.post will use the retry strategy and timeout for each attempt.
@@ -1092,31 +1797,51 @@ def chat_with_deepseek(
 
     try:
         if current_streaming:
-            # ... (OpenAI-like streaming logic, use "DeepSeek" in logs) ...
-            with requests.Session() as session:
+            session = create_session_with_retries(
+                total=int(deepseek_config.get('api_retries', 3)),
+                backoff_factor=float(deepseek_config.get('api_retry_delay', 1)),
+            )
+            with session:
                 response = session.post(api_url, headers=headers, json=data, stream=True, timeout=180)
                 response.raise_for_status()
 
-                def stream_generator():
+            def stream_generator():
+                    done_sent = False
                     try:
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip(): yield line + "\n\n"
-                    except GeneratorExit:
-                        if response: response.close()
-                        raise
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                yield openai_delta_chunk(l)
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
+                    except requests.exceptions.ChunkedEncodingError as e:
+                        logging.error(f"DeepSeek: ChunkedEncodingError during stream: {e}", exc_info=True)
+                        yield sse_data({'error': {'message': f'Stream connection error: {str(e)}', 'type': 'deepseek_stream_error'}})
+                    except Exception as e:
+                        logging.error(f"DeepSeek: Stream iteration error: {e}", exc_info=True)
+                        yield sse_data({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'deepseek_stream_error'}})
                     finally:
-                        if response: response.close()
+                        for tail in finalize_stream(response, done_already=done_sent):
+                            yield tail
 
-                return stream_generator()
+            return stream_generator()
         else:
-            # ... (non-streaming, retry) ...
-            adapter = HTTPAdapter(max_retries=Retry(total=int(deepseek_config.get('api_retries', 3)),
-                                                    backoff_factor=float(deepseek_config.get('api_retry_delay', 1)),
-                                                    status_forcelist=[429, 500, 502, 503, 504],
-                                                    allowed_methods=["POST"]))
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
+            session = create_session_with_retries(
+                total=int(deepseek_config.get('api_retries', 3)),
+                backoff_factor=float(deepseek_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=data, timeout=120)
             response.raise_for_status()
             return response.json()
     except requests.exceptions.HTTPError as e:  # ... error handling ...
@@ -1197,20 +1922,28 @@ def chat_with_google(
 
     try:
         # ... (retry logic) ...
-        adapter = HTTPAdapter(max_retries=Retry(total=int(google_config.get('api_retries', 3)),
-                                                backoff_factor=float(google_config.get('api_retry_delay', 1)),
-                                                status_forcelist=[429, 500, 503], allowed_methods=["POST"]))
-        with requests.Session() as session:
-            session.mount("https://", adapter)
-            response = session.post(api_url, headers=headers, json=payload, stream=current_streaming, timeout=180)
+        session = create_session_with_retries(
+            total=int(google_config.get('api_retries', 3)),
+            backoff_factor=float(google_config.get('api_retry_delay', 1)),
+            status_forcelist=[429, 500, 503],
+            allowed_methods=["POST"],
+        )
+        response = session.post(api_url, headers=headers, json=payload, stream=current_streaming, timeout=180)
         response.raise_for_status()
 
         if current_streaming:
             logging.debug("Google Gemini: Streaming response received.")
 
             def stream_generator():
+                done_sent = False
                 try:
-                    for line in response.iter_lines(decode_unicode=True):
+                    for raw in response.iter_lines():
+                        if not raw:
+                            continue
+                        try:
+                            line = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            line = str(raw)
                         if line and line.strip().startswith('data:'):
                             json_str = line.strip()[len('data:'):]
                             try:
@@ -1234,45 +1967,44 @@ def chat_with_google(
                                                     chunk_text += part.get('text', '')
                                                 # Check for functionCall delta if Gemini supports streaming them this way
                                                 if 'functionCall' in part:
-                                                    # This needs careful mapping to OpenAI's tool_calls delta
-                                                    # For now, just logging it if complex
                                                     logging.debug(
                                                         f"Gemini Stream: Received functionCall part: {part['functionCall']}")
-                                                    # Example: if part['functionCall'] has 'name' and 'args'
-                                                    # tool_calls_delta = [{"index": 0, "id": "call_SOMEID", "type": "function", "function": {"name": part['functionCall']['name'], "arguments": part['functionCall']['args']}}]
-
                                         # Finish reason
                                         raw_finish_reason = candidate.get("finishReason")
                                         if raw_finish_reason:
                                             finish_reason_map = {"MAX_TOKENS": "length", "STOP": "stop",
                                                                  "SAFETY": "content_filter",
                                                                  "RECITATION": "content_filter", "OTHER": "error",
-                                                                 "TOOL_CODE_NOT_FOUND": "error"}  # Simplified
-                                            finish_reason = finish_reason_map.get(raw_finish_reason,
-                                                                                  raw_finish_reason.lower())
+                                                                 "TOOL_CODE_NOT_FOUND": "error"}
+                                            finish_reason = finish_reason_map.get(raw_finish_reason, raw_finish_reason.lower())
 
-                                    if chunk_text or tool_calls_delta:  # If there's text or tool call delta
+                                    if chunk_text or tool_calls_delta:
                                         delta_payload = {}
-                                        if chunk_text: delta_payload["content"] = chunk_text
-                                        if tool_calls_delta: delta_payload[
-                                            "tool_calls"] = tool_calls_delta  # This needs to be OpenAI's delta format for tool_calls
-
+                                        if chunk_text:
+                                            delta_payload["content"] = chunk_text
+                                        if tool_calls_delta:
+                                            delta_payload["tool_calls"] = tool_calls_delta
                                         sse_chunk = {'choices': [{'delta': delta_payload,
                                                                   "finish_reason": finish_reason if finish_reason else None,
                                                                   "index": 0}]}
-                                        # Add common SSE fields if needed by client: id, object, created, model
-                                        yield f"data: {json.dumps(sse_chunk)}\n\n"
-                                    elif finish_reason:  # Only finish reason
-                                        sse_chunk = {
-                                            'choices': [{'delta': {}, "finish_reason": finish_reason, "index": 0}]}
-                                        yield f"data: {json.dumps(sse_chunk)}\n\n"
+                                        yield sse_data(sse_chunk)
+                                    elif finish_reason:
+                                        sse_chunk = {'choices': [{'delta': {}, "finish_reason": finish_reason, "index": 0}]}
+                                        yield sse_data(sse_chunk)
 
                             except json.JSONDecodeError:
                                 logging.warning(f"Google Gemini: Could not decode JSON line: {json_str}")
-                    yield "data: [DONE]\n\n"
-                # ... (error handling for stream) ...
+                    done_sent = True
+                    yield sse_done()
+                except requests.exceptions.ChunkedEncodingError as e_chunk:
+                    logging.error(f"Google Gemini stream: ChunkedEncodingError: {e_chunk}")
+                    yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "gemini_stream_error"}})
+                except Exception as e_stream:
+                    logging.error(f"Google Gemini stream: iteration error: {e_stream}", exc_info=True)
+                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "gemini_stream_error"}})
                 finally:
-                    if response: response.close()
+                    for tail in finalize_stream(response, done_already=done_sent):
+                        yield tail
 
             return stream_generator()
         else:
@@ -1429,46 +2161,53 @@ def chat_with_qwen(
 
     try:
         if current_streaming:
-            with requests.Session() as session:
+            session = create_session_with_retries(
+                total=api_retries if api_retries is not None else 3,
+                backoff_factor=retry_delay if retry_delay is not None else 1.0,
+            )
+            with session:
                 response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=api_timeout or 120)
                 response.raise_for_status()
 
-                def stream_generator():
+            def stream_generator():
+                    done_sent = False
                     try:
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip():
-                                yield line + ""
-                        yield "data: [DONE]"
-                    except requests.exceptions.ChunkedEncodingError as err:
-                        logging.error(f"Qwen: ChunkedEncodingError during stream: {err}", exc_info=True)
-                        error_chunk = json.dumps({
-                            "error": {"message": f"Stream connection error: {err}", "type": "qwen_stream_error"}
-                        })
-                        yield f"data: {error_chunk}"
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                # Fallback: wrap plain text as OpenAI delta SSE
+                                yield openai_delta_chunk(l)
+                        # Ensure final DONE sentinel only if not seen
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
+                    except requests.exceptions.ChunkedEncodingError as stream_err:
+                        logging.error(f"Qwen: ChunkedEncodingError during stream: {stream_err}", exc_info=True)
+                        yield sse_data({"error": {"message": f"Stream connection error: {stream_err}", "type": "qwen_stream_error"}})
                     except Exception as stream_err:
                         logging.error(f"Qwen: Error during stream iteration: {stream_err}", exc_info=True)
-                        error_chunk = json.dumps({
-                            "error": {"message": f"Stream iteration error: {stream_err}", "type": "qwen_stream_error"}
-                        })
-                        yield f"data: {error_chunk}"
+                        yield sse_data({"error": {"message": f"Stream iteration error: {stream_err}", "type": "qwen_stream_error"}})
                     finally:
-                        if response:
-                            response.close()
+                        for tail in finalize_stream(response, done_already=done_sent):
+                            yield tail
 
-                return stream_generator()
+            return stream_generator()
         else:
-            adapter = HTTPAdapter(
-                max_retries=Retry(
-                    total=api_retries if api_retries is not None else 3,
-                    backoff_factor=retry_delay if retry_delay is not None else 1.0,
-                    status_forcelist=[429, 500, 502, 503, 504],
-                    allowed_methods=["POST"],
-                )
+            session = create_session_with_retries(
+                total=api_retries if api_retries is not None else 3,
+                backoff_factor=retry_delay if retry_delay is not None else 1.0,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
             )
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                session.mount("http://", adapter)
-                response = session.post(api_url, headers=headers, json=payload, timeout=api_timeout or 90)
+            response = session.post(api_url, headers=headers, json=payload, timeout=api_timeout or 90)
             response.raise_for_status()
             return response.json()
     except requests.exceptions.HTTPError as e:
@@ -1574,37 +2313,56 @@ def chat_with_groq(
     logging.debug(f"Groq Request Payload (excluding messages): {{k: v for k, v in data.items() if k != 'messages'}}")
     try:
         if current_streaming:
-            # ... (OpenAI-like streaming logic, ensure "Groq" in logs) ...
-            with requests.Session() as session:
-                response = session.post(api_url, headers=headers, json=data, stream=True, timeout=180)
-                response.raise_for_status()
+            session = create_session_with_retries(
+                total=int(groq_config.get('api_retries', 3)),
+                backoff_factor=float(groq_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=data, stream=True, timeout=180)
+            response.raise_for_status()
 
-                def stream_generator():
+            def stream_generator():
+                    done_sent = False
                     try:
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip(): yield line + "\n\n"
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                yield openai_delta_chunk(l)
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
                     except GeneratorExit:
-                        if response: response.close()
+                        if response:
+                            response.close()
                         raise
-                    except requests.exceptions.ChunkedEncodingError as e:  # ... error handling ...
+                    except requests.exceptions.ChunkedEncodingError as e:
                         logging.error(f"Groq: ChunkedEncodingError: {e}", exc_info=True)
-                        yield f"data: {json.dumps({'error': {'message': f'Stream error: {str(e)}', 'type': 'groq_stream_error'}})}\n\n"
-                    except Exception as e:  # ... error handling ...
+                        yield sse_data({'error': {'message': f'Stream error: {str(e)}', 'type': 'groq_stream_error'}})
+                    except Exception as e:
                         logging.error(f"Groq: Stream iteration error: {e}", exc_info=True)
-                        yield f"data: {json.dumps({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'groq_stream_error'}})}\n\n"
+                        yield sse_data({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'groq_stream_error'}})
                     finally:
-                        if response: response.close()
+                        for tail in finalize_stream(response, done_already=done_sent):
+                            yield tail
 
-                return stream_generator()
+            return stream_generator()
         else:
-            # ... (non-streaming logic, retry) ...
-            retry_count = int(groq_config.get('api_retries', 3))  # ... retry setup ...
-            adapter = HTTPAdapter(
-                max_retries=Retry(total=retry_count, backoff_factor=float(groq_config.get('api_retry_delay', 1)),
-                                  status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["POST"]))
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
+            session = create_session_with_retries(
+                total=int(groq_config.get('api_retries', 3)),
+                backoff_factor=float(groq_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=data, timeout=120)
             response.raise_for_status()
             return response.json()
     except requests.exceptions.HTTPError as e:  # ... error handling ...
@@ -1758,54 +2516,53 @@ def chat_with_huggingface(
     try:
         if final_streaming_payload_val: # Check the boolean intended for payload
             logging.debug(f"HuggingFace: Posting streaming request to {api_url}")
-            # Session might not be strictly necessary for a single streaming POST, but good for potential keep-alive
-            response = requests.post(api_url, headers=headers, json=payload, stream=True, timeout=timeout_seconds)
-            response.raise_for_status()
-
-            def stream_generator_huggingface():
-                try:
-                    for line_bytes in response.iter_lines():
-                        if line_bytes:
-                            decoded_line = line_bytes.decode('utf-8').strip()
-                            if not decoded_line: continue # Skip empty keep-alive lines
-
-                            # logging.debug(f"HF Stream raw line: {decoded_line}")
-                            if decoded_line.startswith("data:"):
-                                data_content = decoded_line[len("data:"):].strip()
-                                if data_content == "[DONE]":
-                                    logging.debug("HuggingFace stream received [DONE] marker.")
-                                    break
-                                try:
-                                    chunk_json = json.loads(data_content)
-                                    delta_content = chunk_json.get("choices", [{}])[0].get("delta", {}).get("content")
-                                    if delta_content:
-                                        yield delta_content
-                                    # Consider if other parts of the chunk are needed, e.g., finish_reason in delta
-                                    # For now, just yielding content as per OpenAI's typical text stream delta.
-                                except json.JSONDecodeError:
-                                    logging.warning(f"HuggingFace stream: JSON decode error for data: '{data_content}'")
-                except requests.exceptions.ChunkedEncodingError as e_chunked:
-                    logging.error(f"HuggingFace stream: ChunkedEncodingError during streaming: {e_chunked}")
-                except Exception as e_stream:
-                    logging.error(f"HuggingFace stream: Unexpected error during streaming: {e_stream}", exc_info=True)
-                finally:
-                    if response:
-                        response.close() # Ensure response is closed
-                    logging.debug("HuggingFace stream generator finished.")
-            return stream_generator_huggingface()
-        else: # Non-streaming
-            logging.debug(f"HuggingFace: Posting non-streaming request to {api_url}")
-            adapter = HTTPAdapter(max_retries=Retry(
+            session = create_session_with_retries(
                 total=int(hf_config.get('api_retries', 3)),
                 backoff_factor=float(hf_config.get('api_retry_delay', 1)),
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"] # Should be allowed_methods for Retry v0.9.2+ (urllib3)
-                                         # or method_whitelist for older versions.
-            ))
-            session = requests.Session()
-            session.mount("https://", adapter)
-            session.mount("http://", adapter)
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=timeout_seconds)
+            response.raise_for_status()
 
+            def stream_generator_huggingface():
+                done_sent = False
+                try:
+                    for line_bytes in response.iter_lines():
+                        if not line_bytes:
+                            continue
+                        decoded_line = line_bytes.decode('utf-8').strip()
+                        if not decoded_line:
+                            continue
+                        if decoded_line.startswith("data:"):
+                            if decoded_line.strip().lower() == "data: [done]".lower():
+                                done_sent = True
+                            yield ensure_sse_line(decoded_line)
+                        else:
+                            # Fallback: wrap as OpenAI-like delta
+                            yield openai_delta_chunk(decoded_line)
+                    # Ensure final sentinel only if not seen
+                    if not done_sent:
+                        done_sent = True
+                        yield sse_done()
+                except requests.exceptions.ChunkedEncodingError as e_chunked:
+                    logging.error(f"HuggingFace stream: ChunkedEncodingError during streaming: {e_chunked}")
+                    yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunked)}", "type": "huggingface_stream_error"}})
+                except Exception as e_stream:
+                    logging.error(f"HuggingFace stream: Unexpected error during streaming: {e_stream}", exc_info=True)
+                    yield sse_data({"error": {"message": f"Unexpected stream error: {str(e_stream)}", "type": "huggingface_stream_error"}})
+                finally:
+                    for tail in finalize_stream(response, done_already=done_sent):
+                        yield tail
+            return stream_generator_huggingface()
+        else: # Non-streaming
+            logging.debug(f"HuggingFace: Posting non-streaming request to {api_url}")
+            session = create_session_with_retries(
+                total=int(hf_config.get('api_retries', 3)),
+                backoff_factor=float(hf_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
             response = session.post(api_url, headers=headers, json=payload, timeout=timeout_seconds)
             response.raise_for_status()
             return response.json() # This should be an OpenAI compatible JSON response
@@ -1900,31 +2657,53 @@ def chat_with_mistral(
 
     try:
         if current_streaming:
-            # ... (OpenAI-like streaming logic, use "Mistral" in logs) ...
-            with requests.Session() as session:
-                response = session.post(api_url, headers=headers, json=data, stream=True, timeout=180)
-                response.raise_for_status()
+            session = create_session_with_retries(
+                total=int(mistral_config.get('api_retries', 3)),
+                backoff_factor=float(mistral_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=data, stream=True, timeout=180)
+            response.raise_for_status()
 
-                def stream_generator():
+            def stream_generator():
                     try:
+                        done_sent = False
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip(): yield line + "\n\n"
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                yield openai_delta_chunk(l)
+                        if not done_sent:
+                            yield sse_done()
                     except GeneratorExit:
-                        if response: response.close()
+                        if response:
+                            response.close()
                         raise
+                    except requests.exceptions.ChunkedEncodingError as e:
+                        # Normalize the error into a data chunk to avoid raising into callers
+                        yield sse_data({"error": {"message": f"Stream connection error: {str(e)}", "type": "mistral_stream_error"}})
+                    except Exception as e:
+                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e)}", "type": "mistral_stream_error"}})
                     finally:
-                        if response: response.close()
-
-                return stream_generator()
+                        if response:
+                            response.close()
+            return stream_generator()
         else:
-            # ... (non-streaming, retry) ...
-            adapter = HTTPAdapter(max_retries=Retry(total=int(mistral_config.get('api_retries', 3)),
-                                                    backoff_factor=float(mistral_config.get('api_retry_delay', 1)),
-                                                    status_forcelist=[429, 500, 502, 503, 504],
-                                                    allowed_methods=["POST"]))
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
+            session = create_session_with_retries(
+                total=int(mistral_config.get('api_retries', 3)),
+                backoff_factor=float(mistral_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=data, timeout=120)
             response.raise_for_status()
             return response.json()
     except requests.exceptions.HTTPError as e:  # ... error handling ...
@@ -2006,30 +2785,46 @@ def chat_with_openrouter(
 
     try:
         if current_streaming:
-            # ... (OpenAI-like streaming logic, ensure "OpenRouter" in logs) ...
             with requests.Session() as session:
                 response = session.post(api_url, headers=headers, json=data, stream=True, timeout=180)
                 response.raise_for_status()
 
-                def stream_generator():
+            def stream_generator():
+                    done_sent = False
                     try:
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip(): yield line + "\n\n"
-                    # ... (error handling for stream) ...
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                yield openai_delta_chunk(l)
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
+                    except requests.exceptions.ChunkedEncodingError as e:
+                        logging.error(f"OpenRouter: ChunkedEncodingError during stream: {e}", exc_info=True)
+                        yield sse_data({'error': {'message': f'Stream connection error: {str(e)}', 'type': 'openrouter_stream_error'}})
+                    except Exception as e:
+                        logging.error(f"OpenRouter: Stream iteration error: {e}", exc_info=True)
+                        yield sse_data({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'openrouter_stream_error'}})
                     finally:
-                        if response: response.close()
-
-                return stream_generator()
+                        for tail in finalize_stream(response, done_already=done_sent):
+                            yield tail
+            return stream_generator()
         else:
-            # ... (non-streaming logic) ...
-            # ... (retry setup) ...
-            adapter = HTTPAdapter(max_retries=Retry(total=int(openrouter_config.get('api_retries', 3)),
-                                                    backoff_factor=float(openrouter_config.get('api_retry_delay', 1)),
-                                                    status_forcelist=[429, 500, 502, 503, 504],
-                                                    allowed_methods=["POST"]))
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
+            session = create_session_with_retries(
+                total=int(openrouter_config.get('api_retries', 3)),
+                backoff_factor=float(openrouter_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=data, timeout=120)
             response.raise_for_status()
             return response.json()  # OpenRouter usually returns OpenAI compatible JSON
     except requests.exceptions.HTTPError as e:  # ... error handling ...
@@ -2237,47 +3032,47 @@ def chat_with_moonshot(
                 response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=180)
                 response.raise_for_status()
                 
-                def stream_generator():
+            def stream_generator():
+                    done_sent = False
                     try:
                         for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip():
-                                # Pass through Moonshot's SSE lines directly
-                                yield line if line.endswith("\n") else line + "\n"
+                            if not line:
+                                continue
+                            l = line.strip()
+                            if not l:
+                                continue
+                            if l.startswith("data:"):
+                                if l.strip().lower() == "data: [done]".lower():
+                                    done_sent = True
+                                yield ensure_sse_line(l)
+                            else:
+                                yield openai_delta_chunk(l)
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
                     except GeneratorExit:
                         if response:
                             response.close()
                         raise
                     except requests.exceptions.ChunkedEncodingError as e_chunk:
                         logging.error(f"Moonshot: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
-                        error_content = json.dumps({"error": {"message": f"Stream connection error: {str(e_chunk)}",
-                                                              "type": "moonshot_stream_error"}})
-                        yield f"data: {error_content}\n\n"
+                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "moonshot_stream_error"}})
                     except Exception as e_stream:
                         logging.error(f"Moonshot: Error during stream iteration: {e_stream}", exc_info=True)
-                        error_content = json.dumps({"error": {"message": f"Stream iteration error: {str(e_stream)}",
-                                                              "type": "moonshot_stream_error"}})
-                        yield f"data: {error_content}\n\n"
+                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "moonshot_stream_error"}})
                     finally:
-                        if response:
-                            response.close()
-                
-                return stream_generator()
-        
+                        for tail in finalize_stream(response, done_already=done_sent):
+                            yield tail
+            return stream_generator()
         else:  # Non-streaming
             logging.debug("Moonshot: Posting request (non-streaming)")
-            retry_count = int(moonshot_config.get('api_retries', 3))
-            retry_delay = float(moonshot_config.get('api_retry_delay', 1.0))
-            
-            retry_strategy = Retry(
-                total=retry_count,
-                backoff_factor=retry_delay,
+            session = create_session_with_retries(
+                total=int(moonshot_config.get('api_retries', 3)),
+                backoff_factor=float(moonshot_config.get('api_retry_delay', 1.0)),
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"]
+                allowed_methods=["POST"],
             )
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                response = session.post(api_url, headers=headers, json=payload, timeout=120)
+            response = session.post(api_url, headers=headers, json=payload, timeout=120)
             
             logging.debug(f"Moonshot: Full API response status: {response.status_code}")
             response.raise_for_status()
@@ -2399,52 +3194,58 @@ def chat_with_zai(
     try:
         if current_streaming:
             logging.debug("Z.AI: Posting request (streaming)")
-            with requests.Session() as session:
-                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=180)
-                response.raise_for_status()
-                
-                def stream_generator():
-                    try:
-                        for line in response.iter_lines(decode_unicode=True):
-                            if line and line.strip():
-                                # Pass through Z.AI's SSE lines directly
-                                yield line if line.endswith("\n") else line + "\n"
-                    except GeneratorExit:
-                        if response:
-                            response.close()
-                        raise
-                    except requests.exceptions.ChunkedEncodingError as e_chunk:
-                        logging.error(f"Z.AI: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
-                        error_content = json.dumps({"error": {"message": f"Stream connection error: {str(e_chunk)}",
-                                                              "type": "zai_stream_error"}})
-                        yield f"data: {error_content}\n\n"
-                    except Exception as e_stream:
-                        logging.error(f"Z.AI: Error during stream iteration: {e_stream}", exc_info=True)
-                        error_content = json.dumps({"error": {"message": f"Stream iteration error: {str(e_stream)}",
-                                                              "type": "zai_stream_error"}})
-                        yield f"data: {error_content}\n\n"
-                    finally:
-                        if response:
-                            response.close()
-                
-                return stream_generator()
+            session = create_session_with_retries(
+                total=int(zai_config.get('api_retries', 3)),
+                backoff_factor=float(zai_config.get('api_retry_delay', 1)),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=180)
+            response.raise_for_status()
+            
+            def stream_generator():
+                done_sent = False
+                try:
+                    for line in response.iter_lines(decode_unicode=True):
+                        if not line:
+                            continue
+                        l = line.strip()
+                        if not l:
+                            continue
+                        if l.startswith("data:"):
+                            if l.strip().lower() == "data: [done]".lower():
+                                done_sent = True
+                            yield ensure_sse_line(l)
+                        else:
+                            yield openai_delta_chunk(l)
+                    if not done_sent:
+                        done_sent = True
+                        yield sse_done()
+                except GeneratorExit:
+                    if response:
+                        response.close()
+                    raise
+                except requests.exceptions.ChunkedEncodingError as e_chunk:
+                    logging.error(f"Z.AI: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
+                    yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "zai_stream_error"}})
+                except Exception as e_stream:
+                    logging.error(f"Z.AI: Error during stream iteration: {e_stream}", exc_info=True)
+                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "zai_stream_error"}})
+                finally:
+                    for tail in finalize_stream(response, done_already=done_sent):
+                        yield tail
+            
+            return stream_generator()
         
         else:  # Non-streaming
             logging.debug("Z.AI: Posting request (non-streaming)")
-            retry_count = int(zai_config.get('api_retries', 3))
-            retry_delay = float(zai_config.get('api_retry_delay', 1.0))
-            
-            retry_strategy = Retry(
-                total=retry_count,
-                backoff_factor=retry_delay,
+            session = create_session_with_retries(
+                total=int(zai_config.get('api_retries', 3)),
+                backoff_factor=float(zai_config.get('api_retry_delay', 1.0)),
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"]
+                allowed_methods=["POST"],
             )
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-            with requests.Session() as session:
-                session.mount("https://", adapter)
-                response = session.post(api_url, headers=headers, json=payload, timeout=120)
-            
+            response = session.post(api_url, headers=headers, json=payload, timeout=120)
             logging.debug(f"Z.AI: Full API response status: {response.status_code}")
             response.raise_for_status()
             response_data = response.json()

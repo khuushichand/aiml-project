@@ -116,10 +116,17 @@ class MediaAnalysisManager {
 
         const html = items.map(item => `
             <div class="search-result-item" onclick="mediaAnalysisManager.loadMediaForAnalysis(${item.id})">
-                <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
-                <p class="item-type">${item.media_type || 'Unknown'}</p>
-                ${item.author ? `<p class="item-author">By: ${this.escapeHtml(item.author)}</p>` : ''}
-                ${item.description ? `<p class="item-description">${this.escapeHtml(item.description).substring(0, 150)}...</p>` : ''}
+                <div style="display:flex; justify-content: space-between; align-items:center; gap:8px;">
+                    <div>
+                        <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
+                        <p class="item-type">${item.media_type || 'Unknown'}</p>
+                        ${item.author ? `<p class="item-author">By: ${this.escapeHtml(item.author)}</p>` : ''}
+                        ${item.description ? `<p class="item-description">${this.escapeHtml(item.description).substring(0, 150)}...</p>` : ''}
+                    </div>
+                    <div>
+                        <button class="api-button btn-sm admin-only" style="display:none" title="Schedule Re-Embed" onclick="event.stopPropagation(); scheduleReembedForMedia(${item.id});">Re-Embed</button>
+                    </div>
+                </div>
             </div>
         `).join('');
 
@@ -176,9 +183,14 @@ class MediaAnalysisManager {
 
         const html = items.map(item => `
             <div class="media-list-item" onclick="mediaAnalysisManager.loadMediaForAnalysis(${item.id})">
-                <div class="media-item-header">
-                    <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
-                    <span class="media-type-badge">${item.media_type || 'Unknown'}</span>
+                <div class="media-item-header" style="display:flex; justify-content: space-between; align-items:center; gap:8px;">
+                    <div>
+                        <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
+                        <span class="media-type-badge">${item.media_type || 'Unknown'}</span>
+                    </div>
+                    <div>
+                        <button class="api-button btn-sm admin-only" style="display:none" title="Schedule Re-Embed" onclick="event.stopPropagation(); scheduleReembedForMedia(${item.id});">Re-Embed</button>
+                    </div>
                 </div>
                 ${item.author ? `<p class="item-author">By: ${this.escapeHtml(item.author)}</p>` : ''}
                 ${item.created_at ? `<p class="item-date">Added: ${new Date(item.created_at).toLocaleDateString()}</p>` : ''}
@@ -227,7 +239,10 @@ class MediaAnalysisManager {
             // Display media info
             selectedMediaDiv.innerHTML = `
                 <div class="selected-media-card">
-                    <h3>${this.escapeHtml(media.title || 'Untitled')}</h3>
+                    <div style="display:flex; justify-content: space-between; align-items:center; gap:8px;">
+                        <h3>${this.escapeHtml(media.title || 'Untitled')}</h3>
+                        <button class="api-button btn-sm" title="Schedule Re-Embed" onclick="scheduleReembedForMedia(${mediaId});">Re-Embed</button>
+                    </div>
                     <p><strong>Type:</strong> ${media.media_type || 'Unknown'}</p>
                     ${media.author ? `<p><strong>Author:</strong> ${this.escapeHtml(media.author)}</p>` : ''}
                     ${media.description ? `<p><strong>Description:</strong> ${this.escapeHtml(media.description)}</p>` : ''}

@@ -81,6 +81,48 @@ class TransformersTokenizer:
         return len(self.encode(text))
 
 
+class TiktokenTokenizer:
+    """Tokenizer wrapper using tiktoken library (OpenAI-style encodings)."""
+
+    def __init__(self, model_name: str = "gpt-3.5-turbo"):
+        """Initialize tiktoken tokenizer.
+
+        Args:
+            model_name: Model name to select appropriate encoding.
+        """
+        self.model_name = model_name
+        self.available = False
+        self._enc = None
+
+        try:
+            import tiktoken  # type: ignore
+            self._tiktoken = tiktoken
+            # Prefer model-specific encoding; fallback to cl100k_base
+            try:
+                self._enc = tiktoken.encoding_for_model(model_name)
+            except Exception:
+                self._enc = tiktoken.get_encoding("cl100k_base")
+            self.available = True
+            logger.debug(f"tiktoken available for tokenization (model={model_name})")
+        except ImportError:
+            self._tiktoken = None
+            logger.debug("tiktoken not available, will try transformers or fallback")
+
+    def encode(self, text: str) -> List[int]:
+        if not self.available or self._enc is None:
+            raise ImportError("tiktoken not available")
+        return list(self._enc.encode(text))
+
+    def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
+        if not self.available or self._enc is None:
+            raise ImportError("tiktoken not available")
+        # tiktoken decode ignores skip_special_tokens; it's fine for chunking
+        return self._enc.decode(token_ids)
+
+    def count_tokens(self, text: str) -> int:
+        return len(self.encode(text))
+
+
 class FallbackTokenizer:
     """Fallback tokenizer using simple word/character splitting."""
     
@@ -201,17 +243,27 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
     def tokenizer(self) -> TokenizerProtocol:
         """Get or create tokenizer instance."""
         if self._tokenizer is None:
-            # Try transformers first
+            # Prefer tiktoken when available (fast, consistent for OpenAI-family models)
             try:
-                self._tokenizer = TransformersTokenizer(self.tokenizer_name)
-                # Test if it actually works
-                _ = self._tokenizer.encode("test")
-                logger.info(f"Using transformers tokenizer: {self.tokenizer_name}")
-            except (ImportError, Exception) as e:
-                logger.warning(f"Could not initialize transformers tokenizer: {e}")
-                logger.info("Falling back to word-based token approximation")
-                self._tokenizer = FallbackTokenizer(self.tokenizer_name)
-        
+                tk = TiktokenTokenizer(self.tokenizer_name)
+                if tk.available:
+                    _ = tk.encode("test")
+                    self._tokenizer = tk
+                    logger.info(f"Using tiktoken tokenizer: {self.tokenizer_name}")
+                else:
+                    raise ImportError("tiktoken not available")
+            except (ImportError, Exception) as te:
+                logger.debug(f"tiktoken initialization skipped/failure: {te}")
+                # Try transformers next
+                try:
+                    self._tokenizer = TransformersTokenizer(self.tokenizer_name)
+                    _ = self._tokenizer.encode("test")
+                    logger.info(f"Using transformers tokenizer: {self.tokenizer_name}")
+                except (ImportError, Exception) as e:
+                    logger.warning(f"Could not initialize transformers tokenizer: {e}")
+                    logger.info("Falling back to word-based token approximation")
+                    self._tokenizer = FallbackTokenizer(self.tokenizer_name)
+
         return self._tokenizer
     
     def chunk(self,

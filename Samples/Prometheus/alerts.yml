@@ -26,3 +26,102 @@ groups:
             User {{ $labels.user_id }} is above 98% of storage quota.
             Used: {{ printf "%.2f" $value }} of 1.00 (ratio). Consider cleanup or quota increase.
 
+  - name: tldw_llm_spend
+    interval: 1m
+    rules:
+      - alert: TLDWDailySpendWarning
+        expr: sum(increase(llm_cost_dollars[24h])) > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Daily LLM spend exceeded $10 (last 24h)"
+          description: |
+            Total LLM cost over the last 24 hours is {{ printf "$%.2f" $value }}.
+            Consider reviewing provider/model usage.
+
+      - alert: TLDWDailySpendCritical
+        expr: sum(increase(llm_cost_dollars[24h])) > 50
+        for: 10m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "Daily LLM spend exceeded $50 (last 24h)"
+          description: |
+            Total LLM cost over the last 24 hours is {{ printf "$%.2f" $value }}.
+            Immediate action recommended: enforce budgets or switch models/providers.
+
+      - alert: TLDWProviderDailySpendWarning
+        expr: sum by (provider) (increase(llm_cost_dollars[24h])) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Provider daily spend exceeded $5 ({{ $labels.provider }})"
+          description: |
+            Provider {{ $labels.provider }} cost over the last 24 hours is {{ printf "$%.2f" $value }}.
+            Check usage and pricing for this provider.
+
+      - alert: TLDWProviderDailySpendCritical
+        expr: sum by (provider) (increase(llm_cost_dollars[24h])) > 20
+        for: 10m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "Provider daily spend exceeded $20 ({{ $labels.provider }})"
+          description: |
+            Provider {{ $labels.provider }} cost over the last 24 hours is {{ printf "$%.2f" $value }}.
+            Immediate action recommended: consider provider/model changes or budgets.
+
+  - name: tldw_llm_tokens
+    interval: 1m
+    rules:
+      - alert: TLDWDailyTokensWarning
+        expr: sum(increase(llm_tokens_used_total[24h])) > 2000000
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Daily LLM tokens exceeded 2M (last 24h)"
+          description: |
+            Total LLM tokens over the last 24 hours is {{ printf "%.0f" $value }}.
+            Consider reviewing usage patterns.
+
+      - alert: TLDWDailyTokensCritical
+        expr: sum(increase(llm_tokens_used_total[24h])) > 10000000
+        for: 10m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "Daily LLM tokens exceeded 10M (last 24h)"
+          description: |
+            Total LLM tokens over the last 24 hours is {{ printf "%.0f" $value }}.
+            Immediate action recommended.
+
+      - alert: TLDWProviderDailyTokensWarning
+        expr: sum by (provider) (increase(llm_tokens_used_total[24h])) > 1000000
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Provider daily tokens exceeded 1M ({{ $labels.provider }})"
+          description: |
+            Provider {{ $labels.provider }} token usage over the last 24 hours is {{ printf "%.0f" $value }}.
+
+      - alert: TLDWOperationDailyTokensWarning
+        expr: sum by (operation) (increase(llm_tokens_used_total_by_operation[24h])) > 1000000
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Operation daily tokens exceeded 1M ({{ $labels.operation }})"
+          description: |
+            Operation {{ $labels.operation }} token usage over the last 24 hours is {{ printf "%.0f" $value }}.

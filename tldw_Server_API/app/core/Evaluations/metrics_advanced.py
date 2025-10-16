@@ -514,9 +514,11 @@ _advanced_metrics_instance = None
 def get_advanced_metrics(use_separate_registry: bool = False):
     """Get or create the global advanced metrics instance."""
     global _advanced_metrics_instance
+    # Always prefer a separate registry to avoid name/label clashes with
+    # the base EvaluationMetrics (which also registers common metric names).
     if _advanced_metrics_instance is None or use_separate_registry:
         try:
-            _advanced_metrics_instance = AdvancedEvaluationMetrics(use_separate_registry=use_separate_registry)
+            _advanced_metrics_instance = AdvancedEvaluationMetrics(use_separate_registry=True)
         except ValueError as e:
             # If metrics are already registered (e.g., during reload), create without registry
             if "Duplicated timeseries" in str(e):
@@ -532,4 +534,4 @@ def reset_advanced_metrics():
     _advanced_metrics_instance = None
 
 # Create the global instance
-advanced_metrics = get_advanced_metrics()
+advanced_metrics = get_advanced_metrics(use_separate_registry=True)

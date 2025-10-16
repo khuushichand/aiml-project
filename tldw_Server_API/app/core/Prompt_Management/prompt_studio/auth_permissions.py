@@ -1,5 +1,5 @@
 # auth_permissions.py
-# Authentication and permissions system for Prompt Studio
+# Authentication and permissions system for Prompt Studio (Deprecated)
 
 import json
 import hashlib
@@ -8,9 +8,11 @@ from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timedelta
 from enum import Enum
 from loguru import logger
+import warnings
 import jwt
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 ########################################################################################################################
 # Permission Types
@@ -132,6 +134,13 @@ class AuthenticationManager:
             db: Database instance
             secret_key: Secret key for JWT tokens
         """
+        # Deprecation notice: use core AuthNZ/JWT and RBAC instead
+        warnings.warn(
+            "Prompt Studio AuthenticationManager is deprecated. "
+            "Use core AuthNZ (JWT/API key) and RBAC instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.db = db
         self.secret_key = secret_key
         self.algorithm = "HS256"
@@ -481,6 +490,12 @@ class PermissionManager:
         Args:
             db: Database instance
         """
+        warnings.warn(
+            "Prompt Studio PermissionManager is deprecated. "
+            "Use core AuthNZ RBAC and endpoint dependencies instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.db = db
     
     def check_permission(self, user_id: int, permission: Permission,
@@ -531,18 +546,38 @@ class PermissionManager:
         # Get role permissions
         permissions = list(ROLE_PERMISSIONS.get(role, set()))
         
-        cursor.execute("""
-            INSERT OR REPLACE INTO prompt_studio_project_permissions (
-                project_id, user_id, role, permissions, granted_by
-            ) VALUES (?, ?, ?, ?, ?)
-        """, (
+        params = (
             project_id,
             user_id,
             role.value,
             json.dumps([p.value for p in permissions]),
-            granted_by
-        ))
-        
+            granted_by,
+        )
+
+        if getattr(self.db, "backend_type", BackendType.SQLITE) == BackendType.POSTGRESQL:
+            cursor.execute(
+                """
+                INSERT INTO prompt_studio_project_permissions (
+                    project_id, user_id, role, permissions, granted_by
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (project_id, user_id) DO UPDATE
+                    SET role = EXCLUDED.role,
+                        permissions = EXCLUDED.permissions,
+                        granted_by = EXCLUDED.granted_by,
+                        granted_at = CURRENT_TIMESTAMP
+                """,
+                params,
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO prompt_studio_project_permissions (
+                    project_id, user_id, role, permissions, granted_by
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                params,
+            )
+
         conn.commit()
         
         # Log action
@@ -669,7 +704,14 @@ class PermissionManager:
         
         row = cursor.fetchone()
         if row:
-            permissions = json.loads(row[0])
+            raw_permissions = row[0]
+            if isinstance(raw_permissions, list):
+                permissions = raw_permissions
+            else:
+                try:
+                    permissions = json.loads(raw_permissions) if raw_permissions else []
+                except (json.JSONDecodeError, TypeError):
+                    permissions = []
             return permission.value in permissions
         
         return False

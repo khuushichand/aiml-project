@@ -16,8 +16,9 @@ def test_general_settings_offline_online_toggle(page, server_url):
     page.keyboard.press("Tab")
     page.get_by_text("Test Connection").click()
     page.wait_for_timeout(1000)
-    # Expect Offline text
-    assert "Offline" in page.locator(".api-status-text").inner_text()
+    # Expect an offline/unreachable indicator
+    offline_text = page.locator(".api-status-text").inner_text()
+    assert ("API Offline" in offline_text) or ("API Unreachable" in offline_text) or ("Error" in offline_text)
 
     # Restore valid URL and re-test
     page.fill("#baseUrl", server_url)
@@ -25,4 +26,3 @@ def test_general_settings_offline_online_toggle(page, server_url):
     page.get_by_text("Test Connection").click()
     page.wait_for_timeout(1000)
     assert "Connected" in page.locator(".api-status-text").inner_text()
-

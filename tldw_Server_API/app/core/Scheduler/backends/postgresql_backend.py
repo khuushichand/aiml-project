@@ -6,7 +6,7 @@ Leverages PostgreSQL-specific features for optimal performance.
 import asyncio
 import json
 from typing import List, Optional, Dict, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 try:
@@ -214,15 +214,17 @@ class PostgreSQLBackend(QueueBackend):
                     payload_ref = await self._store_external_payload(conn, task.id, payload_data)
                     payload_data = None
                 
-                # Insert with ON CONFLICT for idempotency
-                await conn.execute("""
+                # Insert with ON CONFLICT for idempotency and return canonical ID
+                row = await conn.fetchrow("""
                     INSERT INTO tasks (
                         id, handler, payload, payload_ref, status, priority,
                         queue_name, scheduled_at, depends_on, idempotency_key,
                         max_retries, retry_delay, timeout, metadata
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                """, 
+                    ON CONFLICT (idempotency_key)
+                    DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+                    RETURNING id
+                """,
                     task.id, task.handler, json.dumps(payload_data) if payload_data else None,
                     payload_ref, task.status.value, task.priority,
                     task.queue_name or self.config.default_queue_name,
@@ -234,7 +236,8 @@ class PostgreSQLBackend(QueueBackend):
                 # Notify listeners
                 await self._notify_queue(conn, task.queue_name or self.config.default_queue_name)
                 
-                return task.id
+                # Return canonical ID (existing or newly inserted)
+                return row['id'] if row and 'id' in row else task.id
                 
             except Exception as e:
                 logger.error(f"Failed to enqueue task: {e}")
@@ -298,7 +301,7 @@ class PostgreSQLBackend(QueueBackend):
         atomic dequeue that scales to thousands of workers.
         """
         lease_id = str(uuid.uuid4())
-        lease_expires = datetime.utcnow() + timedelta(seconds=self.config.lease_duration_seconds)
+        lease_expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.lease_duration_seconds)
         
         async with self.pool.acquire() as conn:
             # Single atomic query with SKIP LOCKED
@@ -387,7 +390,7 @@ class PostgreSQLBackend(QueueBackend):
         """
         Renew task lease to prevent timeout.
         """
-        new_expires = datetime.utcnow() + timedelta(seconds=self.config.lease_duration_seconds)
+        new_expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.lease_duration_seconds)
         
         async with self.pool.acquire() as conn:
             affected = await conn.execute("""
@@ -431,6 +434,14 @@ class PostgreSQLBackend(QueueBackend):
             if not row:
                 return None
             return await self._row_to_task(conn, row)
+
+    async def get_task_by_idempotency_key(self, idempotency_key: str) -> Optional[str]:
+        """Get task ID by idempotency key."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT id FROM tasks WHERE idempotency_key = $1",
+                idempotency_key
+            )
     
     async def get_queue_size(self, queue_name: str) -> int:
         """
@@ -479,7 +490,7 @@ class PostgreSQLBackend(QueueBackend):
         """
         Try to acquire leadership using advisory locks.
         """
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         
         async with self.pool.acquire() as conn:
             # Use advisory lock for atomic operation
@@ -513,7 +524,7 @@ class PostgreSQLBackend(QueueBackend):
         """
         Renew leadership lease.
         """
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         
         async with self.pool.acquire() as conn:
             affected = await conn.execute("""

@@ -288,7 +288,7 @@ async def get_run_status(run_id: str):
 
 ### Files to Create/Modify
 
-1. **New: `/app/api/v1/endpoints/evals_openai.py`**
+1. Unified endpoints live at `/app/api/v1/endpoints/evaluations_unified.py` (legacy `evals_openai.py` removed)
    - All OpenAI-compatible endpoints
    - Async processing with BackgroundTasks
    - Proper error handling
@@ -442,8 +442,8 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 
 ### Authentication Improvements
 - **Enhanced API Key Support**: Updated `verify_api_key` function to support:
-  - Default development key: `default-secret-key-for-single-user`
-  - Environment variable configuration via `API_BEARER`
+  - Single-user deployments must set `SINGLE_USER_API_KEY` (e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+  - Environment variable configuration via `SINGLE_USER_API_KEY` or legacy `API_BEARER`
   - OpenAI-style `sk-` prefixed keys for compatibility
   - Proper error responses matching OpenAI format
 
@@ -461,7 +461,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
   - Automatic connection management
 
 ### Comprehensive Test Suite
-- **Location**: `tldw_Server_API/tests/Evaluations/test_evals_openai.py`
+- Tests target unified endpoints under `tests/Evaluations/`
 - **Test Coverage**:
   - Authentication (default key, sk- keys, invalid keys)
   - CRUD operations for evaluations, runs, datasets
@@ -501,7 +501,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 - [x] OpenAI-compatible schemas (`openai_eval_schemas.py`)
 - [x] Async evaluation runner (`eval_runner.py`)
 - [x] Integration with existing eval backends (G-Eval, RAG, Response Quality)
-- [x] API endpoints implementation (`evals_openai.py`)
+- [x] API endpoints implementation (`evaluations_unified.py`)
 - [x] Authentication system (Bearer token support)
 - [x] Error handling (OpenAI-style error responses)
 - [x] Router registration in main.py

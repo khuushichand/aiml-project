@@ -19,6 +19,8 @@ from .queue_schemas import (
     JobStatus,
     UserTier,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 
 class JobManagerConfig(BaseModel):
@@ -218,13 +220,25 @@ class EmbeddingJobManager:
         job_key = f"job:{job_id}"
         await self.redis_client.hset(
             job_key,
-            mapping=job_info.dict()
+            mapping=model_dump_compat(job_info)
         )
         await self.redis_client.expire(job_key, self.config.job_ttl_seconds)
         
         # Track user's active jobs
         await self._track_user_job(user_id, job_id)
         
+        # Create chunking message (propagate trace_id if available)
+        trace_id_hex = None
+        try:
+            tm = get_tracing_manager()
+            span = tm.get_current_span()
+            if span:
+                ctx = span.get_span_context()
+                if ctx and getattr(ctx, "is_valid", False):
+                    trace_id_hex = f"{ctx.trace_id:032x}"
+        except Exception:
+            trace_id_hex = None
+
         # Create chunking message
         chunking_message = ChunkingMessage(
             job_id=job_id,
@@ -235,13 +249,14 @@ class EmbeddingJobManager:
             content=content,
             content_type=content_type,
             chunking_config=chunking_config,
-            source_metadata=metadata or {}
+            source_metadata=metadata or {},
+            **({"trace_id": trace_id_hex} if trace_id_hex else {})
         )
         
         # Add to chunking queue
         await self.redis_client.xadd(
             self.config.chunking_queue,
-            chunking_message.dict()
+            model_dump_compat(chunking_message)
         )
         
         logger.info(f"Created job {job_id} for user {user_id} with priority {effective_priority}")
@@ -341,6 +356,24 @@ class EmbeddingJobManager:
             length = await self.redis_client.xlen(queue_name)
             stats[queue_name] = length
         
+        return stats
+
+    async def get_queue_stats_with_dlq(self) -> Dict[str, int]:
+        """Get current queue statistics including DLQ depths"""
+        stats = await self.get_queue_stats()
+        try:
+            dlq_names = [
+                f"{self.config.chunking_queue}:dlq",
+                f"{self.config.embedding_queue}:dlq",
+                f"{self.config.storage_queue}:dlq",
+            ]
+            for q in dlq_names:
+                try:
+                    stats[q] = await self.redis_client.xlen(q)
+                except Exception:
+                    stats[q] = 0
+        except Exception:
+            pass
         return stats
     
     async def _ensure_consumer_groups(self):

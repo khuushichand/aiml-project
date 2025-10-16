@@ -44,8 +44,12 @@ curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
     "answer_generation": {"supported": true, "configurable_model": true},
     "reranking": {
       "supported": true,
-      "strategies": ["flashrank", "cross_encoder", "hybrid"],
-      "models": ["flashrank", "cross-encoder/ms-marco-MiniLM-L-12-v2"]
+      "strategies": ["flashrank", "cross_encoder", "hybrid", "llama_cpp"],
+      "models": [
+        "flashrank",
+        "cross-encoder (e.g., BAAI/bge-reranker-v2-m3, Jina reranker)",
+        "GGUF via llama.cpp (e.g., Qwen3-Embedding-0.6B_f16.gguf, BGE/Jina GGUF)"
+      ]
     },
     "table_processing": {"supported": true, "methods": ["markdown", "html", "hybrid"]},
     "enhanced_chunking": {
@@ -98,4 +102,3 @@ curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
 Notes:
 - Capability labels “fulltext” and “semantic” correspond to request values `"fts"` and `"vector"` for `search_mode`.
 - Source values `"characters"` and `"chats"` both map to the `character_db` datastore internally.
-

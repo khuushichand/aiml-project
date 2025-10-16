@@ -10,6 +10,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import asyncio
 from typing import Dict, List, Any
 from datetime import datetime
+import types
 
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, SearchResult, DataSource
@@ -201,8 +202,189 @@ class TestUnifiedPipelineFeatures:
             # Should return cached result
             assert result.cache_hit is True
             assert result.generated_answer == "Cached answer"
+            assert len(result.documents) == 1
+            assert result.documents[0]["content"] == "Cached content"
             mock_semantic_cache.get.assert_called_once()
-    
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_with_legacy_list_payload(self, mock_semantic_cache):
+        """Ensure legacy cache entries storing raw document lists still work."""
+        legacy_doc = Document(
+            id="legacy_1",
+            content="Legacy cached content",
+            metadata={"source": "media_db"},
+            source=DataSource.MEDIA_DB,
+            score=0.95,
+        )
+        mock_semantic_cache.get.return_value = [legacy_doc]
+        mock_semantic_cache.find_similar.return_value = None
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache', return_value=mock_semantic_cache), \
+             patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+            result = await unified_rag_pipeline(
+                query="legacy cache hit",
+                enable_cache=True,
+                enable_generation=False,
+            )
+
+        mock_retriever.assert_not_called()
+        assert result.cache_hit is True
+        assert result.documents
+        assert result.documents[0]["content"] == "Legacy cached content"
+
+    @pytest.mark.asyncio
+    async def test_cache_storage_persists_documents_and_answer(self):
+        """Verify cache set receives structured payload with documents and answer."""
+
+        class RecordingCache:
+            def __init__(self, *_, **__):
+                self.set_calls = []
+
+            def get(self, _query):
+                return None
+
+            def find_similar(self, _query):
+                return None
+
+            def set(self, query, value, ttl=None):
+                self.set_calls.append((query, value, ttl))
+
+        recording_cache = RecordingCache()
+        retrieved_doc = Document(
+            id="doc-cache",
+            content="Content to cache",
+            metadata={"source": "media_db"},
+            source=DataSource.MEDIA_DB,
+            score=0.88,
+        )
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache', return_value=recording_cache), \
+             patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+            mock_instance = MagicMock()
+            mock_instance.retrieve = AsyncMock(return_value=[retrieved_doc])
+            mock_retriever.return_value = mock_instance
+
+            await unified_rag_pipeline(
+                query="store cache payload",
+                enable_cache=True,
+                enable_generation=False,
+            )
+
+        assert recording_cache.set_calls, "Cache set should have been invoked"
+        stored_query, payload, ttl = recording_cache.set_calls[0]
+        assert stored_query == "store cache payload"
+        assert ttl == 3600
+        assert isinstance(payload, dict)
+        assert payload.get("cached") is True
+        assert payload.get("documents")
+        assert payload["documents"][0].id == "doc-cache"
+
+    @pytest.mark.asyncio
+    async def test_claim_retrieval_uses_request_scoped_chacha_db(self):
+        """Claims pipeline must reuse the caller's ChaCha DB instance."""
+
+        class NullCache:
+            def __init__(self, *_, **__):
+                pass
+
+            def get(self, _query):
+                return None
+
+            def find_similar(self, _query):
+                return None
+
+            def set(self, _query, _value, _ttl=None):
+                return None
+
+        base_doc = Document(
+            id="media-claim",
+            content="Evidence content",
+            metadata={"media_id": 42, "source": "media_db"},
+            source=DataSource.MEDIA_DB,
+            score=0.9,
+        )
+        chacha_db_instance = object()
+
+        class StubMediaRetriever:
+            def __init__(self):
+                self.retrieve_calls = []
+                self.hybrid_calls = []
+
+            async def retrieve(self, query, **kwargs):
+                self.retrieve_calls.append((query, kwargs))
+                return [base_doc]
+
+            async def retrieve_hybrid(self, query, alpha=0.7, **kwargs):
+                self.hybrid_calls.append((query, alpha, kwargs))
+                return [base_doc]
+
+        class StubMultiDatabaseRetriever:
+            instances: List["StubMultiDatabaseRetriever"] = []
+
+            def __init__(self, db_paths, user_id="0", *, media_db=None, chacha_db=None):
+                self.db_paths = db_paths
+                self.user_id = user_id
+                self.media_db = media_db
+                self.chacha_db = chacha_db
+                self.retrievers = {DataSource.MEDIA_DB: StubMediaRetriever()}
+                self.retrieve_invocations: List[Any] = []
+                StubMultiDatabaseRetriever.instances.append(self)
+
+            async def retrieve(self, query, **kwargs):
+                self.retrieve_invocations.append((query, kwargs))
+                return [base_doc]
+
+            async def retrieve_hybrid(self, query, alpha=0.7, **kwargs):
+                return await self.retrievers[DataSource.MEDIA_DB].retrieve_hybrid(query, alpha, **kwargs)
+
+            def close(self):
+                return None
+
+        class StubClaimsEngine:
+            def __init__(self, _analyze):
+                self.run_calls: List[Dict[str, Any]] = []
+
+            async def run(self, **kwargs):
+                self.run_calls.append(kwargs)
+                retrieve_fn = kwargs.get("retrieve_fn")
+                if retrieve_fn:
+                    await retrieve_fn("claim text")
+                return {"claims": [], "summary": {}}
+
+        StubMultiDatabaseRetriever.instances = []
+        dummy_sgl = types.SimpleNamespace(analyze=lambda *_, **__: {})
+
+        with patch.dict('sys.modules', {
+            'tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib': dummy_sgl,
+        }), \
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache', return_value=NullCache()), \
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever', StubMultiDatabaseRetriever), \
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.ClaimsEngine', StubClaimsEngine), \
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_answer_gen:
+
+            answer_gen_instance = MagicMock()
+            answer_gen_instance.generate = AsyncMock(return_value={"answer": "Generated answer"})
+            mock_answer_gen.return_value = answer_gen_instance
+
+            result = await unified_rag_pipeline(
+                query="Explain the claim",
+                enable_claims=True,
+                enable_cache=False,
+                enable_generation=True,
+                chacha_db=chacha_db_instance,
+                media_db_path=None,
+                notes_db_path=None,
+                character_db_path=None,
+            )
+
+        assert result.generated_answer == "Generated answer"
+        instances = StubMultiDatabaseRetriever.instances
+        assert len(instances) >= 2
+        assert all(inst.chacha_db is chacha_db_instance for inst in instances)
+        per_claim_instance = instances[-1]
+        media_retriever = per_claim_instance.retrievers[DataSource.MEDIA_DB]
+        assert media_retriever.hybrid_calls or media_retriever.retrieve_calls
+
     @pytest.mark.asyncio
     async def test_reranking_feature(self):
         """Test reranking when enabled."""

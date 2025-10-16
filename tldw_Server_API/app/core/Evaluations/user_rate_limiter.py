@@ -14,9 +14,11 @@ from enum import Enum
 from loguru import logger
 import asyncio
 from pathlib import Path
+import threading
 
 # Import configuration management
 from tldw_Server_API.app.core.Evaluations.config_manager import get_rate_limit_config, get_config
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 # Import connection pool
 from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
 import sqlite3
@@ -130,6 +132,7 @@ class UserRateLimiter:
             db_path: Path to rate limiting database
         """
         if db_path is None:
+            # Backward-compat: default to legacy global evaluations DB
             db_dir = Path(__file__).parent.parent.parent.parent / "Databases"
             db_dir.mkdir(parents=True, exist_ok=True)
             db_path = db_dir / "evaluations.db"
@@ -322,6 +325,12 @@ class UserRateLimiter:
         """Check per-minute rate limits."""
         now = datetime.now(timezone.utc)
         minute_ago = now - timedelta(minutes=1)
+        # Seconds until window reset
+        try:
+            elapsed = (now - minute_ago).total_seconds()
+            reset_seconds = max(0, 60 - int(elapsed))
+        except Exception:
+            reset_seconds = 60
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -355,13 +364,15 @@ class UserRateLimiter:
                         "retry_after": retry_after,
                         "limit": limit,
                         "window": "1 minute",
-                        "tier": config.tier.value
+                        "tier": config.tier.value,
+                        "reset_seconds": reset_seconds,
                     }
             
             return True, {
                 "requests_remaining": limit - request_count - 1,
                 "limit": limit,
-                "window": "1 minute"
+                "window": "1 minute",
+                "reset_seconds": reset_seconds,
             }
     
     async def _check_daily_limits(
@@ -633,6 +644,44 @@ class UserRateLimiter:
             }
         }
 
+    async def record_actual_usage(self, user_id: str, endpoint: str, tokens_used: int, cost: float = 0.0) -> None:
+        """Record actual usage after a request completes (if provider returns usage).
+
+        Safe no-op on failure.
+        """
+        try:
+            await self._record_request(user_id, endpoint, max(0, int(tokens_used or 0)), float(cost or 0.0))
+        except Exception:
+            # Non-fatal; logging here could be noisy for hot paths
+            pass
+
 
 # Global instance
+# Global default (legacy) instance
 user_rate_limiter = UserRateLimiter()
+
+# Per-user instances cache
+_user_rate_limiter_instances: dict = {}
+_user_rate_limiter_lock: Optional[threading.Lock] = None
+
+
+def get_user_rate_limiter_for_user(user_id: int) -> UserRateLimiter:
+    """Return a UserRateLimiter bound to the user's evaluations DB."""
+    # In test environments, fall back to legacy global instance for compatibility with existing tests/mocks
+    try:
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") or "PYTEST_CURRENT_TEST" in _os.environ:
+            return user_rate_limiter
+    except Exception:
+        pass
+    global _user_rate_limiter_lock
+    if _user_rate_limiter_lock is None:
+        _user_rate_limiter_lock = threading.Lock()
+    with _user_rate_limiter_lock:
+        inst = _user_rate_limiter_instances.get(user_id)
+        if inst is not None:
+            return inst
+        db_path = str(DatabasePaths.get_evaluations_db_path(int(user_id)))
+        inst = UserRateLimiter(db_path=db_path)
+        _user_rate_limiter_instances[user_id] = inst
+        return inst

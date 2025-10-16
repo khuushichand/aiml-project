@@ -224,3 +224,306 @@ class PMCOAQueryResponse(BaseModel):
 
 class PMCOAIdentifyResponse(BaseModel):
     info: Dict[str, Any]
+
+
+# ---------------- Additional Provider Schemas (Scaffold) ----------------
+
+class GenericPaper(BaseModel):
+    id: Optional[str] = None
+    title: str
+    authors: Optional[str] = None
+    journal: Optional[str] = None
+    pub_date: Optional[str] = None
+    abstract: Optional[str] = None
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    pdf_url: Optional[str] = None
+    provider: Optional[str] = None
+
+
+class GenericSearchResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[GenericPaper]
+    total_results: int
+    page: int
+    results_per_page: int
+    total_pages: int
+
+
+class IEEESearchRequestForm:
+    def __init__(
+        self,
+        q: Optional[str] = Query(None, description="Keyword query"),
+        from_year: Optional[int] = Query(None, ge=1800, le=2100),
+        to_year: Optional[int] = Query(None, ge=1800, le=2100),
+        publication_title: Optional[str] = Query(None, description="IEEE publication title filter"),
+        authors: Optional[str] = Query(None, description="Author name(s)"),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.q = q
+        self.from_year = from_year
+        self.to_year = to_year
+        self.publication_title = publication_title
+        self.authors = authors
+        self.page = page
+        self.results_per_page = results_per_page
+
+
+class SimpleVenueSearchForm:
+    def __init__(
+        self,
+        q: Optional[str] = Query(None, description="Keyword query"),
+        venue: Optional[str] = Query(None, description="Venue or journal name filter"),
+        from_year: Optional[int] = Query(None, ge=1800, le=2100),
+        to_year: Optional[int] = Query(None, ge=1800, le=2100),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.q = q
+        self.venue = venue
+        self.from_year = from_year
+        self.to_year = to_year
+        self.page = page
+        self.results_per_page = results_per_page
+
+
+class DOIRequestForm:
+    def __init__(self, doi: str = Query(..., min_length=3)):
+        self.doi = doi
+
+
+# ---------------- RePEc / CitEc Schemas ----------------
+
+class RepecCitationsResponse(BaseModel):
+    handle: str
+    cited_by: int
+    cites: int
+    uri: Optional[str] = None
+    date: Optional[str] = None
+
+# ---------------- BioRxiv Reports Schemas ----------------
+
+class BioRxivFunderPaper(BaseModel):
+    doi: str
+    title: str
+    authors: Optional[str] = None
+    category: Optional[str] = None
+    date: Optional[str] = None
+    abstract: Optional[str] = None
+    server: Optional[str] = None
+    version: Optional[int] = None
+    url: Optional[str] = None
+    pdf_url: Optional[str] = None
+    funder: Optional[Any] = None  # raw funder block from API (name/id/id-type/award)
+
+
+class BioRxivFunderSearchResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[BioRxivFunderPaper]
+    total_results: int
+    page: int
+    results_per_page: int
+    total_pages: int
+
+
+class BioRxivFunderSearchRequestForm:
+    def __init__(
+        self,
+        server: str = Query("biorxiv", description="Server: biorxiv or medrxiv"),
+        ror_id: str = Query(..., min_length=5, description="Funder ROR ID (final 9-char segment)"),
+        from_date: Optional[str] = Query(None, description="YYYY-MM-DD start"),
+        to_date: Optional[str] = Query(None, description="YYYY-MM-DD end"),
+        category: Optional[str] = Query(None, description="Optional category filter"),
+        recent_days: Optional[int] = Query(None, ge=1, description="Most recent N days"),
+        recent_count: Optional[int] = Query(None, ge=1, description="Most recent N posts"),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.server = server
+        self.ror_id = ror_id
+        self.from_date = from_date
+        self.to_date = to_date
+        self.category = category
+        self.recent_days = recent_days
+        self.recent_count = recent_count
+        self.page = page
+        self.results_per_page = results_per_page
+
+
+class BioRxivPublisherSearchRequestForm:
+    def __init__(
+        self,
+        publisher_prefix: str = Query(..., min_length=4, description="Publisher DOI prefix, e.g., '10.15252'"),
+        from_date: Optional[str] = Query(None, description="YYYY-MM-DD start"),
+        to_date: Optional[str] = Query(None, description="YYYY-MM-DD end"),
+        recent_days: Optional[int] = Query(None, ge=1, description="Most recent N days"),
+        recent_count: Optional[int] = Query(None, ge=1, description="Most recent N articles"),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.publisher_prefix = publisher_prefix
+        self.from_date = from_date
+        self.to_date = to_date
+        self.recent_days = recent_days
+        self.recent_count = recent_count
+        self.page = page
+        self.results_per_page = results_per_page
+
+
+class BioRxivPubSearchRequestForm:
+    def __init__(
+        self,
+        from_date: Optional[str] = Query(None, description="YYYY-MM-DD start"),
+        to_date: Optional[str] = Query(None, description="YYYY-MM-DD end"),
+        recent_days: Optional[int] = Query(None, ge=1, description="Most recent N days"),
+        recent_count: Optional[int] = Query(None, ge=1, description="Most recent N articles"),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.from_date = from_date
+        self.to_date = to_date
+        self.recent_days = recent_days
+        self.recent_count = recent_count
+        self.page = page
+        self.results_per_page = results_per_page
+
+
+class BioRxivSummaryItem(BaseModel):
+    month: str
+    new_papers: Optional[int] = None
+    new_papers_cumulative: Optional[int] = None
+    revised_papers: Optional[int] = None
+    preprint_date: Optional[str] = None
+    revised_papers_cumulative: Optional[int] = None
+
+
+class BioRxivSummaryResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[BioRxivSummaryItem]
+
+
+class BioRxivSummaryRequestForm:
+    def __init__(self, interval: str = Query("m", description="Interval: m (monthly) or y (yearly)")):
+        self.interval = interval
+
+
+class BioRxivUsageItem(BaseModel):
+    month: str
+    abstract_views: Optional[int] = None
+    full_text_views: Optional[int] = None
+    pdf_downloads: Optional[int] = None
+    abstract_cumulative: Optional[int] = None
+    full_text_cumulative: Optional[int] = None
+    pdf_cumulative: Optional[int] = None
+
+
+class BioRxivUsageResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[BioRxivUsageItem]
+
+
+class BioRxivUsageRequestForm:
+    def __init__(self, interval: str = Query("m", description="Interval: m (monthly) or y (yearly)")):
+        self.interval = interval
+
+
+# ---------------- ChemRxiv Schemas ----------------
+
+class ChemRxivSearchRequestForm:
+    def __init__(
+        self,
+        term: Optional[str] = Query(None, description="Search term"),
+        skip: int = Query(0, ge=0, description="Offset for results"),
+        limit: int = Query(10, ge=1, le=50, description="Results per page (max 50)"),
+        sort: Optional[str] = Query("PUBLISHED_DATE_DESC", description="Sort order (ChemRxiv enum)"),
+        author: Optional[str] = Query(None, description="Author filter"),
+        searchDateFrom: Optional[str] = Query(None, description="YYYY-MM-DD or ISO"),
+        searchDateTo: Optional[str] = Query(None, description="YYYY-MM-DD or ISO"),
+        searchLicense: Optional[str] = Query(None, description="License filter"),
+        categoryIds: Optional[str] = Query(None, description="Comma-separated category IDs"),
+        subjectIds: Optional[str] = Query(None, description="Comma-separated subject IDs"),
+    ):
+        self.term = term
+        self.skip = skip
+        self.limit = limit
+        self.sort = sort
+        self.author = author
+        self.searchDateFrom = searchDateFrom
+        self.searchDateTo = searchDateTo
+        self.searchLicense = searchLicense
+        self.categoryIds_list = [s.strip() for s in categoryIds.split(',')] if categoryIds else None
+        self.subjectIds_list = [s.strip() for s in subjectIds.split(',')] if subjectIds else None
+
+
+# ---------------- IACR Schemas ----------------
+
+class IacrConferenceResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    data: Dict[str, Any]
+
+
+# ---------------- Ingest Batch Schemas ----------------
+
+class IngestBatchItem(BaseModel):
+    doi: Optional[str] = None
+    pdf_url: Optional[str] = None
+    pmcid: Optional[str] = None
+    arxiv_id: Optional[str] = None
+    title: Optional[str] = None
+    author: Optional[str] = None
+    keywords: Optional[List[str]] = None
+
+
+class IngestBatchRequest(BaseModel):
+    items: List[IngestBatchItem]
+    perform_chunking: bool = True
+    parser: Optional[str] = "pymupdf4llm"
+    chunk_method: Optional[str] = None
+    chunk_size: int = 500
+    chunk_overlap: int = 200
+    perform_analysis: bool = False
+    api_name: Optional[str] = None
+    custom_prompt: Optional[str] = None
+    system_prompt: Optional[str] = None
+    enable_ocr: bool = False
+    ocr_backend: Optional[str] = None
+    ocr_lang: Optional[str] = "eng"
+    ocr_dpi: int = 300
+    ocr_mode: Optional[str] = "fallback"
+    ocr_min_page_text_chars: int = 40
+
+
+class IngestBatchResultItem(BaseModel):
+    doi: Optional[str] = None
+    pdf_url: Optional[str] = None
+    pmcid: Optional[str] = None
+    arxiv_id: Optional[str] = None
+    success: bool
+    media_id: Optional[int] = None
+    media_uuid: Optional[str] = None
+    error: Optional[str] = None
+
+
+class IngestBatchResponse(BaseModel):
+    results: List[IngestBatchResultItem]
+    succeeded: int
+    failed: int
+
+
+# ---------------- OSF Schemas ----------------
+
+class OSFSearchRequestForm:
+    def __init__(
+        self,
+        term: Optional[str] = Query(None, description="Search text (OSF 'q')"),
+        provider: Optional[str] = Query(None, description="Preprints provider key (e.g., 'osf', 'eartharxiv', 'socarxiv')"),
+        from_date: Optional[str] = Query(None, description="Filter by created date >= YYYY-MM-DD"),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.term = term
+        self.provider = provider
+        self.from_date = from_date
+        self.page = page
+        self.results_per_page = results_per_page

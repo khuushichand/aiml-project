@@ -10,7 +10,7 @@ API endpoints, ensuring proper validation and serialization.
 
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class TimedEffects(BaseModel):
@@ -60,8 +60,7 @@ class DictionaryEntryResponse(DictionaryEntryBase):
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatDictionaryBase(BaseModel):
@@ -92,8 +91,7 @@ class ChatDictionaryResponse(ChatDictionaryBase):
     version: int = Field(..., description="Version number for optimistic locking")
     entry_count: Optional[int] = Field(None, description="Number of entries in the dictionary")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatDictionaryWithEntries(ChatDictionaryResponse):
@@ -157,7 +155,7 @@ class ExportDictionaryJSONResponse(BaseModel):
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""
-    entry_ids: List[int] = Field(..., min_items=1, description="List of entry IDs to operate on")
+    entry_ids: List[int] = Field(..., min_length=1, description="List of entry IDs to operate on")
     operation: str = Field(..., pattern="^(delete|activate|deactivate|group)$", description="Operation to perform")
     group_name: Optional[str] = Field(None, description="Group name (for group operation)")
 

@@ -19,7 +19,7 @@
     
     // Default configuration (fallback values)
     const DEFAULT_CONFIG = {
-        api_key: 'default-secret-key-for-single-user',
+        api_key: 'YOUR_API_KEY',
         base_url: 'http://localhost:8000',
         configured: false,
         auth_mode: 'single_user',
@@ -91,7 +91,7 @@ eval_data = {
 }
 
 response = requests.post(
-    f"{BASE_URL}/api/v1/evals",
+    f"{BASE_URL}/api/v1/evaluations",
     json=eval_data,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -99,7 +99,7 @@ response = requests.post(
 print(f"Created evaluation: {response.json()['id']}")`;
         
         // cURL example
-        examples.curl = `curl -X POST ${config.base_url}/api/v1/evals \\
+examples.curl = `curl -X POST ${config.base_url}/api/v1/evaluations \\
   -H "Authorization: Bearer ${config.api_key}" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -124,7 +124,7 @@ const evalData = {
     ]
 };
 
-const response = await fetch(\`\${BASE_URL}/api/v1/evals\`, {
+const response = await fetch(\`\${BASE_URL}/api/v1/evaluations\`, {
     method: 'POST',
     headers: {
         'Authorization': \`Bearer \${API_KEY}\`,

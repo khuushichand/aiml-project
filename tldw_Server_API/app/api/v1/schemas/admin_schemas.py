@@ -5,6 +5,7 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from datetime import date
 
 #######################################################################################################################
 #
@@ -145,6 +146,36 @@ class SystemStatsResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Security Alert Schemas
+
+class SecurityAlertSinkStatus(BaseModel):
+    """Represents the status of an individual security alert sink."""
+    sink: str
+    configured: bool
+    min_severity: Optional[str] = None
+    last_status: Optional[bool] = None
+    last_error: Optional[str] = None
+    backoff_until: Optional[datetime] = None
+
+
+class SecurityAlertStatusResponse(BaseModel):
+    """Aggregated security alert configuration and health."""
+    enabled: bool
+    min_severity: str
+    last_dispatch_time: Optional[datetime]
+    last_dispatch_success: Optional[bool]
+    last_dispatch_error: Optional[str] = None
+    dispatch_count: int
+    last_validation_time: Optional[datetime]
+    validation_errors: Optional[List[str]] = None
+    sinks: List[SecurityAlertSinkStatus]
+    health: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # Audit Log Schemas
 
 class AuditLogEntry(BaseModel):
@@ -187,6 +218,160 @@ class BatchOperationResponse(BaseModel):
     message: str
     
     model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Usage Reporting Schemas
+
+class UsageDailyRow(BaseModel):
+    """Single usage_daily record."""
+    user_id: int
+    day: date | str
+    requests: int
+    errors: int
+    bytes_total: int
+    bytes_in_total: int | None = None
+    latency_avg_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageDailyResponse(BaseModel):
+    """Response for daily usage query."""
+    items: List[UsageDailyRow]
+    total: int
+    page: int
+    limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageTopRow(BaseModel):
+    """Aggregated usage by user for a date range."""
+    user_id: int
+    requests: int
+    errors: int
+    bytes_total: int
+    bytes_in_total: int | None = None
+    latency_avg_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageTopResponse(BaseModel):
+    items: List[UsageTopRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# LLM Usage Schemas
+
+class LLMUsageLogRow(BaseModel):
+    id: int
+    ts: datetime
+    user_id: Optional[int] = None
+    key_id: Optional[int] = None
+    endpoint: Optional[str] = None
+    operation: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    status: Optional[int] = None
+    latency_ms: Optional[int] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    total_cost_usd: Optional[float] = None
+    currency: Optional[str] = None
+    estimated: Optional[bool] = None
+    request_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMUsageLogResponse(BaseModel):
+    items: List[LLMUsageLogRow]
+    total: int
+    page: int
+    limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMUsageSummaryRow(BaseModel):
+    group_value: str
+    requests: int
+    errors: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    total_cost_usd: float
+    latency_avg_ms: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMUsageSummaryResponse(BaseModel):
+    items: List[LLMUsageSummaryRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMTopSpenderRow(BaseModel):
+    user_id: int
+    total_cost_usd: float
+    requests: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMTopSpendersResponse(BaseModel):
+    items: List[LLMTopSpenderRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Tool Permission Schemas (MCP Integration)
+
+class ToolPermissionCreateRequest(BaseModel):
+    """Create a tool execute permission.
+
+    If tool_name is "*", creates tools.execute:* (wildcard).
+    """
+    tool_name: str = Field(..., min_length=1)
+    description: Optional[str] = None
+
+
+class ToolPermissionResponse(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+
+
+class ToolPermissionGrantRequest(BaseModel):
+    """Grant a tool execution permission to a role.
+
+    tool_name '*' means tools.execute:*
+    """
+    tool_name: str = Field(..., min_length=1)
+
+
+class ToolPermissionBatchRequest(BaseModel):
+    """Grant multiple tool execution permissions to a role in one call."""
+    tool_names: List[str] = Field(..., min_length=1)
+
+
+class ToolPermissionPrefixRequest(BaseModel):
+    """Grant/Revoke all tool permissions matching a name prefix.
+
+    Examples:
+      {"prefix": "tools.execute:media."} or {"prefix": "media."}
+    """
+    prefix: str = Field(..., min_length=1)
 
 
 #

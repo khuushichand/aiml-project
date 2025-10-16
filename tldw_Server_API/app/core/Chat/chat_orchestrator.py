@@ -7,9 +7,10 @@ interactions with various LLM providers.
 """
 #
 # Imports
-import logging
+from loguru import logger as logging
 import os
 import time
+import asyncio
 from typing import Any, Dict, List, Optional, Union
 #
 # 3rd-party Libraries
@@ -28,7 +29,8 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
 )
 from tldw_Server_API.app.core.Chat.provider_config import (
     API_CALL_HANDLERS,
-    PROVIDER_PARAM_MAP
+    PROVIDER_PARAM_MAP,
+    ASYNC_API_CALL_HANDLERS,
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.config import load_and_log_configs
@@ -91,7 +93,10 @@ def chat_api_call(
     stop: Optional[Union[str, List[str]]] = None,
     response_format: Optional[Dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
     n: Optional[int] = None,
-    user_identifier: Optional[str] = None  # Renamed from 'user' to avoid conflict with 'user' role in messages
+    user_identifier: Optional[str] = None,  # Renamed from 'user' to avoid conflict with 'user' role in messages
+    # Provider-specific extensions (e.g., Bedrock guardrails)
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     ):
     """
     Acts as a unified dispatcher to call various LLM API providers.
@@ -186,7 +191,9 @@ def chat_api_call(
         'stop': stop,
         'response_format': response_format,
         'n': n,
-        'user_identifier': user_identifier
+        'user_identifier': user_identifier,
+        'extra_headers': extra_headers,
+        'extra_body': extra_body,
     }
 
     for generic_param_name, provider_param_name in params_map.items():
@@ -195,8 +202,23 @@ def chat_api_call(
         if generic_param_name == 'prompt' and endpoint_lower == 'cohere':
              pass # Specific handling for Cohere's prompt is assumed to be within chat_with_cohere
 
-    if call_kwargs.get(params_map.get('api_key', 'api_key')) and isinstance(call_kwargs.get(params_map.get('api_key', 'api_key')), str) and len(call_kwargs.get(params_map.get('api_key', 'api_key'))) > 8:
-         logging.info(f"Debug - Chat API Call - API Key: {call_kwargs[params_map.get('api_key', 'api_key')][:4]}...{call_kwargs[params_map.get('api_key', 'api_key')][-4:]}")
+    # Never log secrets by default; allow opt-in masked key logging via env
+    try:
+        import os as _os_keys
+        _key_val = call_kwargs.get(params_map.get('api_key', 'api_key'))
+        if (
+            _key_val
+            and isinstance(_key_val, str)
+            and len(_key_val) > 8
+            and _os_keys.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}
+        ):
+            logging.debug(
+                "Chat API Call - API Key (masked): %s...%s",
+                _key_val[:4],
+                _key_val[-4:]
+            )
+    except Exception:
+        pass
 
     try:
         logging.debug(f"Calling handler {handler.__name__} with kwargs: { {k: (type(v) if k != params_map.get('api_key') else 'key_hidden') for k,v in call_kwargs.items()} }")
@@ -271,6 +293,94 @@ def chat_api_call(
         raise ChatAPIError(provider=endpoint_lower,
                            message=f"An unexpected internal error occurred in chat_api_call for {endpoint_lower}: {str(e)}",
                            status_code=500)
+
+
+async def chat_api_call_async(
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    minp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    model: Optional[str] = None,
+    topk: Optional[int] = None,
+    topp: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+):
+    """Async dispatcher that prefers async handlers when available; otherwise falls back to thread exec.
+
+    Returns either a regular dict (non-stream) or an async iterator (streaming).
+    """
+    endpoint_lower = api_endpoint.lower()
+    handler_async = ASYNC_API_CALL_HANDLERS.get(endpoint_lower)
+    params_map = PROVIDER_PARAM_MAP.get(endpoint_lower, {})
+
+    available_generic_params = {
+        'api_key': api_key,
+        'messages_payload': messages_payload,
+        'temp': temp,
+        'system_message': system_message,
+        'streaming': streaming,
+        'minp': minp,
+        'maxp': maxp,
+        'model': model,
+        'topk': topk,
+        'topp': topp,
+        'logprobs': logprobs,
+        'top_logprobs': top_logprobs,
+        'logit_bias': logit_bias,
+        'presence_penalty': presence_penalty,
+        'frequency_penalty': frequency_penalty,
+        'tools': tools,
+        'tool_choice': tool_choice,
+        'max_tokens': max_tokens,
+        'seed': seed,
+        'stop': stop,
+        'response_format': response_format,
+        'n': n,
+        'user_identifier': user_identifier,
+        'extra_headers': extra_headers,
+        'extra_body': extra_body,
+    }
+    call_kwargs: Dict[str, Any] = {}
+    for generic_param_name, provider_param_name in params_map.items():
+        if generic_param_name in available_generic_params and available_generic_params[generic_param_name] is not None:
+            call_kwargs[provider_param_name] = available_generic_params[generic_param_name]
+
+    try:
+        if handler_async is not None:
+            # Invoke provider-native async handler
+            return await handler_async(**call_kwargs)
+        else:
+            # Fallback to sync handler via thread
+            handler_sync = API_CALL_HANDLERS.get(endpoint_lower)
+            if handler_sync is None:
+                raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {api_endpoint}")
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, lambda: handler_sync(**call_kwargs))
+    except requests.exceptions.RequestException as e:
+        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        if isinstance(e, (ChatAPIError, ChatProviderError, ChatBadRequestError, ChatAuthenticationError, ChatRateLimitError, ChatConfigurationError)):
+            raise
+        # Surface as provider error for unexpected conditions
+        raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}")
 
 #
 ####################################################################################################

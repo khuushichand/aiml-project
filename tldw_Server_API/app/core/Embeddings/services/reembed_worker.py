@@ -1,0 +1,356 @@
+"""
+Re-embed expansion worker (Phase 2):
+
+- Uses the Jobs module (DB-backed) as the control plane to schedule expansion
+  jobs that trigger re-embedding.
+- Expands a job payload (user_id, media_id, optional embedder hints) into one
+  or more Embedding stage messages and publishes them directly to the live
+  embeddings queue (embeddings:embedding).
+- Does NOT use the prior request/scheduled Redis streams. Those may remain for
+  compatibility but are not required for Phase 2.
+
+Job contract (domain/queue/job_type):
+- domain = "embeddings"
+- queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+- job_type = "expand_reembed"
+
+Expected payload fields (opaque beyond these):
+- user_id: str (required)
+- media_id: int (required)
+- idempotency_key: Optional[str]
+- dedupe_key: Optional[str]
+- operation_id: Optional[str] (preferred for dedupe)
+- embedder_name, embedder_version: Optional[str] (hints only)
+
+Environment variables:
+- REDIS_URL: Redis connection string (default redis://localhost:6379)
+- REEMBED_JOB_QUEUE: Jobs queue name (default: reembed)
+- REEMBED_LEASE_SECONDS: Job lease duration (default: 60)
+- REEMBED_RENEW_SECONDS: Lease renewal cadence (default: 30)
+- REEMBED_RENEW_JITTER_SECONDS: Renewal jitter (default: 5)
+- REEMBED_CHUNK_BATCH: Optional max chunks per embedding message (default: 0 → all)
+
+Usage (manual):
+  python -m tldw_Server_API.app.core.Embeddings.services.reembed_worker
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+
+import redis.asyncio as aioredis
+from loguru import logger
+
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Embeddings.queue_schemas import (
+    ChunkData,
+    EmbeddingMessage,
+    JobStatus,
+)
+from tldw_Server_API.app.core.Embeddings.messages import (
+    CURRENT_SCHEMA,
+    CURRENT_SCHEMA_URL,
+    CURRENT_VERSION,
+)
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
+
+
+EMBEDDING_QUEUE = os.getenv("EMBEDDING_LIVE_QUEUE", "embeddings:embedding")
+
+
+async def _redis_client() -> aioredis.Redis:
+    url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    return await aioredis.from_url(url, decode_responses=True)
+
+
+def _norm_for_hash(text: str) -> str:
+    """Mirror the chunking worker's normalization for stable content hashes."""
+    import unicodedata
+    if not isinstance(text, str):
+        text = str(text or "")
+    t = unicodedata.normalize('NFC', text)
+    t = t.strip()
+    t = " ".join(t.split())
+    t = t.lower()
+    return t
+
+
+def _generate_chunk_id(job_id: str, chunk_index: int) -> str:
+    data = f"{job_id}:{chunk_index}"
+    return hashlib.sha256(data.encode()).hexdigest()[:16]
+
+
+def _jobs_backend() -> Tuple[Optional[str], Optional[str]]:
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    return backend, db_url
+
+
+def _get_media_db_for_user(user_id: str) -> MediaDatabase:
+    """Best-effort resolver for Media DB path and client id."""
+    # Try dependency util if available; otherwise default path
+    try:
+        uid_int = int(str(user_id))
+    except Exception:
+        uid_int = 1
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import _get_chacha_db_path_for_user  # type: ignore
+        # Even if present, Embeddings primarily use the global Media DB by default.
+    except Exception:
+        pass
+    # Default Media DB path from helpers
+    db_path = os.getenv("MEDIA_DB_PATH", "Databases/Media_DB_v2.db")
+    return MediaDatabase(db_path=db_path, client_id=str(user_id))
+
+
+def _fetch_chunks(db: MediaDatabase, media_id: int) -> List[Tuple[str, int, int]]:
+    """Return list of (chunk_text, start, end) for a media item.
+
+    Prefers UnvectorizedMediaChunks (ordered by chunk_index). Falls back to
+    MediaChunks.
+    """
+    rows: List[Tuple[str, int, int]] = []
+    try:
+        if db.has_unvectorized_chunks(media_id):
+            # Use a generous range to fetch all
+            arr = db.get_unvectorized_chunks_in_range(media_id, 0, 1_000_000)
+            for i, r in enumerate(arr):
+                txt = r.get("chunk_text") or ""
+                start = int(r.get("start_char") or 0)
+                end = int(r.get("end_char") or (start + len(txt)))
+                rows.append((txt, start, end))
+            return rows
+    except Exception as e:
+        logger.debug(f"Unvectorized chunks path failed for media_id={media_id}: {e}")
+    # Fallback to MediaChunks table
+    try:
+        cur = db.execute_query(
+            "SELECT chunk_text, start_index, end_index FROM MediaChunks WHERE media_id = ? AND deleted = 0 ORDER BY id ASC",
+            (media_id,),
+        )
+        for r in cur.fetchall() or []:
+            # sqlite Row mapping safe across adapters
+            if isinstance(r, dict):
+                txt = r.get("chunk_text") or ""
+                start = int(r.get("start_index") or 0)
+                end = int(r.get("end_index") or (start + len(txt)))
+            else:
+                txt = r[0] or ""
+                start = int(r[1] or 0)
+                end = int(r[2] or (start + len(txt)))
+            rows.append((txt, start, end))
+    except Exception as e:
+        logger.warning(f"MediaChunks fallback failed for media_id={media_id}: {e}")
+    return rows
+
+
+async def _enqueue_embedding(client: aioredis.Redis, message: EmbeddingMessage) -> None:
+    await client.xadd(EMBEDDING_QUEUE, model_dump_compat(message))
+
+
+async def run(stop_event: Optional[asyncio.Event] = None) -> None:
+    """Run the re-embed expansion worker loop."""
+    backend, db_url = _jobs_backend()
+    jm = JobManager(backend=backend, db_url=db_url)
+    worker_id = f"reembed-expander"
+    queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+    lease_seconds = int(os.getenv("REEMBED_LEASE_SECONDS", "60") or 60)
+    renew_seconds = int(os.getenv("REEMBED_RENEW_SECONDS", "30") or 30)
+    renew_jitter = int(os.getenv("REEMBED_RENEW_JITTER_SECONDS", "5") or 5)
+    chunk_batch = int(os.getenv("REEMBED_CHUNK_BATCH", "0") or 0)
+    poll_sleep = float(os.getenv("JOBS_POLL_INTERVAL_SECONDS", "1.0") or 1.0)
+
+    logger.info("Starting Embeddings Re-embed expansion worker (Jobs-driven)")
+    client = await _redis_client()
+
+    async def _start_renewal(job_id: int, lease_id: str):
+        async def _loop():
+            import random as _rnd
+            while True:
+                try:
+                    if stop_event and stop_event.is_set():
+                        return
+                    jm.renew_job_lease(int(job_id), seconds=lease_seconds, worker_id=worker_id, lease_id=str(lease_id))
+                except Exception:
+                    pass
+                slp = renew_seconds + _rnd.uniform(-float(renew_jitter), float(renew_jitter))
+                await asyncio.sleep(max(1.0, slp))
+        return asyncio.create_task(_loop())
+
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                logger.info("Stopping re-embed worker on shutdown signal")
+                break
+            try:
+                job = jm.acquire_next_job(domain="embeddings", queue=queue, lease_seconds=lease_seconds, worker_id=worker_id)
+                if not job:
+                    await asyncio.sleep(poll_sleep)
+                    continue
+                # Guards / fields
+                lease_id = str(job.get("lease_id"))
+                owner = str(job.get("owner_user_id") or (job.get("payload") or {}).get("user_id") or "")
+                payload: Dict[str, Any] = job.get("payload") or {}
+                media_id = payload.get("media_id")
+                if not owner or media_id is None:
+                    jm.fail_job(int(job["id"]), error="missing owner_user_id or media_id", retryable=False, worker_id=worker_id, lease_id=lease_id)
+                    continue
+                job_uuid = str(job.get("uuid") or job.get("id"))
+                # Pre-flight cancel
+                cur = jm.get_job(int(job["id"])) or {}
+                if cur.get("cancel_requested_at"):
+                    jm.finalize_cancelled(int(job["id"]), reason="cancel requested before start")
+                    continue
+                # Begin lease renewal
+                renew_task = await _start_renewal(int(job["id"]), lease_id)
+
+                # Fetch chunks
+                db = _get_media_db_for_user(owner)
+                chunk_rows = _fetch_chunks(db, int(media_id))
+                if not chunk_rows:
+                    jm.fail_job(int(job["id"]), error="no chunks available", retryable=False, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
+                    try:
+                        renew_task.cancel()
+                    except Exception:
+                        pass
+                    continue
+
+                # Optional: skip unchanged chunks by comparing content_hash in vector store metadata
+                changed_rows = chunk_rows
+                try:
+                    skip_unchanged = (os.getenv("REEMBED_SKIP_UNCHANGED", "true").lower() in ("1","true","yes","on"))
+                    if skip_unchanged:
+                        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+                        adapter = VectorStoreFactory.create_from_settings(_settings, user_id=str(owner))
+                        if adapter is not None:
+                            await adapter.initialize()
+                            collection_name = f"user_{owner}_media_embeddings"
+                            filtered: List[Tuple[str,int,int]] = []
+                            for i, (txt, start, end) in enumerate(chunk_rows):
+                                ch = _norm_for_hash(txt)
+                                cur_hash = hashlib.sha256(ch.encode("utf-8")).hexdigest()
+                                chunk_id = _generate_chunk_id(job_uuid, i)
+                                try:
+                                    existing = await adapter.get_vector(collection_name, chunk_id)  # type: ignore[attr-defined]
+                                except Exception:
+                                    existing = None
+                                if existing and isinstance(existing.get('metadata'), dict):
+                                    prev_hash = str(existing['metadata'].get('content_hash') or '')
+                                    if prev_hash == cur_hash:
+                                        # unchanged -> skip
+                                        continue
+                                filtered.append((txt, start, end))
+                            changed_rows = filtered
+                except Exception as _skip_err:
+                    logger.debug(f"Skip-unchanged check failed, proceeding without filter: {_skip_err}")
+
+                if not changed_rows:
+                    # Nothing to do; mark job completed and continue
+                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
+                    try:
+                        renew_task.cancel()
+                    except Exception:
+                        pass
+                    continue
+
+                # Build EmbeddingMessage(s)
+                idempotency_key = payload.get("idempotency_key") or f"reembed:{owner}:{media_id}:{payload.get('embedder_name','')}:{payload.get('embedder_version','')}"
+                dedupe_key = payload.get("dedupe_key") or idempotency_key
+                operation_id = payload.get("operation_id") or job_uuid
+                user_tier = str(payload.get("user_tier") or "free")
+                priority = int(job.get("priority") or 50)
+
+                # Make chunks
+                def _make_chunk_data(rows: List[Tuple[str, int, int]]) -> List[ChunkData]:
+                    out: List[ChunkData] = []
+                    total = len(rows)
+                    for i, (txt, start, end) in enumerate(rows):
+                        ch = _norm_for_hash(txt)
+                        content_hash = hashlib.sha256(ch.encode("utf-8")).hexdigest()
+                        out.append(
+                            ChunkData(
+                                chunk_id=_generate_chunk_id(job_uuid, i),
+                                content=txt,
+                                metadata={
+                                    "chunk_index": i,
+                                    "total_chunks": total,
+                                    "content_type": "text",
+                                    "content_hash": content_hash,
+                                    "hash_norm": "ws_v1",
+                                },
+                                start_index=start,
+                                end_index=end,
+                                sequence_number=i,
+                            )
+                        )
+                    return out
+
+                all_chunks = _make_chunk_data(changed_rows)
+                batches: List[List[ChunkData]]
+                if chunk_batch and chunk_batch > 0:
+                    batches = [all_chunks[i:i+chunk_batch] for i in range(0, len(all_chunks), chunk_batch)]
+                else:
+                    batches = [all_chunks]
+
+                # Publish one or multiple embedding messages
+                for idx, chunks in enumerate(batches):
+                    msg = EmbeddingMessage(
+                        # envelope
+                        msg_version=CURRENT_VERSION,
+                        msg_schema=CURRENT_SCHEMA,
+                        schema_url=CURRENT_SCHEMA_URL,
+                        idempotency_key=idempotency_key,
+                        dedupe_key=dedupe_key,
+                        operation_id=operation_id,
+                        # identity
+                        job_id=job_uuid if len(batches) == 1 else f"{job_uuid}:{idx}",
+                        user_id=str(owner),
+                        media_id=int(media_id),
+                        priority=priority,
+                        user_tier=user_tier,  # enum coercion handled by model
+                        created_at=datetime.utcnow(),
+                        # payload
+                        chunks=chunks,
+                        embedding_model_config={},
+                        model_provider="",
+                    )
+                    await _enqueue_embedding(client, msg)
+
+                # Update basic status in Redis job key (best-effort)
+                try:
+                    jk = f"job:{job_uuid}"
+                    await client.hset(jk, mapping={
+                        "status": JobStatus.EMBEDDING,
+                        "current_stage": "embedding",
+                        "chunks_processed": 0,
+                        "total_chunks": len(all_chunks),
+                    })
+                except Exception:
+                    pass
+
+                # Complete job
+                jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
+                try:
+                    renew_task.cancel()
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.error(f"Re-embed worker loop error: {e}")
+                await asyncio.sleep(poll_sleep)
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    asyncio.run(run())

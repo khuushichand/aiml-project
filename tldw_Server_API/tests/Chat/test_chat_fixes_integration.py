@@ -23,7 +23,8 @@ from tldw_Server_API.app.api.v1.endpoints.chat import (
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
     get_or_create_conversation,
-    extract_response_content
+    extract_response_content,
+    load_conversation_history,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -126,6 +127,56 @@ class TestEmptyMessageFix:
         
         # Should save something, not return None
         assert mock_db.add_message.called
+
+
+class TestMultiImagePersistence:
+    """Validate that multiple images on a single message persist correctly."""
+
+    @pytest.mark.asyncio
+    async def test_multi_image_roundtrip(self, tmp_path):
+        db_path = tmp_path / "multi_image_chat.db"
+        chat_db = CharactersRAGDB(db_path=str(db_path), client_id="test_client_multi")
+        try:
+            conv_id = chat_db.add_conversation({"character_id": 1, "title": "Multi Image Conversation"})
+            img_data_uri_1 = (
+                "data:image/png;base64,"
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+            )
+            img_data_uri_2 = (
+                "data:image/png;base64,"
+                "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR42mNgYGD4z8DAwMgABBgAFSgC/7IvmV0AAAAASUVORK5CYII="
+            )
+            message_obj = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Multiple attachments"},
+                    {"type": "image_url", "image_url": {"url": img_data_uri_1}},
+                    {"type": "image_url", "image_url": {"url": img_data_uri_2}},
+                ],
+            }
+
+            await _save_message_turn_to_db(
+                chat_db,
+                conv_id,
+                message_obj,
+                use_transaction=True,
+            )
+
+            stored_messages = chat_db.get_messages_for_conversation(conv_id, limit=10)
+            assert len(stored_messages) == 1
+            stored = stored_messages[0]
+            images = stored.get("images")
+            assert images is not None and len(images) == 2
+            assert stored.get("image_data") == images[0]["image_data"]
+            # Ensure helper returns multimodal content with both images
+            history = await load_conversation_history(chat_db, conv_id, character_card=None, limit=10)
+            assert len(history) == 1
+            history_content = history[0]["content"]
+            assert isinstance(history_content, list)
+            image_parts = [part for part in history_content if part.get("type") == "image_url"]
+            assert len(image_parts) == 2
+        finally:
+            chat_db.close_connection()
 
 
 class TestDuplicateSerializationFix:

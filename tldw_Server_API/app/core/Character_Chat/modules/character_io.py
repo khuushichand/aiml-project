@@ -157,6 +157,10 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
 
         # Enhanced format detection supporting more character card formats
         # Check for various format indicators
+        # Character Card v3 explicit markers
+        is_explicit_v3_spec = card_data_dict.get('spec') == 'chara_card_v3'
+        is_explicit_v3_version = str(card_data_dict.get('spec_version', '')).startswith("3.")
+
         is_explicit_v2_spec = card_data_dict.get('spec') == 'chara_card_v2'
         is_explicit_v2_version_str = str(card_data_dict.get('spec_version', ''))
         is_explicit_v2_version = is_explicit_v2_version_str.startswith("2.")
@@ -176,8 +180,25 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
         has_data_node_heuristic = isinstance(card_data_dict.get('data'), dict) and \
                                   'name' in card_data_dict['data']  # Heuristic for implicit V2
 
-        attempt_v2_processing = is_explicit_v2_spec or is_explicit_v2_version or \
-                                (has_data_node_heuristic and not is_explicit_v2_spec and not is_explicit_v2_version)
+        # Try V3 first if explicitly marked
+        if is_explicit_v3_spec or is_explicit_v3_version:
+            logger.debug("Attempting V3 validation based on card structure/spec.")
+            try:
+                from tldw_Server_API.app.core.Character_Chat.ccv3_parser import validate_v3_card, parse_v3_card
+                is_valid_v3_struct, v3_errors = validate_v3_card(card_data_dict)
+                if is_valid_v3_struct:
+                    parsed_card = parse_v3_card(card_data_dict)
+                    if parsed_card and parsed_card.get('name'):
+                        logger.info("V3 card parsed successfully.")
+                    else:
+                        logger.warning("V3 parsing failed after validation; will try other formats.")
+                else:
+                    logger.warning(f"V3 validation failed: {'; '.join(v3_errors)}; falling back.")
+            except Exception as e:
+                logger.warning(f"V3 parsing import failed or not available: {e}")
+
+        attempt_v2_processing = (parsed_card is None) and (is_explicit_v2_spec or is_explicit_v2_version or \
+                                (has_data_node_heuristic and not is_explicit_v2_spec and not is_explicit_v2_version))
 
         if attempt_v2_processing:
             logger.debug("Attempting V2 validation based on card structure/spec.")

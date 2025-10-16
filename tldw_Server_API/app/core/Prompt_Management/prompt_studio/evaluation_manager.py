@@ -1,9 +1,6 @@
 # evaluation_manager.py
 # Manages evaluation runs for prompt testing
 
-import json
-import time
-import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from loguru import logger
@@ -43,58 +40,40 @@ class EvaluationManager:
         Returns:
             Evaluation results with metrics
         """
-        # Get prompt details
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, system_prompt, user_prompt, name, project_id
-            FROM prompt_studio_prompts
-            WHERE id = ? AND deleted = 0
-        """, (prompt_id,))
-        
-        prompt = cursor.fetchone()
-        if not prompt:
+        prompt = self.db.get_prompt(prompt_id)
+        if not prompt or prompt.get("deleted"):
             raise ValueError(f"Prompt {prompt_id} not found")
-        
-        # Get test cases
-        placeholders = ','.join('?' * len(test_case_ids))
-        cursor.execute(f"""
-            SELECT id, inputs, expected_outputs, name
-            FROM prompt_studio_test_cases
-            WHERE id IN ({placeholders}) AND deleted = 0
-        """, test_case_ids)
-        
-        test_cases = cursor.fetchall()
-        
-        # Create evaluation record
-        eval_uuid = str(uuid.uuid4())
-        model_configs = json.dumps({
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens
-        })
-        cursor.execute("""
-            INSERT INTO prompt_studio_evaluations (
-                uuid, prompt_id, project_id, model_configs, status, 
-                test_case_ids, started_at, client_id
-            ) VALUES (?, ?, ?, ?, 'running', ?, CURRENT_TIMESTAMP, ?)
-        """, (eval_uuid, prompt_id, prompt[4], model_configs, json.dumps(test_case_ids), self.db.client_id))
-        
-        eval_id = cursor.lastrowid
-        conn.commit()
+
+        test_cases = self.db.get_test_cases_by_ids(test_case_ids)
+        if not test_cases:
+            raise ValueError("No valid test cases provided for evaluation")
+
+        evaluation_record = self.db.create_evaluation(
+            prompt_id=prompt_id,
+            project_id=prompt.get("project_id"),
+            model_configs={
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            test_case_ids=test_case_ids,
+            client_id=self.db.client_id,
+        )
+
+        eval_id = evaluation_record.get("id")
+        eval_uuid = evaluation_record.get("uuid")
         
         # Run each test case
         results = []
         total_score = 0
         
         for test_case in test_cases:
-            test_id = test_case[0]
-            inputs = json.loads(test_case[1]) if test_case[1] else {}
-            expected = json.loads(test_case[2]) if test_case[2] else {}
+            test_id = test_case.get("id")
+            inputs = test_case.get("inputs") or {}
+            expected = test_case.get("expected_outputs") or {}
             
             # Format prompt with inputs
-            formatted_user_prompt = prompt[2]
+            formatted_user_prompt = prompt.get("user_prompt", "")
             for key, value in inputs.items():
                 formatted_user_prompt = formatted_user_prompt.replace(f"{{{key}}}", str(value))
             
@@ -104,7 +83,7 @@ class EvaluationManager:
                     api_endpoint="openai",
                     model=model,
                     messages=[
-                        {"role": "system", "content": prompt[1]},
+                        {"role": "system", "content": prompt.get("system_prompt")},
                         {"role": "user", "content": formatted_user_prompt}
                     ],
                     temperature=temperature,
@@ -150,24 +129,20 @@ class EvaluationManager:
         }
         
         # Update evaluation record
-        cursor.execute("""
-            UPDATE prompt_studio_evaluations
-            SET status = 'completed',
-                completed_at = CURRENT_TIMESTAMP,
-                test_run_ids = ?,
-                aggregate_metrics = ?
-            WHERE id = ?
-        """, (
-            json.dumps([r["test_case_id"] for r in results]),
-            json.dumps(aggregate_metrics),
-            eval_id
-        ))
-        conn.commit()
-        
+        self.db.update_evaluation(
+            eval_id,
+            {
+                "status": "completed",
+                "completed_at": datetime.utcnow(),
+                "test_run_ids": [r["test_case_id"] for r in results],
+                "aggregate_metrics": aggregate_metrics,
+            },
+        )
+
         return {
             "id": eval_id,
             "uuid": eval_uuid,
-            "project_id": prompt[4],
+            "project_id": prompt.get("project_id"),
             "prompt_id": prompt_id,
             "model": model,
             "status": "completed",
@@ -218,18 +193,7 @@ class EvaluationManager:
         Returns:
             Evaluation record or None
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM prompt_studio_evaluations
-            WHERE id = ?
-        """, (eval_id,))
-        
-        row = cursor.fetchone()
-        if row:
-            return self.db._row_to_dict(cursor, row)
-        return None
+        return self.db.get_evaluation(eval_id)
     
     def list_evaluations(
         self,
@@ -252,64 +216,13 @@ class EvaluationManager:
         Returns:
             Dictionary with evaluations and pagination
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        # Build query
-        conditions = []
-        params = []
-        
-        if project_id:
-            conditions.append("p.project_id = ?")
-            params.append(project_id)
-        
-        if prompt_id:
-            conditions.append("e.prompt_id = ?")
-            params.append(prompt_id)
-        
-        if status:
-            conditions.append("e.status = ?")
-            params.append(status)
-        
-        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-        
-        # Count total
-        count_query = f"""
-            SELECT COUNT(*) 
-            FROM prompt_studio_evaluations e
-            LEFT JOIN prompt_studio_prompts p ON e.prompt_id = p.id
-            {where_clause}
-        """
-        cursor.execute(count_query, params)
-        total = cursor.fetchone()[0]
-        
-        # Get evaluations
-        offset = (page - 1) * per_page
-        query = f"""
-            SELECT e.*, p.name as prompt_name
-            FROM prompt_studio_evaluations e
-            LEFT JOIN prompt_studio_prompts p ON e.prompt_id = p.id
-            {where_clause}
-            ORDER BY e.created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([per_page, offset])
-        
-        cursor.execute(query, params)
-        evaluations = []
-        for row in cursor.fetchall():
-            eval_dict = self.db._row_to_dict(cursor, row)
-            evaluations.append(eval_dict)
-        
-        return {
-            "evaluations": evaluations,
-            "pagination": {
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "total_pages": (total + per_page - 1) // per_page
-            }
-        }
+        return self.db.list_evaluations(
+            project_id=project_id,
+            prompt_id=prompt_id,
+            status=status,
+            page=page,
+            per_page=per_page,
+        )
     
     def compare_evaluations(self, eval_ids: List[int]) -> Dict[str, Any]:
         """

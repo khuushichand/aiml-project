@@ -11,15 +11,16 @@ Pydantic models for chatbook creation, import, export, and preview operations.
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 from enum import Enum
 
 
 # Enums
 
 class ChatbookVersion(str, Enum):
-    """Chatbook format versions."""
-    V1 = "1.0"
-    V2 = "2.0"  # Future version
+    """Chatbook format versions (semantic)."""
+    V1 = "1.0.0"
+    V2 = "2.0.0"  # Future version
 
 
 class ContentType(str, Enum):
@@ -83,26 +84,25 @@ class CreateChatbookRequest(BaseModel):
     categories: List[str] = Field(default_factory=list, description="Chatbook categories")
     async_mode: bool = Field(False, description="Run as background job")
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "name": "My Research Chatbook",
-                "description": "Collection of research conversations and notes",
-                "content_selections": {
-                    "conversation": ["conv123", "conv456"],
-                    "note": ["note789"],
-                    "character": ["char001"]
-                },
-                "author": "Jane Doe",
-                "include_media": False,
-                "media_quality": "compressed",
-                "include_embeddings": False,
-                "include_generated_content": True,
-                "tags": ["research", "AI"],
-                "categories": ["Work"],
-                "async_mode": False
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "name": "My Research Chatbook",
+            "description": "Collection of research conversations and notes",
+            "content_selections": {
+                "conversation": ["conv123", "conv456"],
+                "note": ["note789"],
+                "character": ["char001"]
+            },
+            "author": "Jane Doe",
+            "include_media": False,
+            "media_quality": "compressed",
+            "include_embeddings": False,
+            "include_generated_content": True,
+            "tags": ["research", "AI"],
+            "categories": ["Work"],
+            "async_mode": False
         }
+    })
 
 
 class ImportChatbookRequest(BaseModel):
@@ -123,16 +123,15 @@ class ImportChatbookRequest(BaseModel):
     import_embeddings: bool = Field(False, description="Import embeddings")
     async_mode: bool = Field(False, description="Run as background job")
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "conflict_resolution": "skip",
-                "prefix_imported": True,
-                "import_media": False,
-                "import_embeddings": False,
-                "async_mode": False
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "conflict_resolution": "skip",
+            "prefix_imported": True,
+            "import_media": False,
+            "import_embeddings": False,
+            "async_mode": False
         }
+    })
 
 
 # Response Schemas
@@ -278,7 +277,7 @@ class ListImportJobsResponse(BaseModel):
 class CleanupExpiredExportsResponse(BaseModel):
     """Response for cleanup operation."""
     deleted_count: int
-    message: str
+    message: Optional[str] = None
 
 
 class DownloadChatbookResponse(BaseModel):
