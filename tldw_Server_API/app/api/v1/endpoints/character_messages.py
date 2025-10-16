@@ -23,7 +23,8 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
-    CharactersRAGDBError
+    CharactersRAGDBError,
+    ConflictError,
 )
 
 # Schemas
@@ -35,7 +36,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
 )
 
 # Character chat helpers  
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import (
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     post_message_to_conversation,
     retrieve_message_details,
     retrieve_conversation_messages_for_ui,
@@ -110,48 +111,26 @@ def _verify_message_access(
     user_id: int
 ) -> Dict[str, Any]:
     """
-    Verify user has access to a message.
-    
-    Args:
-        db: Database instance
-        message_id: Message ID to check
-        user_id: User ID to verify
-        
-    Returns:
-        Message data if access allowed
-        
-    Raises:
-        HTTPException: 404 if not found, 403 if unauthorized
+    Verify user has access to a message using DB abstractions.
     """
-    # Get message from database
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT m.*, c.client_id 
-        FROM messages m
-        JOIN conversations c ON m.conversation_id = c.id
-        WHERE m.id = ? AND m.deleted = 0
-    """, (message_id,))
-    
-    result = cursor.fetchone()
-    
-    if not result:
+    message = db.get_message_by_id(message_id)
+    if not message:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Message {message_id} not found"
         )
-    
-    # Convert to dict
-    columns = [description[0] for description in cursor.description]
-    message = dict(zip(columns, result))
-    
-    if message.get('client_id') != str(user_id):
+    conv = db.get_conversation_by_id(message.get('conversation_id'))
+    if not conv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {message.get('conversation_id')} not found"
+        )
+    if conv.get('client_id') != str(user_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this message"
         )
-    
+    message['client_id'] = conv.get('client_id')
     return message
 
 # ========================================================================
@@ -183,12 +162,21 @@ async def send_message(
         HTTPException: 404 if chat not found, 403 if unauthorized, 429 if rate limited
     """
     try:
-        # Check rate limits
+        # Check rate limits (global + per-minute + per-chat message count)
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "message_send")
+        await rate_limiter.check_message_send_rate(current_user.id)
         
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
+        # Enforce per-chat message cap
+        try:
+            existing_msgs = db.get_messages_for_conversation(chat_id, limit=10000)
+            await rate_limiter.check_message_limit(chat_id, len(existing_msgs))
+        except HTTPException:
+            raise
+        except Exception:
+            logger.debug("Non-fatal: message cap check skipped")
         
         # Validate parent message if provided
         if message_data.parent_message_id:
@@ -239,15 +227,13 @@ async def send_message(
                 detail="Failed to create message"
             )
         
-        # Update conversation last_modified
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE conversations 
-            SET last_modified = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (chat_id,))
-        conn.commit()
+        # Update conversation metadata (last_modified/version) via DB abstraction
+        conv_for_update = db.get_conversation_by_id(chat_id)
+        if conv_for_update:
+            try:
+                db.update_conversation(chat_id, {}, conv_for_update.get('version', 1))
+            except (ConflictError, CharactersRAGDBError):
+                logger.debug(f"Non-fatal: failed to bump conversation metadata for {chat_id}")
         
         # Get character details for placeholders
         character_id = conversation.get('character_id')
@@ -281,6 +267,8 @@ async def get_chat_messages(
     include_deleted: bool = Query(False, description="Include deleted messages"),
     include_character_context: bool = Query(False, description="Include character context for chat completions"),
     format_for_completions: bool = Query(False, description="Format messages for use with chat/completions endpoint"),
+    include_tool_calls: bool = Query(False, description="Include tool_calls metadata per message when available (standard format only)"),
+    include_metadata: bool = Query(False, description="Include stored message metadata.extra JSON where available"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -309,6 +297,13 @@ async def get_chat_messages(
         
         # Get messages
         messages = db.get_messages_for_conversation(chat_id, limit=limit+offset)
+        # Enforce per-chat message cap via limiter (use current count before appending new)
+        try:
+            await get_character_rate_limiter().check_message_limit(chat_id, len(messages))
+        except HTTPException:
+            raise
+        except Exception:
+            logger.debug("Non-fatal: message limit check skipped")
         
         if not messages:
             messages = []
@@ -329,6 +324,7 @@ async def get_chat_messages(
             if format_for_completions:
                 # Return format ready for chat completions endpoint
                 formatted_messages = []
+                metadata_extra_map: Dict[str, Any] = {}
                 
                 # Add system prompt if character exists
                 if character and include_character_context:
@@ -345,14 +341,97 @@ async def get_chat_messages(
                         "content": system_prompt.strip()
                     })
                 
-                # Add conversation messages
+                # Add conversation messages with optional tool role messages
+                import re as _re
+                _suffix_re = _re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", _re.DOTALL)
                 for msg in paginated:
-                    formatted_messages.append({
-                        "role": msg.get('sender', 'user'),
-                        "content": msg.get('content', '')
-                    })
+                    role = msg.get('sender', 'user')
+                    content = msg.get('content', '')
+                    msg_id = msg.get('id')
+
+                    base_message: Dict[str, Any] = {"role": role, "content": content}
+
+                    # If assistant message has tool_calls in metadata, include tool role messages (OpenAI-compatible)
+                    md = None
+                    try:
+                        md = db.get_message_metadata(msg_id)
+                    except Exception:
+                        md = None
+
+                    if include_metadata and md and md.get('extra') is not None and msg_id:
+                        metadata_extra_map[msg_id] = md.get('extra')
+
+                    # Add the original message first
+                    tool_calls_list = None
+                    if role == 'assistant':
+                        if md and isinstance(md.get('tool_calls'), list) and md.get('tool_calls'):
+                            tool_calls_list = md.get('tool_calls')
+                        else:
+                            # Fallback: parse inline suffix if present
+                            try:
+                                m = _suffix_re.search(content or '')
+                                if m:
+                                    import json as _json
+                                    parsed = _json.loads(m.group(1).strip())
+                                    if isinstance(parsed, dict) and 'tool_calls' in parsed:
+                                        tool_calls_list = parsed.get('tool_calls')
+                                    else:
+                                        tool_calls_list = parsed
+                                    if not isinstance(tool_calls_list, list):
+                                        tool_calls_list = None
+                            except Exception:
+                                tool_calls_list = None
+
+                    if role == 'assistant' and tool_calls_list:
+                        # Optionally include tool_calls array on assistant message for completeness
+                        base_message_with_tools = dict(base_message)
+                        base_message_with_tools["tool_calls"] = tool_calls_list
+                        formatted_messages.append(base_message_with_tools)
+
+                        # Emit tool role messages after the assistant message
+                        tool_results_by_id: Dict[str, Any] = {}
+                        try:
+                            extra = md.get('extra') or {}
+                            # Common pattern: extra.tool_results: { tool_call_id: { ... } }
+                            tr = extra.get('tool_results') if isinstance(extra, dict) else None
+                            if isinstance(tr, dict):
+                                tool_results_by_id = tr
+                        except Exception:
+                            tool_results_by_id = {}
+
+                        for tc in tool_calls_list:
+                            tc_id = None
+                            tc_name = None
+                            try:
+                                tc_id = tc.get('id')
+                                func = tc.get('function') or {}
+                                tc_name = func.get('name')
+                            except Exception:
+                                pass
+                            tool_content = ""
+                            # If we have stored results keyed by tool_call_id, include them
+                            try:
+                                if tc_id and tool_results_by_id.get(tc_id) is not None:
+                                    # Convert result to string; JSON-encode if needed
+                                    res = tool_results_by_id.get(tc_id)
+                                    if isinstance(res, (dict, list)):
+                                        import json as _json
+                                        tool_content = _json.dumps(res)
+                                    else:
+                                        tool_content = str(res)
+                            except Exception:
+                                pass
+                            tool_msg: Dict[str, Any] = {"role": "tool", "content": tool_content}
+                            if tc_id:
+                                tool_msg["tool_call_id"] = tc_id
+                            if tc_name:
+                                tool_msg["name"] = tc_name
+                            formatted_messages.append(tool_msg)
+                    else:
+                        # No tools: append base message as-is
+                        formatted_messages.append(base_message)
                 
-                return {
+                resp_obj: Dict[str, Any] = {
                     "character_name": character.get('name') if character else None,
                     "character_id": character_id,
                     "chat_id": chat_id,
@@ -360,10 +439,33 @@ async def get_chat_messages(
                     "total": len(messages),
                     "usage_instructions": "Use these messages with POST /api/v1/chat/completions"
                 }
+                if include_metadata and metadata_extra_map:
+                    # Provide sidecar of metadata.extra without polluting message objects
+                    resp_obj["metadata_extra"] = metadata_extra_map
+                return resp_obj
             
             # Otherwise return standard format with character info
+            # Build standard response messages, optionally including tool_calls
+            built_messages = []
+            for m in paginated:
+                resp = _convert_db_message_to_response(m)
+                if include_tool_calls:
+                    try:
+                        md = db.get_message_metadata(resp.id)
+                        if md and md.get('tool_calls') is not None:
+                            resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
+                    except Exception:
+                        pass
+                if include_metadata:
+                    try:
+                        md = db.get_message_metadata(resp.id)
+                        if md and md.get('extra') is not None:
+                            resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
+                    except Exception:
+                        pass
+                built_messages.append(resp)
             response = MessageListResponse(
-                messages=[_convert_db_message_to_response(msg) for msg in paginated],
+                messages=built_messages,
                 total=len(messages),
                 limit=limit,
                 offset=offset
@@ -383,8 +485,27 @@ async def get_chat_messages(
             return response
         
         # Standard response
+        # Standard response (no character context)
+        built_messages = []
+        for m in paginated:
+            resp = _convert_db_message_to_response(m)
+            if include_tool_calls:
+                try:
+                    md = db.get_message_metadata(resp.id)
+                    if md and md.get('tool_calls') is not None:
+                        resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
+                except Exception:
+                    pass
+            if include_metadata:
+                try:
+                    md = db.get_message_metadata(resp.id)
+                    if md and md.get('extra') is not None:
+                        resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
+                except Exception:
+                    pass
+            built_messages.append(resp)
         return MessageListResponse(
-            messages=[_convert_db_message_to_response(msg) for msg in paginated],
+            messages=built_messages,
             total=len(messages),
             limit=limit,
             offset=offset
@@ -404,6 +525,8 @@ async def get_chat_messages(
             summary="Get a specific message", tags=["Messages"])
 async def get_message(
     message_id: str = Path(..., description="Message ID"),
+    include_tool_calls: bool = Query(False, description="Include tool_calls metadata when available"),
+    include_metadata: bool = Query(False, description="Include stored message metadata.extra JSON where available"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -423,7 +546,17 @@ async def get_message(
     """
     try:
         message = _verify_message_access(db, message_id, current_user.id)
-        return _convert_db_message_to_response(message)
+        resp = _convert_db_message_to_response(message)
+        if include_tool_calls or include_metadata:
+            try:
+                md = db.get_message_metadata(resp.id)
+                if include_tool_calls and md and md.get('tool_calls') is not None:
+                    resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
+                if include_metadata and md and md.get('extra') is not None:
+                    resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
+            except Exception:
+                pass
+        return resp
         
     except HTTPException:
         raise
@@ -480,15 +613,13 @@ async def edit_message(
                 detail="Failed to update message"
             )
         
-        # Update conversation last_modified
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE conversations 
-            SET last_modified = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (message['conversation_id'],))
-        conn.commit()
+        # Update conversation metadata (last_modified/version) via DB abstraction
+        conv = db.get_conversation_by_id(message['conversation_id'])
+        if conv:
+            try:
+                db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
+            except (ConflictError, CharactersRAGDBError):
+                logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
         
         # Get character details for placeholders
         conversation = db.get_conversation_by_id(message['conversation_id'])
@@ -554,15 +685,13 @@ async def delete_message(
                 detail="Failed to delete message"
             )
         
-        # Update conversation last_modified
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE conversations 
-            SET last_modified = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (message['conversation_id'],))
-        conn.commit()
+        # Update conversation metadata (last_modified/version) via DB abstraction
+        conv = db.get_conversation_by_id(message['conversation_id'])
+        if conv:
+            try:
+                db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
+            except (ConflictError, CharactersRAGDBError):
+                logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
         
         logger.info(f"Soft deleted message {message_id} by user {current_user.id}")
         

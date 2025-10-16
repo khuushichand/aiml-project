@@ -24,6 +24,9 @@ import httpx # Keep for mocking specific download errors
 from fastapi import status, Header
 from fastapi.testclient import TestClient
 from loguru import logger
+from io import BytesIO
+import pytest
+import zipfile
 #
 # Local Imports
 # Adjust import paths based on your project structure if needed
@@ -338,6 +341,369 @@ def check_media_item_result(result, expected_status, check_db_interaction=True, 
         assert result.get("error") is None or result["error"] == "", f"Expected None or empty error for Success status, got '{result.get('error')}' for input '{result.get('input_ref')}'"
     elif expected_status == "Warning":
         assert result.get("error") or result.get("warnings"), f"Expected error or warnings for Warning status for input '{result.get('input_ref')}'"
+
+
+def _build_nested_eml_bytes():
+    # Construct a simple nested .eml in-memory
+    from email.message import EmailMessage
+    inner = EmailMessage()
+    inner["From"] = "Inner <inner@example.com>"
+    inner["To"] = "Bob <bob@example.com>"
+    inner["Subject"] = "Inner Child"
+    inner.set_content("Inner body.")
+
+    outer = EmailMessage()
+    outer["From"] = "Alice <alice@example.com>"
+    outer["To"] = "Bob <bob@example.com>"
+    outer["Subject"] = "Outer Parent"
+    outer.set_content("Outer body.")
+    outer.add_attachment(inner, maintype="message", subtype="rfc822", filename="child.eml")
+    return outer.as_bytes()
+
+
+def test_add_email_with_children_persists_child(test_api_client, db_session, dummy_headers):
+    # Prepare form for email add with attachment ingestion
+    form_data = create_add_media_form_data(
+        media_type="email",
+        perform_chunking=True,
+        chunk_method='sentences',
+        chunk_size=500, # Will be bumped to 1000 by defaults for email
+        chunk_overlap=200,
+    )
+    # Add email-specific form flags
+    form_data.update({
+        'ingest_attachments': 'true',
+        'max_depth': '2',
+    })
+
+    # Build nested EML bytes and upload as file
+    nested_eml = _build_nested_eml_bytes()
+    files = {
+        'files': ('outer.eml', nested_eml, 'message/rfc822'),
+    }
+
+    response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+    data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+    # Expect at least one result (parent)
+    assert data['results'], "No results returned for email add"
+    parent = data['results'][0]
+    check_media_item_result(parent, expected_status="Success", check_db_interaction=True, expected_media_type='email')
+    # Ensure child persistence indicated
+    cdb = parent.get('child_db_results')
+    assert isinstance(cdb, list) and len(cdb) == 1, f"Expected one child persisted, got: {cdb}"
+    assert isinstance(cdb[0].get('db_id'), int), f"Child db_id missing: {cdb}"
+
+
+def _build_zip_emails_bytes():
+    # Build two simple EMLs and zip them
+    eml1 = (
+        b"From: X <x@example.com>\r\n"
+        b"To: Y <y@example.com>\r\n"
+        b"Subject: Archive One\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Hello.\r\n"
+    )
+    eml2 = (
+        b"From: P <p@example.com>\r\n"
+        b"To: Q <q@example.com>\r\n"
+        b"Subject: Archive Two\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Hi.\r\n"
+    )
+    bio = BytesIO()
+    with zipfile.ZipFile(bio, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('a1.eml', eml1)
+        zf.writestr('a2.eml', eml2)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+def test_add_email_archive_persists_children(test_api_client, db_session, dummy_headers):
+    # Similar to nested eml, but provide a .zip and accept_archives=true; expect children persisted
+    form_data = create_add_media_form_data(
+        media_type="email",
+        perform_chunking=True,
+        chunk_method='sentences',
+        chunk_size=500,
+        chunk_overlap=200,
+    )
+    form_data.update({
+        'accept_archives': 'true',
+    })
+    zip_bytes = _build_zip_emails_bytes()
+    files = {
+        'files': ('emails.zip', zip_bytes, 'application/zip'),
+    }
+
+    response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+    data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+    assert data['results'], "No results returned for email add (zip)"
+    parent = data['results'][0]
+    check_media_item_result(parent, expected_status="Success", check_db_interaction=False, expected_media_type='email')
+    # Parent should include the archive grouping keyword in its keywords
+    parent_keywords = parent.get('keywords') or []
+    assert 'email_archive:emails' in parent_keywords, f"Parent missing archive keyword. Keywords: {parent_keywords}"
+    cdb = parent.get('child_db_results')
+    assert isinstance(cdb, list) and len(cdb) == 2, f"Expected two children persisted from archive, got: {cdb}"
+    # Also assert that each child result includes the archive grouping keyword
+    children = parent.get('children') or []
+    assert isinstance(children, list) and len(children) == 2, f"Expected two children in response, got: {children}"
+    for child in children:
+        if isinstance(child, dict):
+            kws = child.get('keywords') or []
+            assert 'email_archive:emails' in kws, f"Archive keyword missing in child: {kws}"
+
+
+def test_add_email_pst_feature_flag_behavior(test_api_client, db_session, dummy_headers):
+    # With accept_pst=true and a small placeholder .pst, expect synthetic parent with children containing informative error
+    form_data = create_add_media_form_data(
+        media_type="email",
+        perform_chunking=False,
+    )
+    form_data.update({
+        'accept_pst': 'true',
+    })
+    files = {
+        'files': ('emails.pst', b'!pst placeholder!', 'application/octet-stream'),
+    }
+    response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+    data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+    assert data['results'], "No results returned for email add (pst)"
+    parent = data['results'][0]
+    check_media_item_result(parent, expected_status="Success", check_db_interaction=False, expected_media_type='email')
+    # Parent should include email_pst grouping
+    parent_keywords = parent.get('keywords') or []
+    assert 'email_pst:emails' in parent_keywords, f"Parent missing pst keyword. Keywords: {parent_keywords}"
+    children = parent.get('children') or []
+    assert isinstance(children, list) and len(children) >= 1
+    first = children[0]
+    assert first.get('status') == 'Error'
+    assert 'pst/ost support not enabled' in str(first.get('error', '')).lower()
+    # No child persistence expected due to error-only children
+    cdb = parent.get('child_db_results') or []
+    assert not cdb, f"Unexpected child DB persistence for pst feature-flag: {cdb}"
+
+
+@pytest.mark.performance
+def test_add_email_zip_large_container_persists_children(test_api_client, db_session, dummy_headers):
+    # Build a zip with 30 small EMLs; expect children to be persisted
+    from io import BytesIO as _BytesIO
+    import zipfile as _zipfile
+
+    def _mk_zip(n: int = 30) -> bytes:
+        bio = _BytesIO()
+        with _zipfile.ZipFile(bio, 'w', compression=_zipfile.ZIP_DEFLATED) as zf:
+            for i in range(n):
+                eml = (
+                    b"From: A <a@example.com>\r\n"
+                    b"To: B <b@example.com>\r\n"
+                    + f"Subject: Z{i}\r\n".encode('utf-8')
+                    + b"MIME-Version: 1.0\r\n"
+                    + b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+                    + b"body\r\n"
+                )
+                zf.writestr(f"m{i}.eml", eml)
+        bio.seek(0)
+        return bio.getvalue()
+
+    form_data = create_add_media_form_data(
+        media_type="email",
+        perform_chunking=False,
+    )
+    form_data.update({'accept_archives': 'true'})
+    zip_bytes = _mk_zip(30)
+    files = {'files': ('emails.zip', zip_bytes, 'application/zip')}
+    response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+    data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+    parent = data['results'][0]
+    children = parent.get('children') or []
+    assert isinstance(children, list) and len(children) >= 30
+    cdb = parent.get('child_db_results') or []
+    assert isinstance(cdb, list) and len(cdb) >= 30
+
+
+@pytest.mark.performance
+def test_add_email_mbox_large_container_persists_children(test_api_client, db_session, dummy_headers):
+    # Build an mbox with 30 small messages; expect children to be persisted
+    import mailbox as _mailbox
+    import tempfile as _tempfile
+    from email.message import EmailMessage
+
+    with _tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        mbox = _mailbox.mbox(tmp_path)
+        for i in range(30):
+            msg = EmailMessage()
+            msg['From'] = f"A <a{i}@example.com>"
+            msg['To'] = 'B <b@example.com>'
+            msg['Subject'] = f"M{i}"
+            msg.set_content('hi')
+            mbox.add(msg)
+        mbox.flush()
+        mbox.close()
+        with open(tmp_path, 'rb') as f:
+            mbox_bytes = f.read()
+    finally:
+        import os as _os
+        try:
+            _os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    form_data = create_add_media_form_data(
+        media_type="email",
+        perform_chunking=False,
+    )
+    form_data.update({'accept_mbox': 'true'})
+    files = {'files': ('emails.mbox', mbox_bytes, 'application/mbox')}
+    response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+    data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+    parent = data['results'][0]
+    children = parent.get('children') or []
+    assert isinstance(children, list) and len(children) >= 30
+    cdb = parent.get('child_db_results') or []
+    assert isinstance(cdb, list) and len(cdb) >= 30
+
+
+def test_add_email_zip_guardrail_too_many_files(test_api_client, db_session, dummy_headers):
+    # Temporarily lower guardrail to 1 to trigger error list
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
+    archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
+    orig = archive_cfg.get('max_internal_files', 100)
+    try:
+        archive_cfg['max_internal_files'] = 1
+        # Build 2-member zip
+        from io import BytesIO as _BytesIO
+        import zipfile as _zipfile
+        bio = _BytesIO()
+        with _zipfile.ZipFile(bio, 'w', compression=_zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('a.eml', b"From: A <a@example.com>\r\nSubject: A\r\n\r\nbody")
+            zf.writestr('b.eml', b"From: B <b@example.com>\r\nSubject: B\r\n\r\nbody")
+        bio.seek(0)
+        zip_bytes = bio.getvalue()
+        form_data = create_add_media_form_data(media_type="email", perform_chunking=False)
+        form_data.update({'accept_archives': 'true'})
+        files = {'files': ('emails.zip', zip_bytes, 'application/zip')}
+        response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+        data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+        parent = data['results'][0]
+        children = parent.get('children') or []
+        assert isinstance(children, list) and len(children) >= 1
+        first = children[0]
+        assert first.get('status') == 'Error' and 'too many files' in str(first.get('error','')).lower()
+        assert not parent.get('child_db_results'), 'No child persistence expected on guardrail error'
+    finally:
+        archive_cfg['max_internal_files'] = orig
+
+
+def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session, dummy_headers):
+    # Lower guardrail to 1 and create 2-message mbox; expect error in children and no child persistence
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
+    import mailbox as _mailbox
+    import tempfile as _tempfile
+    from email.message import EmailMessage
+    archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
+    orig = archive_cfg.get('max_internal_files', 100)
+    try:
+        archive_cfg['max_internal_files'] = 1
+        with _tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            mbox = _mailbox.mbox(tmp_path)
+            for i in range(2):
+                msg = EmailMessage(); msg['From'] = 'A <a@example.com>'; msg['To'] = 'B <b@example.com>'; msg['Subject'] = f'M{i}'; msg.set_content('hi')
+                mbox.add(msg)
+            mbox.flush(); mbox.close()
+            with open(tmp_path, 'rb') as f:
+                mbox_bytes = f.read()
+        finally:
+            import os as _os
+            try: _os.unlink(tmp_path)
+            except Exception: pass
+        form_data = create_add_media_form_data(media_type="email", perform_chunking=False)
+        form_data.update({'accept_mbox': 'true'})
+        files = {'files': ('emails.mbox', mbox_bytes, 'application/mbox')}
+        response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+        data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+        parent = data['results'][0]
+        children = parent.get('children') or []
+        assert isinstance(children, list) and len(children) >= 1
+        first = children[0]
+        assert first.get('status') == 'Error' and 'too many' in str(first.get('error','')).lower()
+        assert not parent.get('child_db_results'), 'No child persistence expected on guardrail error'
+    finally:
+        archive_cfg['max_internal_files'] = orig
+
+
+def _build_mbox_two_emails_bytes() -> bytes:
+    import mailbox as _mailbox
+    import tempfile as _tempfile
+    from email.message import EmailMessage
+    with _tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        mbox = _mailbox.mbox(tmp_path)
+        msg1 = EmailMessage()
+        msg1['From'] = 'x@example.com'
+        msg1['To'] = 'y@example.com'
+        msg1['Subject'] = 'MBOX Child One'
+        msg1.set_content('Hi from mbox 1')
+        mbox.add(msg1)
+        msg2 = EmailMessage()
+        msg2['From'] = 'p@example.com'
+        msg2['To'] = 'q@example.com'
+        msg2['Subject'] = 'MBOX Child Two'
+        msg2.set_content('Hi from mbox 2')
+        mbox.add(msg2)
+        mbox.flush()
+        mbox.close()
+        with open(tmp_path, 'rb') as fh:
+            return fh.read()
+    finally:
+        import os as _os
+        try:
+            _os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+def test_add_email_mbox_persists_children(test_api_client, db_session, dummy_headers):
+    form_data = create_add_media_form_data(
+        media_type="email",
+        perform_chunking=True,
+        chunk_method='sentences',
+        chunk_size=500,
+        chunk_overlap=200,
+    )
+    form_data.update({
+        'accept_mbox': 'true',
+    })
+    mbox_bytes = _build_mbox_two_emails_bytes()
+    files = {
+        'files': ('emails.mbox', mbox_bytes, 'application/mbox'),
+    }
+
+    response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, files=files, headers=dummy_headers)
+    data = check_batch_response(response, expected_status_code=status.HTTP_200_OK)
+    assert data['results'], "No results returned for email add (mbox)"
+    parent = data['results'][0]
+    check_media_item_result(parent, expected_status="Success", check_db_interaction=False, expected_media_type='email')
+    # Parent should include the mbox grouping keyword
+    parent_keywords = parent.get('keywords') or []
+    assert 'email_mbox:emails' in parent_keywords, f"Parent missing mbox keyword. Keywords: {parent_keywords}"
+    # Children persisted
+    cdb = parent.get('child_db_results')
+    assert isinstance(cdb, list) and len(cdb) == 2, f"Expected two children persisted from mbox, got: {cdb}"
+    # Also assert that each child result includes the mbox grouping keyword
+    children = parent.get('children') or []
+    assert isinstance(children, list) and len(children) == 2, f"Expected two children in response, got: {children}"
+    for child in children:
+        if isinstance(child, dict):
+            kws = child.get('keywords') or []
+            assert 'email_mbox:emails' in kws, f"MBOX keyword missing in child: {kws}"
 
 
 # --- Helper for Form Data ---

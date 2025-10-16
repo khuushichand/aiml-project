@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import Unif
 from tldw_Server_API.app.core.Evaluations.connection_pool import ConnectionPool
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
+from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.DB_Management.migrations import create_evaluations_migrations
 
 
@@ -224,23 +224,7 @@ def mock_rate_limiter(monkeypatch):
         mock_check_evaluation_rate_limit
     )
     
-    # Mock the rate limit check in evals endpoint too
-    monkeypatch.setattr(
-        "tldw_Server_API.app.api.v1.endpoints.evals.check_evaluation_rate_limit",
-        mock_check_evaluation_rate_limit
-    )
-    
-    # Mock slowapi rate limiter if it's being used
-    try:
-        from slowapi import Limiter
-        mock_slowapi_limiter = Mock(spec=Limiter)
-        mock_slowapi_limiter.limit = Mock(return_value=lambda f: f)
-        monkeypatch.setattr(
-            "tldw_Server_API.app.api.v1.endpoints.evals_openai.limiter",
-            mock_slowapi_limiter
-        )
-    except ImportError:
-        pass  # slowapi not installed in test environment
+    # Legacy evals and evals_openai endpoints removed; no additional patching required
     
     return mock_limiter
 
@@ -278,12 +262,37 @@ async def webhook_receiver_server():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
-    await site.start()
+    # In restricted sandboxes, binding to localhost may be disallowed.
+    # Skip tests gracefully in that case to avoid hard failures.
+    try:
+        await site.start()
+    except (PermissionError, OSError) as e:
+        import pytest
+        await runner.cleanup()
+        pytest.skip(f"Local socket binding not permitted in sandbox; skipping webhook tests ({e})")
 
     # Discover the bound port
     sockets = getattr(site, '_server').sockets  # type: ignore[attr-defined]
     port = sockets[0].getsockname()[1]
     url = f"http://127.0.0.1:{port}/webhook"
+
+    # In some sandboxes, outbound connections to localhost are blocked.
+    # Perform a quick connectivity check and skip if not reachable.
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1)) as session:
+            try:
+                async with session.post(url, json={"probe": True}) as _resp:
+                    pass
+            except Exception as e:
+                import pytest
+                await runner.cleanup()
+                pytest.skip(f"Local HTTP connections blocked in sandbox; skipping webhook tests ({e})")
+        # Clear the probe request from captured events
+        received.clear()
+    except Exception:
+        # If aiohttp is not available or other import issues, proceed; tests may still pass.
+        pass
 
     try:
         yield {"url": url, "received": received}
@@ -324,11 +333,31 @@ async def flaky_webhook_receiver_server():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
-    await site.start()
+    try:
+        await site.start()
+    except (PermissionError, OSError) as e:
+        import pytest
+        await runner.cleanup()
+        pytest.skip(f"Local socket binding not permitted in sandbox; skipping webhook tests ({e})")
 
     sockets = getattr(site, '_server').sockets  # type: ignore[attr-defined]
     port = sockets[0].getsockname()[1]
     url = f"http://127.0.0.1:{port}/webhook"
+
+    # Connectivity check for sandboxed environments
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1)) as session:
+            try:
+                async with session.post(url, json={"probe": True}) as _resp:
+                    pass
+            except Exception as e:
+                import pytest
+                await runner.cleanup()
+                pytest.skip(f"Local HTTP connections blocked in sandbox; skipping webhook tests ({e})")
+        received.clear()
+    except Exception:
+        pass
 
     try:
         yield {"url": url, "received": received}
@@ -504,7 +533,8 @@ def quality_evaluator() -> ResponseQualityEvaluator:
     return ResponseQualityEvaluator()
 
 
-@pytest.fixture(scope="function")
+import pytest_asyncio
+@pytest_asyncio.fixture(scope="function")
 async def unified_service(temp_db_path) -> AsyncGenerator[UnifiedEvaluationService, None]:
     """Create a UnifiedEvaluationService instance for testing."""
     service = UnifiedEvaluationService(
@@ -517,7 +547,7 @@ async def unified_service(temp_db_path) -> AsyncGenerator[UnifiedEvaluationServi
     await service.shutdown()
 
 
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def unified_service_with_webhooks(temp_db_path) -> AsyncGenerator[UnifiedEvaluationService, None]:
     """Create a UnifiedEvaluationService instance with webhooks enabled."""
     service = UnifiedEvaluationService(

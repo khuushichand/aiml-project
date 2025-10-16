@@ -9,6 +9,10 @@ on:
 jobs:
   webui-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -32,7 +36,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install Python project
         run: |
@@ -48,4 +52,3 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           python -m pytest -m "e2e" -v tldw_Server_API/tests/webui_e2e/
-

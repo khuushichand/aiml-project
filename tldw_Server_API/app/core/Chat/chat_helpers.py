@@ -237,35 +237,56 @@ async def load_conversation_history(
             if text_content:
                 # Apply placeholder replacement if using character context
                 if character_card:
-                    from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import replace_placeholders
+                    from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
                     char_name = character_card.get('name', "Assistant")
                     text_content = replace_placeholders(text_content, char_name, "User")
                 msg_parts.append({"type": "text", "text": text_content})
             
-            # Add image if present
-            img_data = db_msg.get("image_data")
-            img_mime = db_msg.get("image_mime_type")
-            if img_data and img_mime:
-                try:
-                    import base64
-                    b64_img = await loop.run_in_executor(None, base64.b64encode, img_data)
-                    msg_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}
-                    })
-                except Exception as e:
-                    logger.warning(f"Error encoding image from history (msg_id {db_msg.get('id')}): {e}")
-            
+            # Add images if present (supports multiple attachments)
+            raw_images = db_msg.get("images") or []
+            if (not raw_images) and db_msg.get("image_data") and db_msg.get("image_mime_type"):
+                raw_images = [{
+                    "position": 0,
+                    "image_data": db_msg.get("image_data"),
+                    "image_mime_type": db_msg.get("image_mime_type"),
+                }]
+
+            if raw_images:
+                import base64
+                for image_entry in raw_images:
+                    try:
+                        img_bytes = image_entry.get("image_data")
+                        if isinstance(img_bytes, memoryview):
+                            img_bytes = img_bytes.tobytes()
+                        if not img_bytes:
+                            continue
+                        img_mime = image_entry.get("image_mime_type") or db_msg.get("image_mime_type") or "image/png"
+                        b64_img = await loop.run_in_executor(None, base64.b64encode, img_bytes)
+                        msg_parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}
+                        })
+                    except Exception as e:
+                        logger.warning(f"Error encoding image from history (msg_id {db_msg.get('id')}): {e}")
+
             # Create message entry
             if msg_parts:
-                hist_entry = {
-                    "role": role,
-                    "content": msg_parts if len(msg_parts) > 1 else msg_parts[0].get("text", "")
-                }
-                
-                # Add character name for assistant messages
+                hist_entry: Dict[str, Any] = {"role": role}
+
+                if len(msg_parts) == 1:
+                    sole_part = msg_parts[0]
+                    if sole_part.get("type") == "text":
+                        hist_entry["content"] = sole_part.get("text", "")
+                    else:
+                        hist_entry["content"] = [sole_part]
+                else:
+                    hist_entry["content"] = msg_parts
+
+                # Add sanitized character name for assistant messages
                 if role == "assistant" and character_card and character_card.get('name'):
-                    hist_entry["name"] = character_card.get('name')
+                    safe_name = character_card.get('name', '').replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
+                    if safe_name:
+                        hist_entry["name"] = safe_name
                 
                 historical_messages.append(hist_entry)
         

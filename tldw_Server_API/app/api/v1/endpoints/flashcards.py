@@ -33,7 +33,7 @@ import json
 
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 
-router = APIRouter(prefix="/flashcards", tags=["flashcards (Experimental)"])
+router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 
 
 @router.post("/decks", response_model=Deck)

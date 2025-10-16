@@ -24,6 +24,15 @@ The production path is an OpenAI-compatible REST API with caching, connection po
 - Input validation: strings or list[str] only; up to 2048 inputs; per-model token limits with clear error payload when exceeded; optional base64 encoding of vectors; L2-normalization for float outputs.
 - Rate limiting: Optional (off by default). Enable with `EMBEDDINGS_RATE_LIMIT=on`.
 
+### Qwen3 Embeddings (Transformers)
+- When the HuggingFace model id contains `Qwen3` and `Embedding` (e.g., `Qwen/Qwen3-Embedding-0.6B`), the engine:
+  - Applies an instruction-aware format per text using keys in `Config_Files/Prompts/embeddings.prompts.yaml`:
+    - `qwen3_embeddings_instruction` (default: “Given a web search query, retrieve relevant passages that answer the query”).
+    - `qwen3_embeddings_mode` (`auto` | `document` | `query`).
+      - `auto`: heuristically formats short question-like inputs as `<Query>:`; others as `<Document>:`.
+  - Uses last-token pooling instead of mean pooling for Qwen3.
+- No ChatML system/assistant blocks are used for embeddings.
+
 ### Public Endpoints
 - `POST /api/v1/embeddings` — Create embeddings (OpenAI-compatible schema). For non-OpenAI providers, the `model` field in the response includes a `provider:model` prefix.
 - `GET /api/v1/embeddings/models` — List known/allowed models and defaults.
@@ -71,3 +80,43 @@ These pieces are present for future horizontal scaling but are not hooked up to 
 - Real-time streaming of results
 - Edge processing capabilities
 - A/B testing framework for models
+
+## Indexing & Storage Enhancements (New)
+
+- pgvector backend (production option):
+  - The RAG vector-store factory (`rag_service/vector_stores/factory.py`) supports `pgvector` in addition to local Chroma.
+  - Configure via settings `RAG.vector_store_type=pgvector` and `RAG.pgvector.{host,port,database,user,password,dsn}`.
+
+- Incremental re-embed policy with checksum gating:
+  - Re-embed worker (`core/Embeddings/services/reembed_worker.py`) skips unchanged chunks by comparing `metadata.content_hash` with the stored vector’s `content_hash`.
+  - Env: `REEMBED_SKIP_UNCHANGED=true` (default) to enable the skip.
+
+- Ingest dedupe now uses SimHash alongside Jaccard:
+  - Reduces collisions on short technical text.
+  - Env: `INGEST_DEDUP_USE_SIMHASH=true`, `INGEST_SIMHASH_HAMMING_THRESHOLD=3`.
+
+- Fielded metadata for chunks:
+  - Chunker attaches `metadata.headings` and `metadata.captions` (when available) to support future field-aware indexing/boosting.
+
+- FTS synonyms (SQLite index-time):
+  - When `DEFAULT_FTS_CORPUS` is set and `Config_Files/Synonyms/<corpus>.json` is present, the Media SQLite FTS index appends synonym expansions at index time.
+  - Limit expansion via `FTS_SYNONYM_EXPANSION_LIMIT` (default 200 tokens).
+
+- PostgreSQL tsvector field weighting:
+  - Media FTS uses `setweight` with `title` (A) and `content` (C) for better ranking.
+
+See also RAG retriever bm25 weights (`FTS_TITLE_WEIGHT`, `FTS_CONTENT_WEIGHT`).
+
+## Environment Variables
+- `EMBEDDINGS_RATE_LIMIT`: `on` to enable per-endpoint rate limiting (default `off`).
+- `EMBEDDINGS_DIMENSION_POLICY`: `reduce` | `pad` | `ignore` (default `reduce`) for post-hoc dimension adjustment.
+- `EMBEDDINGS_ENFORCE_POLICY`: `true|false` to enforce provider/model allowlists (defaults to `true` in tests, `false` otherwise); `EMBEDDINGS_ENFORCE_POLICY_STRICT` disables admin bypass when `true`.
+- `PRELOAD_EMBEDDING_MODELS`: Comma-separated list of models to warm up on startup (CI-only by default).
+- `AUTO_DOWNLOAD_MODELS`: `true|false` to auto-download models during CI warmup (default `true`).
+- `TRUSTED_HF_REMOTE_CODE_MODELS`: List of patterns to enable `trust_remote_code` for HuggingFace models.
+- `CHROMADB_FORCE_STUB`: `true|false` to force in-memory Chroma stub for tests.
+- `TESTING` / `USE_REAL_OPENAI_IN_TESTS`: When `TESTING=true` and `USE_REAL_OPENAI_IN_TESTS!=true`, OpenAI embeddings are deterministically synthesized.
+- `EMBEDDINGS_CACHE_TTL_SECONDS`: Override cache TTL (default 3600).
+- `EMBEDDINGS_CACHE_MAX_SIZE`: Override cache max entries (default 5000).
+- `EMBEDDINGS_CACHE_CLEANUP_INTERVAL`: Override cache cleanup interval seconds (default 300).
+- `EMBEDDINGS_MAX_BATCH_SIZE`: Maximum uncached texts processed per internal batch (default 100).

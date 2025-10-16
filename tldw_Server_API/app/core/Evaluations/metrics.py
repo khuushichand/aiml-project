@@ -13,7 +13,7 @@ import time
 from typing import Dict, Any, Optional, Callable
 from functools import wraps
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, UTC
 
 try:
     from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, REGISTRY
@@ -266,7 +266,7 @@ class EvaluationMetrics:
         
         self.service_info.info({
             'version': '1.0.0',
-            'start_time': datetime.utcnow().isoformat()
+            'start_time': datetime.now(UTC).isoformat()
         })
         
         logger.info("Evaluation metrics initialized")

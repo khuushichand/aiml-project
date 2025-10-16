@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import secrets
 
 from loguru import logger
-from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
 
 
 class RequestSigner:
@@ -127,11 +127,7 @@ class RequestSigner:
                 
                 if age > self.max_age_seconds:
                     self.stats['expired'] += 1
-                    audit_log(
-                        AuditEventType.REQUEST_SIGNATURE_EXPIRED,
-                        user_id=user_id,
-                        details={'age_seconds': age}
-                    )
+                    log_security_violation(user_id=user_id, action="request_signature_expired", metadata={'age_seconds': age})
                     return False, f"Signature expired (age: {age}s)"
                 
                 if age < -60:  # Allow 1 minute clock skew
@@ -151,11 +147,7 @@ class RequestSigner:
                 return True, None
             else:
                 self.stats['failed'] += 1
-                audit_log(
-                    AuditEventType.REQUEST_SIGNATURE_INVALID,
-                    user_id=user_id,
-                    details={'provided_signature': signature[:10] + '...'}
-                )
+                log_security_violation(user_id=user_id, action="request_signature_invalid", metadata={'provided_signature_prefix': signature[:10] + '...'})
                 return False, "Invalid signature"
                 
         except Exception as e:
@@ -446,11 +438,7 @@ def validate_signed_request(
     
     # Check nonce
     if not nonce_manager.is_valid_nonce(nonce):
-        audit_log(
-            AuditEventType.REQUEST_REPLAY_ATTEMPT,
-            user_id=user_id,
-            details={'nonce': nonce}
-        )
+        log_security_violation(user_id=user_id, action="request_replay_attempt", metadata={'nonce': nonce})
         return False, "Invalid or reused nonce"
     
     # Verify signature

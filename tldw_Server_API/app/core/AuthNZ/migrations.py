@@ -57,10 +57,13 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
             encrypted_token TEXT,
             encrypted_refresh TEXT,
             expires_at TIMESTAMP NOT NULL,
+            refresh_expires_at TIMESTAMP,
             ip_address TEXT,
             user_agent TEXT,
             device_id TEXT,
             is_revoked INTEGER DEFAULT 0,
+            access_jti TEXT,
+            refresh_jti TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -68,9 +71,25 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
     """)
     
     # Create indexes
+    try:
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col('refresh_expires_at', "refresh_expires_at TIMESTAMP")
+        add_col('access_jti', "access_jti TEXT")
+        add_col('refresh_jti', "refresh_jti TEXT")
+    except Exception:
+        pass
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)")
     
     conn.commit()
     logger.info("Migration 002: Created sessions table")
@@ -83,7 +102,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             key_hash TEXT UNIQUE NOT NULL,
-            key_prefix TEXT NOT NULL,
+            key_prefix TEXT,
             name TEXT,
             description TEXT,
             scope TEXT DEFAULT 'read',
@@ -104,11 +123,42 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
-    
-    # Create indexes
+
+    # Harmonize legacy schemas: add missing columns if needed
+    try:
+        cur = conn.execute("PRAGMA table_info(api_keys)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col('key_prefix', "key_prefix TEXT")
+        add_col('description', "description TEXT")
+        add_col('scope', "scope TEXT DEFAULT 'read'")
+        add_col('status', "status TEXT DEFAULT 'active'")
+        add_col('last_used_at', "last_used_at TIMESTAMP")
+        add_col('last_used_ip', "last_used_ip TEXT")
+        add_col('usage_count', "usage_count INTEGER DEFAULT 0")
+        add_col('rate_limit', "rate_limit INTEGER")
+        add_col('allowed_ips', "allowed_ips TEXT")
+        add_col('metadata', "metadata TEXT")
+        add_col('rotated_from', "rotated_from INTEGER REFERENCES api_keys(id)")
+        add_col('rotated_to', "rotated_to INTEGER REFERENCES api_keys(id)")
+        add_col('revoked_at', "revoked_at TIMESTAMP")
+        add_col('revoked_by', "revoked_by INTEGER")
+        add_col('revoke_reason', "revoke_reason TEXT")
+    except Exception:
+        pass
+
+    # Create indexes (only if columns exist)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+    except Exception:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
     
     conn.commit()
@@ -304,7 +354,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            token_hash TEXT UNIQUE NOT NULL,
+            token_hash TEXT UNIQUE,
             expires_at TIMESTAMP NOT NULL,
             used_at TIMESTAMP,
             ip_address TEXT,
@@ -312,7 +362,19 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_hash ON password_reset_tokens(token_hash)")
+    # Harmonize legacy column name 'token' -> ensure 'token_hash' exists
+    try:
+        cur = conn.execute("PRAGMA table_info(password_reset_tokens)")
+        cols = {row[1] for row in cur.fetchall()}
+        if 'token_hash' not in cols:
+            conn.execute("ALTER TABLE password_reset_tokens ADD COLUMN token_hash TEXT UNIQUE")
+    except Exception:
+        pass
+    # Indexes
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_hash ON password_reset_tokens(token_hash)")
+    except Exception:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)")
     
     # Failed attempts table for lockout tracking
@@ -365,8 +427,16 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     columns = [row[1] for row in cursor.fetchall()]
     
     if 'uuid' not in columns:
-        conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
-        logger.info("Added uuid column to users table")
+        # SQLite cannot add a UNIQUE constraint via ALTER TABLE. Add column first,
+        # then create a unique index to enforce uniqueness. This keeps the
+        # migration compatible with fresh DBs and legacy ones.
+        conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)")
+        except Exception:
+            # If an older schema already enforced uniqueness differently, ignore
+            pass
+        logger.info("Added uuid column to users table with unique index")
 
     if 'email_verified_at' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMP")
@@ -380,6 +450,477 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 011: Created enhanced authentication tables")
 
 
+def migration_012_create_rbac_tables(conn: sqlite3.Connection) -> None:
+    """Create core RBAC tables: roles, permissions, mappings, and user overrides."""
+    # Roles
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            is_system INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    # Permissions (use column name 'name' to match existing DB accessors)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            category TEXT
+        )
+        """
+    )
+
+    # Role -> Permission mapping
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (role_id, permission_id),
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # User -> Role mapping (with optional expiration)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            granted_by INTEGER,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, role_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # User permission overrides (allow/deny via boolean 'granted')
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            granted INTEGER NOT NULL DEFAULT 1, -- 1 = allow, 0 = deny
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, permission_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Helpful indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_role_permissions_role ON role_permissions(role_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_permissions_user ON user_permissions(user_id)")
+
+    conn.commit()
+    logger.info("Migration 012: Created RBAC core tables (roles, permissions, mappings, overrides)")
+
+
+def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None:
+    """Create optional RBAC rate limit and usage tables (SQLite)."""
+    # Role-level rate limits
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rbac_role_rate_limits (
+            role_id INTEGER NOT NULL,
+            resource TEXT NOT NULL,
+            limit_per_min INTEGER,
+            burst INTEGER,
+            PRIMARY KEY (role_id, resource),
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # User-level rate limits (override role defaults)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rbac_user_rate_limits (
+            user_id INTEGER NOT NULL,
+            resource TEXT NOT NULL,
+            limit_per_min INTEGER,
+            burst INTEGER,
+            PRIMARY KEY (user_id, resource),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Lightweight per-request usage (for API analytics)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER,
+            key_id INTEGER,
+            endpoint TEXT,
+            status INTEGER,
+            latency_ms INTEGER,
+            bytes INTEGER,
+            bytes_in INTEGER,
+            meta TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    # Daily aggregate for reporting
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage_daily (
+            user_id INTEGER NOT NULL,
+            day DATE NOT NULL,
+            requests INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            bytes_total INTEGER DEFAULT 0,
+            latency_avg_ms REAL,
+            PRIMARY KEY (user_id, day),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 013: Created RBAC rate limit and usage tables")
+
+
+def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
+    """Seed default roles and a baseline permission catalog."""
+    # Seed roles
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO roles (name, description, is_system)
+        VALUES
+          ('admin', 'Administrator (full access)', 1),
+          ('user', 'Standard user (baseline permissions)', 1),
+          ('moderator', 'Moderator (curated elevated access)', 1)
+        """
+    )
+
+    # Seed permissions (align with AuthNZ/permissions.py constants; use name column)
+    perms = [
+        # media
+        ('media.create','Create media','media'),
+        ('media.read','Read media','media'),
+        ('media.update','Update media','media'),
+        ('media.delete','Delete media','media'),
+        ('media.transcribe','Transcribe audio/video','media'),
+        ('media.export','Export media','media'),
+        # users
+        ('users.create','Create users','users'),
+        ('users.read','Read users','users'),
+        ('users.update','Update users','users'),
+        ('users.delete','Delete users','users'),
+        ('users.manage_roles','Manage user roles','users'),
+        ('users.invite','Invite users','users'),
+        # system
+        ('system.configure','Configure system','system'),
+        ('system.backup','Backup system','system'),
+        ('system.export','Export system data','system'),
+        ('system.logs','View system logs','system'),
+        ('system.maintenance','Maintenance operations','system'),
+        # api
+        ('api.generate_keys','Generate API keys','api'),
+        ('api.manage_webhooks','Manage webhooks','api'),
+        ('api.rate_limit_override','Override rate limits','api')
+    ]
+    for name, description, category in perms:
+        conn.execute(
+            "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)",
+            (name, description, category),
+        )
+
+    # Helper: get id by name
+    def _id(table: str, key: str) -> int:
+        cur = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    admin_id = _id('roles', 'admin')
+    user_id = _id('roles', 'user')
+    mod_id = _id('roles', 'moderator')
+
+    # Grant all permissions to admin
+    cur = conn.execute("SELECT id FROM permissions")
+    for (perm_id,) in cur.fetchall():
+        if admin_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (admin_id, perm_id),
+            )
+
+    # Baseline user permissions
+    baseline = [
+        'media.create','media.read','media.update','media.transcribe',
+        'users.read'
+    ]
+    for code in baseline:
+        pid = _id('permissions', code)
+        if pid is not None and user_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (user_id, pid),
+            )
+
+    # Moderator: baseline + delete and some users.manage_roles
+    mod_extra = ['media.delete', 'users.manage_roles']
+    for code in set(baseline + mod_extra):
+        pid = _id('permissions', code)
+        if pid is not None and mod_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (mod_id, pid),
+            )
+
+    conn.commit()
+    logger.info("Migration 014: Seeded default roles and permissions")
+
+
+def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
+    """Create llm_usage_log and llm_usage_daily tables (SQLite)."""
+    # Per-request LLM usage log
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER,
+            key_id INTEGER,
+            endpoint TEXT,
+            operation TEXT,
+            provider TEXT,
+            model TEXT,
+            status INTEGER,
+            latency_ms INTEGER,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            prompt_cost_usd REAL,
+            completion_cost_usd REAL,
+            total_cost_usd REAL,
+            currency TEXT DEFAULT 'USD',
+            estimated INTEGER DEFAULT 0,
+            request_id TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    # Helpful indexes for common queries
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
+
+    # Daily aggregate table
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+            day DATE NOT NULL,
+            user_id INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            requests INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            total_cost_usd REAL DEFAULT 0.0,
+            latency_avg_ms REAL,
+            PRIMARY KEY (day, user_id, operation, provider, model),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 015: Created LLM usage tables (llm_usage_log, llm_usage_daily)")
+
+
+def migration_016_create_orgs_teams(conn: sqlite3.Connection) -> None:
+    """Create Organizations/Teams hierarchy tables (SQLite)."""
+    # organizations
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS organizations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE,
+            name TEXT UNIQUE NOT NULL,
+            slug TEXT UNIQUE,
+            owner_user_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)")
+
+    # org_members
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_members (
+            org_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT DEFAULT 'member',
+            status TEXT DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (org_id, user_id),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+
+    # teams
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            slug TEXT,
+            description TEXT,
+            is_active INTEGER DEFAULT 1,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (org_id, name),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)")
+
+    # team_members
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS team_members (
+            team_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT DEFAULT 'member',
+            status TEXT DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (team_id, user_id),
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
+
+    conn.commit()
+    logger.info("Migration 016: Created organizations, org_members, teams, team_members")
+
+
+def migration_017_extend_api_keys_virtual(conn: sqlite3.Connection) -> None:
+    """Extend api_keys table with Virtual Key fields (SQLite)."""
+    # Helper to check column existence
+    cur = conn.execute("PRAGMA table_info(api_keys)")
+    cols = {row[1] for row in cur.fetchall()}
+
+    def add_col(name: str, decl: str) -> None:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+
+    add_col('is_virtual', "is_virtual INTEGER DEFAULT 0")
+    add_col('parent_key_id', "parent_key_id INTEGER REFERENCES api_keys(id)")
+    add_col('org_id', "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+    add_col('team_id', "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+    add_col('llm_budget_day_tokens', "llm_budget_day_tokens INTEGER")
+    add_col('llm_budget_month_tokens', "llm_budget_month_tokens INTEGER")
+    add_col('llm_budget_day_usd', "llm_budget_day_usd REAL")
+    add_col('llm_budget_month_usd', "llm_budget_month_usd REAL")
+    add_col('llm_allowed_endpoints', "llm_allowed_endpoints TEXT")
+    add_col('llm_allowed_providers', "llm_allowed_providers TEXT")
+    add_col('llm_allowed_models', "llm_allowed_models TEXT")
+
+    # Helpful indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
+
+    conn.commit()
+    logger.info("Migration 017: Extended api_keys with virtual key fields")
+
+
+def migration_018_add_usage_indexes(conn: sqlite3.Connection) -> None:
+    """Add helpful indexes for usage tables (SQLite)."""
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
+    except Exception:
+        pass
+    conn.commit()
+    logger.info("Migration 018: Added indexes for usage_log and usage_daily")
+
+
+def migration_019_usage_log_add_request_id(conn: sqlite3.Connection) -> None:
+    """Add request_id column to usage_log and index it (SQLite)."""
+    try:
+        conn.execute("ALTER TABLE usage_log ADD COLUMN request_id TEXT")
+    except Exception:
+        # Column may already exist
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
+    except Exception:
+        pass
+    conn.commit()
+    logger.info("Migration 019: Added request_id column to usage_log")
+
+
+def migration_020_usage_log_add_bytes_in(conn: sqlite3.Connection) -> None:
+    """Add bytes_in column to usage_log (SQLite)."""
+    try:
+        conn.execute("ALTER TABLE usage_log ADD COLUMN bytes_in INTEGER")
+    except Exception:
+        # Column may already exist
+        pass
+    conn.commit()
+    logger.info("Migration 020: Added bytes_in column to usage_log")
+
+
+def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> None:
+    """Add bytes_in_total column to usage_daily (SQLite)."""
+    try:
+        conn.execute("ALTER TABLE usage_daily ADD COLUMN bytes_in_total INTEGER DEFAULT 0")
+    except Exception:
+        # Column may already exist
+        pass
+    conn.commit()
+    logger.info("Migration 021: Added bytes_in_total column to usage_daily")
 #######################################################################################################################
 #
 # Migration Registry
@@ -399,6 +940,16 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(9, "Add session encryption columns", migration_009_add_session_encryption_columns),
         Migration(10, "Add 2FA columns to users", migration_010_add_2fa_columns),
         Migration(11, "Enhanced auth tables + uuid", migration_011_add_enhanced_auth_tables),
+        Migration(12, "Create RBAC core tables", migration_012_create_rbac_tables),
+        Migration(13, "Create RBAC limits and usage tables", migration_013_create_rbac_limits_and_usage),
+        Migration(14, "Seed default roles and permissions", migration_014_seed_roles_permissions),
+        Migration(15, "Create LLM usage tables", migration_015_create_llm_usage_tables),
+        Migration(16, "Create organizations and teams tables", migration_016_create_orgs_teams),
+        Migration(17, "Extend api_keys with virtual key fields", migration_017_extend_api_keys_virtual),
+        Migration(18, "Add indexes for usage tables", migration_018_add_usage_indexes),
+        Migration(19, "Add request_id to usage_log", migration_019_usage_log_add_request_id),
+        Migration(20, "Add bytes_in to usage_log", migration_020_usage_log_add_bytes_in),
+        Migration(21, "Add bytes_in_total to usage_daily", migration_021_usage_daily_add_bytes_in_total),
     ]
 
 

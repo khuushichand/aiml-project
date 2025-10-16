@@ -20,6 +20,8 @@ from ..core.improved_worker_pool import (
 from ..base import Task, TaskStatus, TaskPriority
 from ..base.registry import TaskRegistry
 
+DEFAULT_METADATA = {"user_id": "reliability-test"}
+
 
 class TestAsyncWriteBuffer:
     """Test the async write buffer implementation."""
@@ -48,13 +50,13 @@ class TestAsyncWriteBuffer:
         )
         
         buffer = AsyncWriteBuffer(backend, config, FlushStrategy.BLOCK)
-        await buffer.start()
+        await buffer.start(run_workers=True)
         
         try:
             # Add tasks to trigger flush
-            task1 = Task(handler='test', payload={'id': 1})
-            task2 = Task(handler='test', payload={'id': 2})
-            task3 = Task(handler='test', payload={'id': 3})
+            task1 = Task(handler='test', payload={'id': 1}, metadata=DEFAULT_METADATA)
+            task2 = Task(handler='test', payload={'id': 2}, metadata=DEFAULT_METADATA)
+            task3 = Task(handler='test', payload={'id': 3}, metadata=DEFAULT_METADATA)
             
             # First two should trigger flush
             await buffer.add(task1)
@@ -76,7 +78,7 @@ class TestAsyncWriteBuffer:
             assert buffer.metrics.total_flushed >= 2
             
         finally:
-            await buffer.close()
+            await buffer.close(timeout=0.1)
     
     @pytest.mark.asyncio
     async def test_flush_strategies(self):
@@ -102,7 +104,7 @@ class TestAsyncWriteBuffer:
         try:
             # Fill up the queue
             for i in range(10):
-                task = Task(handler='test', payload={'id': i})
+                task = Task(handler='test', payload={'id': i}, metadata=DEFAULT_METADATA)
                 await buffer.add(task)
             
             # Some tasks should be dropped
@@ -117,12 +119,13 @@ class TestAsyncWriteBuffer:
             FlushStrategy.REJECT,
             max_queue_size=2
         )
-        await buffer2.start()
+        # Start without workers so queue capacity is deterministic for REJECT
+        await buffer2.start(run_workers=False)
         
         try:
             # Fill up the queue
             for i in range(5):
-                task = Task(handler='test', payload={'id': i})
+                task = Task(handler='test', payload={'id': i}, metadata=DEFAULT_METADATA)
                 if i < 4:
                     await buffer2.add(task)
                 else:
@@ -131,7 +134,7 @@ class TestAsyncWriteBuffer:
                         await buffer2.add(task)
             
         finally:
-            await buffer2.close()
+            await buffer2.close(timeout=0.1)
     
     @pytest.mark.asyncio
     async def test_adaptive_flush_interval(self):
@@ -158,7 +161,7 @@ class TestAsyncWriteBuffer:
         try:
             # Add tasks to trigger flush
             for i in range(4):
-                task = Task(handler='test', payload={'id': i})
+                task = Task(handler='test', payload={'id': i}, metadata=DEFAULT_METADATA)
                 await buffer.add(task)
             
             await asyncio.sleep(0.1)
@@ -175,7 +178,7 @@ class TestAsyncWriteBuffer:
             
             # Add more tasks
             for i in range(4):
-                task = Task(handler='test', payload={'id': i + 4})
+                task = Task(handler='test', payload={'id': i + 4}, metadata=DEFAULT_METADATA)
                 await buffer.add(task)
             
             await asyncio.sleep(1)
@@ -207,7 +210,7 @@ class TestAsyncWriteBuffer:
             # Add tasks
             tasks = []
             for i in range(5):
-                task = Task(handler='test', payload={'id': i})
+                task = Task(handler='test', payload={'id': i}, metadata=DEFAULT_METADATA)
                 tasks.append(task)
                 await buffer.add(task)
             
@@ -407,7 +410,7 @@ class TestImprovedWorkerPool:
         )
         
         # Mock task processing
-        task = Task(handler='slow_handler', payload={'test': 'data'})
+        task = Task(handler='slow_handler', payload={'test': 'data'}, metadata=DEFAULT_METADATA)
         worker.current_task = task
         worker.state = WorkerState.BUSY
         

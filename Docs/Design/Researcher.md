@@ -52,7 +52,7 @@ Follow gptresearchers method at first, planner LLM -> query LLM -> analyzer LLM 
 [researcher]
 # Researcher settings
 default_search_engine = google
-# Options are: google, bing, yandex, baidu, searx, kagi, serper, tavily
+# Supported engines: google, bing, duckduckgo, brave (others are pending implementation)
 default_search_type = web
 # Options are: web, local, both
 default_search_language = en

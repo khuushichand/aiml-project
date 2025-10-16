@@ -33,46 +33,48 @@ The Evaluations module follows a layered architecture pattern with clear separat
 
 ### Key Components
 
-1. **API Endpoints** (`evals_openai.py`)
-   - OpenAI-compatible REST API
-   - Request validation with Pydantic
-   - Async request handling
+1. **Unified API Endpoints** (`evaluations_unified.py`)
+   - Unified REST API under `/api/v1/evaluations` (OpenAI-compatible + tldw-specific)
+   - Request/response validation with unified schemas
+   - Endpoint tag: `evaluations`
 
-2. **Evaluation Runner** (`eval_runner.py`)
-   - Async task orchestration
-   - Progress tracking
-   - Result aggregation
+2. **Unified Evaluation Service** (`unified_evaluation_service.py`)
+   - Central orchestration (DB + runner + evaluators + webhooks)
+   - Create/list/get/update/delete evaluations, runs, datasets
 
-3. **Evaluators** (Various `*_evaluator.py` files)
-   - Specific evaluation implementations
-   - Metric calculations
-   - LLM integration
+3. **Evaluation Runner** (`eval_runner.py`)
+   - Async task orchestration for runs
+   - Progress tracking and aggregation
 
-4. **Database Manager** (`Evaluations_DB.py`)
-   - CRUD operations
-   - Transaction management
-   - Query optimization
+4. **Evaluators** (various `*_evaluator.py` files)
+   - Implementations: G‑Eval, RAG, response quality, OCR, etc.
+   - Metric calculations and LLM integration
+
+5. **Database Manager** (`Evaluations_DB.py`)
+   - CRUD operations (evaluations, runs, datasets)
+   - Additional registries (webhooks, pipeline presets, embeddings A/B tests)
 
 ## Module Structure
 
 ```
 app/core/Evaluations/
-├── eval_runner.py              # Main evaluation orchestrator
-├── ms_g_eval.py                # G-Eval implementation
-├── rag_evaluator.py            # RAG system evaluator
-├── response_quality_evaluator.py # Response quality evaluator
-└── evaluation_manager.py       # Legacy evaluation manager
+├── unified_evaluation_service.py   # Unified evaluation orchestration
+├── eval_runner.py                  # Evaluation run executor
+├── ms_g_eval.py                    # G‑Eval implementation
+├── rag_evaluator.py                # RAG evaluator
+├── response_quality_evaluator.py   # Response quality evaluator
+└── evaluation_manager.py           # Legacy manager (kept for compatibility)
 
 app/api/v1/
 ├── endpoints/
-│   ├── evals_openai.py        # OpenAI-compatible API
-│   └── evals.py               # Legacy API (disabled)
+│   └── evaluations_unified.py      # Unified Evaluations API
 └── schemas/
-    ├── openai_eval_schemas.py # Request/response models
-    └── evaluation_schema.py   # Legacy schemas
+    ├── evaluation_schemas_unified.py  # Unified request/response models
+    ├── embeddings_abtest_schemas.py   # Embeddings A/B test models
+    └── evaluation_schema.py           # Legacy schemas (compat)
 
 app/core/DB_Management/
-└── Evaluations_DB.py          # Database operations
+└── Evaluations_DB.py              # Database operations (unified schema)
 ```
 
 ## Database Schema
@@ -130,51 +132,77 @@ CREATE TABLE datasets (
 );
 ```
 
+### Additional Tables (Unified)
+
+The unified service also manages auxiliary tables used by evaluation features:
+
+- `internal_evaluations`: tldw-specific evaluations (RAG, response quality) with lifecycle/state
+- `pipeline_presets`: saved RAG pipeline configurations for evaluation runs
+- `ephemeral_collections`: TTL registry for temporary vector collections
+- `webhook_registrations`: per-user webhook registrations and delivery stats
+- Embeddings A/B tests:
+  - `embedding_abtests`: test metadata/config/stats
+  - `embedding_abtest_arms`: per-arm provider/model settings and stats
+  - `embedding_abtest_queries`: queries and optional ground-truth ids
+  - `embedding_abtest_results`: per‑arm per‑query results/metrics/latency
+
 ## Internal API Usage
 
 ### Using Evaluations Programmatically
+
+Option A — Unified service (recommended):
+
+```python
+from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
+
+svc = UnifiedEvaluationService(db_path="Databases/evaluations.db")
+await svc.initialize()
+
+# (Optional) create a dataset inline
+dataset = await svc.create_dataset(
+    name="demo_ds",
+    description="Sample eval dataset",
+    samples=[{"input": {"text": "hello"}, "expected": {"label": "greeting"}}],
+    created_by="dev"
+)
+
+# Create an evaluation definition
+evaluation = await svc.create_evaluation(
+    name="my_eval",
+    eval_type="model_graded",
+    eval_spec={"sub_type": "summarization", "metrics": ["fluency", "relevance"], "model": "gpt-4"},
+    dataset_id=dataset["id"],
+    created_by="dev"
+)
+
+# Start a run
+run = await svc.create_run(
+    eval_id=evaluation["id"],
+    target_model="gpt-3.5-turbo",
+    config={"temperature": 0.0},
+    created_by="dev"
+)
+
+# Poll run
+run_status = await svc.get_run(run["id"])
+```
+
+Option B — Direct DB + runner (supported):
 
 ```python
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 
-# Initialize components
-db = EvaluationsDatabase("path/to/evaluations.db")
-runner = EvaluationRunner("path/to/evaluations.db")
+db = EvaluationsDatabase("Databases/evaluations.db")
+runner = EvaluationRunner("Databases/evaluations.db")
 
-# Create an evaluation
 eval_id = db.create_evaluation(
     name="my_evaluation",
     eval_type="model_graded",
-    eval_spec={
-        "sub_type": "summarization",
-        "evaluator_model": "gpt-4",
-        "metrics": ["fluency", "relevance"],
-        "threshold": 0.7
-    },
-    dataset_id="dataset_123"
+    eval_spec={"sub_type": "summarization", "metrics": ["fluency", "relevance"], "model": "gpt-4"}
 )
-
-# Create a run
-run_id = db.create_run(
-    eval_id=eval_id,
-    target_model="gpt-3.5-turbo",
-    config={"temperature": 0.0}
-)
-
-# Execute evaluation
-await runner.run_evaluation(
-    run_id=run_id,
-    eval_id=eval_id,
-    eval_config={
-        "eval_type": "model_graded",
-        "eval_spec": eval_spec,
-        "dataset_id": dataset_id,
-        "config": {"temperature": 0.0}
-    }
-)
-
-# Get results
+run_id = db.create_run(eval_id=eval_id, target_model="gpt-3.5-turbo", config={"temperature": 0.0})
+await runner.run_evaluation(run_id=run_id, eval_id=eval_id, eval_config={"eval_type": "model_graded"})
 results = db.get_run_results(run_id)
 ```
 
@@ -291,17 +319,22 @@ async def _eval_custom(
 
 ### Step 3: Update API Schema (Optional)
 
-If your evaluation needs special parameters, update schemas:
+If your evaluation needs special parameters, update unified schemas:
 
 ```python
-# In openai_eval_schemas.py
-class CustomEvalSpec(BaseModel):
-    """Custom evaluation specification"""
-    custom_param: str
+# In evaluation_schemas_unified.py
+from pydantic import BaseModel
+from typing import Optional
+
+# Extend the unified spec with custom knobs
+class EvaluationSpec(BaseModel):
+    # existing fields ...
+    custom_param: Optional[str] = None
     another_param: Optional[int] = 10
-    
-# Update EvaluationSpec union type
-EvaluationSpec = Union[ModelGradedSpec, ExactMatchSpec, CustomEvalSpec]
+
+# If introducing a new top-level type, add it to EvaluationType enum
+# class EvaluationType(str, Enum):
+#     CUSTOM = "custom"
 ```
 
 ## Extending the Evaluation Runner
@@ -426,37 +459,32 @@ async def test_custom_evaluator():
 ```python
 @pytest.mark.asyncio
 async def test_evaluation_workflow():
-    """Test complete evaluation workflow"""
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
-    
+
     client = TestClient(app)
-    
-    # Create evaluation
-    response = client.post("/v1/evals", json={
+
+    # Create evaluation (inline dataset)
+    resp = client.post("/api/v1/evaluations", json={
         "name": "test_eval",
         "eval_type": "exact_match",
-        "eval_spec": {"threshold": 1.0},
-        "dataset": [{"input": {"output": "test"}, "expected": {"output": "test"}}]
+        "eval_spec": {"metrics": ["exact_match"]},
+        "dataset": [{"input": {"text": "test"}, "expected": {"text": "test"}}]
     })
-    assert response.status_code == 201
-    eval_id = response.json()["id"]
-    
-    # Run evaluation
-    response = client.post(f"/v1/evals/{eval_id}/runs", json={
+    assert resp.status_code in (200, 201)
+    eval_id = resp.json()["id"]
+
+    # Start a run
+    resp = client.post(f"/api/v1/evaluations/{eval_id}/runs", json={
         "target_model": "test",
         "config": {"temperature": 0}
     })
-    assert response.status_code == 202
-    run_id = response.json()["id"]
-    
-    # Check results
-    import asyncio
-    await asyncio.sleep(1)  # Wait for processing
-    
-    response = client.get(f"/v1/runs/{run_id}/results")
-    assert response.status_code == 200
-    assert response.json()["results"]["aggregate"]["pass_rate"] == 1.0
+    assert resp.status_code in (200, 202)
+    run_id = resp.json()["id"]
+
+    # Poll run (results included on completion)
+    resp = client.get(f"/api/v1/evaluations/runs/{run_id}")
+    assert resp.status_code == 200
 ```
 
 ### Mocking External Services
@@ -667,7 +695,7 @@ except EvaluationTimeoutError as e:
 
 ## Migration Guide
 
-### From Legacy to OpenAI-Compatible API
+### From Legacy to Unified Evaluations API
 
 ```python
 # Old API call
@@ -680,17 +708,14 @@ eval_id = await manager.store_evaluation(
     results=results
 )
 
-# New API call
-from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+# New API call (unified service)
+from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
 
-db = EvaluationsDatabase()
-eval_id = db.create_evaluation(
+svc = UnifiedEvaluationService()
+evaluation = await svc.create_evaluation(
     name="geval_summary",
     eval_type="model_graded",
-    eval_spec={
-        "sub_type": "summarization",
-        "evaluator_model": "gpt-4"
-    }
+    eval_spec={"sub_type": "summarization", "model": "gpt-4"}
 )
 ```
 
@@ -713,7 +738,7 @@ eval_id = db.create_evaluation(
 - Real-time collaboration features
 
 ## Resources
-- [API Reference](../API-related/Evaluations_API_Reference.md)
+- [Unified API Reference](../API-related/Evaluations_API_Unified_Reference.md)
 - [User Guide](../User_Guides/Evaluations_User_Guide.md)
 - [OpenAI Evals](https://github.com/openai/evals) - Compatible format
 - [Test Suite](/tests/Evaluations/) - Example implementations

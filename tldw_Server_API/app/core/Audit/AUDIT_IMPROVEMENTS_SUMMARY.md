@@ -1,5 +1,7 @@
 # Audit Module Improvements Summary
 
+Note: This document contains historical notes that reference legacy modules such as `core/Audit/audit_logger.py` and `core/Evaluations/audit_logger.py`. These modules have been removed in favor of the unified audit service (`core/Audit/unified_audit_service.py`). Any references to the legacy modules are for context only.
+
 ## Overview
 This document summarizes the critical fixes and improvements made to the audit logging system in tldw_server.
 
@@ -89,26 +91,24 @@ After (unified system):
 
 ## Usage Examples
 
-### Basic Event Logging
+### Basic Event Logging (via dependency injection)
 ```python
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    get_unified_audit_service,
-    AuditEventType,
-    AuditContext
-)
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext, UnifiedAuditService
 
-service = await get_unified_audit_service()
-
-# Log an event
-await service.log_event(
-    event_type=AuditEventType.AUTH_LOGIN_SUCCESS,
-    context=AuditContext(
-        user_id="user123",
-        ip_address="192.168.1.1",
-        session_id="sess456"
-    ),
-    metadata={"browser": "Chrome", "version": "120"}
-)
+async def handler(
+    audit_service: UnifiedAuditService = Depends(get_audit_service_for_user)
+):
+    await audit_service.log_event(
+        event_type=AuditEventType.AUTH_LOGIN_SUCCESS,
+        context=AuditContext(
+            user_id="user123",
+            ip_address="192.168.1.1",
+            session_id="sess456"
+        ),
+        metadata={"browser": "Chrome", "version": "120"}
+    )
 ```
 
 ### Using Context Manager
@@ -129,15 +129,17 @@ async with audit_operation(
 
 ### Querying Audit Logs
 ```python
+from datetime import datetime, timedelta
+
 # Query by user
-events = await service.query_events(
+events = await audit_service.query_events(
     user_id="user123",
     start_time=datetime.now() - timedelta(days=7),
     min_risk_score=50  # Only high-risk events
 )
 
 # Query by correlation
-related_events = await service.query_events(
+related_events = await audit_service.query_events(
     correlation_id="corr-abc-123"
 )
 ```
@@ -162,7 +164,7 @@ related_events = await service.query_events(
 
 ## Testing
 
-Comprehensive test suite created in `tests/Audit/test_audit_improvements.py`:
+Comprehensive test suite created in `tests/Audit/test_unified_audit_service.py`:
 - Tests for all critical fixes
 - PII detection validation
 - Risk scoring verification
@@ -171,7 +173,25 @@ Comprehensive test suite created in `tests/Audit/test_audit_improvements.py`:
 
 Run tests:
 ```bash
-python -m pytest tldw_Server_API/tests/Audit/test_audit_improvements.py -v
+python -m pytest tldw_Server_API/tests/Audit/test_unified_audit_service.py -v
+
+### Export
+```python
+# Export recent high‑risk events to JSON string
+from datetime import datetime, timedelta, timezone
+events_json = await audit_service.export_events(
+    start_time=datetime.now(timezone.utc) - timedelta(days=7),
+    min_risk_score=70,
+    format="json",
+)
+
+# Export all API events to CSV file
+await audit_service.export_events(
+    categories=[AuditEventCategory.API_CALL],
+    format="csv",
+    file_path="./Databases/audit_exports/api_events.csv",
+)
+```
 ```
 
 ## Performance Metrics

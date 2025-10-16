@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
 
-from tldw_Server_API.app.main import app
+from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.tests.test_config import TestConfig
@@ -38,14 +38,14 @@ def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
         return User(id=1, username="testuser", email="test@example.com", is_active=True)
 
     # Apply dependency overrides
-    app.dependency_overrides[get_chacha_db_for_user] = override_get_db
-    app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db
+    fastapi_app.dependency_overrides[get_request_user] = override_user
 
     # Provide a TestClient with default X-API-KEY header for all requests
     default_headers = {"X-API-KEY": TestConfig.TEST_API_KEY}
-    with TestClient(app, headers=default_headers) as c:
+    with TestClient(fastapi_app, headers=default_headers) as c:
         yield c
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
 def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):

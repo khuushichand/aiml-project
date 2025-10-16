@@ -22,20 +22,29 @@ from enum import Enum
 from loguru import logger
 
 # Import database components
-from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_evaluations_database as _create_evals_db,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 # Import evaluation engines
-from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
-from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 
 # Import support services
-from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter, UserTier
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
-from tldw_Server_API.app.core.Evaluations.audit_logger import AuditLogger, AuditEventType
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_created,
+    log_evaluation_updated,
+    log_evaluation_deleted,
+    log_run_started,
+    log_run_cancelled,
+    log_dataset_created,
+    log_dataset_deleted,
+)
+from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
 
 
 class EvaluationType(str, Enum):
@@ -64,7 +73,7 @@ class UnifiedEvaluationService:
     
     def __init__(
         self,
-        db_path: str = "Databases/evaluations.db",
+        db_path: str = str(DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id())),
         *,
         enable_webhooks: bool = True,
         enable_caching: bool = True
@@ -84,11 +93,16 @@ class UnifiedEvaluationService:
         # Lifecycle flag
         self._initialized = False
 
-        # Initialize database
-        self.db = EvaluationsDatabase(db_path)
+        # Initialize database (allow override via env for tests)
+        import os as _os
+        _override_db = _os.getenv("EVALUATIONS_TEST_DB_PATH")
+        effective_db_path = _override_db or db_path
+        # Use backend-aware factory so Postgres content backend is honored
+        self.db = _create_evals_db(db_path=effective_db_path)
         
-        # Initialize evaluation runner for async processing
-        self.runner = EvaluationRunner(db_path)
+        # Initialize evaluation runner for async processing (lazy import)
+        from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
+        self.runner = EvaluationRunner(effective_db_path)
         
         # Initialize evaluation engines (lazy loading)
         self._rag_evaluator = None
@@ -106,8 +120,58 @@ class UnifiedEvaluationService:
             )
         )
         
-        # Initialize audit logger
-        self.audit_logger = AuditLogger()
+        # Audit logger shim for backward compatibility in tests
+        class _AuditShim:
+            def evaluation_created(self, *, user_id: str, eval_id: str, name: str, eval_type: str) -> None:
+                try:
+                    log_evaluation_created(user_id=user_id, eval_id=eval_id, name=name, eval_type=eval_type)
+                except Exception:
+                    pass
+
+            def evaluation_updated(self, *, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
+                try:
+                    log_evaluation_updated(user_id=user_id, eval_id=eval_id, updates=updates)
+                except Exception:
+                    pass
+
+            def evaluation_deleted(self, *, user_id: str, eval_id: str) -> None:
+                try:
+                    log_evaluation_deleted(user_id=user_id, eval_id=eval_id)
+                except Exception:
+                    pass
+
+            def run_started(self, *, user_id: str, run_id: str, eval_id: str, target_model: str) -> None:
+                try:
+                    log_run_started(user_id=user_id, run_id=run_id, eval_id=eval_id, target_model=target_model)
+                except Exception:
+                    pass
+
+            def run_cancelled(self, *, user_id: str, run_id: str) -> None:
+                try:
+                    log_run_cancelled(user_id=user_id, run_id=run_id)
+                except Exception:
+                    pass
+
+            def dataset_created(self, *, user_id: str, dataset_id: str, name: str, samples: int) -> None:
+                try:
+                    log_dataset_created(user_id=user_id, dataset_id=dataset_id, name=name, samples=samples)
+                except Exception:
+                    pass
+
+            def dataset_deleted(self, *, user_id: str, dataset_id: str) -> None:
+                try:
+                    log_dataset_deleted(user_id=user_id, dataset_id=dataset_id)
+                except Exception:
+                    pass
+
+        self.audit_logger = _AuditShim()
+
+        # Initialize per-service webhook manager bound to this DB
+        try:
+            from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
+            self.webhook_manager = WebhookManager(db_path=effective_db_path)
+        except Exception:
+            self.webhook_manager = None
         
         logger.info("Unified Evaluation Service initialized")
 
@@ -221,14 +285,8 @@ class UnifiedEvaluationService:
                 metadata=metadata
             )
             
-            # Log audit event
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_CREATE,
-                action="create",
-                user_id=created_by,
-                resource_id=eval_id,
-                details={"name": name, "type": eval_type}
-            )
+            # Unified audit
+            log_evaluation_created(user_id=created_by, eval_id=eval_id, name=name, eval_type=eval_type)
             
             # Get and return created evaluation
             evaluation = self.db.get_evaluation(eval_id)
@@ -289,13 +347,7 @@ class UnifiedEvaluationService:
             success = self.db.update_evaluation(eval_id, updates)
             
             if success:
-                self.audit_logger.log_event(
-                    event_type=AuditEventType.EVALUATION_UPDATE,
-                    action="update",
-                    user_id=updated_by,
-                    resource_id=eval_id,
-                    details={"updates": list(updates.keys())}
-                )
+                log_evaluation_updated(user_id=updated_by, eval_id=eval_id, updates=updates)
             
             return success
             
@@ -313,12 +365,7 @@ class UnifiedEvaluationService:
             success = self.db.delete_evaluation(eval_id)
             
             if success:
-                self.audit_logger.log_event(
-                    event_type=AuditEventType.EVALUATION_DELETE,
-                    action="delete",
-                    user_id=deleted_by,
-                    resource_id=eval_id
-                )
+                log_evaluation_deleted(user_id=deleted_by, eval_id=eval_id)
             
             return success
             
@@ -367,6 +414,7 @@ class UnifiedEvaluationService:
             
             # Send webhook for run started
             if webhook_url and self.enable_webhooks:
+                from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                 await webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_STARTED,
@@ -398,17 +446,8 @@ class UnifiedEvaluationService:
                 )
             )
             
-            # Log audit event
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_RUN,
-                action="create",
-                user_id=created_by,
-                resource_id=run_id,
-                details={
-                    "eval_id": eval_id,
-                    "target_model": target_model
-                }
-            )
+            # Unified audit
+            log_run_started(user_id=created_by, run_id=run_id, eval_id=eval_id, target_model=target_model)
             
             # Return run info
             run = self.db.get_run(run_id)
@@ -437,9 +476,9 @@ class UnifiedEvaluationService:
             )
             
             # Send completion webhook
-            if eval_config.get("webhook_url") and self.enable_webhooks:
+            if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
                 run = self.db.get_run(run_id)
-                await webhook_manager.send_webhook(
+                await self.webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_COMPLETED,
                     evaluation_id=run_id,
@@ -457,8 +496,8 @@ class UnifiedEvaluationService:
             self.db.update_run_status(run_id, "failed", error_message=str(e))
             
             # Send failure webhook
-            if eval_config.get("webhook_url") and self.enable_webhooks:
-                await webhook_manager.send_webhook(
+            if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+                await self.webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_FAILED,
                     evaluation_id=run_id,
@@ -502,12 +541,7 @@ class UnifiedEvaluationService:
                 # Update status directly if not in runner
                 self.db.update_run_status(run_id, "cancelled")
             
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_RUN,
-                action="cancel",
-                user_id=cancelled_by,
-                resource_id=run_id
-            )
+            log_run_cancelled(user_id=cancelled_by, run_id=run_id)
             
             return True
             
@@ -544,6 +578,9 @@ class UnifiedEvaluationService:
             start_time = time.time()
             
             # Track metrics
+            # Lazy import to avoid heavy chat stack at module import time
+            from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
+
             if advanced_metrics.enabled:
                 with advanced_metrics.track_sli_request("/evaluations/geval"):
                     result = await asyncio.to_thread(
@@ -586,6 +623,7 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
+                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     # Normalize single-user id to fixed numeric id when appropriate
                     effective_user_id = user_id
                     if user_id == "single_user":
@@ -690,6 +728,7 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
+                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     effective_user_id = user_id
                     if user_id == "single_user":
                         try:
@@ -789,6 +828,7 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
+                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     effective_user_id = user_id
                     if user_id == "single_user":
                         try:
@@ -1092,13 +1132,7 @@ class UnifiedEvaluationService:
                 metadata=metadata
             )
             
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_CREATE,
-                action="create",
-                user_id=created_by,
-                resource_id=dataset_id,
-                details={"name": name, "samples": len(samples)}
-            )
+            log_dataset_created(user_id=created_by, dataset_id=dataset_id, name=name, samples=len(samples))
             
             return dataset_id
             
@@ -1136,12 +1170,7 @@ class UnifiedEvaluationService:
             success = self.db.delete_dataset(dataset_id)
             
             if success:
-                self.audit_logger.log_event(
-                    event_type=AuditEventType.EVALUATION_DELETE,
-                    action="delete",
-                    user_id=deleted_by,
-                    resource_id=dataset_id
-                )
+                log_dataset_deleted(user_id=deleted_by, dataset_id=dataset_id)
             
             return success
             
@@ -1395,6 +1424,16 @@ class UnifiedEvaluationService:
 
 # Singleton instance
 _service_instance = None
+_service_instances_lock = None
+
+# LRU cache for per-user services to bound memory in long‑lived servers
+try:
+    from collections import OrderedDict
+except Exception:  # pragma: no cover - stdlib guard
+    OrderedDict = dict  # type: ignore
+
+_MAX_SERVICE_INSTANCES = 128
+_service_instances_by_user: "OrderedDict[int, UnifiedEvaluationService]" = OrderedDict()  # type: ignore[name-defined]
 
 
 def get_unified_evaluation_service(db_path: Optional[str] = None) -> UnifiedEvaluationService:
@@ -1410,8 +1449,53 @@ def get_unified_evaluation_service(db_path: Optional[str] = None) -> UnifiedEval
     global _service_instance
     
     if _service_instance is None:
-        _service_instance = UnifiedEvaluationService(
-            db_path or "Databases/evaluations.db"
-        )
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        _default_path = str(_DP.get_evaluations_db_path(_DP.get_single_user_id()))
+        _service_instance = UnifiedEvaluationService(db_path or _default_path)
     
     return _service_instance
+
+
+def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationService:
+    """Get or create a per-user unified evaluation service bound to that user's DB."""
+    # Lazy init lock to avoid import-time issues
+    global _service_instances_lock
+    if _service_instances_lock is None:
+        import threading as _threading
+        _service_instances_lock = _threading.Lock()
+
+    with _service_instances_lock:
+        # Return existing and mark as recently used
+        if user_id in _service_instances_by_user:
+            svc = _service_instances_by_user.pop(user_id)
+            # If tests override the DB via env, ensure the cached instance matches
+            try:
+                import os as _os
+                override_path = _os.getenv("EVALUATIONS_TEST_DB_PATH")
+                if override_path and getattr(getattr(svc, "db", None), "db_path", None) != override_path:
+                    # Replace with a new instance bound to the override path
+                    svc = UnifiedEvaluationService(db_path=override_path)
+            except Exception:
+                pass
+            _service_instances_by_user[user_id] = svc
+            return svc
+
+        # Create new service for this user
+        db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
+        svc = UnifiedEvaluationService(db_path=db_path)
+        _service_instances_by_user[user_id] = svc
+
+        # Evict least-recently-used if over capacity
+        if hasattr(_service_instances_by_user, "popitem") and len(_service_instances_by_user) > _MAX_SERVICE_INSTANCES:  # type: ignore[attr-defined]
+            try:
+                old_user_id, old_svc = _service_instances_by_user.popitem(last=False)  # type: ignore[arg-type]
+                # Best effort shutdown without blocking
+                try:
+                    import asyncio as _aio
+                    if hasattr(old_svc, "shutdown"):
+                        _aio.create_task(old_svc.shutdown())
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return svc

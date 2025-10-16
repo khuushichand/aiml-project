@@ -52,6 +52,33 @@ class TestPropositionEvaluationEndpoint:
         assert data["total_extracted"] == 2
         assert data["total_reference"] == 2
 
+    def test_proposition_evaluation_headers_present(self, client, auth_headers):
+        payload = {
+            "extracted": [
+                "Alice founded Acme Corp in 2020",
+                "Bob joined Acme in 2021",
+            ],
+            "reference": [
+                "Alice founded Acme Corp in 2020",
+                "Carol raised funding for Acme in 2022",
+            ],
+            "method": "jaccard",
+            "threshold": 0.5,
+        }
+        resp = client.post("/api/v1/evaluations/propositions", json=payload, headers=auth_headers)
+        assert resp.status_code == 200
+        # Assert rate-limit headers are present
+        headers = resp.headers
+        for key in [
+            "X-RateLimit-Tier",
+            "X-RateLimit-PerMinute-Limit",
+            "X-RateLimit-Daily-Limit",
+            "X-RateLimit-Daily-Remaining",
+            "X-RateLimit-Tokens-Remaining",
+            "X-RateLimit-Reset",
+        ]:
+            assert key in headers, f"Missing header: {key}"
+
 
 class TestPropositionRunFlow:
     def test_create_and_run_proposition_evaluation(self, client, auth_headers):

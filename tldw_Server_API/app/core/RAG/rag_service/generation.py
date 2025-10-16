@@ -540,6 +540,59 @@ async def generate_response(context: Any, **kwargs) -> Any:
     return context
 
 
+# Thin wrapper expected by unified_pipeline
+class AnswerGenerator:
+    """Minimal wrapper to generate answers used by unified_pipeline.
+
+    Provides a simple interface: initialize with optional model/provider and
+    call `generate(query=..., context=..., prompt_template=..., max_tokens=...)`.
+    Returns a plain string or a dict with an `answer` key for backward compatibility.
+    """
+
+    def __init__(self, model: Optional[str] = None, provider: Optional[str] = None, system_prompt: Optional[str] = None):
+        # Lazy-configure provider/model from env/config when not provided
+        try:
+            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+            cfg = load_and_log_configs() or {}
+        except Exception:
+            cfg = {}
+        self.provider = (provider or cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
+        self.model = (model or cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
+        self.system_prompt = system_prompt or cfg.get("RAG_DEFAULT_SYSTEM_PROMPT")
+
+    async def generate(
+        self,
+        *,
+        query: str,
+        context: str,
+        prompt_template: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> Union[str, Dict[str, Any]]:
+        # Build a minimal GenerationConfig and use LLMGenerator under the hood
+        gcfg = GenerationConfig(
+            provider=self.provider,
+            model=self.model,
+            max_tokens=int(max_tokens or 500),
+            prompt_template=(prompt_template or "default"),
+            system_prompt=self.system_prompt,
+        )
+        gen = LLMGenerator(gcfg)
+
+        # Create a tiny context holder compatible with BaseGenerator expectations
+        class _Ctx:
+            def __init__(self, documents: List[Document], query: str):
+                self.documents = documents
+                self.query = query
+
+        # Convert raw context string into a single Document to preserve downstream formatting
+        doc = Document(id="ctx", content=context or "", metadata={"source": "context", "title": "Context"})
+        ctx = _Ctx([doc], query)
+        res = await gen.generate(ctx, query)
+        # Normalize to simple shape
+        return {"answer": res.response, "provider": res.provider, "model": res.model, "tokens_used": res.tokens_used, "generation_time": res.generation_time}
+
+
 async def generate_streaming_response(context: Any, **kwargs) -> Any:
     """Generate streaming response for pipeline context."""
     config_dict = context.config.get("generation", {})
@@ -558,6 +611,10 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
     enable_claims = bool(kwargs.get("enable_claims", False))
     claims_top_k = int(kwargs.get("claims_top_k", 3))
     claims_max = int(kwargs.get("claims_max", 10))
+    try:
+        claims_concurrency = int(kwargs.get("claims_concurrency", 8))
+    except Exception:
+        claims_concurrency = 8
     
     if enable_claims and ClaimsEngine is not None:
         try:
@@ -594,6 +651,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
                                 claims_conf_threshold=0.75,
                                 claims_max=min(5, claims_max),
                                 retrieve_fn=None,
+                                claims_concurrency=claims_concurrency,
                             )
                             context.metadata["claims_overlay"] = claims_out
                             last_emit = len(buffer)

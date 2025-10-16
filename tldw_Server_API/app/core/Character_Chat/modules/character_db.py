@@ -28,6 +28,20 @@ def _prepare_character_data_for_db_storage(
     """
     db_data = input_data.copy() # Work on a copy
 
+    # Coerce scalar fields that must be strings to avoid driver type errors
+    for key in ("name", "description", "personality", "scenario", "system_prompt",
+                "post_history_instructions", "first_message", "message_example", "creator_notes",
+                "creator", "character_version"):
+        if key in db_data:
+            val = db_data[key]
+            if isinstance(val, tuple):
+                try:
+                    db_data[key] = val[0] if len(val) > 0 else ""
+                except Exception:
+                    db_data[key] = str(val)
+            elif not isinstance(val, (str, type(None))):
+                db_data[key] = str(val)
+
     # Handle image_base64: convert to bytes for 'image' field, with optimization
     if 'image_base64' in db_data:
         base64_str = db_data.pop('image_base64')
@@ -173,9 +187,13 @@ def update_existing_character_details(
 
 
 def delete_character_from_db(db: CharactersRAGDB, character_id: int, expected_version: int) -> bool:
-    """Delete a character from the database."""
+    """Soft-delete a character from the database (idempotent)."""
     try:
-        success = db.delete_character_card(character_id, expected_version)
+        # Prefer new soft-delete API; fallback to legacy name if present
+        if hasattr(db, "soft_delete_character_card"):
+            success = db.soft_delete_character_card(character_id, expected_version)
+        else:
+            success = db.delete_character_card(character_id, expected_version)  # type: ignore[attr-defined]
         if success:
             logger.info(f"Successfully deleted character {character_id}")
         else:
@@ -197,7 +215,8 @@ def search_characters_by_query_text(
 ) -> List[Dict[str, Any]]:
     """Search for characters by text query."""
     try:
-        results = db.search_character_cards(query, limit, offset)
+        # DB search API accepts (query, limit); offset not supported
+        results = db.search_character_cards(query, limit)
         logger.info(f"Character search for '{query}' returned {len(results)} results")
         return results
     except CharactersRAGDBError as e:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -13,6 +14,9 @@ from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
@@ -45,7 +49,7 @@ async def get_setup_status() -> Dict[str, Any]:
 
 
 @router.get("/config", openapi_extra={"security": []})
-async def get_setup_config() -> Dict[str, Any]:
+async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
     """Return the current configuration grouped by section for the setup UI."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -122,7 +126,8 @@ async def mark_setup_complete(
     plan_requested = False
     if payload.install_plan and not payload.install_plan.is_empty():
         plan_requested = True
-        background_tasks.add_task(execute_install_plan, payload.install_plan.dict())
+        plan_dict = model_dump_compat(payload.install_plan)
+        background_tasks.add_task(execute_install_plan, plan_dict)
 
     if payload.disable_first_time_setup:
         setup_manager.update_config({setup_manager.SETUP_SECTION: {"enable_first_time_setup": False}}, create_backup=False)
@@ -145,3 +150,94 @@ async def ask_setup_assistant(
         return setup_manager.answer_setup_question(payload.question)
     except ValueError as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    
+    "/reset",
+    summary="Reset first-time setup flags (admin)",
+    description=(
+        "Admin-only recovery endpoint to re-enable the guided setup flow by setting "
+        "enable_first_time_setup=true and setup_completed=false. Requires server restart."
+    ),
+)
+async def reset_setup_flags(_admin: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Admin-only: reset first-time setup flags for recovery.
+
+    Sets `enable_first_time_setup = true` and `setup_completed = false` in config.txt.
+    """
+    try:
+        setup_manager.reset_setup_flags()
+        return {
+            "success": True,
+            "message": "Setup flags reset. Restart the server and revisit /setup.",
+            "requires_restart": True,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to reset setup flags")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    
+    "/self-verify",
+    summary="Mark current user as verified (initial setup)",
+    description=(
+        "Local-only helper to mark the authenticated user as verified during initial setup. "
+        "Requires that the setup wizard is still enabled and not completed. Accepts either "
+        "Bearer JWT (Authorization header) or X-API-KEY for multi-user SQLite setups."
+    ),
+)
+async def setup_self_verify(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db=Depends(get_db_transaction),
+    _guard: None = Depends(require_local_setup_access),
+) -> Dict[str, Any]:
+    """Mark the authenticated account as verified when setup is in progress."""
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["needs_setup"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Self-verify is only available while initial setup is in progress.",
+        )
+
+    user_id = int(current_user.get("id"))
+    if not user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
+
+    raw_conn = getattr(db, "_conn", db)
+
+    def _conn_module_name(conn: Any) -> str:
+        module = getattr(conn.__class__, "__module__", "")
+        return module or ""
+
+    async def _maybe_commit(conn: Any) -> None:
+        commit = getattr(conn, "commit", None)
+        if not commit:
+            return
+        result = commit()
+        if inspect.isawaitable(result):
+            await result
+
+    try:
+        module_name = _conn_module_name(raw_conn)
+        is_asyncpg = module_name.startswith("asyncpg")
+
+        if is_asyncpg:
+            await db.execute(
+                "UPDATE users SET is_verified = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                True,
+                user_id,
+            )
+        else:
+            await db.execute(
+                "UPDATE users SET is_verified = ?, updated_at = datetime('now') WHERE id = ?",
+                (1, user_id),
+            )
+            await _maybe_commit(db)
+            if raw_conn is not db:
+                await _maybe_commit(raw_conn)
+        return {"success": True, "user_id": user_id, "message": "Account marked as verified."}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to self-verify during setup")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))

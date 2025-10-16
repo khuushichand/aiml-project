@@ -266,6 +266,36 @@ class TestHiggsAdapterMock:
             assert chat_ml["reference_audio_path"] == "/tmp/voice.wav"
             assert chat_ml["voice"] == "cloned"
 
+    async def test_chat_ml_includes_assistant_audio_with_voice_reference(self):
+        """Ensure assistant AudioContent is injected when voice_reference is provided."""
+        adapter = HiggsAdapter({})
+        request = TTSRequest(
+            text="Hello world",
+            voice="narrator",
+        )
+        voice_ref_path = "/tmp/ref.wav"
+        chat_ml = adapter._prepare_higgs_chat_ml(request, voice_ref_path)
+        assert "messages" in chat_ml
+        msgs = chat_ml["messages"]
+        assert len(msgs) >= 2
+
+        # Find assistant message
+        def _get_role(m):
+            return getattr(m, "role", m.get("role") if isinstance(m, dict) else None)
+
+        def _get_content(m):
+            return getattr(m, "content", m.get("content") if isinstance(m, dict) else None)
+
+        assistant = next((m for m in msgs if _get_role(m) == "assistant"), None)
+        assert assistant is not None, "Assistant message not found when voice reference provided"
+
+        content = _get_content(assistant)
+        # Content may be a dataclass (AudioContent) or a dict fallback
+        ctype = getattr(content, "type", content.get("type") if isinstance(content, dict) else None)
+        url = getattr(content, "audio_url", content.get("audio_url") if isinstance(content, dict) else None)
+        assert ctype == "audio"
+        assert url == voice_ref_path
+
 #######################################################################################################################
 #
 # End of test_higgs_adapter_mock.py

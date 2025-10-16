@@ -1,0 +1,427 @@
+<!-- LLM Diagnostics Tab -->
+<div id="tabLLMDiagnostics" class="tab-content">
+  <div class="endpoint-section" id="llmDiagnostics">
+    <h2>
+      <span class="endpoint-method get">GET</span>
+      <span class="endpoint-path">/api/v1/llm/providers - Diagnostics</span>
+    </h2>
+    <p>Live health metrics across providers. Click Refresh to pull latest.</p>
+
+    <button class="api-button" onclick="loadLLMDiagnostics()">Refresh Diagnostics</button>
+    <button class="api-button" onclick="downloadLLMHealthJSON()">Download JSON</button>
+
+    <div class="info-box" style="margin-top: 20px;">
+      <h4>Average Response Time (ms)</h4>
+      <div id="llmDiagAvgRt" class="chart"></div>
+    </div>
+
+    <div class="info-box" style="margin-top: 20px;">
+      <h4>Error Rate (%)</h4>
+      <div id="llmDiagErrorRate" class="chart"></div>
+    </div>
+
+    <div class="info-box" style="margin-top: 20px;">
+      <h4>Queue Metrics</h4>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <button class="api-button" onclick="loadQueueStatus()">Refresh Queue</button>
+        <label style="font-family: monospace; font-size: 13px; display:flex; align-items:center; gap:6px;">
+          <input id="llmDiagQueueAuto" type="checkbox" onchange="toggleQueueStatusAuto(this.checked)"> Auto-refresh
+          <input id="llmDiagQueueInterval" type="number" min="1" max="60" value="10" style="width:64px;" title="Seconds">
+          <span style="font-family: monospace; font-size: 12px;">sec</span>
+        </label>
+      </div>
+      <div id="llmDiagQueueStatus" style="margin-top:10px; font-family: monospace; font-size: 13px;"></div>
+    </div>
+
+    <div class="info-box" style="margin-top: 20px;">
+      <h4>Queue Activity (Recent)</h4>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <label style="font-family: monospace; font-size: 13px;">Limit <input id="llmDiagQueueLimit" type="number" min="1" max="1000" value="50" style="width:80px;"></label>
+        <button class="api-button" onclick="loadQueueActivity()">Refresh Activity</button>
+        <label style="font-family: monospace; font-size: 13px; display:flex; align-items:center; gap:6px;">
+          <input id="llmDiagQueueActivityAuto" type="checkbox" onchange="toggleQueueActivityAuto(this.checked)"> Auto-refresh
+          <input id="llmDiagQueueActivityInterval" type="number" min="1" max="60" value="10" style="width:64px;" title="Seconds">
+          <span style="font-family: monospace; font-size: 12px;">sec</span>
+        </label>
+        <button class="api-button" onclick="copyQueueActivityCSV()">Copy as CSV</button>
+        <button class="api-button" onclick="downloadQueueActivityCSV()">Download CSV</button>
+      </div>
+      <div id="llmDiagQueueActivity" style="margin-top:10px; max-height:300px; overflow:auto; font-family: monospace; font-size: 12px;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadLLMDiagnostics() {
+  try {
+    const respEl = document.getElementById('llmProvidersList_response');
+    // Call providers endpoint directly
+    const response = await fetch('/api/v1/llm/providers', { credentials: 'same-origin' });
+    const data = await response.json();
+    // Apply diagnostics UI config (interval bounds) if provided by server
+    applyDiagnosticsUIConfig(data);
+    // Render charts
+    renderDiagCharts(data);
+  } catch (e) {
+    console.error('Failed diagnostics load', e);
+  }
+}
+
+function renderDiagCharts(data) {
+  const healths = (data.providers || []).map(p => ({
+    name: p.name,
+    health: p.health || {}
+  }));
+  // Average Response Time chart
+  const avgRtContainer = document.getElementById('llmDiagAvgRt');
+  const errContainer = document.getElementById('llmDiagErrorRate');
+  if (!avgRtContainer || !errContainer) return;
+  const itemsRt = healths.map(h => ({
+    name: h.name,
+    val: h.health.average_response_time != null ? Math.round(h.health.average_response_time * 1000) : null
+  })).filter(x => x.val != null);
+  const maxRt = itemsRt.reduce((m, x) => Math.max(m, x.val), 0) || 1;
+  avgRtContainer.innerHTML = itemsRt.length ? itemsRt.map(x => {
+    const w = Math.max(2, Math.round((x.val / maxRt) * 260));
+    return `<div class="bar"><span class="label">${x.name}</span><span class="meter" style="width:${w}px;"></span><span class="value">${x.val}</span></div>`;
+  }).join('') : '<p>No data</p>';
+
+  // Error rate chart
+  const itemsErr = healths.map(h => {
+    const sc = h.health.success_count || 0;
+    const fc = h.health.failure_count || 0;
+    const tot = sc + fc;
+    return {
+      name: h.name,
+      val: tot > 0 ? Math.round((fc * 1000 / tot)) / 10 : 0
+    }
+  });
+  const maxErr = itemsErr.reduce((m, x) => Math.max(m, x.val), 0) || 1;
+  errContainer.innerHTML = itemsErr.map(x => {
+    const w = Math.max(2, Math.round((x.val / maxErr) * 260));
+    const color = x.val < 5 ? '#2e7d32' : (x.val < 20 ? '#f9a825' : '#c62828');
+    return `<div class="bar"><span class="label">${x.name}</span><span class="meter" style="width:${w}px; background-color:${color}"></span><span class="value">${x.val}</span></div>`;
+  }).join('');
+}
+
+// Auto-load when diagnostics tab is opened
+document.addEventListener('DOMContentLoaded', () => {
+  const tab = document.getElementById('tabLLMDiagnostics');
+  if (tab && tab.classList.contains('active')) {
+    loadLLMDiagnostics();
+  }
+});
+
+async function loadQueueActivity() {
+  try {
+    const limitEl = document.getElementById('llmDiagQueueLimit');
+    const lim = limitEl ? parseInt(limitEl.value || '50') : 50;
+    const res = await fetch(`/api/v1/chat/queue/activity?limit=${encodeURIComponent(lim)}`, { credentials: 'same-origin' });
+    if (!res.ok) {
+      const wrap = document.getElementById('llmDiagQueueActivity');
+      if (wrap) wrap.innerHTML = `<p style="color:#b71c1c;">Error: ${res.status} (check limit bounds)</p>`;
+      return;
+    }
+    const data = await res.json();
+    const wrap = document.getElementById('llmDiagQueueActivity');
+    if (!wrap) return;
+    if (!data || !data.enabled) {
+      wrap.innerHTML = '<p>Queue not initialized</p>';
+      return;
+    }
+    const items = (data.activity || []).slice().reverse(); // newest first visually
+    window.__llmQueueActivity = items;
+    if (!items.length) {
+      wrap.innerHTML = '<p>No recent activity</p>';
+      return;
+    }
+    // Render as simple table
+    let html = '<table style="width:100%; border-collapse:collapse;">';
+    html += '<thead><tr>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">time</th>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">request_id</th>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">client</th>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">prio</th>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">stream</th>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">result</th>'
+         + '<th style="text-align:left; border-bottom:1px solid #ddd; padding:4px;">dur(ms)</th>'
+         + '</tr></thead><tbody>';
+    const prioMap = {1:'CRITICAL',2:'HIGH',3:'NORMAL',4:'LOW'};
+    html += items.map(x => {
+      const dt = new Date((x.ts || 0) * 1000).toLocaleTimeString();
+      const dms = Math.round((x.duration || 0) * 1000);
+      return `<tr>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${dt}</td>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${x.request_id || ''}</td>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${x.client_id || ''}</td>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${prioMap[x.priority] || x.priority}</td>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${x.streaming ? 'yes' : 'no'}</td>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${x.result || ''}</td>`
+        + `<td style=\"border-bottom:1px solid #eee; padding:4px;\">${dms}</td>`
+        + `</tr>`;
+    }).join('');
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  } catch (e) {
+    // Silent failure in the diagnostics panel
+  }
+}
+
+async function loadQueueStatus() {
+  try {
+    const wrap = document.getElementById('llmDiagQueueStatus');
+    if (!wrap) return;
+    const res = await fetch('/api/v1/chat/queue/status', { credentials: 'same-origin' });
+    const data = await res.json();
+    if (!data || !data.enabled) {
+      wrap.innerHTML = '<p>Queue not initialized</p>';
+      return;
+    }
+    const q = data.queue_size || 0;
+    const proc = data.processing_count || 0;
+    const maxQ = data.max_queue_size || 0;
+    const maxC = data.max_concurrent || 0;
+    const totP = data.total_processed || 0;
+    const totR = data.total_rejected || 0;
+    const running = data.is_running ? 'running' : 'stopped';
+    wrap.innerHTML = `Queue: ${q}/${maxQ} | Processing: ${proc}/${maxC} | Status: ${running} | Total processed: ${totP} | Rejected: ${totR}`;
+  } catch (e) { /* ignore */ }
+}
+
+let __llmQueueStatusTimer = null;
+function toggleQueueStatusAuto(enabled) {
+  if (enabled) {
+    if (window.__llmQueueStatusTimer) clearInterval(window.__llmQueueStatusTimer);
+    const sec = getDiagQueueIntervalSeconds();
+    loadQueueStatus();
+    window.__llmQueueStatusTimer = setInterval(loadQueueStatus, sec * 1000);
+    try { localStorage.setItem('llm_diag_queue_auto', '1'); } catch (e) {}
+    try { localStorage.setItem('llm_diag_queue_interval', String(sec)); } catch (e) {}
+  } else {
+    if (window.__llmQueueStatusTimer) clearInterval(window.__llmQueueStatusTimer);
+    window.__llmQueueStatusTimer = null;
+    try { localStorage.removeItem('llm_diag_queue_auto'); } catch (e) {}
+  }
+}
+
+// Restore auto-refresh preference on diagnostics load
+document.addEventListener('DOMContentLoaded', () => {
+  const auto = document.getElementById('llmDiagQueueAuto');
+  if (auto) {
+    const saved = localStorage.getItem('llm_diag_queue_auto') === '1';
+    auto.checked = saved;
+    const intEl = document.getElementById('llmDiagQueueInterval');
+    const savedInt = parseInt(localStorage.getItem('llm_diag_queue_interval') || '10');
+    if (intEl && Number.isFinite(savedInt)) intEl.value = String(Math.min(60, Math.max(1, savedInt)));
+    if (saved) toggleQueueStatusAuto(true);
+    if (intEl) intEl.addEventListener('change', () => {
+      // If auto is on, restart timer with new interval
+      if (auto.checked) toggleQueueStatusAuto(true);
+    });
+  }
+  const actAuto = document.getElementById('llmDiagQueueActivityAuto');
+  if (actAuto) {
+    const savedA = localStorage.getItem('llm_diag_queue_activity_auto') === '1';
+    actAuto.checked = savedA;
+    const intElA = document.getElementById('llmDiagQueueActivityInterval');
+    const savedIntA = parseInt(localStorage.getItem('llm_diag_queue_activity_interval') || '10');
+    if (intElA && Number.isFinite(savedIntA)) intElA.value = String(Math.min(60, Math.max(1, savedIntA)));
+    if (savedA) toggleQueueActivityAuto(true);
+    if (intElA) intElA.addEventListener('change', () => {
+      if (actAuto.checked) toggleQueueActivityAuto(true);
+    });
+  }
+});
+
+async function copyQueueActivityCSV() {
+  try {
+    const items = window.__llmQueueActivity || [];
+    if (!items.length) return;
+    const headers = ['ts_iso','request_id','client_id','priority','streaming','result','duration_ms'];
+    const rows = items.map(x => [
+      x.ts ? new Date(x.ts * 1000).toISOString() : '',
+      x.request_id || '',
+      x.client_id || '',
+      x.priority != null ? x.priority : '',
+      x.streaming ? 'yes' : 'no',
+      x.result || (x.error ? 'error' : ''),
+      Math.round((x.duration || 0) * 1000)
+    ]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(cell => String(cell).replace(/"/g,'""')).map(c => /[",\n]/.test(c) ? `"${c}"` : c).join(','))].join('\n');
+    await navigator.clipboard.writeText(csv);
+  } catch (e) {
+    // Fallback to download
+    try {
+      const items = window.__llmQueueActivity || [];
+      const headers = ['ts_iso','request_id','client_id','priority','streaming','result','duration_ms'];
+      const rows = items.map(x => [
+        x.ts ? new Date(x.ts * 1000).toISOString() : '',
+        x.request_id || '',
+        x.client_id || '',
+        x.priority != null ? x.priority : '',
+        x.streaming ? 'yes' : 'no',
+        x.result || (x.error ? 'error' : ''),
+        Math.round((x.duration || 0) * 1000)
+      ]);
+      const csv = [headers.join(','), ...rows.map(r => r.map(cell => String(cell).replace(/"/g,'""')).map(c => /[",\n]/.test(c) ? `"${c}"` : c).join(','))].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `queue_activity_${new Date().toISOString()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }
+}
+
+function buildQueueActivityCSV() {
+  const items = window.__llmQueueActivity || [];
+  const headers = ['ts_iso','request_id','client_id','priority','streaming','result','duration_ms'];
+  const rows = items.map(x => [
+    x.ts ? new Date(x.ts * 1000).toISOString() : '',
+    x.request_id || '',
+    x.client_id || '',
+    x.priority != null ? x.priority : '',
+    x.streaming ? 'yes' : 'no',
+    x.result || (x.error ? 'error' : ''),
+    Math.round((x.duration || 0) * 1000)
+  ]);
+  return [headers.join(','), ...rows.map(r => r.map(cell => String(cell).replace(/"/g,'""')).map(c => /[",\n]/.test(c) ? `"${c}"` : c).join(','))].join('\n');
+}
+
+async function downloadQueueActivityCSV() {
+  try {
+    const items = window.__llmQueueActivity || [];
+    if (!items.length) return;
+    const csv = buildQueueActivityCSV();
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `queue_activity_${new Date().toISOString()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) { /* ignore */ }
+}
+
+window.__llmQueueStatusTimer = window.__llmQueueStatusTimer || null;
+window.__llmQueueActivityTimer = window.__llmQueueActivityTimer || null;
+function getDiagQueueIntervalSeconds() {
+  const el = document.getElementById('llmDiagQueueInterval');
+  const v = el ? parseInt(el.value || '10') : 10;
+  const min = el && el.min ? parseInt(el.min) : 1;
+  const max = el && el.max ? parseInt(el.max) : 60;
+  return Math.min(max, Math.max(min, Number.isFinite(v) ? v : 10));
+}
+function getDiagQueueActivityIntervalSeconds() {
+  const el = document.getElementById('llmDiagQueueActivityInterval');
+  const v = el ? parseInt(el.value || '10') : 10;
+  const min = el && el.min ? parseInt(el.min) : 1;
+  const max = el && el.max ? parseInt(el.max) : 60;
+  return Math.min(max, Math.max(min, Number.isFinite(v) ? v : 10));
+}
+function toggleQueueActivityAuto(enabled) {
+  if (enabled) {
+    if (window.__llmQueueActivityTimer) clearInterval(window.__llmQueueActivityTimer);
+    const sec = getDiagQueueActivityIntervalSeconds();
+    loadQueueActivity();
+    window.__llmQueueActivityTimer = setInterval(loadQueueActivity, sec * 1000);
+    try { localStorage.setItem('llm_diag_queue_activity_auto', '1'); } catch (e) {}
+    try { localStorage.setItem('llm_diag_queue_activity_interval', String(sec)); } catch (e) {}
+  } else {
+    if (window.__llmQueueActivityTimer) clearInterval(window.__llmQueueActivityTimer);
+    window.__llmQueueActivityTimer = null;
+    try { localStorage.removeItem('llm_diag_queue_activity_auto'); } catch (e) {}
+  }
+}
+
+// Cleanup timers when leaving Diagnostics tab
+window.cleanupLLMDiagnosticsTimers = function() {
+  try {
+    if (window.__llmQueueStatusTimer) { clearInterval(window.__llmQueueStatusTimer); window.__llmQueueStatusTimer = null; }
+    if (window.__llmQueueActivityTimer) { clearInterval(window.__llmQueueActivityTimer); window.__llmQueueActivityTimer = null; }
+  } catch (e) { /* ignore */ }
+}
+
+function applyDiagnosticsUIConfig(data) {
+  try {
+    const diag = data && data.diagnostics_ui ? data.diagnostics_ui : null;
+    if (!diag) return;
+    const qs = diag.queue_status_auto || {};
+    const qa = diag.queue_activity_auto || {};
+    const qsEl = document.getElementById('llmDiagQueueInterval');
+    const qaEl = document.getElementById('llmDiagQueueActivityInterval');
+    if (qsEl) {
+      if (Number.isFinite(parseInt(qs.min))) qsEl.min = String(Math.max(1, parseInt(qs.min)));
+      if (Number.isFinite(parseInt(qs.max))) qsEl.max = String(Math.max(1, parseInt(qs.max)));
+      const min = qsEl.min ? parseInt(qsEl.min) : 1;
+      const max = qsEl.max ? parseInt(qsEl.max) : 60;
+      const cur = parseInt(qsEl.value || '10');
+      const clamped = Math.min(max, Math.max(min, Number.isFinite(cur) ? cur : 10));
+      qsEl.value = String(clamped);
+      try { localStorage.setItem('llm_diag_queue_interval', String(clamped)); } catch (e) {}
+    }
+    if (qaEl) {
+      if (Number.isFinite(parseInt(qa.min))) qaEl.min = String(Math.max(1, parseInt(qa.min)));
+      if (Number.isFinite(parseInt(qa.max))) qaEl.max = String(Math.max(1, parseInt(qa.max)));
+      const minA = qaEl.min ? parseInt(qaEl.min) : 1;
+      const maxA = qaEl.max ? parseInt(qaEl.max) : 60;
+      const curA = parseInt(qaEl.value || '10');
+      const clampedA = Math.min(maxA, Math.max(minA, Number.isFinite(curA) ? curA : 10));
+      qaEl.value = String(clampedA);
+      try { localStorage.setItem('llm_diag_queue_activity_interval', String(clampedA)); } catch (e) {}
+    }
+  } catch (e) { /* best-effort */ }
+}
+</script>
+
+<script>
+async function downloadLLMHealthJSON() {
+  try {
+    const res = await fetch('/api/v1/llm/providers', { credentials: 'same-origin' });
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `llm_providers_health_${new Date().toISOString()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error('Failed to download providers health JSON', e);
+  }
+}
+</script>
+
+<style>
+.chart .bar {
+  display: flex;
+  align-items: center;
+  margin: 4px 0;
+}
+.chart .label {
+  width: 120px;
+  font-family: monospace;
+  font-size: 13px;
+}
+.chart .meter {
+  display: inline-block;
+  height: 12px;
+  background-color: #4f7cac;
+  margin: 0 8px;
+  border-radius: 3px;
+}
+.chart .value {
+  width: 60px;
+  text-align: right;
+  font-family: monospace;
+  font-size: 12px;
+}
+</style>

@@ -7,7 +7,13 @@ Supports both Redis (for distributed deployments) and in-memory (for single-inst
 import time
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
-import redis
+
+# Optional Redis import: allow running without redis-py installed
+try:  # pragma: no cover - environment-dependent
+    import redis  # type: ignore
+except Exception:  # ImportError or environment issues
+    redis = None  # type: ignore
+
 from loguru import logger
 from fastapi import HTTPException, status
 
@@ -21,7 +27,7 @@ class CharacterRateLimiter:
     
     def __init__(
         self,
-        redis_client: Optional[redis.Redis] = None,
+        redis_client: Optional[object] = None,
         max_operations: int = 100,
         window_seconds: int = 3600,
         max_characters: int = 1000,  # Max total characters per user
@@ -115,7 +121,7 @@ class CharacterRateLimiter:
                 logger.debug(f"Rate limit check for user {user_id}: {remaining} operations remaining")
                 return True, remaining
                 
-            except redis.RedisError as e:
+            except Exception as e:
                 logger.error(f"Redis error in rate limiter: {e}. Falling back to memory.")
                 # Fall through to in-memory implementation
         
@@ -221,7 +227,7 @@ class CharacterRateLimiter:
                     "window_seconds": self.window_seconds,
                     "reset_time": now + self.window_seconds
                 }
-            except redis.RedisError:
+            except Exception:
                 pass
         
         # In-memory fallback
@@ -383,7 +389,7 @@ class CharacterRateLimiter:
                 remaining = max_count - current_count
                 return True, remaining
                 
-            except redis.RedisError as e:
+            except Exception as e:
                 logger.error(f"Redis error in rate limiter: {e}. Falling back to memory.")
         
         # In-memory fallback - use operation-specific store
@@ -427,6 +433,13 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
     if _rate_limiter is None:
         # Initialize with Redis if available
         from tldw_Server_API.app.core.config import settings
+        import os
+
+        def _env_int(name: str, default_val: int) -> int:
+            try:
+                return int(os.getenv(name, str(default_val)))
+            except Exception:
+                return default_val
         
         redis_client = None
         if settings.get("REDIS_ENABLED", False):
@@ -445,15 +458,15 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
         
         _rate_limiter = CharacterRateLimiter(
             redis_client=redis_client,
-            max_operations=settings.get("CHARACTER_RATE_LIMIT_OPS", 100),
-            window_seconds=settings.get("CHARACTER_RATE_LIMIT_WINDOW", 3600),
-            max_characters=settings.get("MAX_CHARACTERS_PER_USER", 1000),
-            max_import_size_mb=settings.get("MAX_CHARACTER_IMPORT_SIZE_MB", 10),
+            max_operations=_env_int("CHARACTER_RATE_LIMIT_OPS", int(settings.get("CHARACTER_RATE_LIMIT_OPS", 100))),
+            window_seconds=_env_int("CHARACTER_RATE_LIMIT_WINDOW", int(settings.get("CHARACTER_RATE_LIMIT_WINDOW", 3600))),
+            max_characters=_env_int("MAX_CHARACTERS_PER_USER", int(settings.get("MAX_CHARACTERS_PER_USER", 1000))),
+            max_import_size_mb=_env_int("MAX_CHARACTER_IMPORT_SIZE_MB", int(settings.get("MAX_CHARACTER_IMPORT_SIZE_MB", 10))),
             # Chat-specific limits
-            max_chats_per_user=settings.get("MAX_CHATS_PER_USER", 100),
-            max_messages_per_chat=settings.get("MAX_MESSAGES_PER_CHAT", 1000),
-            max_chat_completions_per_minute=settings.get("MAX_CHAT_COMPLETIONS_PER_MINUTE", 20),
-            max_message_sends_per_minute=settings.get("MAX_MESSAGE_SENDS_PER_MINUTE", 60)
+            max_chats_per_user=_env_int("MAX_CHATS_PER_USER", int(settings.get("MAX_CHATS_PER_USER", 100))),
+            max_messages_per_chat=_env_int("MAX_MESSAGES_PER_CHAT", int(settings.get("MAX_MESSAGES_PER_CHAT", 1000))),
+            max_chat_completions_per_minute=_env_int("MAX_CHAT_COMPLETIONS_PER_MINUTE", int(settings.get("MAX_CHAT_COMPLETIONS_PER_MINUTE", 20))),
+            max_message_sends_per_minute=_env_int("MAX_MESSAGE_SENDS_PER_MINUTE", int(settings.get("MAX_MESSAGE_SENDS_PER_MINUTE", 60)))
         )
     
     return _rate_limiter

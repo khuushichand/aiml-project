@@ -1,0 +1,198 @@
+# Long-Term Admin Guide (Operations & Maintenance)
+
+Version: v0.1.0
+Audience: Operators and administrators running tldw_server in production
+
+This guide covers day‑2 operations: upgrades, backups, monitoring, capacity and cost management, security operations, and troubleshooting. Pair this with the Production Hardening checklist and Metrics Cheatsheet.
+
+Related documents
+- First-time production setup: `Docs/Deployment/First_Time_Production_Setup.md`
+- Production hardening checklist: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`
+- Reverse proxy examples: `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
+- Metrics & Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
+- Environment reference: `Env_Vars.md`
+
+## 1) Service Management
+
+Docker Compose
+- Start: `docker compose up -d`
+- Stop: `docker compose down`
+- Logs: `docker compose logs -f app`
+- Rebuild: `docker compose build app && docker compose up -d`
+- Scale workers (CPU bound): set `UVICORN_WORKERS` env and rebuild or override at runtime.
+ - Overrides: `docker-compose.override.yml` ships with production defaults.
+
+systemd (bare‑metal)
+- Status: `sudo systemctl status tldw`
+- Logs: `sudo journalctl -u tldw -f`
+- Restart: `sudo systemctl restart tldw`
+
+## 2) Upgrades & Rollbacks
+
+Recommended (Compose deployments)
+1. Back up databases and user data (see Backups).
+2. Pull changes: `git pull` (or update image tag if you publish images).
+3. Rebuild and restart: `docker compose up --build -d`.
+4. Verify health: `/health`, `/ready`, smoke tests.
+5. If issues: `docker compose logs app`, and roll back by checking out the previous commit/tag and rebuilding.
+
+Bare‑metal
+- Update code then reinstall: `pip install --upgrade .` or `pip install -r tldw_Server_API/requirements.txt` if pinned.
+- Restart the service.
+
+Database migrations
+- AuthNZ: startup runs migrations automatically; check logs for “Ensured AuthNZ migrations”.
+- Content/Workflows: see `Postgres_Migration_Guide.md` for SQLite→Postgres migration and validation.
+
+## 3) Backups & Restore
+
+What to back up
+- AuthNZ DB: Postgres (`pg_dump`) or SQLite file at `Databases/users.db`.
+- Content DBs: `Databases/Media_DB_v2.db` (and related) or Postgres content DBs if you’ve migrated.
+- Per‑user data: `Databases/user_databases/<user_id>/ChaChaNotes.db` and associated files.
+- Chroma/vector data: volume/directory you configured (default under `Databases/user_databases`).
+- Config: `.env`, `tldw_Server_API/Config_Files/config.txt`.
+- Optional: `logs/`, `server.log`, `Samples/` if you modified.
+
+PostgreSQL (example)
+```bash
+# Backup
+PG_DB=tldw_users
+PG_USER=tldw_user
+PG_HOST=localhost
+pg_dump -U "$PG_USER" -h "$PG_HOST" -F c -d "$PG_DB" > /backups/${PG_DB}_$(date +%F).dump
+
+# Restore
+pg_restore -U "$PG_USER" -h "$PG_HOST" -d "$PG_DB" -c /backups/${PG_DB}_YYYY-MM-DD.dump
+```
+
+SQLite (file copy)
+```bash
+# Quiesce app, then copy DB files
+cp Databases/*.db /backups/sqlite_$(date +%F)/
+```
+
+Disaster recovery (Compose)
+1. Provision a new host with Docker/Compose, same `.env` and volumes.
+2. Restore DB dumps/files and persistent volumes.
+3. Bring up stack and validate with `/health` and smoke tests.
+
+## 4) Monitoring & Alerting
+
+Endpoints
+- Health: `GET /health`, readiness: `GET /ready`.
+- Metrics (text): `GET /metrics` or `GET /api/v1/metrics/text`.
+- JSON metrics: `GET /api/v1/metrics/json`.
+- Chat/LLM cost and tokens: `GET /api/v1/metrics/chat`.
+
+Grafana + Prometheus
+- Use the sample dashboards and alerts referenced in `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`.
+- Suggested alerts: HTTP 5xx error rate, p95 latency, Postgres connection saturation, token/cost spikes, user storage near quota.
+
+Logs
+- Container logs (stdout/stderr) via `docker compose logs -f app`.
+- Bare‑metal via journal: `journalctl -u tldw -f`.
+- Adjust verbosity with `LOG_LEVEL`.
+ - Kubernetes: `kubectl logs -n tldw deploy/tldw-app -f`.
+
+## 5) Capacity, Performance & Cost
+
+Application
+- CPU workers: set `UVICORN_WORKERS` (default 4 in Dockerfile.prod). Monitor latency and CPU to tune.
+- Caching: ensure embeddings/model caches reside on fast disk; configure per module where available.
+- Background jobs: Chatbooks worker enabled by default (core backend). Control via `CHATBOOKS_CORE_WORKER_ENABLED`.
+
+Database
+- Prefer Postgres for multi‑user. Tune pool sizes with `TLDW_DB_POOL_SIZE`, `TLDW_DB_MAX_OVERFLOW`, `TLDW_DB_POOL_TIMEOUT`.
+- Postgres maintenance: schedule VACUUM/ANALYZE, monitor autovacuum, and size indices.
+- SQLite: enable WAL; avoid concurrent heavy writers.
+
+LLM providers & cost
+- Track provider usage and cost via metrics and admin endpoints listed in the README under Admin Reporting.
+- Use Virtual Keys and per‑provider allowlists where applicable to constrain usage.
+- Consider separate API keys per environment/user group for accountability.
+
+RAG & embeddings
+- For high concurrency, consider the enterprise embeddings worker/orchestrator topology (see Embeddings Deployment Guide).
+- Place vector stores on persistent, fast storage; monitor `embedding_cache_*` metrics.
+ - Kubernetes samples are provided under `Samples/Kubernetes`.
+
+## 6) Security Operations
+
+Secrets and auth
+- Rotate `SINGLE_USER_API_KEY` and `JWT_SECRET_KEY` on a schedule; rolling restarts will invalidate old sessions as configured.
+- Never print keys in production. Keep `SHOW_API_KEY_ON_STARTUP` unset/false with `tldw_production=true`.
+
+Registration controls (multi‑user)
+- Toggle with `ENABLE_REGISTRATION=true|false` and `REQUIRE_REGISTRATION_CODE=true|false`.
+- Default storage quota per user: `DEFAULT_STORAGE_QUOTA_MB`.
+
+Network
+- Enforce TLS at the proxy and restrict `ALLOWED_ORIGINS`.
+- Ensure WebSocket upgrade rules for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
+ - Caddy example: `Samples/Caddy/Caddyfile`.
+
+Rate limiting
+- Keep global and module‑specific rate limiters enabled; adjust per your user base.
+- Consider reverse‑proxy limits as an extra control plane.
+
+Auditing
+- Centralize and retain logs. Export audit logs periodically (see Multi‑User Deployment Guide examples).
+
+## 7) Routine Tasks (Checklist)
+
+Weekly
+- Review metrics dashboards for error spikes and slow endpoints.
+- Check Postgres for bloat/long‑running queries.
+- Validate backups (restore test in staging where possible).
+- Rotate logs and prune old container images/volumes.
+
+Monthly
+- Patch OS, Docker, and dependencies (rebuild images).
+- Rotate API/JWT secrets as policy dictates.
+- Review CORS and proxy configs; verify TLS renewal.
+
+## 8) Troubleshooting
+
+Common issues and fixes
+- 502/504 via proxy during long requests
+  - Increase proxy timeouts; ensure WebSocket upgrade where required.
+- Auth errors in production
+  - Verify `AUTH_MODE` and secrets; confirm `.env` is loaded. In single‑user, ensure header `X-API-KEY` is set.
+- “Database is locked” (SQLite)
+  - Switch to Postgres for multi‑user; enable WAL mode if staying on SQLite.
+- Postgres connection saturation
+  - Increase pool size (`TLDW_DB_POOL_SIZE`, `TLDW_DB_MAX_OVERFLOW`) and Postgres `max_connections`. Inspect `pg_stat_activity`.
+- High cost/usage spikes
+  - Check metrics `/api/v1/metrics/chat`, enforce provider/model allowlists, and rotate/limit keys.
+- Slow embeddings/LLM
+  - Use smaller models, enable GPU where available, or scale out orchestrator.
+
+Diagnostics
+```bash
+# Basic health
+curl -sS http://127.0.0.1:8000/health | jq .
+
+# Providers
+curl -sS -H "X-API-KEY: $SINGLE_USER_API_KEY" http://127.0.0.1:8000/api/v1/llm/providers | jq .
+
+# Metrics snapshot
+curl -sS http://127.0.0.1:8000/metrics | head -n 50
+```
+
+## 9) Change Management
+
+Recommended practice
+- Maintain environments: dev → staging → prod.
+- Tag releases and build images from tags; pin deployments to tags, not `main`.
+- Run smoke tests after deploy; roll back quickly on failures.
+
+## 10) References
+
+- README admin endpoints and usage reporting: `README.md`
+- Registration & AuthNZ configuration: `Docs/User_Guides/Authentication_Setup.md`
+- Multi‑User deployment patterns: `Docs/User_Guides/Multi-User_Deployment_Guide.md`
+- Reverse proxy and TLS: `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Postgres/SQLite backends: `Docs/Database-Backends.md`
+- Metrics and dashboards: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`

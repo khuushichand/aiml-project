@@ -20,7 +20,11 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 # --- Pydantic Models for OpenAI Chat Completion Request ---
 # Based on https://platform.openai.com/docs/api-reference/chat/create
 
-DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai") # Default if not set
+# In TEST_MODE default to local-llm to avoid external dependencies
+if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") and not os.getenv("DEFAULT_LLM_PROVIDER"):
+    DEFAULT_LLM_PROVIDER = "local-llm"
+else:
+    DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai")  # Default if not set
 model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading
@@ -55,6 +59,7 @@ def _get_setting(env_var, section, key, default=""):
     
     return default
 ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
+    "bedrock",
     "anthropic",
     "cohere",
     "deepseek",
@@ -126,6 +131,7 @@ API_KEYS = get_api_keys()
 
 # For type hinting - define explicitly
 SUPPORTED_API_ENDPOINTS = Literal[
+    "bedrock",
     "anthropic",
     "cohere",
     "deepseek",
@@ -288,6 +294,19 @@ class ChatCompletionRequest(BaseModel):
     tools: Optional[List[ToolDefinition]] = Field(None, max_length=128, description="Tools the model may call (provider support varies).")
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field("auto", description="Controls tool usage (provider support varies).")
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
+
+    # --- Bedrock Guardrails Extensions ---
+    extra_headers: Optional[Dict[str, str]] = Field(
+        None,
+        description="Provider-specific additional headers to include via the request body (e.g., Bedrock guardrails)."
+                    " For Bedrock, include keys: 'X-Amzn-Bedrock-GuardrailIdentifier',"
+                    " 'X-Amzn-Bedrock-GuardrailVersion', and optional 'X-Amzn-Bedrock-Trace'."
+    )
+    extra_body: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Provider-specific extra body content. For Bedrock guardrails, include"
+                    " 'amazon-bedrock-guardrailConfig': { 'tagSuffix': '...'} if needed."
+    )
 
     # --- Extended Parameters for chat_api_call ---
     minp: Optional[float] = Field(None, description="[Extension] Minimum probability threshold (provider specific).")

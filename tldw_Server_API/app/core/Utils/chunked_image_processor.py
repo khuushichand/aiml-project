@@ -227,15 +227,19 @@ class StreamingImageProcessor:
             header, base64_data = image_url.split(',', 1)
             mime_type = header.split(';')[0].split(':')[1]
             
-            # Check if we have memory available
-            async with self._lock:
-                if self.current_memory + max_size_bytes > self.max_memory:
-                    # Wait for memory to be available
-                    await asyncio.sleep(0.5)
-                    if self.current_memory + max_size_bytes > self.max_memory:
-                        return False, None, None, "Insufficient memory for processing"
-                
-                self.current_memory += max_size_bytes
+            # Check if we have memory available (wait politely without holding the lock)
+            attempts = 0
+            while True:
+                async with self._lock:
+                    if self.current_memory + max_size_bytes <= self.max_memory:
+                        self.current_memory += max_size_bytes
+                        break
+                    if max_size_bytes > self.max_memory:
+                        return False, None, None, "Requested image exceeds memory budget"
+                attempts += 1
+                if attempts >= 5:
+                    return False, None, None, "Insufficient memory for processing"
+                await asyncio.sleep(0.2)
             
             try:
                 # Process image in chunks

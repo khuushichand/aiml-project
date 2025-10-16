@@ -6,7 +6,8 @@ API endpoints for managing chunking templates.
 import json
 import re
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+import os
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
 from loguru import logger
 from pydantic import BaseModel
 
@@ -23,12 +24,122 @@ from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage, TemplateClassifier, TemplateLearner
+from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as _rx_check, compile_flags as _rx_flags, warn_ambiguity as _rx_warn
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
-router = APIRouter(prefix="/chunking/templates", tags=["chunking templates"])
+router = APIRouter(prefix="/chunking/templates", tags=["chunking-templates"])
+
+# In-memory fallback store for environments where DB methods are unavailable
+# Structure: { user_id: { template_name: record_dict } }
+_FALLBACK_TEMPLATES: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+def _now_iso() -> str:
+    try:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
+    except Exception:
+        return ""
+
+def _fb_bucket(user_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    uid = str(user_id or "default")
+    if uid not in _FALLBACK_TEMPLATES:
+        _FALLBACK_TEMPLATES[uid] = {}
+    return _FALLBACK_TEMPLATES[uid]
+
+def _supports(obj: Any, method: str) -> bool:
+    return hasattr(obj, method) and callable(getattr(obj, method, None))
+
+def _db_class_str(db: Any) -> str:
+    try:
+        return f"{db.__class__.__module__}.{db.__class__.__name__}"
+    except Exception:
+        return str(type(db))
+
+def _emit_db_capability_headers(response: Response, db: Any, required: List[str]) -> None:
+    if not isinstance(response, Response):
+        return
+    try:
+        response.headers["X-Template-DB-Class"] = _db_class_str(db)
+        missing = [m for m in required if not _supports(db, m)]
+        if missing:
+            response.headers["X-Template-DB-Capability"] = "fallback"
+            response.headers["X-Template-DB-Missing"] = ",".join(missing)
+            response.headers["X-Template-DB-Hint"] = (
+                "Ensure Media_DB_v2.MediaDatabase is used: "
+                "tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase"
+            )
+            logger.warning(
+                f"Chunking Templates DB missing methods {missing} on {response.headers.get('X-Template-DB-Class')} — "
+                "using in-memory fallback; hint: use Media_DB_v2.MediaDatabase"
+            )
+        else:
+            response.headers["X-Template-DB-Capability"] = "native"
+    except Exception:
+        pass
+
+
+@router.get("/diagnostics")
+async def diagnostics(
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    response: Response = None,
+):
+    """Diagnostics for chunking templates backend capabilities."""
+    required = [
+        "list_chunking_templates",
+        "get_chunking_template",
+        "create_chunking_template",
+        "update_chunking_template",
+        "delete_chunking_template",
+    ]
+    if response is not None:
+        _emit_db_capability_headers(response, db, required)
+        _set_db_capability_gauge(response)
+    missing = [m for m in required if not _supports(db, m)]
+    return {
+        "db_class": _db_class_str(db),
+        "capability": "native" if not missing else "fallback",
+        "missing_methods": missing,
+        "fallback_enabled": _fallback_allowed(),
+        "hint": "Use tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase for native support.",
+    }
+
+# Observability helpers (no-op fallbacks)
+try:
+    from tldw_Server_API.app.core.Metrics import increment_counter, set_gauge
+except Exception:  # pragma: no cover - safety
+    def increment_counter(*args, **kwargs):
+        return None
+    def set_gauge(*args, **kwargs):
+        return None
+
+def _fallback_allowed() -> bool:
+    val = str(os.getenv("CHUNKING_TEMPLATES_FALLBACK_ENABLED", "1")).lower()
+    return val in ("1", "true", "yes")
+
+def _ensure_fallback_policy(db: Any, required: List[str]) -> None:
+    """If DB lacks required methods and fallback is disabled, raise a 500 with a hint."""
+    missing = [m for m in required if not _supports(db, m)]
+    if missing and not _fallback_allowed():
+        detail = {
+            "success": False,
+            "error": "Templates fallback store is disabled",
+            "error_code": "FALLBACK_DISABLED",
+            "details": [{"field": ",".join(missing), "message": "DB capability missing. Use Media_DB_v2.MediaDatabase.", "code": "DB_CAPABILITY"}],
+            "hint": "Enable CHUNKING_TEMPLATES_FALLBACK_ENABLED=1 for dev/test or use proper MediaDatabase in production.",
+        }
+        raise HTTPException(status_code=500, detail=detail)
+
+def _set_db_capability_gauge(response: Response) -> None:
+    try:
+        cap = (response.headers.get("X-Template-DB-Capability") or "native").lower()
+        set_gauge("chunking_templates_db_capability", 1.0 if cap == "native" else 0.0, labels={"capability": cap})
+    except Exception:
+        pass
 
 
 @router.get("", response_model=ChunkingTemplateListResponse)
@@ -38,7 +149,8 @@ async def list_templates(
     tags: Optional[List[str]] = Query(None, description="Filter by tags"),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    response: Response = None,
 ) -> ChunkingTemplateListResponse:
     """
     List all available chunking templates with optional filtering.
@@ -47,13 +159,31 @@ async def list_templates(
         List of chunking templates matching the filter criteria
     """
     try:
-        templates = db.list_chunking_templates(
-            include_builtin=include_builtin,
-            include_custom=include_custom,
-            tags=tags,
-            user_id=user_id,
-            include_deleted=False
-        )
+        if response is not None:
+            _emit_db_capability_headers(response, db, ["list_chunking_templates"]) 
+            _set_db_capability_gauge(response)
+        _ensure_fallback_policy(db, ["list_chunking_templates"])  # Enforce prod safeguard
+        if _supports(db, 'list_chunking_templates'):
+            templates = db.list_chunking_templates(
+                include_builtin=include_builtin,
+                include_custom=include_custom,
+                tags=tags,
+                user_id=user_id,
+                include_deleted=False
+            )
+        else:
+            increment_counter("chunking_templates_fallback_list_total", labels={"mode": "fallback"})
+            # Fallback: aggregate from in-memory store
+            templates = []
+            if user_id is not None:
+                buckets = [_fb_bucket(user_id)]
+            else:
+                buckets = list(_FALLBACK_TEMPLATES.values())
+            for bucket in buckets:
+                for _, rec in bucket.items():
+                    if tags and not any(t in (rec.get('tags') or []) for t in tags):
+                        continue
+                    templates.append(rec)
         
         # Convert to response format
         template_responses = []
@@ -72,10 +202,11 @@ async def list_templates(
                 user_id=template['user_id']
             ))
         
-        return ChunkingTemplateListResponse(
+        resp = ChunkingTemplateListResponse(
             templates=template_responses,
             total=len(template_responses)
         )
+        return resp
         
     except Exception as e:
         logger.error(f"Error listing templates: {e}")
@@ -101,7 +232,15 @@ async def get_template(
         404: Template not found
     """
     try:
-        template = db.get_chunking_template(name=template_name)
+        template = None
+        if _supports(db, 'get_chunking_template'):
+            template = db.get_chunking_template(name=template_name)
+        if not template:
+            # Fallback search across in-memory buckets
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if template_name in bucket:
+                    template = bucket[template_name]
+                    break
         
         if not template:
             raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
@@ -131,7 +270,8 @@ async def get_template(
 async def create_template(
     template_data: ChunkingTemplateCreate,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    response: Response = None,
 ) -> ChunkingTemplateResponse:
     """
     Create a new chunking template.
@@ -148,20 +288,52 @@ async def create_template(
     """
     try:
         # Convert template config to JSON string
-        template_json = json.dumps(template_data.template.dict())
+        tmpl_dict = model_dump_compat(template_data.template)
+        template_json = json.dumps(tmpl_dict)
         
-        # Create template in database
-        created = db.create_chunking_template(
-            name=template_data.name,
-            template_json=template_json,
-            description=template_data.description,
-            is_builtin=False,
-            tags=template_data.tags,
-            user_id=template_data.user_id
-        )
-        
-        # Fetch full record to ensure datetime fields are present and correct
-        stored = db.get_chunking_template(name=created['name'])
+        # Emit DB capability headers for diagnostics
+        if response is not None:
+            _emit_db_capability_headers(response, db, ["create_chunking_template", "get_chunking_template"]) 
+            _set_db_capability_gauge(response)
+        _ensure_fallback_policy(db, ["create_chunking_template", "get_chunking_template"])  # Enforce prod safeguard
+        # Create template in database (or fallback)
+        if _supports(db, 'create_chunking_template'):
+            created = db.create_chunking_template(
+                name=template_data.name,
+                template_json=template_json,
+                description=template_data.description,
+                is_builtin=False,
+                tags=template_data.tags,
+                user_id=template_data.user_id
+            )
+            stored = db.get_chunking_template(name=created['name'])
+        else:
+            increment_counter("chunking_templates_create_total", labels={"mode": "fallback"})
+            # In-memory fallback
+            from uuid import uuid4
+            uid = str(template_data.user_id or getattr(current_user, 'id', ''))
+            bucket = _fb_bucket(uid)
+            if template_data.name in bucket:
+                raise HTTPException(status_code=409, detail={
+                    "success": False,
+                    "error": f"Template with name '{template_data.name}' already exists",
+                    "error_code": "CONFLICT",
+                })
+            stored = {
+                'id': len(bucket) + 1,
+                'uuid': str(uuid4()),
+                'name': template_data.name,
+                'description': template_data.description,
+                'template_json': template_json,
+                'is_builtin': False,
+                'tags': template_data.tags or [],
+                'created_at': _now_iso(),
+                'updated_at': _now_iso(),
+                'version': 1,
+                'user_id': uid
+            }
+            bucket[template_data.name] = stored
+        increment_counter("chunking_templates_create_total", labels={"mode": "native" if _supports(db, 'create_chunking_template') else 'fallback'})
         return ChunkingTemplateResponse(
             id=stored['id'],
             uuid=stored['uuid'],
@@ -177,13 +349,14 @@ async def create_template(
         )
         
     except Exception as e:
-        if "already exists" in str(e):
-            raise HTTPException(status_code=409, detail=str(e))
-        elif "Invalid template JSON" in str(e):
-            raise HTTPException(status_code=400, detail=str(e))
+        msg = str(e)
+        if "already exists" in msg:
+            raise HTTPException(status_code=409, detail={"success": False, "error": msg, "error_code": "CONFLICT"})
+        elif "Invalid template JSON" in msg:
+            raise HTTPException(status_code=400, detail={"success": False, "error": msg, "error_code": "BAD_REQUEST"})
         else:
             logger.error(f"Error creating template: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail={"success": False, "error": msg, "error_code": "SERVER_ERROR"})
 
 
 @router.put("/{template_name}", response_model=ChunkingTemplateResponse)
@@ -191,7 +364,8 @@ async def update_template(
     template_name: str,
     template_update: ChunkingTemplateUpdate,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    response: Response = None,
 ) -> ChunkingTemplateResponse:
     """
     Update an existing chunking template.
@@ -208,34 +382,138 @@ async def update_template(
         404: Template not found
     """
     try:
-        # Get existing template
-        existing = db.get_chunking_template(name=template_name)
+        # Emit DB capability headers for diagnostics
+        if response is not None:
+            _emit_db_capability_headers(response, db, [
+                "get_chunking_template",
+                "list_chunking_templates",
+                "update_chunking_template",
+            ])
+            _set_db_capability_gauge(response)
+        _ensure_fallback_policy(db, ["get_chunking_template", "list_chunking_templates", "update_chunking_template"])  # Enforce prod safeguard
+        # Heuristic: protect conventional built-in names eagerly
+        if template_name.lower().startswith('builtin_'):
+            raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates", "error_code": "BUILTIN"})
+        # Fast path: use list() to detect built-ins deterministically when available
+        if _supports(db, 'list_chunking_templates'):
+            try:
+                matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                if matches:
+                    ex0 = matches[0]
+                    if ex0.get('is_builtin'):
+                        raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates", "error_code": "BUILTIN"})
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        # Find existing first to handle built-ins deterministically
+        existing = None
+        if _supports(db, 'get_chunking_template'):
+            try:
+                existing = db.get_chunking_template(name=template_name)
+            except Exception:
+                existing = None
+        if not existing and _supports(db, 'list_chunking_templates'):
+            try:
+                matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                existing = matches[0] if matches else None
+            except Exception:
+                existing = None
         if not existing:
-            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-        
-        # Check if built-in
-        if existing['is_builtin']:
+            # Fallback store (best-effort). If still missing, continue; disambiguate later.
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if template_name in bucket:
+                    existing = bucket[template_name]
+                    break
+        if existing and existing.get('is_builtin'):
             raise HTTPException(status_code=400, detail="Cannot modify built-in templates")
-        
+
         # Prepare update data
         template_json = None
         if template_update.template:
-            template_json = json.dumps(template_update.template.dict())
+            try:
+                tmpl_dict = model_dump_compat(template_update.template)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Failed to serialise chunking template update payload")
+                raise HTTPException(
+                    status_code=400,
+                    detail={"success": False, "error": "Invalid template payload", "error_code": "BAD_TEMPLATE"},
+                ) from exc
+            template_json = json.dumps(tmpl_dict)
         
         # Update template
-        success = db.update_chunking_template(
-            name=template_name,
-            template_json=template_json,
-            description=template_update.description,
-            tags=template_update.tags
-        )
+        if _supports(db, 'update_chunking_template'):
+            try:
+                success = db.update_chunking_template(
+                    name=template_name,
+                    template_json=template_json,
+                    description=template_update.description,
+                    tags=template_update.tags
+                )
+            except Exception:
+                # Conservatively treat DB-layer exceptions as a protected/bad update
+                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates or invalid update", "error_code": "BAD_REQUEST"})
+        else:
+            # In-memory update
+            success = False
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if template_name in bucket:
+                    rec = bucket[template_name]
+                    if rec.get('is_builtin'):
+                        raise HTTPException(status_code=400, detail="Cannot modify built-in templates")
+                    if template_json is not None:
+                        rec['template_json'] = template_json
+                    if template_update.description is not None:
+                        rec['description'] = template_update.description
+                    if template_update.tags is not None:
+                        rec['tags'] = template_update.tags
+                    rec['updated_at'] = _now_iso()
+                    success = True
+                    break
         
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to update template")
+            # Attempt to disambiguate failure: not found vs built-in
+            existing = None
+            try:
+                if hasattr(db, 'get_chunking_template'):
+                    existing = db.get_chunking_template(name=template_name)
+            except Exception:
+                existing = None
+            if existing is None and hasattr(db, 'list_chunking_templates'):
+                try:
+                    matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                    existing = matches[0] if matches else None
+                except Exception:
+                    existing = None
+            if not existing:
+                raise HTTPException(status_code=404, detail={"success": False, "error": f"Template '{template_name}' not found", "error_code": "NOT_FOUND"})
+            if existing.get('is_builtin'):
+                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates", "error_code": "BUILTIN"})
+            raise HTTPException(status_code=500, detail={"success": False, "error": "Failed to update template", "error_code": "SERVER_ERROR"})
         
         # Get updated template
-        updated = db.get_chunking_template(name=template_name)
+        updated = None
+        try:
+            if hasattr(db, 'get_chunking_template'):
+                updated = db.get_chunking_template(name=template_name)
+        except Exception:
+            updated = None
+        if updated is None and hasattr(db, 'list_chunking_templates'):
+            try:
+                matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                updated = matches[0] if matches else None
+            except Exception:
+                updated = None
+        if updated is None:
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if template_name in bucket:
+                    updated = bucket[template_name]
+                    break
         
+        try:
+            increment_counter("chunking_templates_update_total", labels={"mode": "native" if _supports(db, 'update_chunking_template') else 'fallback', "success": str(bool(updated)).lower()})
+        except Exception:
+            pass
         return ChunkingTemplateResponse(
             id=updated['id'],
             uuid=updated['uuid'],
@@ -254,7 +532,7 @@ async def update_template(
         raise
     except Exception as e:
         logger.error(f"Error updating template: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail={"success": False, "error": str(e), "error_code": "SERVER_ERROR"})
 
 
 @router.delete("/{template_name}", status_code=204)
@@ -262,7 +540,8 @@ async def delete_template(
     template_name: str,
     hard_delete: bool = Query(False, description="Permanently delete template"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    response: Response = None,
 ) -> None:
     """
     Delete a chunking template.
@@ -276,29 +555,93 @@ async def delete_template(
         404: Template not found
     """
     try:
-        # Get existing template
-        existing = db.get_chunking_template(name=template_name)
+        # Emit DB capability headers for diagnostics
+        if response is not None:
+            _emit_db_capability_headers(response, db, [
+                "get_chunking_template",
+                "list_chunking_templates",
+                "delete_chunking_template",
+            ])
+            _set_db_capability_gauge(response)
+        _ensure_fallback_policy(db, ["get_chunking_template", "list_chunking_templates", "delete_chunking_template"])  # Enforce prod safeguard
+        # Heuristic: protect conventional built-in names eagerly
+        if template_name.lower().startswith('builtin_'):
+            raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates", "error_code": "BUILTIN"})
+        # Check existing and built-in first
+        existing = None
+        if _supports(db, 'get_chunking_template'):
+            try:
+                existing = db.get_chunking_template(name=template_name)
+            except Exception:
+                existing = None
+        if not existing and _supports(db, 'list_chunking_templates'):
+            try:
+                matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                existing = matches[0] if matches else None
+            except Exception:
+                existing = None
         if not existing:
-            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-        
-        # Check if built-in
-        if existing['is_builtin']:
-            raise HTTPException(status_code=400, detail="Cannot delete built-in templates")
-        
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if template_name in bucket:
+                    existing = bucket[template_name]
+                    break
+        if not existing:
+            raise HTTPException(status_code=404, detail={"success": False, "error": f"Template '{template_name}' not found", "error_code": "NOT_FOUND"})
+        if existing.get('is_builtin'):
+            raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates", "error_code": "BUILTIN"})
+
         # Delete template
-        success = db.delete_chunking_template(
-            name=template_name,
-            hard_delete=hard_delete
-        )
+        if _supports(db, 'delete_chunking_template'):
+            try:
+                success = db.delete_chunking_template(
+                    name=template_name,
+                    hard_delete=hard_delete
+                )
+            except Exception:
+                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates or invalid delete", "error_code": "BAD_REQUEST"})
+        else:
+            success = False
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if template_name in bucket:
+                    del bucket[template_name]
+                    success = True
+                    break
         
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to delete template")
+            # Attempt to disambiguate failure: not found vs built-in
+            existing = None
+            try:
+                if hasattr(db, 'get_chunking_template'):
+                    existing = db.get_chunking_template(name=template_name)
+            except Exception:
+                existing = None
+            if existing is None and hasattr(db, 'list_chunking_templates'):
+                try:
+                    matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                    existing = matches[0] if matches else None
+                except Exception:
+                    existing = None
+            if not existing:
+                # Probe fallback store
+                for bucket in _FALLBACK_TEMPLATES.values():
+                    if template_name in bucket:
+                        existing = bucket[template_name]
+                        break
+            if not existing:
+                raise HTTPException(status_code=404, detail={"success": False, "error": f"Template '{template_name}' not found", "error_code": "NOT_FOUND"})
+            if existing.get('is_builtin'):
+                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates", "error_code": "BUILTIN"})
+            raise HTTPException(status_code=500, detail={"success": False, "error": "Failed to delete template", "error_code": "SERVER_ERROR"})
+        try:
+            increment_counter("chunking_templates_delete_total", labels={"mode": "native" if _supports(db, 'delete_chunking_template') else 'fallback', "hard": str(bool(hard_delete)).lower(), "success": str(bool(success)).lower()})
+        except Exception:
+            pass
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting template: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail={"success": False, "error": str(e), "error_code": "SERVER_ERROR"})
 
 
 @router.post("/apply", response_model=ApplyTemplateResponse)
@@ -306,7 +649,8 @@ async def apply_template(
     request: ApplyTemplateRequest,
     include_metadata: bool = Query(False, description="Return chunk metadata; if false, return only text list"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    response: Response = None,
 ) -> ApplyTemplateResponse:
     """
     Apply a chunking template to text.
@@ -322,10 +666,31 @@ async def apply_template(
         400: Template application error
     """
     try:
-        # Get template from database
-        template_data = db.get_chunking_template(name=request.template_name)
+        # Emit DB capability headers for diagnostics
+        if response is not None:
+            _emit_db_capability_headers(response, db, ["get_chunking_template", "list_chunking_templates"]) 
+            _set_db_capability_gauge(response)
+        _ensure_fallback_policy(db, ["get_chunking_template", "list_chunking_templates"])  # Enforce prod safeguard
+        # Get template from database or fallback
+        template_data = None
+        if _supports(db, 'get_chunking_template'):
+            try:
+                template_data = db.get_chunking_template(name=request.template_name)
+            except Exception:
+                template_data = None
+        if template_data is None and _supports(db, 'list_chunking_templates'):
+            try:
+                matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == request.template_name]
+                template_data = matches[0] if matches else None
+            except Exception:
+                template_data = None
+        if template_data is None:
+            for bucket in _FALLBACK_TEMPLATES.values():
+                if request.template_name in bucket:
+                    template_data = bucket[request.template_name]
+                    break
         if not template_data:
-            raise HTTPException(status_code=404, detail=f"Template '{request.template_name}' not found")
+            raise HTTPException(status_code=404, detail={"success": False, "error": f"Template '{request.template_name}' not found", "error_code": "NOT_FOUND"})
         
         # Parse template JSON
         template_config = json.loads(template_data['template_json'])
@@ -384,6 +749,7 @@ async def apply_template(
         else:
             out_chunks = [c.get('text', '') if isinstance(c, dict) else str(c) for c in chunks]
 
+        increment_counter("chunking_templates_apply_total", labels={"template": template_data['name']})
         return ApplyTemplateResponse(
             template_name=request.template_name,
             chunks=out_chunks,  # type: ignore[arg-type]
@@ -397,7 +763,7 @@ async def apply_template(
         raise
     except Exception as e:
         logger.error(f"Error applying template: {e}")
-        raise HTTPException(status_code=400, detail=f"Template application error: {str(e)}")
+        raise HTTPException(status_code=400, detail={"success": False, "error": f"Template application error: {str(e)}", "error_code": "BAD_REQUEST"})
 
 
 @router.post("/validate", response_model=TemplateValidationResponse)
@@ -480,34 +846,34 @@ async def validate_template(
                         ))
                         continue
                     pat = str(rule.get('pattern') or '')
-                    if len(pat) > 256:
+                    # Safety check (length + nested quantifier guard + compile test)
+                    err = _rx_check(pat, max_len=256)
+                    if err:
+                        try:
+                            increment_counter("chunking_templates_regex_reject_total", labels={"reason": "safety_check"})
+                        except Exception:
+                            pass
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
-                            message='Pattern too long (max 256)'
+                            message=err
                         ))
                     flags_str = str(rule.get('flags') or '').lower()
-                    if len(flags_str) > 10:
+                    re_flags, ferr = _rx_flags(flags_str)
+                    if ferr:
+                        try:
+                            increment_counter("chunking_templates_regex_reject_total", labels={"reason": "flags"})
+                        except Exception:
+                            pass
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
-                            message='Flags too long (max 10)'
+                            message=ferr
                         ))
-                    if any(f not in {'i','m',''} for f in list(flags_str)):
-                        errors.append(TemplateValidationError(
-                            field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
-                            message="Only 'i' and 'm' flags are allowed"
-                        ))
-                    # Compile test (basic catastrophic heuristic: bounded quantifiers only)
-                    try:
-                        re_flags = 0
-                        if 'i' in flags_str:
-                            re_flags |= re.IGNORECASE
-                        if 'm' in flags_str:
-                            re_flags |= re.MULTILINE
-                        re.compile(pat, re_flags)
-                    except Exception as e:
-                        errors.append(TemplateValidationError(
+                    # Ambiguity warning (non-fatal)
+                    w = _rx_warn(pat)
+                    if w:
+                        warnings.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
-                            message=f'Invalid regex: {e}'
+                            message=w
                         ))
 
         # Validate classifier
@@ -529,6 +895,24 @@ async def validate_template(
             pr = classifier.get('priority')
             if pr is not None and not isinstance(pr, int):
                 errors.append(TemplateValidationError(field='classifier.priority', message='priority must be integer'))
+            # Validate classifier regex patterns with light guardrails
+            for key in ('filename_regex', 'title_regex', 'url_regex'):
+                pat = classifier.get(key)
+                if pat is None:
+                    continue
+                if not isinstance(pat, str):
+                    errors.append(TemplateValidationError(field=f'classifier.{key}', message='must be a string'))
+                    continue
+                if len(pat) > 128:
+                    errors.append(TemplateValidationError(field=f'classifier.{key}', message='Pattern too long (max 128)'))
+                    continue
+                perr = _rx_check(pat, max_len=128)
+                if perr:
+                    try:
+                        increment_counter("chunking_templates_regex_reject_total", labels={"reason": "classifier"})
+                    except Exception:
+                        pass
+                    errors.append(TemplateValidationError(field=f'classifier.{key}', message=perr))
 
         # Validate preprocessing operations
         if 'preprocessing' in template_config:
@@ -644,7 +1028,25 @@ async def learn_template(
             }
         }
         if req.save:
-            db.create_chunking_template(name=req.name, template_json=json.dumps(tmpl), description=req.description or "Learned", is_builtin=False, tags=["learned"], user_id=str(getattr(current_user, 'id', '')))
+            uid = str(getattr(current_user, 'id', ''))
+            if _supports(db, 'create_chunking_template'):
+                db.create_chunking_template(name=req.name, template_json=json.dumps(tmpl), description=req.description or "Learned", is_builtin=False, tags=["learned"], user_id=uid)
+            else:
+                bucket = _fb_bucket(uid)
+                from uuid import uuid4
+                bucket[req.name] = {
+                    'id': len(bucket) + 1,
+                    'uuid': str(uuid4()),
+                    'name': req.name,
+                    'description': req.description or "Learned",
+                    'template_json': json.dumps(tmpl),
+                    'is_builtin': False,
+                    'tags': ["learned"],
+                    'created_at': _now_iso(),
+                    'updated_at': _now_iso(),
+                    'version': 1,
+                    'user_id': uid,
+                }
         return {"template": tmpl, "saved": req.save}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

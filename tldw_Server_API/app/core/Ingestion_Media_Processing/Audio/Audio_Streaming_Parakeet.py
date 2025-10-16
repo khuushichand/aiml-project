@@ -16,7 +16,7 @@
 import asyncio
 import base64
 import json
-import logging
+from loguru import logger
 import time
 from typing import Optional, AsyncGenerator, Dict, Any, Callable
 from dataclasses import dataclass, field
@@ -34,7 +34,7 @@ from .Audio_Transcription_Parakeet_MLX import (
     transcribe_with_parakeet_mlx
 )
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 @dataclass

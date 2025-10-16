@@ -5,22 +5,19 @@ modules:
     name: Media
     version: "1.0.0"
     department: media
-    timeout_seconds: 30
-    max_retries: 3
-    circuit_breaker_threshold: 5
-    circuit_breaker_timeout: 60
+    # Module runtime controls (optional)
+    # Limit concurrent operations per module instance (0 disables guard)
+    max_concurrent: 16
+    # Circuit breaker settings
+    circuit_breaker_threshold: 3           # failures before breaker opens
+    circuit_breaker_timeout: 30            # initial open window (seconds)
+    circuit_breaker_backoff_factor: 2.0    # multiply timeout on half-open failure
+    circuit_breaker_max_timeout: 180       # cap the backoff window (seconds)
+    # Module-specific settings
     settings:
       db_path: ./Databases/Media_DB_v2.db
       cache_ttl: 300
 
-  - id: example
-    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule
-    enabled: true
-    name: Example
-    version: "1.0.0"
-    department: demo
-    timeout_seconds: 30
-    max_retries: 3
-    circuit_breaker_threshold: 5
-    circuit_breaker_timeout: 60
-    settings: {}
+# Notes
+# - Only modules under tldw_Server_API.app.core.MCP_unified.modules.implementations are allowed.
+# - You can also specify modules via env: MCP_MODULES="media=tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule"

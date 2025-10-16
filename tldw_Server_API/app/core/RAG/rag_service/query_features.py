@@ -15,6 +15,7 @@ from collections import defaultdict
 import json
 
 from loguru import logger
+import os
 import nltk
 from nltk.corpus import wordnet, stopwords
 from nltk.tokenize import word_tokenize
@@ -54,21 +55,33 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
     except Exception:
         return False
 
-# Ensure NLTK resources are present, but avoid hangs by enforcing timeouts
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    _download_with_timeout('punkt', timeout_s=60)
+# Ensure NLTK resources are present, but avoid hangs by enforcing timeouts.
+# In tests or when explicitly disabled, skip downloads and degrade gracefully.
+_TEST_MODE = os.getenv("TEST_MODE") == "true"
+_DISABLE_NLTK_DOWNLOADS = os.getenv("DISABLE_NLTK_DOWNLOADS", "").lower() in {"1", "true", "yes"}
+_RUNNING_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
+_FORCE_ALLOW_NLTK = os.getenv("ALLOW_NLTK_DOWNLOADS", "").lower() in {"1", "true", "yes"}
+_ALLOW_NLTK_DOWNLOADS = _FORCE_ALLOW_NLTK or not (_TEST_MODE or _DISABLE_NLTK_DOWNLOADS or _RUNNING_PYTEST)
 
-try:
-    nltk.data.find('corpora/wordnet')
-except LookupError:
-    _download_with_timeout('wordnet', timeout_s=60)
+def _ensure_resource(path: str, resource_key: str) -> bool:
+    try:
+        nltk.data.find(path)
+        return True
+    except LookupError:
+        if _ALLOW_NLTK_DOWNLOADS:
+            ok = _download_with_timeout(resource_key, timeout_s=60)
+            if not ok:
+                logger.warning(f"NLTK resource '{resource_key}' unavailable; continuing without it")
+            return ok
+        else:
+            logger.info(
+                f"Skipping NLTK download for '{resource_key}' (TEST_MODE={_TEST_MODE}, DISABLE_NLTK_DOWNLOADS={_DISABLE_NLTK_DOWNLOADS}, PYTEST={_RUNNING_PYTEST}); set ALLOW_NLTK_DOWNLOADS=1 to override"
+            )
+            return False
 
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    _download_with_timeout('stopwords', timeout_s=60)
+_HAS_PUNKT = _ensure_resource('tokenizers/punkt', 'punkt')
+_HAS_WORDNET = _ensure_resource('corpora/wordnet', 'wordnet')
+_HAS_STOPWORDS = _ensure_resource('corpora/stopwords', 'stopwords')
 
 
 class QueryIntent(Enum):

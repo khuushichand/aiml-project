@@ -4,7 +4,7 @@ services:
   test-ubuntu-latest:
     build:
       context: .
-      dockerfile: test-workflow/Dockerfile.ubuntu
+      dockerfile: Dockerfile.Ubuntu
     container_name: tldw-test-ubuntu
     environment:
       - PYTHONPATH=/app/tldw_Server_API
@@ -17,7 +17,7 @@ services:
   test-workflow-py310:
     build:
       context: .
-      dockerfile: test-workflow/Dockerfile.ubuntu
+      dockerfile: Dockerfile.Ubuntu
       args:
         PYTHON_VERSION: "3.10"
     container_name: tldw-test-py310
@@ -32,7 +32,7 @@ services:
   test-workflow-py311:
     build:
       context: .
-      dockerfile: test-workflow/Dockerfile.ubuntu
+      dockerfile: Dockerfile.Ubuntu
       args:
         PYTHON_VERSION: "3.11"
     container_name: tldw-test-py311
@@ -47,7 +47,7 @@ services:
   test-workflow-py312:
     build:
       context: .
-      dockerfile: test-workflow/Dockerfile.ubuntu
+      dockerfile: Dockerfile.Ubuntu
       args:
         PYTHON_VERSION: "3.12"
     container_name: tldw-test-py312

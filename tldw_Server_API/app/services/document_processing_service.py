@@ -15,10 +15,19 @@ from pypandoc import convert_file
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from fastapi import HTTPException
+
+
+def _ensure_placeholder_enabled():
+    s = get_settings()
+    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
+        raise HTTPException(status_code=503, detail="Document placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
 
 async def process_documents(
     doc_urls: Optional[List[str]],
@@ -49,6 +58,7 @@ async def process_documents(
     4) Return a structured dict describing results
     """
 
+    _ensure_placeholder_enabled()
     start_time = time.time()
     processed_count = 0
     failed_count = 0
@@ -119,13 +129,61 @@ async def process_documents(
             return pypandoc.convert_file(file_path, "plain", format="rtf")
 
         elif ext == ".pdf":
-            # If you want partial PDF support here (rather than a separate pdf codepath):
-            # return pypandoc.convert_file(file_path, 'plain', format='pdf')
-            # or use your PDF parsing approach
-            return "[PDF format not handled here - use a separate PDF pipeline?]"
+            # Minimal placeholder for PDF — prefer the dedicated PDF pipeline elsewhere
+            try:
+                return pypandoc.convert_file(file_path, 'plain', format='pdf')
+            except Exception:
+                return "[PDF format not handled here - use a separate PDF pipeline?]"
 
         else:
             return "[Unsupported file extension or not recognized]"
+
+    def build_plaintext_chunks(text: str, method: Optional[str] = None, max_size: int = 500, overlap: int = 50,
+                               language: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Chunk plaintext and return items ready for UnvectorizedMediaChunks persistence.
+
+        Uses hierarchical flat chunking to obtain offsets and paragraph kind, then maps
+        to a normalized `chunk_type` for FTS-level retrieval.
+        """
+        method = method or "sentences"
+        ck = Chunker()
+        flat = ck.chunk_text_hierarchical_flat(
+            text,
+            method=method,
+            max_size=max_size,
+            overlap=overlap,
+            language=language or "en",
+        )
+        kind_map = {
+            "paragraph": "text",
+            "list_unordered": "list",
+            "list_ordered": "list",
+            "code_fence": "code",
+            "table_md": "table",
+            "header_line": "heading",
+            "header_atx": "heading",
+        }
+        chunks_out: List[Dict[str, Any]] = []
+        for item in flat:
+            md = item.get("metadata", {}) or {}
+            start = md.get("start_offset")
+            end = md.get("end_offset")
+            p_kind = md.get("paragraph_kind")
+            ctype = kind_map.get(str(p_kind or "").lower(), "text")
+            meta_small = {}
+            # Keep compact ancestry for UI/context, avoid large payloads
+            if md.get("ancestry_titles"):
+                meta_small["ancestry_titles"] = md.get("ancestry_titles")
+            if md.get("section_path"):
+                meta_small["section_path"] = md.get("section_path")
+            chunks_out.append({
+                "text": item.get("text", ""),
+                "start_char": start,
+                "end_char": end,
+                "chunk_type": ctype,
+                "metadata": meta_small,
+            })
+        return chunks_out
 
     # Helper for chunking + summarization
     def summarize_text_if_needed(full_text: str) -> str:
@@ -211,6 +269,15 @@ async def process_documents(
                         }
                         _safe_json = _json.dumps({k: v for k, v in _safe_meta.items() if v is not None}, ensure_ascii=False)
 
+                        # Build plaintext chunks for FTS-first retrieval
+                        _chunks = build_plaintext_chunks(
+                            text_content,
+                            method=chunk_method or "sentences",
+                            max_size=max_chunk_size,
+                            overlap=chunk_overlap,
+                            language=chunk_language or "en",
+                        )
+
                         db_id, _, _ = db.add_media_with_keywords(
                             url=url,
                             title=custom_title or os.path.basename(local_path),
@@ -223,7 +290,8 @@ async def process_documents(
                             transcription_model="document-import",
                             author=None,
                             ingestion_date=None,
-                            overwrite=overwrite_existing
+                            overwrite=overwrite_existing,
+                            chunks=_chunks
                         )
                         item_result["db_id"] = db_id
                     finally:
@@ -278,6 +346,14 @@ async def process_documents(
                         }
                         _safe_json = _json.dumps({k: v for k, v in _safe_meta.items() if v is not None}, ensure_ascii=False)
 
+                        _chunks = build_plaintext_chunks(
+                            text_content,
+                            method=chunk_method or "sentences",
+                            max_size=max_chunk_size,
+                            overlap=chunk_overlap,
+                            language=chunk_language or "en",
+                        )
+
                         db_id, _, _ = db.add_media_with_keywords(
                             url=file_path,
                             title=custom_title or os.path.basename(file_path),
@@ -290,7 +366,8 @@ async def process_documents(
                             transcription_model="document-import",
                             author=None,
                             ingestion_date=None,
-                            overwrite=overwrite_existing
+                            overwrite=overwrite_existing,
+                            chunks=_chunks
                         )
                         item_result["db_id"] = db_id
                     finally:

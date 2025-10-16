@@ -609,7 +609,12 @@ def process_videos(
             results.append(single_result) # Append regardless of status
 
             if single_result.get("status") == "Success":
-                log_counter(...) # Metrics are fine if DB-free
+                # Record per-item success metric
+                log_counter(
+                    metric_name="videos_processed_total",
+                    labels={"whisper_model": transcription_model, "api_name": (api_name or 'none')},
+                    value=1,
+                )
 
                 # Prepare for potential confabulation check
                 transcript_text = single_result.get("content", "") # Use 'transcript' key returned by single
@@ -658,7 +663,6 @@ def process_videos(
                 "metadata": {}, "transcript": None, "segments": None, "chunks": None, "summary": None,
                 "analysis_details": None, "warnings": None
             })
-            log_counter("videos_failed_total", ...)
 
             # Log failure metric
             log_counter(

@@ -1,7 +1,6 @@
 # tldw_Server_API/app/api/v1/API_Deps/Prompts_DB_Deps.py
 #
 # Imports
-import logging
 import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -12,7 +11,6 @@ from fastapi import Request
 # Third-party imports
 from fastapi import Depends, HTTPException, status
 from cachetools import LRUCache # Assuming cachetools is available
-from loguru import logger
 
 #
 # Local Imports

@@ -7,11 +7,10 @@ Ensures consistent database file locations across the application.
 import os
 from pathlib import Path
 from typing import Optional, Dict
-import logging
+from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
 
-logger = logging.getLogger(__name__)
 
 
 class DatabasePaths:
@@ -23,6 +22,7 @@ class DatabasePaths:
     PROMPTS_DB_NAME = "user_prompts_v2.sqlite"
     AUDIT_DB_NAME = "unified_audit.db"
     EVALUATIONS_DB_NAME = "evaluations.db"
+    PERSONALIZATION_DB_NAME = "Personalization.db"
     
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
@@ -115,6 +115,13 @@ class DatabasePaths:
             raise
         
         return eval_dir / DatabasePaths.EVALUATIONS_DB_NAME
+
+    @staticmethod
+    def get_personalization_db_path(user_id: int) -> Path:
+        """Get the path to the user's Personalization database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        # Keep at root of user dir alongside ChaChaNotes for discoverability
+        return user_dir / DatabasePaths.PERSONALIZATION_DB_NAME
     
     @staticmethod
     def get_all_user_db_paths(user_id: int) -> Dict[str, Path]:
@@ -130,6 +137,7 @@ class DatabasePaths:
             "prompts": DatabasePaths.get_prompts_db_path(user_id),
             "audit": DatabasePaths.get_audit_db_path(user_id),
             "evaluations": DatabasePaths.get_evaluations_db_path(user_id),
+            "personalization": DatabasePaths.get_personalization_db_path(user_id),
         }
     
     @staticmethod

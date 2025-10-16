@@ -17,9 +17,7 @@ import aiohttp
 import ssl
 from loguru import logger
 
-from tldw_Server_API.app.core.Chatbooks.chatbook_service import audit_logger
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
-from tldw_Server_API.app.core.Evaluations.audit_logger import AuditEventType, AuditSeverity
 
 
 class WebhookSecurityLevel(Enum):
@@ -248,20 +246,7 @@ class WebhookSecurityValidator:
         # Calculate security score
         security_score = self._calculate_security_score(url, errors, warnings, metadata)
         
-        # Audit log the validation
-        audit_logger.log_event(
-            event_type=AuditEventType.WEBHOOK_REGISTER,
-            action=f"Webhook URL validation: {len(errors)} errors, {len(warnings)} warnings",
-            user_id=user_id,
-            outcome="success" if not errors else "warning",
-            severity=AuditSeverity.LOW if not errors else AuditSeverity.MEDIUM,
-            details={
-                "url": url[:100] + "..." if len(url) > 100 else url,  # Truncate for logging
-                "errors": len(errors),
-                "warnings": len(warnings),
-                "security_score": security_score
-            }
-        )
+        # (Optional) Could emit a unified audit event here if desired
         
         return WebhookValidationResult(
             valid=len(errors) == 0,
@@ -705,19 +690,7 @@ class WebhookPermissionManager:
                     
                     webhook_owner = row[0]
                     if webhook_owner != user_id:
-                        audit_logger.log_event(
-                            event_type=AuditEventType.AUTHORIZATION_FAILURE,
-                            action=f"Unauthorized webhook {action} attempt",
-                            user_id=user_id,
-                            resource_id=str(webhook_id),
-                            resource_type="webhook",
-                            outcome="failure",
-                            severity=AuditSeverity.MEDIUM,
-                            details={
-                                "action": action,
-                                "webhook_owner": webhook_owner
-                            }
-                        )
+                        # (Optional) Could emit a unified audit SECURITY_VIOLATION here
                         return False, "Access denied: not webhook owner"
                 
                 elif url:

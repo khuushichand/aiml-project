@@ -23,7 +23,7 @@ from loguru import logger
 # Create router
 router = APIRouter(
     prefix="/api/v1/prompt-studio/ws",
-    tags=["Prompt Studio (Experimental)"]
+    tags=["prompt-studio"]
 )
 
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
@@ -395,6 +395,31 @@ async def sse_endpoint(
             "X-Accel-Buffering": "no"  # Disable nginx buffering
         }
     )
+
+# Expose SSE fallback on the same base path via GET
+@router.get("", response_class=StreamingResponse, openapi_extra={
+    "responses": {
+        "200": {
+            "description": "SSE stream",
+            "content": {
+                "text/event-stream": {
+                    "examples": {
+                        "heartbeat": {
+                            "summary": "Heartbeat event",
+                            "value": "data: {\"type\": \"heartbeat\", \"timestamp\": \"2024-09-21T12:00:00\"}\\n\\n"
+                        }
+                    }
+                }
+            }
+        }
+    }
+})
+async def sse_endpoint_route(
+    client_id: str = Query(..., description="Client ID"),
+    project_id: Optional[int] = Query(None, description="Project ID to subscribe to"),
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+):
+    return await sse_endpoint(client_id=client_id, project_id=project_id, db=db)
 
 ########################################################################################################################
 # WebSocket Endpoint

@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Generator
 import json
-import logging
+from loguru import logger as _loguru_logger
 from queue import Queue, Empty
 
 from .base import (
@@ -28,7 +28,7 @@ from .base import (
     NotSupportedError
 )
 
-logger = logging.getLogger(__name__)
+logger = _loguru_logger
 
 
 class SQLiteConnectionPool(ConnectionPool):
@@ -42,7 +42,11 @@ class SQLiteConnectionPool(ConnectionPool):
             db_path: Path to SQLite database file
             config: Database configuration
         """
-        self.db_path = db_path
+        # Normalize to absolute path to avoid CWD-related open errors under tests
+        try:
+            self.db_path = str(Path(db_path).resolve())
+        except Exception:
+            self.db_path = db_path
         self.config = config
         self._local = threading.local()
         self._connections: Dict[int, sqlite3.Connection] = {}
@@ -67,6 +71,14 @@ class SQLiteConnectionPool(ConnectionPool):
     
     def _create_connection(self) -> sqlite3.Connection:
         """Create a new SQLite connection with optimal settings."""
+        # Ensure database directory exists to avoid 'unable to open database file'
+        try:
+            dbp = Path(self.db_path)
+            if dbp.parent and not dbp.parent.exists():
+                dbp.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
         conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False,
@@ -80,14 +92,17 @@ class SQLiteConnectionPool(ConnectionPool):
         if self.config.sqlite_wal_mode:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
-        
+
         if self.config.sqlite_foreign_keys:
             conn.execute("PRAGMA foreign_keys = ON")
-        
+
+        # Reduce lock contention under concurrent access
+        conn.execute("PRAGMA busy_timeout = 5000")
+
         # Additional optimizations
         conn.execute("PRAGMA cache_size = -2000")  # 2MB cache
         conn.execute("PRAGMA temp_store = MEMORY")
-        
+
         return conn
     
     def return_connection(self, connection: sqlite3.Connection) -> None:
@@ -164,16 +179,19 @@ class SQLiteBackend(DatabaseBackend):
             check_same_thread=False,
             isolation_level=None
         )
-        
+
         conn.row_factory = sqlite3.Row
-        
+
         # Apply configuration
         if self.config.sqlite_wal_mode:
             conn.execute("PRAGMA journal_mode = WAL")
-        
+
         if self.config.sqlite_foreign_keys:
             conn.execute("PRAGMA foreign_keys = ON")
-        
+
+        # Reduce lock contention under concurrent access
+        conn.execute("PRAGMA busy_timeout = 5000")
+
         return conn
     
     def disconnect(self, connection: sqlite3.Connection) -> None:
@@ -183,25 +201,29 @@ class SQLiteBackend(DatabaseBackend):
     
     @contextmanager
     def transaction(self, connection: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.Connection, None, None]:
-        """SQLite transaction context manager."""
+        """SQLite transaction context manager.
+
+        Uses explicit BEGIN/COMMIT/ROLLBACK and guards with in_transaction to
+        avoid errors when statements (e.g., executescript) implicitly end a txn.
+        """
         if connection:
-            # Use existing connection
             conn = connection
-            owns_connection = False
         else:
-            # Get connection from pool
             conn = self.get_pool().get_connection()
-            owns_connection = False  # Pool manages connection
-        
+
         try:
-            # Begin transaction
-            conn.execute("BEGIN")
+            if not getattr(conn, "in_transaction", False):
+                conn.execute("BEGIN")
             yield conn
-            # Commit on success
-            conn.execute("COMMIT")
+            if getattr(conn, "in_transaction", False):
+                conn.execute("COMMIT")
         except Exception as e:
-            # Rollback on error
-            conn.execute("ROLLBACK")
+            if getattr(conn, "in_transaction", False):
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    # Best effort; ignore if no active transaction
+                    pass
             logger.error(f"Transaction failed: {e}")
             raise
     

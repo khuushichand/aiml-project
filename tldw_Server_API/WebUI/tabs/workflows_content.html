@@ -1,8 +1,55 @@
 <!-- Workflows Tab -->
 <div id="tabWorkflowsDefinitions" class="tab-content">
   <h2>Workflows: Definitions</h2>
+  <div class="card" style="margin-bottom:12px; padding:10px; border:1px solid var(--color-base-40); border-radius:8px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+      <div>
+        <h3 style="margin:0 0 6px 0">Configuration Cheat Sheet</h3>
+        <div style="color:var(--color-base-0); font-size:0.9em">Read-only snapshot of effective Workflows settings</div>
+      </div>
+      <div>
+        <button class="api-button" onclick="wfLoadConfig()">Refresh</button>
+      </div>
+    </div>
+    <div id="wfConfig_card" style="margin-top:8px"></div>
+  </div>
+  <div class="form-group">
+    <button class="api-button" onclick="wfGetStepTypes()">Get Step Types</button>
+  </div>
   <div class="form-group">
     <label for="wfDef_payload">Definition JSON</label>
+    <div id="wfTpl_featured" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:6px 0">
+      <span style="opacity:0.85">Featured:</span>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('site_watch_digest_tts')">Site Watch + Digest + TTS</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('site_watch_digest_tts')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('pdf_qa')">PDF → Q&A</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('pdf_qa')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('paper_roundup')">Paper Roundup</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('paper_roundup')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('policy_checker')">Policy Checker</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('policy_checker')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('podcast_summary_narration')">Podcast → Summary → TTS</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('podcast_summary_narration')">Run Featured</button>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
+      <label style="margin:0">Templates</label>
+      <input id="wfTpl_search" type="search" placeholder="Search templates..." style="min-width:200px" onkeydown="if(event.key==='Enter'){wfTplLoadList()}" oninput="wfTplQueryChanged()"/>
+      <label style="margin:0 0 0 6px">Tag</label>
+      <select id="wfTpl_tag" style="min-width:160px"><option value="">(all)</option></select>
+      <select id="wfTpl_select" style="min-width:240px"></select>
+      <button class="api-button" onclick="wfTplLoadList()">Search/Refresh</button>
+      <button class="api-button" onclick="wfTplApply()">Load Selected</button>
+      <button class="api-button" onclick="wfTplInsert()">Insert Selected</button>
+      <button class="api-button" onclick="wfTplRun()">Run This Template</button>
+      <button class="api-button" onclick="wfTplRunWatch()">Run & Watch</button>
+      <button class="api-button" onclick="wfTplCopyCurlAlt()" title="Copy a shell snippet that uses jq to parse the workflow id and start a run">Copy cURL (Create+Run)</button>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--color-base-0); font-size:0.9em" title="jq is used to extract the workflow id from the create response. Toggle 'No jq' for a placeholder-based script.">
+        <span id="wfTpl_curl_note" title="Default: jq required. Switch to 'No jq' for a manual WID placeholder.">Requires jq</span>
+        <span style="opacity:0.8">|</span>
+        <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
+      </label>
+      <button class="api-button" onclick="wfTplResetFilters()" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
+    </div>
     <textarea id="wfDef_payload" rows="12" style="width:100%">{
   "name": "hello",
   "version": 1,
@@ -11,9 +58,51 @@
   ]
 }</textarea>
   </div>
+  <div class="card" style="margin:12px 0; padding:10px; border:1px solid var(--color-base-40); border-radius:8px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+      <div>
+        <h3 style="margin:0 0 6px 0">Scheduler (workflow_run)</h3>
+        <div style="color:var(--color-base-0); font-size:0.9em">Create cron schedules that enqueue workflow runs</div>
+      </div>
+      <div>
+        <button class="api-button" onclick="wfSchedList()">Refresh</button>
+      </div>
+    </div>
+    <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+      <input type="text" id="wfSched_workflow_id" placeholder="workflow_id (optional)" style="width:140px"/>
+      <input type="text" id="wfSched_name" placeholder="name (optional)" style="width:160px"/>
+      <input type="text" id="wfSched_cron" placeholder="cron (e.g., */15 * * * *)" style="width:200px"/>
+      <input type="text" id="wfSched_tz" placeholder="timezone (optional)" style="width:160px"/>
+      <select id="wfSched_mode">
+        <option value="async">async</option>
+        <option value="sync">sync</option>
+      </select>
+      <select id="wfSched_validation">
+        <option value="block">block</option>
+        <option value="non-block">non-block</option>
+      </select>
+      <label style="display:flex; gap:6px; align-items:center"><input type="checkbox" id="wfSched_enabled" checked /> Enabled</label>
+      <input type="text" id="wfSched_inputs" placeholder='inputs JSON (optional)' style="flex:1; min-width:220px"/>
+      <button class="api-button" onclick="wfSchedCreate()">Create</button>
+    </div>
+    <div id="wfSched_list"></div>
+  </div>
   <div class="form-group">
     <button class="api-button" onclick="wfCreateDefinition()">Create Definition</button>
     <button class="api-button" onclick="wfListDefinitions()">List Definitions</button>
+    <button class="api-button" onclick="wfInsertDelay()">Insert Delay Step</button>
+    <button class="api-button" onclick="wfInsertLog()">Insert Log Step</button>
+    <button class="api-button" onclick="wfInsertPrompt()">Insert Prompt Step</button>
+    <button class="api-button" onclick="wfInsertRagSearch()">Insert RAG Search Step</button>
+    <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
+    <button class="api-button" onclick="wfInsertTTS()">Insert TTS Step</button>
+    <button class="api-button" onclick="wfInsertProcessMedia()">Insert Process Media Step</button>
+    <button class="api-button" onclick="wfInsertRSSFetch()">Insert RSS Fetch Step</button>
+    <button class="api-button" onclick="wfInsertEmbed()">Insert Embed Step</button>
+    <button class="api-button" onclick="wfInsertTranslate()">Insert Translate Step</button>
+    <button class="api-button" onclick="wfInsertSTT()">Insert STT Transcribe Step</button>
+    <button class="api-button" onclick="wfInsertNotify()">Insert Notify Step</button>
+    <button class="api-button" onclick="wfInsertDiff()">Insert Diff Change Step</button>
   </div>
   <div class="form-group">
     <label>Workflow ID</label>
@@ -27,8 +116,44 @@
     <input type="text" id="wfRun_inputs" placeholder='{"name":"Alice"}' />
     <button class="api-button" onclick="wfRunSaved()">Run Saved</button>
   </div>
+  <div class="form-group" style="margin-bottom:4px">
+    <button class="api-button" onclick="wfCopyJson('wfDef_result')">Copy</button>
+    <button class="api-button" onclick="wfClearJson('wfDef_result')">Clear</button>
+  </div>
   <pre id="wfDef_result" class="json-viewer"></pre>
   <script>
+  async function wfLoadConfig(){
+    try{
+      const cfg = await apiClient.makeRequest('GET','/api/v1/workflows/config');
+      wfRenderConfigCard(cfg);
+    }catch(e){ Toast.error('Failed to load config: '+(e?.message||e)); }
+  }
+  function _wfRow(label, value){
+    const v = (Array.isArray(value) ? value.join(', ') : (value===true? 'true': value===false? 'false' : (value ?? '')));
+    return `<div style=\"display:flex;gap:8px;justify-content:space-between;border-bottom:1px dashed var(--color-base-30);padding:4px 0\"><div style=\"color:var(--color-base-0)\">${label}</div><div style=\"font-family:monospace\">${String(v)}</div></div>`;
+  }
+  function wfRenderConfigCard(cfg){
+    try{
+      const c = document.getElementById('wfConfig_card');
+      if (!cfg || typeof cfg !== 'object'){ c.innerHTML = '<div style="color:var(--color-base-0)">No data</div>'; return; }
+      const backend = cfg.backend||{};
+      const rl = cfg.rate_limits||{};
+      const eng = cfg.engine||{};
+      const eg = cfg.egress||{};
+      const wh = cfg.webhooks||{};
+      const art = cfg.artifacts||{};
+      let html = '';
+      html += '<div style="display:grid;grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));gap:12px">';
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Backend</div>${_wfRow('type', backend.type||'(auto)')}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Rate Limits / Quotas</div>${_wfRow('limits_disabled', rl.disabled)}${_wfRow('quotas_disabled', rl.quotas_disabled)}${_wfRow('burst_per_min', rl.quota_burst_per_min)}${_wfRow('daily_per_user', rl.quota_daily_per_user)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Engine</div>${_wfRow('tenant_concurrency', eng.tenant_concurrency)}${_wfRow('workflow_concurrency', eng.workflow_concurrency)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Egress</div>${_wfRow('profile', eg.profile)}${_wfRow('allowed_ports', eg.allowed_ports)}${_wfRow('allowlist', eg.allowlist)}${_wfRow('block_private', eg.block_private)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Webhooks</div>${_wfRow('completion_disabled', wh.completion_disabled)}${_wfRow('secret_set', wh.secret_set)}${_wfRow('dlq_enabled', wh.dlq_enabled)}${_wfRow('allowlist', wh.allowlist)}${_wfRow('denylist', wh.denylist)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Artifacts</div>${_wfRow('validate_strict', art.validate_strict)}${_wfRow('encryption_enabled', art.encryption_enabled)}${_wfRow('gc_enabled', art.gc_enabled)}${_wfRow('retention_days', art.retention_days)}</div>`;
+      html += '</div>';
+      c.innerHTML = html;
+    }catch(e){ /* ignore */ }
+  }
   async function wfCreateDefinition(){
     try{
       const body = JSON.parse(document.getElementById('wfDef_payload').value);
@@ -37,11 +162,311 @@
       Toast.success('Created definition id='+(resp?.id||''));
     }catch(e){ Toast.error('Create failed: '+(e?.message||e)); }
   }
+  async function wfTplLoadList(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      sel.innerHTML = '';
+      const q = (document.getElementById('wfTpl_search')?.value||'').trim();
+      const tagSel = document.getElementById('wfTpl_tag');
+      const tagVal = (tagSel?.value||'').trim();
+      let url = '/api/v1/workflows/templates';
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (tagVal) params.set('tag', tagVal);
+      if ([...params.keys()].length){ url += '?' + params.toString(); }
+      const items = await apiClient.makeRequest('GET', url);
+      // persist filters
+      wfTplSavePrefs();
+      if (!Array.isArray(items) || items.length===0){
+        const opt = document.createElement('option'); opt.value=''; opt.textContent='(no templates found)'; sel.appendChild(opt); return;
+      }
+      for (const it of items){
+        const opt = document.createElement('option');
+        opt.value = it.name;
+        const pretty = wfHumanTitle(it.title || it.name);
+        const label = (it.name && pretty && pretty !== it.name) ? `${pretty} — ${it.name}` : pretty || it.name;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+      // Restore last selection if present
+      try{
+        const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('workflows-last-template') : null;
+        if (saved){ sel.value = saved; }
+      }catch(_){ }
+      // Persist selection on change (attach once)
+      try{
+        if (!sel._wf_has_onchange){
+          sel.addEventListener('change', ()=>{ try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', sel.value); }catch(_){ } });
+          sel._wf_has_onchange = true;
+        }
+      }catch(_){ }
+      Toast.success('Templates loaded');
+    }catch(e){ Toast.error('Failed to load templates: '+(e?.message||e)); }
+  }
+  function wfTplResetFilters(){
+    try{
+      const q = document.getElementById('wfTpl_search'); if (q) q.value = '';
+      const tagSel = document.getElementById('wfTpl_tag'); if (tagSel) tagSel.value = '';
+      wfTplSavePrefs();
+      wfTplLoadList();
+    }catch(_){ }
+  }
+  function wfHumanTitle(s){
+    try{
+      if (!s) return '';
+      let t = String(s).replace(/[\-_]+/g, ' ').trim();
+      // Title case words, preserving non-word tokens like arrows
+      t = t.replace(/\b([a-z])(\w*)/g, (m,a,b)=> a.toUpperCase()+b.toLowerCase());
+      return t;
+    }catch(_){ return String(s); }
+  }
+  async function wfTplApply(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const data = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      document.getElementById('wfDef_payload').value = JSON.stringify(data,null,2);
+      Toast.success('Template loaded: '+name);
+    }catch(e){ Toast.error('Failed to load template: '+(e?.message||e)); }
+  }
+  async function wfTplLoadByName(name){
+    try{
+      if (!name){ return; }
+      const data = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      document.getElementById('wfDef_payload').value = JSON.stringify(data,null,2);
+      Toast.success('Template loaded: '+wfHumanTitle(name));
+    }catch(e){ Toast.error('Failed to load template: '+(e?.message||e)); }
+  }
+  async function wfTplInsert(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const ta = document.getElementById('wfDef_payload');
+      const obj = (()=>{ try{ return JSON.parse(ta.value||'{}'); }catch(_){ return {}; } })();
+      obj.name = obj.name || (tpl && tpl.name) || 'composed';
+      obj.version = obj.version || 1;
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      if (Array.isArray(tpl?.steps)){
+        for (const step of tpl.steps){ obj.steps.push(step); }
+      }
+      ta.value = JSON.stringify(obj, null, 2);
+      Toast.success('Inserted steps from template: '+name);
+    }catch(e){ Toast.error('Failed to insert: '+(e?.message||e)); }
+  }
+  async function wfTplRun(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      // Create definition
+      const created = await apiClient.makeRequest('POST','/api/v1/workflows',{ body: tpl });
+      const wid = created?.id;
+      if (!wid){ throw new Error('Create did not return id'); }
+      // Default inputs
+      const inputs = (tpl && typeof tpl.default_inputs==='object' && tpl.default_inputs) ? tpl.default_inputs : {};
+      const run = await apiClient.makeRequest('POST',`/api/v1/workflows/${encodeURIComponent(wid)}/run?mode=async`,{ body: { inputs } });
+      document.getElementById('wfDef_result').textContent = JSON.stringify({ created, run }, null, 2);
+      const runId = run?.run_id || '';
+      const toastEl = Toast.success('Run started: '+ runId, 8000);
+      // Append a quick-link button to jump to Runs tab and pre-fill run_id
+      try{
+        const btn = document.createElement('button');
+        btn.className = 'api-button btn-sm';
+        btn.style.marginLeft = '8px';
+        btn.textContent = 'Open in Runs';
+        btn.onclick = () => { try{ wfGoToRun(runId); }catch(_){} };
+        const content = toastEl?.querySelector?.('.toast-content .toast-message') || toastEl?.querySelector?.('.toast-content') || toastEl;
+        if (content) content.appendChild(btn);
+      }catch(_){ /* ignore */ }
+    }catch(e){ Toast.error('Run template failed: '+(e?.message||e)); }
+  }
+
+  // Create+Run and automatically navigate and watch status
+  async function wfTplRunWatch(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const created = await apiClient.makeRequest('POST','/api/v1/workflows',{ body: tpl });
+      const wid = created?.id; if (!wid){ throw new Error('Create did not return id'); }
+      const inputs = (tpl && typeof tpl.default_inputs==='object' && tpl.default_inputs) ? tpl.default_inputs : {};
+      const run = await apiClient.makeRequest('POST',`/api/v1/workflows/${encodeURIComponent(wid)}/run?mode=async`,{ body: { inputs } });
+      const runId = run?.run_id || '';
+      document.getElementById('wfDef_result').textContent = JSON.stringify({ created, run }, null, 2);
+      wfGoToRun(runId);
+      setTimeout(()=>{ try{ wfStartWatchStatus(runId); }catch(_){ } }, 350);
+    }catch(e){ Toast.error('Run & Watch failed: '+(e?.message||e)); }
+  }
+
+  async function wfTplRunByName(name){
+    try{
+      if (!name){ return; }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const created = await apiClient.makeRequest('POST','/api/v1/workflows',{ body: tpl });
+      const wid = created?.id;
+      if (!wid){ throw new Error('Create did not return id'); }
+      const inputs = (tpl && typeof tpl.default_inputs==='object' && tpl.default_inputs) ? tpl.default_inputs : {};
+      const run = await apiClient.makeRequest('POST',`/api/v1/workflows/${encodeURIComponent(wid)}/run?mode=async`,{ body: { inputs } });
+      const runId = run?.run_id || '';
+      const toastEl = Toast.success('Run started: '+ runId, 8000);
+      try{
+        const btn = document.createElement('button');
+        btn.className = 'api-button btn-sm';
+        btn.style.marginLeft = '8px';
+        btn.textContent = 'Open in Runs';
+        btn.onclick = () => { try{ wfGoToRun(runId); }catch(_){} };
+        const content = toastEl?.querySelector?.('.toast-content .toast-message') || toastEl?.querySelector?.('.toast-content') || toastEl;
+        if (content) content.appendChild(btn);
+      }catch(_){ }
+    }catch(e){ Toast.error('Run featured failed: '+(e?.message||e)); }
+  }
+
+  async function wfTplCopyCurl(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : 'http://localhost:8000';
+      const token = (apiClient && apiClient.token) ? apiClient.token : 'YOUR_API_KEY_HERE';
+      const json = JSON.stringify(tpl, null, 2);
+      const snippet = `#!/usr/bin/env bash\nset -e\nBASE='${base}'\nAPI_KEY='${token}'\n\n# Requires: jq\ncat > /tmp/wf_def.json << 'JSON'\n${json}\nJSON\n\nCREATE=$(curl -sS -X POST "$BASE/api/v1/workflows" \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-KEY: $API_KEY" \\\n  --data-binary @/tmp/wf_def.json)\necho "$CREATE" | jq .\nWID=$(echo "$CREATE" | jq -r '.id')\n\nRUN=$(curl -sS -X POST "$BASE/api/v1/workflows/$WID/run?mode=async" \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-KEY: $API_KEY" \\\n  --data '{"inputs": {}}')\necho "$RUN" | jq .\n`;
+      await navigator.clipboard.writeText(snippet);
+      Toast.success('Copied cURL (create+run)');
+    }catch(e){ Toast.error('Copy cURL failed: '+(e?.message||e)); }
+  }
+
+  // New generator supporting no-jq mode and using current API base/token
+  async function wfTplCopyCurlAlt(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : 'http://localhost:8000';
+      const token = (apiClient && apiClient.token) ? apiClient.token : 'YOUR_API_KEY_HERE';
+      const json = JSON.stringify(tpl, null, 2);
+      const nojq = !!document.getElementById('wfTpl_curl_nojq')?.checked;
+      let snippet;
+      if (!nojq){
+        snippet = `#!/usr/bin/env bash\nset -e\nBASE='${base}'\nAPI_KEY='${token}'\n\n# Requires: jq\ncat > /tmp/wf_def.json << 'JSON'\n${json}\nJSON\n\nCREATE=$(curl -sS -X POST "$BASE/api/v1/workflows" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data-binary @/tmp/wf_def.json)\necho "$CREATE" | jq .\nWID=$(echo "$CREATE" | jq -r '.id')\n\nRUN=$(curl -sS -X POST "$BASE/api/v1/workflows/$WID/run?mode=async" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data '{"inputs": {}}')\necho "$RUN" | jq .\n`;
+      } else {
+        snippet = `#!/usr/bin/env bash\nset -e\nBASE='${base}'\nAPI_KEY='${token}'\n\ncat > /tmp/wf_def.json << 'JSON'\n${json}\nJSON\n\n# Create definition (response saved to file)\ncurl -sS -X POST "$BASE/api/v1/workflows" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data-binary @/tmp/wf_def.json > /tmp/wf_created.json\n\necho "Created response saved to /tmp/wf_created.json"\necho "Open it and set WID manually:"\necho "export WID=REPLACE_WITH_ID"\n\n# Run (replace WID first)\ncurl -sS -X POST "$BASE/api/v1/workflows/$WID/run?mode=async" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data '{"inputs": {}}' > /tmp/wf_run.json\n\necho "Run response saved to /tmp/wf_run.json"\n`;
+      }
+      await navigator.clipboard.writeText(snippet);
+      Toast.success('Copied cURL (create+run)');
+    }catch(e){ Toast.error('Copy cURL failed: '+(e?.message||e)); }
+  }
+
+  function wfTplCurlToggle(){
+    try{
+      const chk = document.getElementById('wfTpl_curl_nojq');
+      const note = document.getElementById('wfTpl_curl_note');
+      if (!note || !chk) return;
+      note.textContent = chk.checked ? 'No jq mode' : 'Requires jq';
+    }catch(_){ }
+  }
+
+  // Simple run status watcher for the Runs tab
+  let wfStatusTimer = null;
+  let wfStatusRunId = null;
+  function wfStartWatchStatus(runId){
+    try{
+      if (wfStatusTimer){ clearInterval(wfStatusTimer); wfStatusTimer = null; }
+      wfStatusRunId = runId;
+      try{ const inp=document.getElementById('wfRun_run_id'); if (inp){ inp.value = String(runId||''); } }catch(_){ }
+      wfStatusTimer = setInterval(async ()=>{
+        try{
+          const r = await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${encodeURIComponent(wfStatusRunId)}`);
+          set('wfRun_result', r);
+          const st = (r && r.status) ? String(r.status) : '';
+          if (st && (st === 'succeeded' || st === 'failed' || st === 'cancelled')){
+            clearInterval(wfStatusTimer); wfStatusTimer = null;
+            Toast.info(`Run ${st}`);
+          }
+        }catch(e){ /* ignore transient */ }
+      }, 1500);
+      // Optionally enable auto events
+      try{
+        const chk = document.getElementById('wfEvents_auto');
+        if (chk && !chk.checked){ chk.checked = true; wfToggleAutoEvents(); }
+      }catch(_){ }
+      // Cleanup on unload
+      window.addEventListener('beforeunload', ()=>{ try{ if (wfStatusTimer) clearInterval(wfStatusTimer); }catch(_){ } });
+    }catch(_){ }
+  }
+  function wfStopWatchStatus(){
+    try{
+      if (wfStatusTimer){ clearInterval(wfStatusTimer); wfStatusTimer = null; Toast.info('Stopped watching'); }
+      // Also stop auto events refresh if enabled
+      try{ const chk=document.getElementById('wfEvents_auto'); if (chk && chk.checked){ chk.checked=false; wfToggleAutoEvents(); } }catch(_){ }
+    }catch(_){ }
+  }
+
+  // Navigate to the Workflows → Runs tab and pre-fill the run ID
+  function wfGoToRun(runId){
+    try{
+      const topBtn = document.querySelector('.top-tab-button[data-toptab="workflows"]');
+      const doFill = () => { setTimeout(()=>{ try{ const inp=document.getElementById('wfRun_run_id'); if (inp){ inp.value = String(runId||''); } }catch(_){ } }, 150); };
+      if (window.webUI && topBtn){
+        // Activate Workflows tab, then the Runs sub-tab
+        Promise.resolve(webUI.activateTopTab(topBtn)).then(()=>{
+          try{ const runsBtn = document.querySelector('#workflows-subtabs .sub-tab-button[data-content-id="tabWorkflowsRuns"]'); if (runsBtn) webUI.activateSubTab(runsBtn); }catch(_){ }
+          doFill();
+          // Follow-up toast with quick Get Status action
+          setTimeout(()=>{
+            try{
+              const t = Toast.info('Ready to check status', 6000);
+              const btn = document.createElement('button');
+              btn.className = 'api-button btn-sm';
+              btn.style.marginLeft = '8px';
+              btn.textContent = 'Get Status';
+              btn.onclick = ()=>{ try{ wfGetRun(); }catch(_){} };
+              const content = t?.querySelector?.('.toast-content .toast-message') || t?.querySelector?.('.toast-content') || t;
+              if (content) content.appendChild(btn);
+            }catch(_){ }
+          }, 220);
+        });
+      } else {
+        // Fallback: show content directly
+        try{
+          document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
+          const runs = document.getElementById('tabWorkflowsRuns'); if (runs) runs.classList.add('active');
+        }catch(_){ }
+        doFill();
+        try{
+          const t = Toast.info('Ready to check status', 6000);
+          const btn = document.createElement('button');
+          btn.className = 'api-button btn-sm';
+          btn.style.marginLeft = '8px';
+          btn.textContent = 'Get Status';
+          btn.onclick = ()=>{ try{ wfGetRun(); }catch(_){} };
+          const content = t?.querySelector?.('.toast-content .toast-message') || t?.querySelector?.('.toast-content') || t;
+          if (content) content.appendChild(btn);
+        }catch(_){ }
+      }
+    }catch(_){ }
+  }
   async function wfListDefinitions(){
     try{
       const resp = await apiClient.makeRequest('GET','/api/v1/workflows');
       document.getElementById('wfDef_result').textContent = JSON.stringify(resp,null,2);
     }catch(e){ Toast.error('List failed: '+(e?.message||e)); }
+  }
+  async function wfGetStepTypes(){
+    try{
+      const resp = await apiClient.makeRequest('GET','/api/v1/workflows/step-types');
+      document.getElementById('wfDef_result').textContent = JSON.stringify(resp,null,2);
+    }catch(e){ Toast.error('Step types failed: '+(e?.message||e)); }
   }
   async function wfRunSaved(){
     try{
@@ -54,16 +479,306 @@
       Toast.success('Run started: '+(resp?.run_id||''));
     }catch(e){ Toast.error('Run failed: '+(e?.message||e)); }
   }
+  async function wfSchedCreate(){
+    try{
+      const widRaw = document.getElementById('wfSched_workflow_id').value.trim();
+      const name = document.getElementById('wfSched_name').value.trim() || null;
+      const cron = document.getElementById('wfSched_cron').value.trim();
+      const timezone = document.getElementById('wfSched_tz').value.trim() || null;
+      const run_mode = document.getElementById('wfSched_mode').value;
+      const validation_mode = document.getElementById('wfSched_validation').value;
+      const enabled = document.getElementById('wfSched_enabled').checked;
+      const inputsText = document.getElementById('wfSched_inputs').value.trim();
+      const body = { name, cron, timezone, run_mode, validation_mode, enabled };
+      if (widRaw) body.workflow_id = parseInt(widRaw,10);
+      if (inputsText){ try{ body.inputs = JSON.parse(inputsText); }catch(e){ Toast.error('Invalid inputs JSON'); return; } }
+      const resp = await apiClient.makeRequest('POST','/api/v1/scheduler/workflows',{ body });
+      Toast.success('Created schedule '+(resp?.id||''));
+      await wfSchedList();
+    }catch(e){ Toast.error('Create schedule failed: '+(e?.message||e)); }
+  }
+  async function wfSchedList(){
+    try{
+      const resp = await apiClient.makeRequest('GET','/api/v1/scheduler/workflows');
+      const host = document.getElementById('wfSched_list');
+      host.innerHTML = wfSchedRender(resp||[]);
+    }catch(e){ Toast.error('List schedules failed: '+(e?.message||e)); }
+  }
+  function wfSchedRender(items){
+    if (!Array.isArray(items) || items.length===0){ return '<div style="color:var(--color-base-0)">No schedules</div>'; }
+    let rows = '';
+    for (const it of items){
+      rows += `<tr>
+        <td style="font-family:monospace">${it.id}</td>
+        <td>${it.name||''}</td>
+        <td>${String(it.workflow_id||'')}</td>
+        <td><code>${it.cron}</code></td>
+        <td>${it.timezone||''}</td>
+        <td>${it.run_mode}</td>
+        <td>${it.validation_mode}</td>
+        <td>${it.enabled? 'yes':'no'}</td>
+        <td>
+          <button class="api-button btn-sm" onclick="wfSchedRunNow('${it.id}')">Run</button>
+          <button class="api-button btn-sm" onclick="wfSchedToggle('${it.id}', ${it.enabled? 'false':'true'})">${it.enabled? 'Disable':'Enable'}</button>
+          <button class="api-button btn-sm danger" onclick="wfSchedDelete('${it.id}')">Delete</button>
+        </td>
+      </tr>`;
+    }
+    return `<table class="table-compact"><thead><tr><th>ID</th><th>Name</th><th>WID</th><th>Cron</th><th>TZ</th><th>Mode</th><th>Validation</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  async function wfSchedDelete(id){
+    try{
+      await apiClient.makeRequest('DELETE',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}`);
+      await wfSchedList();
+      Toast.success('Deleted');
+    }catch(e){ Toast.error('Delete failed: '+(e?.message||e)); }
+  }
+  async function wfSchedToggle(id, enabled){
+    try{
+      const body = { enabled };
+      await apiClient.makeRequest('PATCH',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}`,{ body });
+      await wfSchedList();
+    }catch(e){ Toast.error('Toggle failed: '+(e?.message||e)); }
+  }
+  async function wfSchedRunNow(id){
+    try{
+      const r = await apiClient.makeRequest('POST',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}/run-now`);
+      Toast.success('Enqueued task '+(r?.task_id||''));
+    }catch(e){ Toast.error('Run-now failed: '+(e?.message||e)); }
+  }
+  function wfInsertDelay(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'delay_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'delay', config: { milliseconds: 1000 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted delay step');
+    }catch(e){ Toast.error('Could not insert delay: '+(e?.message||e)); }
+  }
+  function wfInsertLog(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'log_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'log', config: { message: 'Run {{ inputs.name || \"\" }}', level: 'info' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted log step');
+    }catch(e){ Toast.error('Could not insert log: '+(e?.message||e)); }
+  }
+  function wfInsertRSSFetch(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'rss_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'rss_fetch', config: { urls: ['https://example.com/feed.xml'], limit: 5 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted rss_fetch step');
+    }catch(e){ Toast.error('Could not insert rss_fetch: '+(e?.message||e)); }
+  }
+  function wfInsertEmbed(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'embed_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'embed', config: { texts: '{{ last.text }}', collection: 'user_{{ user_id }}_workflows' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted embed step');
+    }catch(e){ Toast.error('Could not insert embed: '+(e?.message||e)); }
+  }
+  function wfInsertTranslate(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'translate_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'translate', config: { input: '{{ last.text }}', target_lang: 'en' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted translate step');
+    }catch(e){ Toast.error('Could not insert translate: '+(e?.message||e)); }
+  }
+  function wfInsertSTT(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'stt_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'stt_transcribe', config: { file_uri: 'file:///ABSOLUTE/PATH/TO/audio.wav', model: 'large-v3', word_timestamps: false }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted stt_transcribe step');
+    }catch(e){ Toast.error('Could not insert stt_transcribe: '+(e?.message||e)); }
+  }
+  function wfInsertNotify(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'notify_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'notify', config: { url: 'https://hooks.slack.com/services/xxx', message: '{{ last.text }}' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted notify step');
+    }catch(e){ Toast.error('Could not insert notify: '+(e?.message||e)); }
+  }
+  function wfInsertDiff(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'diff_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'diff_change_detector', config: { current: '{{ last.text }}', method: 'ratio', threshold: 0.95 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted diff_change_detector step');
+    }catch(e){ Toast.error('Could not insert diff change: '+(e?.message||e)); }
+  }
+  function wfInsertPrompt(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'prompt_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'prompt', config: { template: 'Hello {{ inputs.name }}' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted prompt step');
+    }catch(e){ Toast.error('Could not insert prompt: '+(e?.message||e)); }
+  }
+  function wfInsertProcessMedia(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'proc_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'process_media', config: { kind: 'web_scraping', scrape_method: 'Individual URLs', url_input: 'https://example.com/article', summarize: true, temperature: 0.7 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted process_media step');
+    }catch(e){ Toast.error('Could not insert process_media: '+(e?.message||e)); }
+  }
+  function wfInsertTTS(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'tts_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'tts', config: { input: 'Narrate: {{ last.text || inputs.summary || "" }}', model: 'kokoro', voice: 'af_heart', response_format: 'mp3', speed: 1.0 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted TTS step');
+    }catch(e){ Toast.error('Could not insert tts: '+(e?.message||e)); }
+  }
+  function wfInsertRagSearch(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'rag_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'rag_search', config: { query: '{{ inputs.query || "example" }}', sources: ['media_db'], search_mode: 'hybrid', top_k: 5 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted RAG search step');
+    }catch(e){ Toast.error('Could not insert rag_search: '+(e?.message||e)); }
+  }
+  function wfInsertMediaIngest(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'ingest_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'media_ingest', config: { sources: [{ uri: 'file:///path/to/file.txt' }], extraction: { extract_text: true }, chunking: { method: 'simple', max_size: 800, overlap: 100 } }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted media_ingest step');
+    }catch(e){ Toast.error('Could not insert media_ingest: '+(e?.message||e)); }
+  }
+  function wfCopyJson(id){
+    try{
+      const txt = document.getElementById(id).textContent||'';
+      navigator.clipboard.writeText(txt).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed'));
+    }catch(e){ Toast.error('Copy failed: '+(e?.message||e)); }
+  }
+  function wfClearJson(id){ try{ document.getElementById(id).textContent=''; }catch(e){} }
   </script>
 </div>
 
 <div id="tabWorkflowsRuns" class="tab-content">
   <h2>Workflows: Runs</h2>
   <div class="form-group">
+    <label>Quick</label>
+    <select id="wfList_quick" onchange="wfQuickHours()">
+      <option value="">(none)</option>
+      <option value="1">last 1h</option>
+      <option value="24">last 24h</option>
+      <option value="168">last 7d</option>
+      <option value="720">last 30d</option>
+    </select>
+    <div id="wfList_status_chips" style="margin-bottom:8px">
+      <span class="chip" data-status="queued" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">queued</span>
+      <span class="chip" data-status="running" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
+      <span class="chip" data-status="paused" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
+      <span class="chip" data-status="waiting_human" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
+      <span class="chip" data-status="waiting_approval" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_approval</span>
+      <span class="chip" data-status="succeeded" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
+      <span class="chip" data-status="failed" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
+      <span class="chip" data-status="cancelled" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
+    </div>
+    <label>Last N Hours</label>
+    <input type="number" id="wfList_last_hours" min="1" style="width:80px" placeholder="e.g., 24">
+    <label>Status (comma)</label>
+    <input type="text" id="wfList_status" placeholder="succeeded,failed">
+    <label>Workflow ID</label>
+    <input type="text" id="wfList_workflow_id" placeholder="optional">
+    <label>Created After</label>
+    <input type="datetime-local" id="wfList_created_after" placeholder="YYYY-MM-DD HH:MM">
+    <label>Created Before</label>
+    <input type="datetime-local" id="wfList_created_before" placeholder="YYYY-MM-DD HH:MM">
+    <label>Date Presets</label>
+    <select id="wfList_presets" onchange="wfApplyPreset()">
+      <option value="">(none)</option>
+      <option value="today">Today</option>
+      <option value="yesterday">Yesterday</option>
+      <option value="lasthour">Last hour</option>
+      <option value="last24h">Last 24h</option>
+      <option value="thisweek">This week</option>
+      <option value="last7d">Last 7 days</option>
+      <option value="last30d">Last 30 days</option>
+    </select>
+    <label>Order By</label>
+    <select id="wfList_order_by">
+      <option value="created_at" selected>created_at</option>
+      <option value="started_at">started_at</option>
+      <option value="ended_at">ended_at</option>
+    </select>
+    <label>Order</label>
+    <select id="wfList_order">
+      <option value="desc" selected>desc</option>
+      <option value="asc">asc</option>
+    </select>
+    <label>Limit</label>
+    <input type="number" id="wfList_limit" value="25" min="1" max="200" style="width:80px">
+    <label>Offset</label>
+    <input type="number" id="wfList_offset" value="0" min="0" style="width:80px">
+    <label style="margin-left:8px" title="When enabled, the cursor token is used and the 'offset' value is ignored."><input type="checkbox" id="wfList_use_cursor" onchange="wfSaveFilters()"> Use cursor</label>
+    <button class="api-button btn-sm" onclick="wfShowCursorHelp()" title="What is cursor pagination?">Cursor Help</button>
+    <label>Cursor</label>
+    <input type="text" id="wfList_cursor" placeholder="opaque token" style="width:260px" oninput="wfSaveFilters()">
+    <button class="api-button btn-sm" onclick="wfResetCursor()">Reset cursor</button>
+      <button class="api-button" onclick="wfListRuns()">List Runs</button>
+      <button class="api-button" onclick="wfCopyRunsCurl()" title="Copy the current runs list request as cURL, including cursor if enabled">Copy cURL (List)</button>
+      <button class="api-button" onclick="wfClearFilters()">Clear Filters</button>
+  </div>
+  <div class="form-group">
     <label>Run ID</label>
     <input type="text" id="wfRun_run_id" placeholder="uuid" />
     <button class="api-button" onclick="wfGetRun()">Get Status</button>
     <button class="api-button" onclick="wfGetEvents()">Get Events</button>
+    <button class="api-button" onclick="wfStopWatchStatus()">Stop Watching</button>
+    <label>Events Limit</label>
+    <input type="number" id="wfEvents_limit" min="1" max="1000" value="500" style="width:90px"/>
+    <button class="api-button" onclick="wfGetNextEvents()">Load Next Events</button>
+    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto" onchange="wfToggleAutoEvents()"> Auto-refresh</label>
+    <label style="margin-left:8px" title="Use server-provided Next-Cursor header for paging instead of since=last_seq"><input type="checkbox" id="wfEvents_use_cursor"> Use cursor (events)</label>
+    <button class="api-button btn-sm" id="wfEvents_next_cursor_btn" onclick="wfGetNextEvents()" disabled>Next (cursor)</button>
+    <label style="margin-left:8px">Filter (types)</label>
+    <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px"/>
     <button class="api-button" onclick="wfListArtifacts()">List Artifacts</button>
     <button class="api-button" onclick="wfDownloadAllServer()">Download All (server)</button>
     <button class="api-button" onclick="wfDownloadAllClient()">Download All (client)</button>
@@ -74,11 +789,332 @@
     <button class="api-button" onclick="wfCancel()">Cancel</button>
     <button class="api-button" onclick="wfRetry()">Retry</button>
   </div>
+  <div class="form-group" style="margin-bottom:4px">
+    <button class="api-button" onclick="wfCopyJson('wfRun_result')">Copy</button>
+    <button class="api-button" onclick="wfClearJson('wfRun_result')">Clear</button>
+  </div>
   <pre id="wfRun_result" class="json-viewer"></pre>
+  <div id="wfRuns_cursor_hint" style="margin-top:4px;color:var(--color-base-0)"></div>
+  <div class="form-group" style="margin-top:4px;color:var(--color-base-0)">
+    <span id="wfEvents_info"></span>
+  </div>
+  <div id="wfEvents_table"></div>
+  <div id="wfRun_list" class="json-viewer" style="margin-top:8px"></div>
+  <div class="form-group">
+    <button class="api-button" id="wfList_prev" onclick="wfPrevPage()" disabled>Prev</button>
+    <button class="api-button" id="wfList_next" onclick="wfNextPage()" disabled>Next</button>
+    <button class="api-button" id="wfList_next_cursor" onclick="wfNextCursor()" disabled>Next (cursor)</button>
+    <span id="wfList_page_info" style="margin-left:8px;color:var(--color-base-0)"></span>
+    <span id="wfList_cursor_info" style="margin-left:8px;color:var(--color-base-0)"></span>
+    <div style="margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+      <label style="margin:0">next_cursor</label>
+      <input type="text" id="wfList_next_cursor_value" style="min-width:420px" readonly placeholder="(will appear after listing)"/>
+      <button class="api-button" id="wfList_copy_cursor_btn" onclick="wfCopyNextCursor()" disabled>Copy</button>
+    </div>
+  </div>
   <div id="wfRun_artifacts" class="json-viewer"></div>
+  <div class="card" style="margin-top:16px">
+    <h3>Webhook DLQ (Admin)</h3>
+    <div class="form-group">
+      <label>Limit</label>
+      <input type="number" id="wfDlq_limit" value="50" min="1" max="500" style="width:80px">
+      <label>Offset</label>
+      <input type="number" id="wfDlq_offset" value="0" min="0" style="width:80px">
+      <button class="api-button" onclick="wfDlqLoad()">Refresh</button>
+    </div>
+    <div id="wfDlq_table"></div>
+  </div>
   <script>
+  function wfQuickHours(){
+    const v = document.getElementById('wfList_quick').value;
+    document.getElementById('wfList_last_hours').value = v || '';
+  }
+  function wfCopyRunsCurl(){
+    try{
+      const params = new URLSearchParams();
+      // statuses
+      const picked = wfSelectedStatuses();
+      const statusText = (document.getElementById('wfList_status').value||'').trim();
+      if (picked.length){ picked.forEach(s=>params.append('status', s)); }
+      if (statusText){ statusText.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>params.append('status', s)); }
+      // basic fields
+      const setIf = (k,id)=>{ const v=(document.getElementById(id)?.value||'').trim(); if (v) params.set(k, v); };
+      setIf('workflow_id','wfList_workflow_id');
+      const caRaw = (document.getElementById('wfList_created_after')?.value||'').trim(); if (caRaw) params.set('created_after', new Date(caRaw).toISOString());
+      const cbRaw = (document.getElementById('wfList_created_before')?.value||'').trim(); if (cbRaw) params.set('created_before', new Date(cbRaw).toISOString());
+      setIf('order_by','wfList_order_by'); setIf('order','wfList_order'); setIf('limit','wfList_limit');
+      const useCursor = !!document.getElementById('wfList_use_cursor')?.checked;
+      const cursorVal = (document.getElementById('wfList_cursor')?.value||'').trim();
+      if (useCursor && cursorVal){ params.set('cursor', cursorVal); }
+      else { setIf('offset','wfList_offset'); }
+      const qs = params.toString();
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : 'http://localhost:8000';
+      const token = (apiClient && apiClient.token) ? apiClient.token : '$API_KEY';
+      const url = `${base}/api/v1/workflows/runs${qs ? ('?'+qs): ''}`;
+      const snippet = `curl -sS -H "X-API-KEY: ${token}" "${url}"`;
+      navigator.clipboard.writeText(snippet).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed'));
+    }catch(e){ Toast.error('Copy failed: '+(e?.message||e)); }
+  }
+  async function wfDlqLoad(){
+    try{
+      const limit = parseInt(document.getElementById('wfDlq_limit').value||'50');
+      const offset = parseInt(document.getElementById('wfDlq_offset').value||'0');
+      const resp = await apiClient.makeRequest('GET', `/api/v1/workflows/webhooks/dlq?limit=${limit}&offset=${offset}`);
+      const items = resp?.items || [];
+      let html = '<table style="width:100%;border-collapse:collapse">';
+      html += '<thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">ID</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Tenant</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Run</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">URL</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Attempts</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Next Attempt</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Last Error</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Actions</th></tr></thead>'; 
+      html += '<tbody>';
+      items.forEach(it => {
+        const id = it.id; const t = it.tenant_id||''; const rid = it.run_id||''; const url = it.url||''; const at = it.attempts||0; const next = it.next_attempt_at||''; const err = it.last_error||'';
+        html += `<tr>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${id}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${t}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${rid}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><code>${escapeHtml(url)}</code></td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${at}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${next||''}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><code>${escapeHtml(String(err)).slice(0,120)}</code></td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><button class=\"api-button\" onclick=\"wfDlqReplay(${id})\">Replay</button></td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      document.getElementById('wfDlq_table').innerHTML = html;
+    }catch(e){ document.getElementById('wfDlq_table').innerHTML = '<em>Failed to load DLQ</em>'; Toast.error('DLQ load failed: '+(e?.message||e)); }
+  }
+  async function wfDlqReplay(id){
+    try{
+      const r = await apiClient.makeRequest('POST', `/api/v1/workflows/webhooks/dlq/${id}/replay`);
+      if (r && r.ok) { Toast.success('Replay dispatched'); wfDlqLoad(); }
+      else { Toast.error('Replay failed'); }
+    }catch(e){ Toast.error('Replay error: '+(e?.message||e)); }
+  }
+  // Persist/restore runs filters
+  function wfSaveFilters(){
+    try{
+      const payload = {
+        last_hours: (document.getElementById('wfList_last_hours')?.value||'').trim(),
+        status: (document.getElementById('wfList_status')?.value||'').trim(),
+        workflow_id: (document.getElementById('wfList_workflow_id')?.value||'').trim(),
+        created_after: (document.getElementById('wfList_created_after')?.value||'').trim(),
+        created_before: (document.getElementById('wfList_created_before')?.value||'').trim(),
+        order_by: (document.getElementById('wfList_order_by')?.value||'').trim(),
+        order: (document.getElementById('wfList_order')?.value||'').trim(),
+        limit: (document.getElementById('wfList_limit')?.value||'').trim(),
+        offset: (document.getElementById('wfList_offset')?.value||'').trim(),
+        use_cursor: !!(document.getElementById('wfList_use_cursor')?.checked),
+        cursor: (document.getElementById('wfList_cursor')?.value||'').trim(),
+      };
+      if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-runs-filters', payload);
+    }catch(_){ }
+  }
+  function wfRestoreFilters(){
+    try{
+      const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('workflows-runs-filters') : null;
+      if (!saved) return;
+      const setv = (id,v)=>{ try{ const el=document.getElementById(id); if (el && v!=null) el.value = v; }catch(_){ } };
+      setv('wfList_last_hours', saved.last_hours);
+      setv('wfList_status', saved.status);
+      setv('wfList_workflow_id', saved.workflow_id);
+      setv('wfList_created_after', saved.created_after);
+      setv('wfList_created_before', saved.created_before);
+      setv('wfList_order_by', saved.order_by);
+      setv('wfList_order', saved.order);
+      setv('wfList_limit', saved.limit);
+      setv('wfList_offset', saved.offset);
+      try{ const uc=document.getElementById('wfList_use_cursor'); if (uc) uc.checked = !!saved.use_cursor; }catch(_){ }
+      setv('wfList_cursor', saved.cursor);
+    }catch(_){ }
+  }
+  function wfToggleChip(el){
+    const selected = el.getAttribute('data-selected') === '1';
+    if (selected){ el.setAttribute('data-selected','0'); el.style.background=''; }
+    else { el.setAttribute('data-selected','1'); el.style.background='var(--color-base-80)'; }
+  }
+  function wfSelectedStatuses(){
+    const chips = document.querySelectorAll('#wfList_status_chips .chip[data-selected="1"]');
+    return Array.from(chips).map(c=>c.getAttribute('data-status'));
+  }
+  let wfLastList = { limit: 0, offset: 0, next_offset: null, next_cursor: null };
+  async function wfListRuns(){
+    try{
+      wfSaveFilters();
+      const params = new URLSearchParams();
+      const picked = wfSelectedStatuses();
+      const statusText = (document.getElementById('wfList_status').value||'').trim();
+      if (picked.length){ picked.forEach(s=>params.append('status', s)); }
+      if (statusText){ statusText.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>params.append('status', s)); }
+      const wf = document.getElementById('wfList_workflow_id').value.trim(); if (wf){ params.set('workflow_id', wf); }
+      const caRaw = document.getElementById('wfList_created_after').value.trim();
+      const cbRaw = document.getElementById('wfList_created_before').value.trim();
+      const ca = caRaw ? new Date(caRaw).toISOString() : '';
+      const cb = cbRaw ? new Date(cbRaw).toISOString() : '';
+      if (ca){ params.set('created_after', ca); }
+      if (cb){ params.set('created_before', cb); }
+      const lh = document.getElementById('wfList_last_hours').value.trim(); if (lh){ params.set('last_n_hours', lh); }
+      params.set('order_by', document.getElementById('wfList_order_by').value);
+      params.set('order', document.getElementById('wfList_order').value);
+      params.set('limit', document.getElementById('wfList_limit').value);
+      const useCursor = !!document.getElementById('wfList_use_cursor').checked;
+      const cursorVal = (document.getElementById('wfList_cursor').value||'').trim();
+      if (useCursor && cursorVal){ params.set('cursor', cursorVal); }
+      else { params.set('offset', document.getElementById('wfList_offset').value); }
+      const url = '/api/v1/workflows/runs?' + params.toString();
+      const resp = await apiClient.makeRequest('GET', url);
+      set('wfRun_result', resp);
+      renderRunTable(resp);
+      // Update pager state
+      const limit = parseInt(document.getElementById('wfList_limit').value || '25');
+      const offset = parseInt(document.getElementById('wfList_offset').value || '0');
+      wfLastList = { limit, offset, next_offset: resp?.next_offset ?? null, next_cursor: resp?.next_cursor ?? null };
+      document.getElementById('wfList_prev').disabled = useCursor ? true : (offset <= 0);
+      document.getElementById('wfList_next').disabled = useCursor ? true : (resp?.next_offset == null);
+      document.getElementById('wfList_next_cursor').disabled = useCursor ? (resp?.next_cursor == null) : true;
+      const count = Array.isArray(resp?.runs) ? resp.runs.length : 0;
+      document.getElementById('wfList_page_info').textContent = `showing ${count} (limit ${limit}) offset ${offset}`;
+      const nc = resp?.next_cursor || '';
+      const infoEl = document.getElementById('wfList_cursor_info');
+      if (infoEl){
+        if (useCursor){
+          if (nc){ infoEl.innerHTML = `next_cursor: ${String(nc).slice(0,24)}… <button class=\"api-button btn-sm\" onclick=\"wfCopyNextCursor()\">Copy</button>`; }
+          else { infoEl.innerHTML = 'next_cursor: (none)'; }
+        } else {
+          infoEl.innerHTML = '';
+        }
+      }
+      const ncInput = document.getElementById('wfList_next_cursor_value');
+      const ncBtn = document.getElementById('wfList_copy_cursor_btn');
+      if (ncInput){ ncInput.value = nc || ''; }
+      if (ncBtn){ ncBtn.disabled = !nc; }
+      try{
+        const hint = document.getElementById('wfRuns_cursor_hint');
+        if (hint){
+          if (useCursor && nc){
+            hint.innerHTML = `Tip: A next_cursor is available below. You can copy it here: <button class=\"api-button btn-sm\" onclick=\"wfCopyNextCursor()\">Copy next_cursor</button>`;
+          } else {
+            hint.innerHTML = '';
+          }
+        }
+      }catch(_){ }
+    }catch(e){ Toast.error('List runs failed: '+(e?.message||e)); }
+  }
+  function wfPrevPage(){ try{ const off = Math.max(0, (wfLastList.offset||0) - (wfLastList.limit||25)); document.getElementById('wfList_offset').value = off; wfListRuns(); }catch(e){} }
+  function wfNextPage(){ try{ if (wfLastList.next_offset != null){ document.getElementById('wfList_offset').value = wfLastList.next_offset; wfListRuns(); } }catch(e){} }
+  function wfNextCursor(){ try{ if (wfLastList.next_cursor){ const inp=document.getElementById('wfList_cursor'); inp.value = wfLastList.next_cursor; wfListRuns(); } }catch(e){} }
+  function wfResetCursor(){ try{ const inp=document.getElementById('wfList_cursor'); if (inp){ inp.value=''; wfSaveFilters(); } Toast.info('Cursor cleared'); }catch(_){ }
+  function wfCopyNextCursor(){ try{ const v=(document.getElementById('wfList_next_cursor_value')?.value||''); if (!v){ Toast.error('No next_cursor'); return; } navigator.clipboard.writeText(v).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed')); }catch(e){ Toast.error('Copy failed'); } }
+  function wfShowCursorHelp(){
+    try{
+      const modal = document.getElementById('wfModal');
+      const pre = document.getElementById('wfModal_content');
+      if (!modal || !pre) return;
+      pre.textContent = [
+        'Cursor pagination returns an opaque token (next_cursor) representing your current position in a stable order. ',
+        'Use this token as the "cursor" parameter on subsequent requests to fetch the next page. ',
+        'When a cursor value is provided, the numeric "offset" is ignored. ',
+        'This approach avoids missed or duplicated items when new records arrive or timestamps tie.',
+        '',
+        'Tips:',
+        ' - Toggle "Use cursor" to switch from offset paging to cursor paging.',
+        ' - Copy the full next_cursor from the field below the pager or use the inline Copy buttons.',
+        ' - The token includes ordering info; do not edit it.'
+      ].join('\n');
+      modal.style.display = 'flex';
+    }catch(_){ }
+  }
   async function wfGetRun(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
-  async function wfGetEvents(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
+  let wfEventsState = { runId: null, lastSeq: null, nextCursor: null, timer: null };
+  async function wfFetchEvents(urlRelative){
+    try{
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : '';
+      const url = base + urlRelative;
+      const headers = { 'Accept': 'application/json' };
+      if (apiClient && apiClient.token){
+        if (apiClient.authMode === 'multi-user' && !apiClient.preferApiKeyInMultiUser){
+          headers['Authorization'] = `Bearer ${apiClient.token}`;
+        } else {
+          headers['X-API-KEY'] = apiClient.token;
+        }
+      }
+      const t0 = performance.now();
+      const resp = await fetch(url, { method:'GET', headers });
+      const latency = Math.round(performance.now()-t0);
+      if (!resp.ok){ throw new Error(`HTTP ${resp.status}`); }
+      const data = await resp.json();
+      const nextCursor = resp.headers.get('Next-Cursor');
+      return { data, latency, nextCursor };
+    }catch(e){ throw e; }
+  }
+  let wfPayloadCache = {};
+  async function wfGetEvents(){
+    try{
+      const id=val('wfRun_run_id');
+      const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
+      const typesRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (typesRaw){ typesRaw.split(',').map(s=>s.trim()).filter(Boolean).forEach(t=>params.append('types', t)); }
+      const { data: r, latency, nextCursor } = await wfFetchEvents(`/api/v1/workflows/runs/${id}/events?${params.toString()}`);
+      set('wfRun_result', r);
+      wfEventsState.runId = id;
+      wfEventsState.lastSeq = Array.isArray(r)&&r.length? r[r.length-1].event_seq : null;
+      wfEventsState.nextCursor = nextCursor || null;
+      const btn = document.getElementById('wfEvents_next_cursor_btn'); if (btn){ btn.disabled = !(document.getElementById('wfEvents_use_cursor')?.checked && wfEventsState.nextCursor); }
+      wfRenderEventsTable(r, latency, false);
+    }catch(e){Toast.error(e?.message||e);} }
+  async function wfGetNextEvents(){
+    try{
+      const id = val('wfRun_run_id');
+      const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
+      const typesRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
+      const params = new URLSearchParams({ limit: String(limit) });
+      const useCursor = !!document.getElementById('wfEvents_use_cursor')?.checked;
+      if (useCursor && wfEventsState.nextCursor){ params.set('cursor', wfEventsState.nextCursor); }
+      else if (wfEventsState.runId===id && wfEventsState.lastSeq!=null){ params.set('since', String(wfEventsState.lastSeq)); }
+      if (typesRaw){ typesRaw.split(',').map(s=>s.trim()).filter(Boolean).forEach(t=>params.append('types', t)); }
+      let url = `/api/v1/workflows/runs/${id}/events?${params.toString()}`;
+      const { data: r, latency, nextCursor } = await wfFetchEvents(url);
+      // Append to existing result view
+      const cur = (()=>{ try{ return JSON.parse(document.getElementById('wfRun_result').textContent||'[]'); }catch(e){ return []; } })();
+      const merged = Array.isArray(cur)? cur.concat(r) : r;
+      set('wfRun_result', merged);
+      if (Array.isArray(r)&&r.length){ wfEventsState.lastSeq = r[r.length-1].event_seq; wfEventsState.runId = id; }
+      wfEventsState.nextCursor = nextCursor || wfEventsState.nextCursor;
+      const btn2 = document.getElementById('wfEvents_next_cursor_btn'); if (btn2){ btn2.disabled = !(useCursor && wfEventsState.nextCursor); }
+      wfRenderEventsTable(r, latency, true);
+    }catch(e){ Toast.error(e?.message||e); }
+  }
+  function wfToggleAutoEvents(){
+    try{
+      const chk = document.getElementById('wfEvents_auto');
+      if (chk.checked){
+        if (wfEventsState.timer) clearInterval(wfEventsState.timer);
+        wfEventsState.timer = setInterval(()=>{ try{ wfGetNextEvents(); }catch(e){} }, 1000);
+        // Ensure interval is cleared when tab/page is hidden or unloaded
+        const _wfCleanup = ()=>{ try{ if (wfEventsState.timer){ clearInterval(wfEventsState.timer); wfEventsState.timer = null; } }catch(e){} };
+        document.addEventListener('visibilitychange', ()=>{ if (document.hidden) _wfCleanup(); }, { once: true });
+        window.addEventListener('beforeunload', _wfCleanup, { once: true });
+      } else {
+        if (wfEventsState.timer) { clearInterval(wfEventsState.timer); wfEventsState.timer = null; }
+      }
+    }catch(e){}
+  }
+  function wfClearFilters(){
+    try{
+      // Clear run list filters
+      document.getElementById('wfList_status').value = '';
+      document.getElementById('wfList_workflow_id').value = '';
+      document.getElementById('wfList_last_hours').value = '';
+      document.getElementById('wfList_created_after').value = '';
+      document.getElementById('wfList_created_before').value = '';
+      document.getElementById('wfList_presets').value = '';
+      document.getElementById('wfList_order_by').value = 'created_at';
+      document.getElementById('wfList_order').value = 'desc';
+      // Reset status chips
+      document.querySelectorAll('#wfList_status_chips .chip').forEach(ch=>{ ch.setAttribute('data-selected','0'); ch.style.background=''; });
+      // Clear events filter text
+      const evt = document.getElementById('wfEvents_filter'); if (evt) evt.value = '';
+      Toast.success('Filters cleared');
+    }catch(e){}
+  }
   async function wfListArtifacts(){
     try{
       const id=val('wfRun_run_id');
@@ -130,6 +1166,52 @@
   async function wfCtl(action){ const id=val('wfRun_run_id'); try{ await apiClient.makeRequest('POST',`/api/v1/workflows/runs/${id}/${action}`); Toast.success(action+' requested'); }catch(e){Toast.error(e?.message||e);} }
   function val(id){ return document.getElementById(id).value.trim(); }
   function set(id,obj){ document.getElementById(id).textContent = JSON.stringify(obj,null,2); }
+  function wfApplyPreset(){
+    try{
+      const v = document.getElementById('wfList_presets').value;
+      const afterEl = document.getElementById('wfList_created_after');
+      const beforeEl = document.getElementById('wfList_created_before');
+      const now = new Date();
+      const fmt = (d)=>{ const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+      if (v==='today'){
+        const start = new Date(); start.setHours(0,0,0,0);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='yesterday'){
+        const start = new Date(); start.setDate(start.getDate()-1); start.setHours(0,0,0,0);
+        const end = new Date(start); end.setHours(23,59,59,999);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(end);
+      } else if (v==='lasthour'){
+        const start = new Date(now.getTime() - 60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='last24h'){
+        const start = new Date(now.getTime() - 24*60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='thisweek'){
+        const day = now.getDay(); // 0=Sun..6=Sat
+        const delta = (day + 6) % 7; // days since Monday
+        const start = new Date(now);
+        start.setDate(now.getDate() - delta);
+        start.setHours(0,0,0,0);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='last7d'){
+        const start = new Date(now.getTime() - 7*24*60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='last30d'){
+        const start = new Date(now.getTime() - 30*24*60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else {
+        afterEl.value = '';
+        beforeEl.value = '';
+      }
+    }catch(e){}
+  }
   async function wfDownloadAllServer(){
     try{
       const id = val('wfRun_run_id');
@@ -186,6 +1268,38 @@
       setTimeout(()=>URL.revokeObjectURL(objUrl), 1500);
     }catch(e){ Toast.error('Download all (client) failed: '+(e?.message||e)); }
   }
+  // Modal for payload preview
+  </script>
+</div>
+<div id="wfModal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:1000">
+  <div style="background:var(--color-base-100);max-width:80%;max-height:80%;overflow:auto;padding:12px;border-radius:8px">
+    <div style="margin-bottom:8px">
+      <button class="api-button" onclick="wfCloseModal()">Close</button>
+      <button class="api-button" onclick="wfCopyModal()">Copy</button>
+    </div>
+    <pre id="wfModal_content" class="json-viewer"></pre>
+  </div>
+</div>
+<div id="tabWorkflowsApprovals" class="tab-content">
+  <h2>Workflows: Approvals</h2>
+  <div class="form-group">
+    <label>Run ID</label>
+    <input type="text" id="wfAppr_run_id" placeholder="uuid" />
+    <label>Step ID</label>
+    <input type="text" id="wfAppr_step_id" placeholder="step id" />
+  </div>
+  <div class="form-group">
+    <label>Comment</label>
+    <input type="text" id="wfAppr_comment" placeholder="optional comment" />
+    <label>Edited Fields (JSON)</label>
+    <input type="text" id="wfAppr_edited" placeholder='{"final_text":"..."}' />
+  </div>
+  <div class="form-group">
+    <button class="api-button" onclick="wfApprove()">Approve</button>
+    <button class="api-button" onclick="wfReject()">Reject</button>
+  </div>
+  <pre id="wfAppr_result" class="json-viewer"></pre>
+  <script>
   async function createZipFromFiles(files){
     const entries = [];
     for (const f of files){ const ab = await f.blob.arrayBuffer(); const data = new Uint8Array(ab); entries.push({ name: f.name, data, crc: crc32(data), size: data.length }); }
@@ -249,5 +1363,257 @@
       Toast.success('Sent '+action);
     }catch(e){ Toast.error('Action failed: '+(e?.message||e)); }
   }
-  </script>
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m])); }
+</script>
 </div>
+<script>
+  function renderRunTable(resp){
+    try{
+      const runs = Array.isArray(resp?.runs) ? resp.runs : [];
+      if (!runs.length){ document.getElementById('wfRun_list').innerHTML = '<em>No runs</em>'; return; }
+      const chip = (st)=>{
+        const colors = { queued:'#888', running:'#0a84ff', paused:'#f0ad4e', waiting_human:'#6f42c1', waiting_approval:'#8e44ad', succeeded:'#2e7d32', failed:'#c62828', cancelled:'#616161' };
+        const color = colors[st] || '#555';
+        return `<span style="display:inline-block;padding:2px 6px;border-radius:10px;background:${color};color:#fff;font-size:12px">${st}</span>`;
+      };
+      let html = '<table style="width:100%; border-collapse:collapse">';
+      html += '<thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Run ID</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Workflow</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Owner</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Status</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Created</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Ended</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Actions</th></tr></thead>';
+      html += '<tbody>';
+      runs.forEach(r => {
+        const rid = r.run_id||'';
+        const wf = r.workflow_id!=null ? r.workflow_id : '';
+        const owner = r.user_id!=null ? r.user_id : '';
+        const st = (r.status||'').toLowerCase();
+        const cr = r.created_at || '';
+        const en = r.ended_at || '';
+        html += `<tr>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><a href="#" onclick="document.getElementById('wfRun_run_id').value='${rid}'; wfGetRun(); return false;">${rid}</a></td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${wf}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${owner}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${chip(st)}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${cr}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${en}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><button class=\"api-button\" onclick=\"wfGetEventsFor('${rid}')\">Events</button></td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      document.getElementById('wfRun_list').innerHTML = html;
+      try{ wfAppendWebhookButtons(); }catch(_){}
+    }catch(e){ document.getElementById('wfRun_list').innerHTML = '<em>Error rendering</em>'; }
+  }
+  async function wfGetEventsFor(runId){
+    try{
+      const r = await apiClient.makeRequest('GET', `/api/v1/workflows/runs/${runId}/events`);
+      set('wfRun_result', r);
+    }catch(e){ Toast.error('Events failed: '+(e?.message||e)); }
+  }
+  function wfAppendWebhookButtons(){
+    try{
+      const container = document.getElementById('wfRun_list');
+      if (!container) return;
+      const rows = container.querySelectorAll('tbody tr');
+      rows.forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        if (cells.length < 7) return;
+        const actions = cells[cells.length-1];
+        // If already has Webhooks button, skip
+        if (actions && actions.textContent.includes('Webhooks')) return;
+        // Derive run_id from the link in first cell
+        let rid = '';
+        try{
+          const a = tr.querySelector('td a[href="#"]');
+          if (a){ rid = a.textContent.trim(); }
+        }catch(_){ rid = ''; }
+        if (!rid) return;
+        const btn = document.createElement('button');
+        btn.className = 'api-button';
+        btn.textContent = 'Webhooks';
+        btn.title = 'Show webhook delivery history';
+        btn.addEventListener('click', () => wfShowWebhookDeliveries(rid));
+        actions.appendChild(document.createTextNode(' '));
+        actions.appendChild(btn);
+      });
+    }catch(_){ }
+  }
+  async function wfShowWebhookDeliveries(runId){
+    try{
+      const r = await apiClient.makeRequest('GET', `/api/v1/workflows/runs/${runId}/webhooks/deliveries`);
+      const items = (r && r.deliveries) ? r.deliveries : [];
+      const modal = document.getElementById('wfModal');
+      const pre = document.getElementById('wfModal_content');
+      if (!modal || !pre){ Toast.error('Modal unavailable'); return; }
+      let text = `Webhook deliveries for ${runId}\n\n`;
+      items.forEach(d => { text += `#${d.event_seq} ${d.created_at} host=${d.host||''} status=${d.status||''} code=${d.code||''}\n`; });
+      pre.textContent = text || '(no deliveries)';
+      modal.style.display = 'flex';
+    }catch(e){ Toast.error('Deliveries failed: '+(e?.message||e)); }
+  }
+</script>
+<script>
+  function wfRenderEventsTable(items, latencyMs, append){
+    const info = document.getElementById('wfEvents_info');
+    const tbl = document.getElementById('wfEvents_table');
+    const colors = {
+      run_started:'#0a84ff', step_started:'#0070c9', step_completed:'#2e7d32', step_failed:'#c62828',
+      step_timeout:'#f0ad4e', waiting_human:'#6f42c1', run_cancelled:'#616161', run_failed:'#c62828', run_completed:'#2e7d32',
+      heartbeat:'#888', snapshot:'#555'
+    };
+    function chip(type){ const c = colors[type]||'#555'; return `<span style="display:inline-block;padding:2px 6px;border-radius:10px;background:${c};color:#fff;font-size:11px">${type}</span>`; }
+    if (!append){ tbl.innerHTML = '<table style="width:100%;border-collapse:collapse" id="wfEvents_table_inner"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Seq</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Type</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Created</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Payload</th></tr></thead><tbody></tbody></table>'; }
+    const tbody = document.querySelector('#wfEvents_table_inner tbody');
+    const fRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
+    const fSet = new Set((fRaw? fRaw.split(','): []).map(s=>s.trim().toLowerCase()).filter(Boolean));
+    let lastSeq = wfEventsState.lastSeq || null;
+    let added = 0;
+    (Array.isArray(items)? items: []).forEach(e => {
+      const etype = String(e.event_type||'').toLowerCase();
+      if (fSet.size && !fSet.has(etype)) return;
+      const tr = document.createElement('tr');
+      const key = String(wfEventsState.runId||'')+':'+String(e.event_seq);
+      const payloadStr = JSON.stringify(e.payload||{}, null, 2);
+      wfPayloadCache[key] = payloadStr;
+      const preview = payloadStr.length > 160 ? escapeHtml(payloadStr.slice(0,160)) + '…' : escapeHtml(payloadStr);
+      const viewBtn = payloadStr.length > 160 ? ` <button class=\"api-button\" onclick=\"wfOpenModalPayload('${key}')\">View</button>` : '';
+      tr.innerHTML = `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\">${e.event_seq}</td>`+
+                     `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\">${chip(e.event_type)}</td>`+
+                     `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\">${e.created_at||''}</td>`+
+                     `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\"><code style=\"font-size:11px\">${preview}</code>${viewBtn}</td>`;
+      tbody.appendChild(tr);
+      lastSeq = e.event_seq;
+      added += 1;
+    });
+    const msg = `events ${added} • last_seq ${lastSeq!=null?lastSeq:'-'} • fetch ${latencyMs||0}ms`;
+    info.textContent = msg;
+  }
+  let _wfModalOpener = null;
+  function wfOpenModalPayload(key){
+    try{
+      const modal = document.getElementById('wfModal');
+      const pre = document.getElementById('wfModal_content');
+      pre.textContent = wfPayloadCache[key] || '';
+      modal.style.display = 'flex';
+      // Accessibility: capture opener and add Esc/backdrop close
+      _wfModalOpener = document.activeElement;
+      // Focus trap within modal
+      const focusables = Array.from(modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(el=>!el.hasAttribute('disabled'));
+      if (focusables.length){ focusables[0].focus(); }
+      const onKey = (ev)=>{
+        if (ev.key === 'Escape'){ wfCloseModal(); return; }
+        if (ev.key === 'Tab'){
+          if (!focusables.length) return;
+          const first = focusables[0]; const last = focusables[focusables.length-1];
+          if (ev.shiftKey){
+            if (document.activeElement === first){ last.focus(); ev.preventDefault(); }
+          } else {
+            if (document.activeElement === last){ first.focus(); ev.preventDefault(); }
+          }
+        }
+      };
+      const onClick = (ev)=>{ if (ev.target && ev.target.id === 'wfModal'){ wfCloseModal(); } };
+      document.addEventListener('keydown', onKey);
+      modal.addEventListener('click', onClick);
+      modal._wf_onKey = onKey; modal._wf_onClick = onClick;
+      // ARIA for dialog
+      modal.setAttribute('role','dialog');
+      modal.setAttribute('aria-modal','true');
+    }catch(e){}
+  }
+  function wfCloseModal(){
+    try{
+      const modal = document.getElementById('wfModal');
+      modal.style.display='none';
+      if (modal._wf_onKey){ document.removeEventListener('keydown', modal._wf_onKey); modal._wf_onKey = null; }
+      if (modal._wf_onClick){ modal.removeEventListener('click', modal._wf_onClick); modal._wf_onClick = null; }
+      if (_wfModalOpener && typeof _wfModalOpener.focus === 'function'){ _wfModalOpener.focus(); }
+      _wfModalOpener = null;
+    }catch(e){}
+  }
+  function wfCopyModal(){ try{ const txt=document.getElementById('wfModal_content').textContent||''; navigator.clipboard.writeText(txt).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed')); }catch(e){} }
+  function escapeHtml(s){ return (s||'').replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#39;'}[m])); }
+</script>
+<script>
+  // Auto-load Templates list when the Workflows Definitions tab becomes active
+  (function(){
+    try{
+      const target = document.getElementById('tabWorkflowsDefinitions');
+      if (!target) return;
+      const trigger = () => { try { wfTplInit(); } catch(e) { /* ignore */ } };
+      // If already active (first open), trigger immediately
+      if (target.classList.contains('active')) { trigger(); }
+      // Observe class changes to detect activation
+      const obs = new MutationObserver((muts)=>{
+        for (const m of muts){
+          if (m.attributeName === 'class' && target.classList.contains('active')){
+            trigger();
+          }
+        }
+      });
+      obs.observe(target, { attributes: true });
+      // Cleanup on unload
+      window.addEventListener('beforeunload', ()=>{ try{ obs.disconnect(); }catch(_){} });
+    }catch(e){ /* ignore */ }
+  })();
+  async function wfTplInit(){
+    try{
+      await wfTplLoadTags();
+      wfTplRestorePrefs();
+      await wfTplLoadList();
+    }catch(e){ /* ignore */ }
+  }
+  async function wfTplLoadTags(){
+    try{
+      const tagSel = document.getElementById('wfTpl_tag');
+      if (!tagSel) return;
+      // load only once per session
+      if (tagSel._wf_loaded_tags) return;
+      const tags = await apiClient.makeRequest('GET','/api/v1/workflows/templates/tags');
+      const arr = Array.isArray(tags)? tags : [];
+      tagSel.innerHTML = '<option value="">(all)</option>' + arr.map(t=>`<option value="${t}">${t}</option>`).join('');
+      tagSel._wf_loaded_tags = true;
+      // save on change
+      try { if (!tagSel._wf_onchange){ tagSel.addEventListener('change', ()=>{ wfTplSavePrefs(); wfTplLoadList(); }); tagSel._wf_onchange = true; } } catch(_){ }
+    }catch(e){ /* ignore */ }
+  }
+  // Debounced search for templates
+  let _wfTplDebounce = null;
+  function wfTplQueryChanged(){
+    try{
+      wfTplSavePrefs();
+      if (_wfTplDebounce){ clearTimeout(_wfTplDebounce); }
+      _wfTplDebounce = setTimeout(()=>{ try{ wfTplLoadList(); }catch(_){ } }, 350);
+    }catch(_){ }
+  }
+  function wfTplSavePrefs(){
+    try{
+      const q = (document.getElementById('wfTpl_search')?.value||'').trim();
+      const tag = (document.getElementById('wfTpl_tag')?.value||'').trim();
+      if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-templates-filters', { q, tag });
+    }catch(_){ }
+  }
+  function wfTplRestorePrefs(){
+    try{
+      const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('workflows-templates-filters') : null;
+      if (!saved) return;
+      try{ const el=document.getElementById('wfTpl_search'); if (el) el.value = saved.q || ''; }catch(_){ }
+      try{ const el=document.getElementById('wfTpl_tag'); if (el && saved.tag){ el.value = saved.tag; } }catch(_){ }
+    }catch(_){ }
+  }
+  // Auto-restore Runs filters when Runs tab becomes active
+  (function(){
+    try{
+      const target = document.getElementById('tabWorkflowsRuns');
+      if (!target) return;
+      const trigger = () => { try { wfRestoreFilters(); } catch(e) { /* ignore */ } };
+      if (target.classList.contains('active')) { trigger(); }
+      const obs = new MutationObserver((muts)=>{
+        for (const m of muts){
+          if (m.attributeName === 'class' && target.classList.contains('active')){
+            trigger();
+          }
+        }
+      });
+      obs.observe(target, { attributes: true });
+      window.addEventListener('beforeunload', ()=>{ try{ obs.disconnect(); }catch(_){} });
+    }catch(e){ /* ignore */ }
+  })();
+</script>

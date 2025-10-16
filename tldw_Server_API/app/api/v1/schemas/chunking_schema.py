@@ -65,6 +65,12 @@ class ChunkingOptionsRequest(BaseModel):
     tokenizer_name_or_path: Optional[str] = Field(default_chunk_options_from_lib.get('tokenizer_name_or_path', "gpt2"),
                                                   description="Tokenizer model name or path.")
 
+    # Code strategy mode (only relevant when method='code')
+    code_mode: Optional[str] = Field(
+        None,
+        description="For method='code': select routing mode: 'auto' (default), 'ast', or 'heuristic'."
+    )
+
     # Behavior Modifiers
     adaptive: Optional[bool] = Field(default_chunk_options_from_lib.get('adaptive'),
                                      description="Enable adaptive chunk sizing.")
@@ -122,6 +128,13 @@ class ChunkingOptionsRequest(BaseModel):
             if current_method in ['words', 'sentences', 'tokens', 'paragraphs', 'propositions', 'json_list']:
                 if overlap >= max_size:
                     raise ValueError(f"Overlap ({overlap}) must be less than max_size ({max_size}) for method '{current_method}'.")
+        # Validate code_mode if provided
+        cm = values.code_mode
+        if cm is not None:
+            low = str(cm).lower()
+            if low not in ('auto', 'ast', 'heuristic'):
+                raise ValueError("code_mode must be one of: 'auto', 'ast', 'heuristic'")
+            values.code_mode = low
         return values
 
 class ChunkingTextRequest(BaseModel):
@@ -152,6 +165,26 @@ class ChunkMetadataResponse(BaseModel):
     # Add any other common fields you expect, or leave it more open if very dynamic
     # For example, if json_content was extracted:
     # initial_json_metadata: Optional[Dict[str, Any]] = None # Example
+
+
+# --- Capabilities schema ---
+
+class CodeMethodOptions(BaseModel):
+    code_mode: List[str] = Field(description="Supported values for option 'code_mode' when method='code'")
+    language_hints: Dict[str, str] = Field(description="Filename extension to language mapping hints")
+
+
+class MethodSpecificOptions(BaseModel):
+    code: CodeMethodOptions
+
+
+class ChunkingCapabilitiesResponse(BaseModel):
+    methods: List[str]
+    default_options: Dict[str, Any]
+    llm_required_methods: List[str]
+    hierarchical_support: bool
+    notes: Optional[str] = None
+    method_specific_options: Optional[MethodSpecificOptions] = None
 
 #
 # End of chunking_schema.py

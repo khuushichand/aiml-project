@@ -23,8 +23,10 @@ from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
 from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
-from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_evaluations_database as _create_evals_db,
+)
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
@@ -57,7 +59,8 @@ class EvaluationRunner:
             max_concurrent_evals: Maximum number of concurrent evaluations
             eval_timeout: Timeout in seconds for each evaluation
         """
-        self.db = EvaluationsDatabase(db_path)
+        # Use backend-aware factory so Postgres content backend is honored
+        self.db = _create_evals_db(db_path=db_path)
         # Lazy initialization - create evaluators only when needed
         self._rag_evaluator = None
         self._quality_evaluator = None

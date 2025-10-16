@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 #
 # 3rd-Party Libraries
-from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi import APIRouter, Query, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 import httpx
@@ -274,6 +274,7 @@ async def websearch_endpoint(
     payload: WebSearchRequest,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
+    request: Request = None,
 ):
     """
     Runs the websearch pipeline: optional subqueries + provider search. If aggregate=True,
@@ -305,11 +306,25 @@ async def websearch_endpoint(
         phase1 = generate_and_search(payload.query, search_params)
 
         if payload.aggregate:
+            # Cancellation propagates if client disconnects
+            cancel_event = asyncio.Event()
+
+            async def _watch_disconnect():
+                try:
+                    if request is not None:
+                        await request.is_disconnected()
+                        cancel_event.set()
+                except Exception:
+                    pass
+
+            monitor = asyncio.create_task(_watch_disconnect())
             aggregated = await analyze_and_aggregate(
                 phase1["web_search_results_dict"],
                 phase1["sub_query_dict"],
                 search_params,
+                cancel_event=cancel_event,
             )
+            monitor.cancel()
             # Merge in sub_query_dict for completeness
             aggregated["sub_query_dict"] = phase1["sub_query_dict"]
             return aggregated

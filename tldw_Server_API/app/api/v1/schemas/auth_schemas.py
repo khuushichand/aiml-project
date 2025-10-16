@@ -294,6 +294,10 @@ class RegistrationResponse(BaseModel):
     username: str = Field(..., description="Username")
     email: str = Field(..., description="Email address")
     requires_verification: bool = Field(..., description="Email verification required")
+    api_key: Optional[str] = Field(
+        default=None,
+        description="X-API-KEY for this user (shown once, SQLite multi-user)."
+    )
     
     model_config = {
         "json_schema_extra": {
@@ -302,7 +306,8 @@ class RegistrationResponse(BaseModel):
                 "user_id": 1,
                 "username": "johndoe",
                 "email": "john@example.com",
-                "requires_verification": True
+                "requires_verification": True,
+                "api_key": "tldw_abcd1234..."
             }
         }
     }

@@ -32,6 +32,7 @@ The main RAG endpoint with complete feature access.
   // ========== SEARCH CONFIGURATION ==========
   "search_mode": "hybrid",  // "fts" | "vector" | "hybrid"
   "hybrid_alpha": 0.7,      // 0=FTS only, 1=Vector only
+  "enable_intent_routing": false, // analyze intent and adjust hybrid/top_k
   "top_k": 10,              // Max results (1-100)
   "min_score": 0.0,         // Minimum relevance score
   
@@ -49,8 +50,16 @@ The main RAG endpoint with complete feature access.
   
   // ========== DOCUMENT PROCESSING ==========
   "enable_reranking": true,
-  "reranking_strategy": "hybrid",  // "flashrank" | "cross_encoder" | "hybrid"
+  "reranking_strategy": "two_tier",  // "flashrank" | "cross_encoder" | "hybrid" | "llm_scoring" | "two_tier"
   "rerank_top_k": 20,             // Docs to rerank (defaults to top_k)
+  // Two‑Tier request-level overrides (optional)
+  "rerank_min_relevance_prob": 0.50,  // minimum calibrated prob to allow generation
+  "rerank_sentinel_margin": 0.15,     // minimum (top_prob − sentinel_prob) margin
+  // Corpus namespace (enables corpus-specific synonyms for query rewrites)
+  "index_namespace": "my_corpus"
+  // Advanced retrieval
+  "enable_multi_vector_passages": false, // ColBERT-style max-span scoring on retrieved docs
+  "enable_numeric_table_boost": false,   // Slight boost for table/number-dense chunks on numeric queries
   "enable_table_processing": false,
   "enable_parent_expansion": false,
   "parent_context_size": 500,      // Characters of parent context
@@ -65,11 +74,40 @@ The main RAG endpoint with complete feature access.
   "include_page_numbers": false,
   "enable_chunk_citations": true,
   
+  // ========== GENERATION GUARDRAILS ==========
+  "enable_injection_filter": true,          // Down-weight risky chunks pre-generation
+  "injection_filter_strength": 0.5,         // Score multiplier for risky chunks
+  "require_hard_citations": false,          // Require per-sentence supporting spans (doc_id + offsets)
+  "enable_numeric_fidelity": false,         // Verify numeric tokens are present in sources
+  "numeric_fidelity_behavior": "continue", // "continue" | "ask" | "decline" | "retry"
+  
   // ========== ANSWER GENERATION ==========
   "enable_generation": false,
   "generation_model": "gpt-4o",     // Model name
   "generation_prompt": "string (optional)",
   "max_generation_tokens": 500,
+  // Abstention & multi-turn synthesis (optional)
+  "enable_abstention": false,
+  "abstention_behavior": "continue",  // "continue" | "ask" | "decline"
+  "enable_multi_turn_synthesis": false,
+  "synthesis_time_budget_sec": 5.0,
+  "synthesis_draft_tokens": 300,
+  "synthesis_refine_tokens": 500,
+  
+  // ========== POST-VERIFICATION (ADAPTIVE) ==========
+  "enable_post_verification": false,
+  "adaptive_max_retries": 1,
+  "adaptive_unsupported_threshold": 0.15,
+  "adaptive_max_claims": 20,
+  "adaptive_time_budget_sec": 10.0,
+  "low_confidence_behavior": "continue",  // "continue" | "ask" | "decline"
+
+  // ========== ADAPTIVE RERUN (LOW CONFIDENCE) ==========
+  "adaptive_rerun_on_low_confidence": false,      // Trigger a single rerun when post-verification shows low confidence
+  "adaptive_rerun_include_generation": true,      // Include generation in rerun (true) or stop after retrieval/rerank (false)
+  "adaptive_rerun_bypass_cache": false,           // Force enable_cache=false for the rerun to avoid stale cache hits
+  "adaptive_rerun_time_budget_sec": 5.0,          // Optional soft cap; emits rag_phase_budget_exhausted_total{phase="adaptive_rerun"} on breach
+  "adaptive_rerun_doc_budget": 8,                 // Optional: cap docs fed into quick verification during adoption check
   
   // ========== SECURITY & PRIVACY ==========
   "enable_security_filter": false,
@@ -144,6 +182,46 @@ The main RAG endpoint with complete feature access.
     "reranking_time": 0.085,
     "citation_time": 0.040
   },
+  "metadata": {
+    // ... other metadata fields
+    "post_verification": {
+      "unsupported_ratio": 0.2,
+      "total_claims": 10,
+      "unsupported_count": 2,
+      "fixed": false,
+      "reason": "threshold_not_exceeded"
+    },
+    "adaptive_rerun": {
+      "performed": true,
+      "duration": 1.23,
+      "old_ratio": 0.3,
+      "new_ratio": 0.15,
+      "adopted": true,
+      "bypass_cache": true,
+      "old_nf_missing": 2,
+      "new_nf_missing": 1,
+      "old_hard_citation_coverage": 0.6,
+      "new_hard_citation_coverage": 0.8,
+      "budget_exhausted": false
+    },
+    "hard_citations": {
+      "coverage": 0.75,
+      "total": 4,
+      "supported": 3,
+      "sentences": [
+        {
+          "text": "WidgetCo revenue reached $10M in 2024.",
+          "citations": [ { "doc_id": "doc-1", "start": 120, "end": 148 } ]
+        }
+      ]
+    },
+    "numeric_fidelity": {
+      "present": ["1234"],
+      "missing": ["50%"],
+      "source_numbers": ["1234", "3000000", "12%"],
+      "retry_docs_added": 3
+    }
+  },
   "citations": [
     "Smith, J. (2024). Machine Learning Fundamentals. Tech Publications."
   ],
@@ -214,9 +292,73 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
   }'
 ```
 
+**Abstention with Clarifying Question (Two‑Tier gating)**:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Summarize obscure topic with little evidence",
+    "sources": ["media_db"],
+    "search_mode": "hybrid",
+    "enable_reranking": true,
+    "reranking_strategy": "two_tier",
+    "enable_generation": true,
+    "enable_abstention": true,
+    "abstention_behavior": "ask"
+  }'
+```
+
+**Multi‑Turn Synthesis (draft→critique→refine)**:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Explain topic X",
+    "sources": ["media_db"],
+    "enable_generation": true,
+    "enable_multi_turn_synthesis": true,
+    "synthesis_time_budget_sec": 5.0,
+    "synthesis_draft_tokens": 256,
+    "synthesis_refine_tokens": 512
+  }'
+```
+
 ### POST `/batch` - Batch RAG Processing
 
 Process multiple queries concurrently.
+
+## Operational Notes
+
+### Two‑Tier Reranking and Generation Gating
+
+- `reranking_strategy="two_tier"` performs a fast cross‑encoder shortlist (default top 50) followed by an LLM reranker (default top 10) under existing LLM time/doc budgets.
+- A sentinel “irrelevant” document is added internally to calibrate low‑evidence scenarios. The final score is a calibrated probability of relevance derived from original retrieval score, CE score, and LLM score via a logistic mapping.
+- If the top calibrated probability is below `RAG_MIN_RELEVANCE_PROB` (default 0.35) or too close to the sentinel probability (margin < `RAG_SENTINEL_MARGIN`, default 0.10), answer generation is gated.
+- Calibration metadata is returned in `metadata.reranking_calibration`.
+
+### Indexing & Chunking
+
+- Adaptive chunking with overlap tuning is enabled by default during ingestion; for media transcripts you can submit a `timecode_map` array in chunk options (server-side integration) to attach `start_time`/`end_time` to chunk metadata.
+- Each chunk receives a stable `chunk_uid` for incremental updates.
+- Ingest‑time deduplication removes near‑duplicate chunks (configurable via `INGEST_*` env). Duplicates are annotated with `metadata.duplicate_of`.
+- Per‑corpus synonyms/aliases: place JSON files under `Config_Files/Synonyms/<corpus>.json` mapping `term -> [aliases]`. When `index_namespace` is set on the request, synonyms and domain expansions will draw from that corpus list.
+
+Environment variables (optional):
+- `RAG_TRANSFORMERS_RERANKER_MODEL` (default `BAAI/bge-reranker-v2-m3`)
+- `RAG_LLM_RERANK_TIMEOUT_SEC`, `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`, `RAG_LLM_RERANK_MAX_DOCS`
+- Calibration weights: `RAG_RERANK_CALIB_BIAS`, `RAG_RERANK_CALIB_W_ORIG`, `RAG_RERANK_CALIB_W_CE`, `RAG_RERANK_CALIB_W_LLM`
+- Gating: `RAG_MIN_RELEVANCE_PROB`, `RAG_SENTINEL_MARGIN`
+
+- Production mode: When `tldw_production=true`, retrievers do not use raw SQL fallbacks; they require database adapters. The unified RAG endpoints pass adapters automatically. If you call the unified pipeline directly, pass `media_db` and `chacha_db`.
+
+- LLM reranking guardrails: For `reranking_strategy="llm_scoring"`, per-call timeout, total budget, and max-doc caps apply by default. Tune via environment:
+  - `RAG_LLM_RERANK_TIMEOUT_SEC` (default `10`)
+  - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` (default `20`)
+  - `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
+
+- Adaptive post-verification: When `enable_post_verification=true`, the service validates claims and may attempt a bounded repair pass. Environment toggles:
+  - `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) — enables HyDE + multi‑strategy rewrites and diversity during the adaptive pass; set to `false` for a simple, single‑query retrieval.
+  - `RAG_ADAPTIVE_TIME_BUDGET_SEC` — optional hard cap (seconds) for post‑verification.
 
 #### Request Schema
 
@@ -265,6 +407,44 @@ Process multiple queries concurrently.
   ]
 }
 ```
+
+## Reranking Backends
+
+The unified pipeline supports multiple reranking strategies. Choose via `reranking_strategy` (pipeline) or via HTTP endpoints under `/v1/reranking` (see README for public aliases).
+
+- Strategies
+  - `flashrank`: Lightweight neural reranker (fast, CPU-friendly)
+  - `cross_encoder`: Transformers-based cross-encoder (GPU recommended)
+  - `llama_cpp`: Embedding-based cosine reranker using llama.cpp GGUF models
+  - `hybrid`: Combines multiple strategies
+
+- Transformers Cross-Encoder
+  - Use `reranking_strategy: "cross_encoder"` and set `reranking_model` to an HF model id (e.g., `BAAI/bge-reranker-v2-m3`)
+  - Pipeline loads via sentence-transformers CrossEncoder if available, otherwise raw Transformers
+  - Set default via config: `RAG_TRANSFORMERS_RERANKER_MODEL`
+  - Typical models: BGE (BAAI/bge-reranker-*), Jina rerankers
+
+- llama.cpp (GGUF)
+  - Use `reranking_strategy: "llama_cpp"` and set `reranking_model` to a GGUF file path
+  - The pipeline shells out to `llama-embedding` with `--embd-output-format json+` and a separator to score `[query] + documents`
+  - Auto-instruct formatting for BGE GGUF (adds `query: ` / `passage: ` prefixes)
+  - Default pooling is model-smart (BGE/Jina → mean; Qwen → last). Override via config if needed
+  - Set defaults via config keys under `[RAG]` (see README): `llama_reranker_*`
+
+- Backends via HTTP (public aliases)
+  - `POST /v1/reranking` accepts `{ backend: "auto|llamacpp|transformers", model, query, documents, top_n }`
+  - Auto selection: `.gguf` → llama.cpp; `model` containing `/` (HF id) → transformers
+
+### Configuration Keys (summary)
+
+- Transformers cross-encoder
+  - `RAG_TRANSFORMERS_RERANKER_MODEL`: default HF model id
+
+- llama.cpp reranker
+  - `RAG_LLAMA_RERANKER_MODEL`, `RAG_LLAMA_RERANKER_BIN`, `RAG_LLAMA_RERANKER_NGL`
+  - `RAG_LLAMA_RERANKER_OUTPUT` (default `json+`), `RAG_LLAMA_RERANKER_SEP` (default `<#sep#>`)
+  - `RAG_LLAMA_RERANKER_POOLING`, `RAG_LLAMA_RERANKER_NORMALIZE`, `RAG_LLAMA_RERANKER_MAX_DOC_CHARS`
+  - `RAG_LLAMA_RERANKER_TEMPLATE_MODE` (auto|bge|jina|none), `RAG_LLAMA_RERANKER_QUERY_PREFIX`, `RAG_LLAMA_RERANKER_DOC_PREFIX`
 
 ### GET `/simple` - Simplified Search Interface
 
@@ -402,6 +582,17 @@ Check health status of all RAG components.
 | `generation_model` | string | null | LLM model name |
 | `generation_prompt` | string | null | Custom prompt template |
 | `max_generation_tokens` | integer | 500 | Max tokens for generated answer |
+
+### Post-Verification (Adaptive)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable_post_verification` | boolean | false | Verify generated answer and optionally repair unsupported claims |
+| `adaptive_max_retries` | integer | 1 | Max repair attempts (0–3) |
+| `adaptive_unsupported_threshold` | float | 0.15 | Trigger when (refuted + NEI)/total_claims exceeds this |
+| `adaptive_max_claims` | integer | 20 | Max claims analyzed during post-check |
+| `adaptive_time_budget_sec` | number|null | null | Optional hard cap (seconds) for post-check work |
+| `low_confidence_behavior` | enum | "continue" | Action when still insufficient after retries: continue | ask | decline |
 
 ### Security & Privacy
 

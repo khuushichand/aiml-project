@@ -14,7 +14,7 @@ load_dotenv()
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app
 # Import helpers from conftest
-from .conftest import get_auth_headers
+# get_auth_headers is defined locally below for clarity
 # Import schemas from your actual file path
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
@@ -214,9 +214,9 @@ def mock_media_db():
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch(
-    "tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")  # Keep patch in case logic changes, but expect no calls
+    "tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")  # Keep patch in case logic changes, but expect no calls
 def test_create_chat_completion_no_template(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
@@ -259,7 +259,7 @@ def test_create_chat_completion_no_template(
         # If present, it should be from the default character
         assert called_kwargs["system_message"] == 'Mock default system prompt'
 
-    # Messages should be passed through as is because active_template is None
+    # Messages should be passed through as-is when using the raw passthrough template
     expected_payload_messages_as_dicts = [msg.model_dump(exclude_none=True) for msg in DEFAULT_USER_MESSAGES_FOR_SCHEMA]
     actual_payload_messages = called_kwargs["messages_payload"]
     assert actual_payload_messages == expected_payload_messages_as_dicts
@@ -284,8 +284,8 @@ def test_create_chat_completion_no_template(
 @pytest.mark.skip(reason="Streaming tests hang with TestClient - needs investigation")
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_create_chat_completion_success_streaming(  # Added default_chat_request_data fixture
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
@@ -339,8 +339,8 @@ def test_create_chat_completion_success_streaming(  # Added default_chat_request
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_system_message_extraction(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db
@@ -377,8 +377,8 @@ def test_system_message_extraction(
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_no_system_message_in_payload(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
@@ -434,8 +434,8 @@ VALID_ALTERNATIVE_PROVIDER_FOR_TEST = "groq"
     VALID_ALTERNATIVE_PROVIDER_FOR_TEST: "alternative_key_for_test",  # Use the valid name
     "cohere": "cohere_test_key_if_needed_separately"  # If you still have a cohere specific part
 })
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_api_key_used_from_config(
         mock_apply_template, mock_load_template,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
@@ -541,8 +541,8 @@ def test_missing_api_key_for_required_provider(
 
 
 @pytest.mark.unit
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")  # Mock template deps
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")  # Mock template deps
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_data
         mock_apply_template, mock_load_template,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
@@ -576,8 +576,8 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")  # Corrected patch target
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 @pytest.mark.parametrize("error_type, expected_status, expected_detail_substring", [
     (ChatAuthenticationError(provider="test", message="Auth failed detail from lib"),
      # Error from perform_chat_api_call
@@ -665,8 +665,8 @@ def test_chat_api_call_exception_handling_unit(
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_non_iterable_stream_generator_from_shim(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
@@ -950,7 +950,7 @@ def test_save_to_db_not_passed_to_chat_api_call(
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")  # Mock this
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")  # Mock this
 def test_create_chat_completion_character_not_found_uses_defaults(
         mock_load_template, mock_chat_api_call_shim,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
@@ -995,7 +995,7 @@ def test_create_chat_completion_character_not_found_uses_defaults(
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
+@patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 def test_create_chat_completion_template_file_not_found(
         mock_load_template, mock_chat_api_call_shim,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
@@ -1022,4 +1022,3 @@ def test_create_chat_completion_template_file_not_found(
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
-

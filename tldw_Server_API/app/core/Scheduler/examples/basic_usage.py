@@ -71,7 +71,8 @@ async def main():
                 "subject": "Welcome!",
                 "body": "Thanks for signing up"
             },
-            priority=TaskPriority.HIGH.value
+            priority=TaskPriority.HIGH.value,
+            metadata={"user_id": "demo-user"}
         )
         print(f"Submitted email task: {email_task}")
         
@@ -82,7 +83,8 @@ async def main():
                 "url": "https://example.com/video.mp4",
                 "duration": 120
             },
-            queue_name="heavy"
+            queue_name="heavy",
+            metadata={"user_id": "demo-user"}
         )
         
         # Task that depends on video processing
@@ -93,21 +95,24 @@ async def main():
                 "values": [10, 20, 30, 40, 50]
             },
             queue_name="analytics",
-            depends_on=[video_task]  # Will only run after video_task completes
+            depends_on=[video_task],  # Will only run after video_task completes
+            metadata={"user_id": "demo-user"}
         )
         
         # Submit with idempotency key (prevents duplicates)
         dedup_task = await scheduler.submit(
             handler="__main__.send_email",
             payload={"to": "admin@example.com", "subject": "Report"},
-            idempotency_key="daily-report-2024-01-01"
+            idempotency_key="daily-report-2024-01-01",
+            metadata={"user_id": "demo-user"}
         )
         
         # Try to submit duplicate (will return same task ID)
         duplicate = await scheduler.submit(
             handler="__main__.send_email",
             payload={"to": "different@example.com", "subject": "Different"},
-            idempotency_key="daily-report-2024-01-01"  # Same key!
+            idempotency_key="daily-report-2024-01-01",  # Same key!
+            metadata={"user_id": "demo-user"}
         )
         
         assert dedup_task == duplicate
@@ -118,7 +123,7 @@ async def main():
         scheduled_task = await scheduler.submit(
             handler="__main__.send_email",
             payload={"to": "future@example.com", "subject": "Scheduled"},
-            metadata={"scheduled_at": future_time.isoformat()}
+            metadata={"user_id": "demo-user", "scheduled_at": future_time.isoformat()}
         )
         
         # Wait for a task to complete
@@ -159,7 +164,8 @@ async def example_with_batch_processing():
                     "to": f"user{i}@example.com",
                     "subject": f"Message {i}"
                 },
-                "priority": TaskPriority.NORMAL.value if i % 2 == 0 else TaskPriority.LOW.value
+                "priority": TaskPriority.NORMAL.value if i % 2 == 0 else TaskPriority.LOW.value,
+                "metadata": {"user_id": f"demo-user-{i}"}
             }
             for i in range(10)
         ]
@@ -198,7 +204,8 @@ async def example_with_error_handling():
         # Submit task that might fail
         task_id = await scheduler.submit(
             handler="__main__.unreliable_task",
-            payload={"important": "data"}
+            payload={"important": "data"},
+            metadata={"user_id": "demo-user"}
         )
         
         # Wait and check result

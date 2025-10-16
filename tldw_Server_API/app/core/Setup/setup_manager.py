@@ -7,19 +7,21 @@ file handling logic across routers or UI layers.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from configparser import ConfigParser
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 SETUP_SECTION = "Setup"
 CONFIG_FILENAME = "config.txt"
 CONFIG_RELATIVE_PATH = Path("Config_Files") / CONFIG_FILENAME
+REMOTE_ACCESS_FIELD = "allow_remote_setup_access"
 
 SENSITIVE_KEY_MARKERS = ("key", "token", "secret", "password", "api_key")
 PLACEHOLDER_VALUES = {
@@ -27,10 +29,20 @@ PLACEHOLDER_VALUES = {
     "your_api_key_here",
     "YOUR_API_KEY_HERE",
     "default-secret-key-for-single-user",
+    "test-api-key-12345",
     "CHANGE_ME_TO_SECURE_API_KEY",
     "ChangeMeStrong123!",
     "change-me-in-production",
 }
+
+_remote_access_hook: Optional[Callable[[bool], None]] = None
+
+
+def register_remote_access_hook(callback: Callable[[bool], None]) -> None:
+    """Register a callback fired whenever remote setup access toggles."""
+    global _remote_access_hook
+    _remote_access_hook = callback
+
 
 SECTION_LABELS: Dict[str, str] = {
     "API": "API Providers",
@@ -89,6 +101,7 @@ SECTION_DESCRIPTIONS: Dict[str, str] = {
 FIELD_HINTS: Dict[Tuple[str, str], str] = {
     ("AuthNZ", "single_user_api_key"): "Strong secret used for X-API-KEY requests in single-user mode.",
     ("AuthNZ", "auth_mode"): "Use 'single_user' for local setups or 'multi_user' for JWT-based auth.",
+    ("Setup", "allow_remote_setup_access"): "Permit the setup API outside localhost. Only enable on trusted networks.",
     ("API", "openai_api_key"): "Personal or organisational OpenAI key.",
     ("API", "anthropic_api_key"): "Anthropic Claude API key.",
     ("API", "google_api_key"): "Google Generative AI key.",
@@ -292,6 +305,10 @@ def get_status_snapshot() -> Dict[str, Any]:
     parser = _load_config_parser()
     flags = get_setup_flags(parser)
 
+    remote_flag = parser.getboolean(SETUP_SECTION, REMOTE_ACCESS_FIELD, fallback=False)
+    env_override = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
+    remote_active = remote_flag or env_override
+
     placeholder_fields: List[Dict[str, str]] = []
     for section in parser.sections():
         for key, value in parser.items(section):
@@ -307,6 +324,9 @@ def get_status_snapshot() -> Dict[str, Any]:
         "setup_completed": flags["completed"],
         "needs_setup": flags["needs_setup"],
         "config_path": str(get_config_file_path()),
+        "allow_remote_setup_access": remote_flag,
+        "remote_access_env_override": env_override,
+        "remote_access_active": remote_active,
         "placeholder_fields": placeholder_fields,
     }
 
@@ -379,6 +399,9 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
     parser = _load_config_parser()
     config_path = get_config_file_path()
 
+    # Validate sections/keys and types against existing config
+    _validate_updates(parser, updates)
+
     for section, items in updates.items():
         if not parser.has_section(section):
             parser.add_section(section)
@@ -396,7 +419,61 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
         parser.write(stream, space_around_delimiters=True)
 
     logger.info("Configuration file updated via setup manager")
+
+    if (
+        _remote_access_hook
+        and SETUP_SECTION in updates
+        and REMOTE_ACCESS_FIELD in updates[SETUP_SECTION]
+    ):
+        try:
+            new_value = parser.getboolean(SETUP_SECTION, REMOTE_ACCESS_FIELD, fallback=False)
+            _remote_access_hook(new_value)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to propagate remote setup access change")
+
     return backup_path
+
+
+def _validate_updates(parser: ConfigParser, updates: Dict[str, Dict[str, Any]]) -> None:
+    """Validate sections, keys, and basic types for setup updates.
+
+    Rules:
+      - Section must already exist in config.
+      - Key must already exist in the section.
+      - Type of new value must match the inferred type of the current value when
+        the current value is boolean/integer/number. String values accept any.
+    """
+    for section, items in updates.items():
+        if not parser.has_section(section):
+            raise ValueError(f"Unknown section '{section}' in updates")
+        for key, new_value in items.items():
+            if not parser.has_option(section, key):
+                raise ValueError(f"Unknown key '{key}' in section '{section}'")
+
+            current_value = parser.get(section, key, fallback="")
+            expected_type = _infer_type(current_value)
+
+            # Accept any string when expected type is string
+            if expected_type == "string":
+                continue
+
+            raw = str(new_value)
+            if expected_type == "boolean":
+                lowered = raw.strip().lower()
+                if lowered not in {"true", "false", "yes", "no", "on", "off", "1", "0"}:
+                    raise ValueError(
+                        f"Invalid boolean for {section}.{key}: '{new_value}'. Use true/false or on/off/1/0."
+                    )
+            elif expected_type == "integer":
+                try:
+                    int(raw)
+                except Exception:  # noqa: BLE001
+                    raise ValueError(f"Invalid integer for {section}.{key}: '{new_value}'") from None
+            elif expected_type == "number":
+                try:
+                    float(raw)
+                except Exception:  # noqa: BLE001
+                    raise ValueError(f"Invalid number for {section}.{key}: '{new_value}'") from None
 
 
 def mark_setup_completed(completed: bool = True) -> None:

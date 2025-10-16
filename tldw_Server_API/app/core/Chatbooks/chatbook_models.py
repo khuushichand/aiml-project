@@ -63,6 +63,7 @@ class ExportStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 class ImportStatus(Enum):
@@ -222,9 +223,6 @@ class ChatbookManifest:
     language: str = "en"
     license: Optional[str] = None
     
-    # User info (sanitized for export)
-    user_id: Optional[str] = None  # Anonymized user identifier
-    
     def to_dict(self) -> dict:
         """Convert manifest to dictionary for JSON serialization."""
         return {
@@ -372,6 +370,17 @@ class ExportJob:
             "metadata": self.metadata
         }
 
+    # Provide dict-like access for test compatibility
+    def __getitem__(self, key: str):  # type: ignore[override]
+        val = getattr(self, key)
+        try:
+            from enum import Enum
+            if isinstance(val, Enum):
+                return val.value
+        except Exception:
+            pass
+        return val
+
 
 @dataclass
 class ImportJob:
@@ -413,6 +422,17 @@ class ImportJob:
             "conflicts": self.conflicts,
             "warnings": self.warnings
         }
+
+    # Provide dict-like access for test compatibility
+    def __getitem__(self, key: str):  # type: ignore[override]
+        val = getattr(self, key)
+        try:
+            from enum import Enum
+            if isinstance(val, Enum):
+                return val.value
+        except Exception:
+            pass
+        return val
 
 
 @dataclass

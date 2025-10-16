@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 
 #
 # Local Imports
@@ -66,38 +67,45 @@ async def verify_token(
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token.")
 
     else:
-        # Multi-user mode: Validate JWT token
-        jwt_service = get_jwt_service()
-        try:
-            # In multi-user mode, the token should be a JWT (not prefixed with "Bearer ")
-            # since this is a header token, not from the Authorization header
-            if not Token:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token.")
-            payload = jwt_service.decode_access_token(Token)
-            
-            # Check if token has valid user information
-            user_id = payload.get("user_id") or payload.get("sub")
-            if not user_id:
-                logger.warning("JWT token missing user_id/sub claim")
+        # Multi-user mode: accept either a JWT token (Token header) or an X-API-KEY validated against the DB
+        if Token:
+            jwt_service = get_jwt_service()
+            try:
+                payload = jwt_service.decode_access_token(Token)
+                user_id = payload.get("user_id") or payload.get("sub")
+                if not user_id:
+                    logger.warning("JWT token missing user_id/sub claim")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid token: missing user information"
+                    )
+                logger.debug(f"JWT token validated for user_id: {user_id}")
+            except (InvalidTokenError, TokenExpiredError) as e:
+                logger.warning(f"JWT validation failed: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token: missing user information"
+                    detail=f"Invalid or expired token: {e}"
                 )
-            
-            logger.debug(f"JWT token validated for user_id: {user_id}")
-            
-        except (InvalidTokenError, TokenExpiredError) as e:
-            logger.warning(f"JWT validation failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid or expired token: {e}"
-            )
-        except Exception as e:
-            logger.error(f"Unexpected error validating JWT: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error validating authentication token"
-            )
+            except Exception as e:
+                logger.error(f"Unexpected error validating JWT: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Error validating authentication token"
+                )
+        elif x_api_key:
+            try:
+                api_mgr = await get_api_key_manager()
+                key_info = await api_mgr.validate_api_key(x_api_key)
+                if not key_info:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+                # Success: we don't attach user here; endpoints that need it should use get_current_user
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error validating API key: {e}")
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+        else:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication (Token or X-API-KEY)")
 
     return True
 

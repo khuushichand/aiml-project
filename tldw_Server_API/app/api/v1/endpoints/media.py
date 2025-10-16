@@ -52,6 +52,9 @@ import redis
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+# FastAPI router must be defined before any @router decorators are executed
+router = APIRouter()
+
 #
 # Local Imports
 #
@@ -60,11 +63,14 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 # from tldw_Server_API.app.core.config import settings, config
 # Authentication & User Identification (Primary Dependency)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.permissions import PermissionChecker, MEDIA_CREATE
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 # Database Instance Dependency (Gets DB based on User)
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user, try_get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_paginated_files,
+    get_full_media_details_rich2,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase, DatabaseError,
@@ -76,19 +82,285 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     fetch_keywords_for_media,
 )
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+    UsageEventLogger,
+)
+
+# -----------------------------
+# Code processing helpers
+# -----------------------------
+class ProcessCodeForm(BaseModel):
+    urls: Optional[List[str]] = None
+    perform_chunking: bool = True
+    # Supports 'code' (structure-aware) and 'lines' (simple line windowing)
+    chunk_method: Optional[str] = Field(default='code', description="Chunk method for code: 'code' or 'lines'")
+    # For 'code' method, interpreted as max characters per chunk; for 'lines', interpreted as lines per chunk
+    chunk_size: int = Field(default=4000, description="Chunk size: chars for 'code', lines for 'lines'")
+    # Overlap is in characters for 'code' and in lines for 'lines'
+    chunk_overlap: int = Field(default=200, description="Overlap: chars for 'code', lines for 'lines'")
+
+CODE_ALLOWED_EXTENSIONS: Set[str] = {
+    '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
+    '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
+    '.rb', '.php', '.pl', '.lua', '.sql', '.json', '.yaml',
+    '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx'
+}
+
+def _detect_code_language(filename: str) -> str:
+    ext = FilePath(filename).suffix.lower()
+    return {
+        '.py': 'python', '.c': 'c', '.h': 'c-header', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp',
+        '.cs': 'csharp', '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.swift': 'swift', '.rs': 'rust', '.go': 'go',
+        '.rb': 'ruby', '.php': 'php', '.pl': 'perl', '.lua': 'lua', '.sql': 'sql', '.json': 'json', '.yaml': 'yaml',
+        '.yml': 'yaml', '.toml': 'toml', '.ini': 'ini', '.cfg': 'ini', '.conf': 'conf', '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'jsx',
+    }.get(ext, ext.lstrip('.') or 'text')
+
+def _read_text_safe(path: FilePath) -> str:
+    try:
+        return path.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        return path.read_text(encoding='latin-1')
+
+def _chunk_code_lines(text: str, lines_per_chunk: int, overlap: int, language: str) -> List[Dict[str, Any]]:
+    lines = text.splitlines()
+    chunks: List[Dict[str, Any]] = []
+    if lines_per_chunk <= 0:
+        return chunks
+    step = max(1, lines_per_chunk - max(0, overlap))
+    start = 0
+    total = len(lines)
+    while start < total:
+        end = min(total, start + lines_per_chunk)
+        chunk_text = "\n".join(lines[start:end])
+        chunks.append({
+            'text': chunk_text,
+            'metadata': {
+                'language': language,
+                'start_line': start + 1,
+                'end_line': end,
+                'total_lines': total,
+                'chunk_method': 'lines'
+            }
+        })
+        if end == total:
+            break
+        start += step
+    return chunks
+
+# Dependency to parse multipart/form-data for code processing
+async def get_process_code_form(
+    urls: Optional[List[str]] = Form(None),
+    perform_chunking: bool = Form(True),
+    chunk_method: Optional[str] = Form('code'),
+    chunk_size: int = Form(4000),
+    chunk_overlap: int = Form(200),
+):
+    try:
+        return ProcessCodeForm(
+            urls=urls,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+    except ValidationError as e:
+        # Normalize Pydantic errors for API response
+        serializable_errors = []
+        for error in e.errors():
+            err = error.copy()
+            ctx = err.get('ctx')
+            if isinstance(ctx, dict):
+                err['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in ctx.items()}
+            serializable_errors.append(err)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=serializable_errors) from e
+
+
+@router.post(
+    "/process-code",
+    summary="Process code files (NO DB Persistence)",
+    tags=["Media Processing (No DB)"]
+)
+async def process_code_endpoint(
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    form_data: ProcessCodeForm = Depends(get_process_code_form),
+    files: Optional[List[UploadFile]] = File(None, description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)"),
+):
+    """
+    Reads uploaded or downloaded code files as text, optionally chunks by lines,
+    and returns artifacts without DB writes.
+    """
+    _validate_inputs("code", form_data.urls, files)
+    batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
+    with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
+        temp_dir = FilePath(temp_dir_path)
+        # Handle uploads
+        if files:
+            saved, upload_errors = await _save_uploaded_files(
+                files, temp_dir, validator=file_validator_instance, allowed_extensions=sorted(CODE_ALLOWED_EXTENSIONS)
+            )
+            for err in upload_errors:
+                batch["results"].append({
+                    "status": "Error", "input_ref": err.get("original_filename", "Unknown Upload"),
+                    # Normalize message for tests: map any disallowed-type to a standard phrase
+                    "error": (
+                        "Invalid file type" if isinstance(err.get('error'), str) and (
+                            'not allowed for security' in err.get('error').lower() or 'invalid file type' in err.get('error').lower()
+                        ) else f"Upload error: {err.get('error')}"
+                    ),
+                    "media_type": "code", "processing_source": None, "metadata": {}, "content": None,
+                    "chunks": None, "analysis": None, "keywords": None, "warnings": None,
+                    "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                })
+                batch["errors_count"] += 1
+            for info in saved:
+                filename = info["original_filename"]
+                local_path = FilePath(info["path"])
+                language = _detect_code_language(filename)
+                try:
+                    text = _read_text_safe(local_path)
+                    if form_data.perform_chunking:
+                        if str(form_data.chunk_method or 'code').lower() == 'lines':
+                            chunks = _chunk_code_lines(
+                                text, form_data.chunk_size, form_data.chunk_overlap, language
+                            )
+                        else:
+                            # Structure-aware code chunking via core Chunker with metadata
+                            from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
+                            from dataclasses import asdict
+                            chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
+                            crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
+                            total = len(crs)
+                            chunks = []
+                            for idx, cr in enumerate(crs):
+                                md = asdict(cr.metadata)
+                                # Flatten options into metadata top-level for ease of use
+                                opts = md.pop('options', {}) or {}
+                                md.update(opts)
+                                md.setdefault('chunk_method', 'code')
+                                md.setdefault('language', language)
+                                md['chunk_index'] = idx + 1
+                                md['total_chunks'] = total
+                                chunks.append({"text": cr.text, "metadata": md})
+                    else:
+                        chunks = []
+                    batch["results"].append({
+                        "status": "Success", "input_ref": filename, "processing_source": str(local_path),
+                        "media_type": "code", "content": text, "metadata": {
+                            "language": language, "filename": filename, "lines": text.count('\n') + 1
+                        }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": None,
+                        "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                    })
+                    batch["processed_count"] += 1
+                except Exception as e:
+                    batch["results"].append({
+                        "status": "Error", "input_ref": filename, "processing_source": str(local_path),
+                        "media_type": "code", "error": f"Failed to read code file: {e}",
+                        "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                        "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                    })
+                    batch["errors_count"] += 1
+        # Handle URLs
+        if form_data.urls:
+            async with httpx.AsyncClient() as client:
+                tasks = [
+                    _download_url_async(
+                        client=client, url=u, target_dir=temp_dir,
+                        allowed_extensions=CODE_ALLOWED_EXTENSIONS, check_extension=True
+                    ) for u in form_data.urls
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for url, res in zip(form_data.urls, results):
+                    if isinstance(res, Exception):
+                        batch["results"].append({
+                            "status": "Error", "input_ref": url, "processing_source": None,
+                            "media_type": "code", "error": f"Download/preparation failed: {res}",
+                            "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                            "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                        })
+                        batch["errors_count"] += 1
+                        continue
+                    local_path = FilePath(res)
+                    language = _detect_code_language(local_path.name)
+                    try:
+                        text = _read_text_safe(local_path)
+                        if form_data.perform_chunking:
+                            if str(form_data.chunk_method or 'code').lower() == 'lines':
+                                chunks = _chunk_code_lines(
+                                    text, form_data.chunk_size, form_data.chunk_overlap, language
+                                )
+                            else:
+                                from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
+                                from dataclasses import asdict
+                                chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
+                                crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
+                                total = len(crs)
+                                chunks = []
+                                for idx, cr in enumerate(crs):
+                                    md = asdict(cr.metadata)
+                                    opts = md.pop('options', {}) or {}
+                                    md.update(opts)
+                                    md.setdefault('chunk_method', 'code')
+                                    md.setdefault('language', language)
+                                    md['chunk_index'] = idx + 1
+                                    md['total_chunks'] = total
+                                    chunks.append({"text": cr.text, "metadata": md})
+                        else:
+                            chunks = []
+                        batch["results"].append({
+                            "status": "Success", "input_ref": url, "processing_source": str(local_path),
+                            "media_type": "code", "content": text, "metadata": {
+                                "language": language, "filename": local_path.name, "lines": text.count('\n') + 1
+                            }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": None,
+                            "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                        })
+                        batch["processed_count"] += 1
+                    except Exception as e:
+                        batch["results"].append({
+                            "status": "Error", "input_ref": url, "processing_source": str(local_path),
+                            "media_type": "code", "error": f"Failed to read code file: {e}",
+                            "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                            "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                        })
+                        batch["errors_count"] += 1
+
+    final_status = status.HTTP_200_OK if (batch["processed_count"] > 0 and batch["errors_count"] == 0) else (
+        status.HTTP_207_MULTI_STATUS if batch["results"] else status.HTTP_400_BAD_REQUEST
+    )
+    return JSONResponse(status_code=final_status, content=batch)
 from tldw_Server_API.app.api.v1.schemas.media_response_models import PaginationInfo, MediaListResponse, MediaListItem, \
     MediaDetailResponse, VersionDetailResponse
 from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSearchRequest, MetadataFilter, MetadataPatchRequest, AdvancedVersionUpsertRequest
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 # Media Processing
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import process_epub
-from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books
+import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_lib
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib
 from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
+# Expose ingestion helpers at module scope for tests to patch
+try:
+    process_document_content = docs.process_document_content  # type: ignore[attr-defined]
+except Exception:
+    async def process_document_content(*args, **kwargs):  # pragma: no cover
+        raise RuntimeError("process_document_content not available")
+
+try:
+    process_pdf_task = pdf_lib.process_pdf_task  # type: ignore[attr-defined]
+except Exception:
+    async def process_pdf_task(*args, **kwargs):  # pragma: no cover
+        raise RuntimeError("process_pdf_task not available")
+
+try:
+    process_epub = books.process_epub  # type: ignore[attr-defined]
+except Exception:
+    def process_epub(*args, **kwargs):  # pragma: no cover
+        raise RuntimeError("process_epub not available")
 #
 # Document Processing
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
@@ -144,8 +416,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki im
 #
 
 # The router is a FastAPI object that allows us to define multiple endpoints under a single prefix.
-# Create a new router instance
-router = APIRouter()
 
 # Rate Limiter is imported from centralized configuration above
 
@@ -309,7 +579,8 @@ def invalidate_cache(media_id: int):
 # =============================================================================
 def get_add_media_form(
     # Replicate ALL Form(...) fields from the endpoint signature
-    media_type: MediaType = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
+    # Accept string here so AddMediaForm can control error messaging for invalid values
+    media_type: str = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
     urls: Optional[List[str]] = Form(None, description="List of URLs of the media items to add"),
     title: Optional[str] = Form(None, description="Optional title (applied if only one item processed)"),
     author: Optional[str] = Form(None, description="Optional author (applied similarly to title)"),
@@ -341,6 +612,12 @@ def get_add_media_form(
     chunk_overlap: int = Form(200, description="Chunk overlap size"),
     custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
     perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"),
+    # Email options
+    ingest_attachments: bool = Form(False, description="For emails: parse nested .eml attachments and ingest as separate items"),
+    max_depth: int = Form(2, description="Max depth for nested email parsing when ingest_attachments is true"),
+    accept_archives: bool = Form(False, description="Accept .zip archives of EMLs and expand/process members"),
+    accept_mbox: bool = Form(False, description="Accept .mbox mailboxes and expand/process messages"),
+    accept_pst: bool = Form(False, description="Accept .pst/.ost containers (feature-flag; parsing may require external tools)"),
     # Contextual chunking options
     enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
     contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
@@ -449,6 +726,12 @@ def get_add_media_form(
             context_window_size=context_window_size,
             context_strategy=context_strategy,  # pydantic will validate allowed values
             context_token_budget=context_token_budget,
+            # Email options
+            ingest_attachments=ingest_attachments,
+            max_depth=max_depth,
+            accept_archives=accept_archives,
+            accept_mbox=accept_mbox,
+            accept_pst=accept_pst,
             generate_embeddings=generate_embeddings,
             embedding_model=embedding_model,
             embedding_provider=embedding_provider,
@@ -488,6 +771,9 @@ def get_add_media_form(
 )
 async def get_media_item(
     media_id: int = Path(..., description="The ID of the media item"),
+    include_content: bool = Query(True, description="Include main content text in response"),
+    include_versions: bool = Query(True, description="Include versions list"),
+    include_version_content: bool = Query(False, description="Include content for each version in versions list"),
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
     """
@@ -496,162 +782,19 @@ async def get_media_item(
     Fetches the details for a specific *active* (non-deleted, non-trash) media item,
     including its associated keywords, its latest prompt/analysis, and document versions.
     """
-    logger.debug(f"Attempting to fetch details for media_id: {media_id}")
+    logger.debug(f"Attempting to fetch rich details for media_id: {media_id}")
     try:
-        media_record_raw = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-
-        if not media_record_raw:
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=include_content,
+            include_versions=include_versions,
+            include_version_content=include_version_content,
+        )
+        if not details:
             logger.warning(f"Media not found or not active for ID: {media_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found or is inactive/trashed")
-
-        # Ensure media_record is a dictionary
-        media_record = dict(media_record_raw)
-        logger.debug(f"Found active media record for ID: {media_id}")
-
-        keywords_list = fetch_keywords_for_media(media_id=media_id, db_instance=db)
-        logger.debug(f"Fetched keywords for media ID {media_id}: {keywords_list}")
-
-        latest_version_info = None
-        prompt = None
-        analysis = None
-        try:
-             latest_version_info = get_document_version(
-                 db_instance=db,
-                 media_id=media_id,
-                 version_number=None, # Get latest
-                 include_content=False
-             )
-             if latest_version_info:
-                  prompt = latest_version_info.get('prompt')
-                  analysis = latest_version_info.get('analysis_content')
-                  logger.debug(f"Fetched latest version info (prompt/analysis) for media ID {media_id}")
-             else:
-                   logger.warning(f"No active document version found for media ID {media_id} to get latest prompt/analysis.")
-        except Exception as dv_e:
-            logger.error(f"Error fetching latest document version for media {media_id}: {dv_e}", exc_info=True)
-
-
-        # --- FIX for Structured Content (Video/Audio) ---
-        content_from_db = media_record.get('content', '')
-        final_content_text = content_from_db
-        final_metadata = {} # Default to empty dict
-
-        if media_record.get('type') in ['video', 'audio']:
-            try:
-                # This assumes JSON part, then "\n\n", then text transcript.
-                parts = content_from_db.split("\n\n", 1)
-                if len(parts) == 2:
-                    possible_json_str = parts[0]
-                    remaining_text = parts[1]
-                    try:
-                        parsed_json_metadata = json.loads(possible_json_str)
-                        if isinstance(parsed_json_metadata, dict):
-                            final_metadata = parsed_json_metadata
-                            final_content_text = remaining_text
-                        else:
-                            logger.warning(f"Parsed JSON metadata for media {media_id} is not a dict. Treating as text.")
-                    except json.JSONDecodeError:
-                        logger.warning(f"First part of content for media {media_id} is not valid JSON. Treating all as text.")
-                # If no "\n\n", the whole content_from_db is treated as text
-            except Exception as e_parse_meta:
-                logger.error(f"Could not parse structured metadata from content for media {media_id}: {e_parse_meta}", exc_info=True)
-        # --- END FIX for Structured Content ---
-
-        word_count = len(final_content_text.split()) if final_content_text else 0
-
-        # --- FIX for Document Versions List ---
-        doc_versions_list = []
-        # Only fetch versions if it's a 'document' type, or adjust logic as needed
-        if media_record.get('type') == 'document':
-            try:
-                # Fetch active versions, without full content to keep the list light
-                raw_versions = db.get_all_document_versions(media_id=media_id, include_content=False, include_deleted=False)
-                for rv_row in raw_versions:
-                    rv = dict(rv_row) # Convert row to dict
-                    # Map to VersionDetailResponse fields
-                    # Ensure datetime objects are handled correctly if not already strings
-                    created_at_dt = rv.get("created_at")
-                    if isinstance(created_at_dt, str):
-                        try:
-                            created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
-                        except ValueError:
-                            logger.warning(f"Could not parse created_at string '{created_at_dt}' for version {rv.get('version_number')}")
-                            # Handle as per Pydantic model requirements, maybe skip or use a default
-                            pass # Pydantic will handle it if it's not a valid datetime
-
-                    # Parse safe_metadata for display
-                    safe_md = rv.get("safe_metadata")
-                    if isinstance(safe_md, str):
-                        try:
-                            safe_md = json.loads(safe_md)
-                        except Exception:
-                            safe_md = None
-                    doc_versions_list.append(
-                        VersionDetailResponse(
-                            media_id=rv.get("media_id"),
-                            version_number=rv.get("version_number"),
-                            created_at=created_at_dt, # Pass datetime object
-                            prompt=rv.get("prompt"),
-                            analysis_content=rv.get("analysis_content"),
-                            safe_metadata=safe_md,
-                            content=None # Don't include content in the list
-                        )
-                    )
-                logger.debug(f"Fetched {len(doc_versions_list)} document versions for media ID {media_id}")
-            except Exception as e_vers:
-                logger.error(f"Error fetching document versions for media {media_id}: {e_vers}", exc_info=True)
-
-        # Parse safe_metadata if present
-        safe_metadata_dict = None
-        try:
-            if safe_metadata and isinstance(safe_metadata, str):
-                safe_metadata_dict = json.loads(safe_metadata)
-            elif isinstance(safe_metadata, dict):
-                safe_metadata_dict = safe_metadata
-        except Exception:
-            safe_metadata_dict = None
-
-        response_data = {
-            "media_id": media_id,
-            "source": { # Corresponds to MediaSourceDetail model
-                "url": media_record.get('url'),
-                "title": media_record.get('title'),
-                "duration": media_record.get('duration'), # Assuming 'duration' exists in Media table
-                "type": media_record.get('type')
-            },
-            "processing": { # Corresponds to MediaProcessingDetail model
-                "prompt": prompt,
-                "analysis": analysis,
-                "safe_metadata": safe_metadata_dict,
-                "model": media_record.get('transcription_model'),
-                "timestamp_option": media_record.get('timestamp_option') # Assuming 'timestamp_option' exists
-            },
-            "content": { # Corresponds to MediaContentDetail model
-                "metadata": final_metadata,
-                "text": final_content_text,
-                "word_count": word_count
-            },
-            "keywords": keywords_list if keywords_list else [],
-            "timestamps": media_record.get('timestamps', []), # Assuming 'timestamps' list exists in Media table or is parsed
-            "versions": doc_versions_list, # Add the fetched versions
-            # Add other top-level fields from MediaDetailResponse if they come directly from media_record
-            # e.g., "uuid": media_record.get('uuid'),
-            # "author": media_record.get('author'),
-            # "ingestion_date": media_record.get('ingestion_date'),
-            # "last_modified": media_record.get('last_modified'),
-            # "version": media_record.get('version'), # Sync version
-        }
-
-        # To ensure the response matches MediaDetailResponse, instantiate it:
-        try:
-            return MediaDetailResponse(**response_data)
-        except Exception as pydantic_err: # Catch Pydantic validation errors
-            logger.error(f"Pydantic validation error for MediaDetailResponse for media {media_id}: {pydantic_err}", exc_info=True)
-            # Log the data that failed validation
-            logger.debug(f"Data causing Pydantic error: {response_data}")
-            raise HTTPException(status_code=500, detail=f"Internal server error creating response for media item.")
-
-
+        return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except DatabaseError as e:
@@ -678,7 +821,7 @@ async def get_media_item(
     tags=["Media Versioning"],
     summary="Create Media Version",
     status_code=status.HTTP_201_CREATED,
-    response_model=Dict[str, Any], # Update if you create a specific Pydantic model
+    response_model=MediaDetailResponse,
 )
 async def create_version(
     media_id: int,
@@ -718,13 +861,17 @@ async def create_version(
         # New method returns a dict with id, uuid, media_id, version_number
         logger.info(f"Successfully created version {result_dict.get('version_number')} (UUID: {result_dict.get('uuid')}) for media_id: {media_id}")
 
-        # Return the useful info from the result
-        return {
-            "message": "Document version created successfully.",
-            "media_id": result_dict.get("media_id"),
-            "version_number": result_dict.get("version_number"),
-            "version_uuid": result_dict.get("uuid")
-        }
+        # Return updated rich details for consistency
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version creation")
+        return MediaDetailResponse(**details)
 
     except InputError as e: # Catch specific error if media_id not found/inactive
         logger.warning(f"Cannot create version for media {media_id}: {e}")
@@ -931,6 +1078,7 @@ async def search_by_metadata(
     "/{media_id:int}/metadata",
     tags=["Media Management"],
     summary="Update safe metadata for the latest version",
+    response_model=MediaDetailResponse,
 )
 async def patch_metadata(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -990,7 +1138,17 @@ async def patch_metadata(
                     analysis_content=latest.get('analysis_content'),
                     safe_metadata=new_meta_json,
                 )
-            return {"message": "New version created with updated metadata.", "version_number": res.get('version_number'), "version_uuid": res.get('uuid')}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
+            return MediaDetailResponse(**details)
         else:
             # Update in place on latest version
             dv_id = latest.get('id')
@@ -1000,7 +1158,17 @@ async def patch_metadata(
                 conn = db.get_connection()
                 conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (new_meta_json, dv_id))
                 conn.commit()
-            return {"message": "Metadata updated on latest version."}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
+            return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except Exception as e:
@@ -1012,6 +1180,7 @@ async def patch_metadata(
     "/{media_id:int}/versions/{version_number:int}/metadata",
     tags=["Media Versioning"],
     summary="Set safe metadata for a specific version",
+    response_model=MediaDetailResponse,
 )
 async def put_version_metadata(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -1058,7 +1227,17 @@ async def put_version_metadata(
             conn = db.get_connection()
             conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (smj, dv_id))
             conn.commit()
-        return {"message": "Version metadata updated."}
+        # Return updated rich details for consistency
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
+        return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except Exception as e:
@@ -1130,6 +1309,7 @@ async def get_by_identifier(
     "/{media_id:int}/versions/advanced",
     tags=["Media Versioning"],
     summary="Create or update version with content + safe metadata",
+    response_model=MediaDetailResponse,
 )
 async def create_or_update_version_advanced(
     media_id: int,
@@ -1195,7 +1375,17 @@ async def create_or_update_version_advanced(
                     analysis_content=analysis,
                     safe_metadata=smj,
                 )
-            return {"message": "New version created.", "version_number": res.get('version_number'), "version_uuid": res.get('uuid')}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version upsert")
+            return MediaDetailResponse(**details)
         else:
             # Update latest safe_metadata only
             dv_id = latest.get('id')
@@ -1203,7 +1393,17 @@ async def create_or_update_version_advanced(
                 conn = db.get_connection()
                 conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (smj, dv_id))
                 conn.commit()
-            return {"message": "Metadata updated on latest version."}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version upsert")
+            return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except Exception as e:
@@ -1360,7 +1560,7 @@ async def delete_version(
     "/{media_id:int}/versions/rollback",
     tags=["Media Versioning"],
     summary="Rollback to Media Version",
-    response_model=Dict[str, Any], # Update if you create a specific Pydantic model
+    response_model=MediaDetailResponse,
 )
 async def rollback_version(
     media_id: int,
@@ -1400,15 +1600,20 @@ async def rollback_version(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
 
         # Success case - DB method returns success details
-        logger.info(f"Rollback successful for media {media_id} to version {target_version_number}. New doc version: {rollback_result.get('new_document_version_number')}")
-        return {
-            "message": rollback_result.get("success", "Rollback successful."),
-            "media_id": media_id,
-            "rolled_back_from_version": target_version_number,
-            "new_document_version_number": rollback_result.get("new_document_version_number"),
-            "new_document_version_uuid": rollback_result.get("new_document_version_uuid"),
-            "new_media_version": rollback_result.get("new_media_version") # Sync version of Media record
-        }
+        logger.info(
+            f"Rollback successful for media {media_id} to version {target_version_number}. "
+            f"New doc version: {rollback_result.get('new_document_version_number')}"
+        )
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after rollback")
+        return MediaDetailResponse(**details)
 
     except ValueError as e: # Catch invalid target_version_number
         logger.warning(f"Invalid input for rollback media {media_id}: {e}")
@@ -1431,7 +1636,7 @@ async def rollback_version(
     tags=["Media Management"],
     summary="Update Media Item",
     status_code=status.HTTP_200_OK,
-    response_model=Dict[str, Any], # Update if specific model created
+    response_model=MediaDetailResponse,
 )
 async def update_media_item(
     payload: MediaUpdateRequest,
@@ -1598,18 +1803,18 @@ async def update_media_item(
             # Commit happens automatically via context manager 'with db.transaction()'
 
         # --- 8. Prepare and Return Response ---
-        response = {
-            "message": message,
-            "media_id": media_id,
-            "media_uuid": media_uuid,
-            "new_media_sync_version": new_sync_version,
-            "new_document_version": { # Include details if version was created
-                 "version_number": new_doc_version_info.get('version_number') if new_doc_version_info else None,
-                 "uuid": new_doc_version_info.get('uuid') if new_doc_version_info else None,
-            } if new_doc_version_info else None,
-            # "updated_media": updated_media_info # Optionally return full updated object
-        }
-        return response
+        # Return the updated rich view for consistency with GET response
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            # Should not happen for active update
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after update")
+        return MediaDetailResponse(**details)
 
     except HTTPException: # Re-raise FastAPI/manual HTTP exceptions
         raise
@@ -2173,6 +2378,26 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
 
     final_chunk_method = form_data.chunk_method or default_chunk_method
 
+    # Determine size/overlap defaults by media type while respecting user-provided values
+    # Base defaults come from AddMediaForm (size=500, overlap=200). For 'document' and 'email',
+    # align to ProcessDocuments/Emails endpoints: size=1000 when user didn't override.
+    chunk_size_used = form_data.chunk_size
+    chunk_overlap_used = form_data.chunk_overlap
+    if str(form_data.media_type) in ["document", "email"]:
+        try:
+            # If user didn't explicitly pick a different size (i.e., it's the model default 500), bump to 1000
+            if chunk_size_used is None or int(chunk_size_used) == 500:
+                chunk_size_used = 1000
+        except Exception:
+            chunk_size_used = 1000
+    # Email-specific overlap decoupling: use 150 when not explicitly overridden (model default 200)
+    if str(form_data.media_type) == "email":
+        try:
+            if chunk_overlap_used is None or int(chunk_overlap_used) == 200:
+                chunk_overlap_used = 150
+        except Exception:
+            chunk_overlap_used = 150
+
     # Override to 'ebook_chapters' if media_type is 'ebook', regardless of user input
     if form_data.media_type == 'ebook':
         final_chunk_method = 'ebook_chapters'
@@ -2181,8 +2406,8 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
     inferred_enable_contextual = bool(getattr(form_data, 'contextual_llm_model', None) or getattr(form_data, 'context_window_size', None))
     chunk_options = {
         'method': final_chunk_method,
-        'max_size': form_data.chunk_size,
-        'overlap': form_data.chunk_overlap,
+        'max_size': chunk_size_used,
+        'overlap': chunk_overlap_used,
         'adaptive': form_data.use_adaptive_chunking,
         'multi_level': form_data.use_multi_level_chunking,
         # Use specific chunk language, fallback to transcription lang, else None
@@ -2564,6 +2789,77 @@ async def _process_batch_media(
                             safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
                     except Exception:
                         safe_metadata_json = None
+                    # Build plaintext chunks for chunk-level FTS if chunking is requested
+                    chunks_for_sql = None
+                    try:
+                        _opts = chunk_options or {}
+                        if _opts:
+                            from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                            _ck = _Chunker()
+                            _flat = _ck.chunk_text_hierarchical_flat(
+                                content_for_db,
+                                method=_opts.get('method') or 'sentences',
+                                max_size=_opts.get('max_size') or 500,
+                                overlap=_opts.get('overlap') or 50,
+                            )
+                            _kind_map = {
+                                'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                            }
+                            chunks_for_sql = []
+                            for _it in _flat:
+                                _md = _it.get('metadata') or {}
+                                _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                _small = {}
+                                if _md.get('ancestry_titles'):
+                                    _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                if _md.get('section_path'):
+                                    _small['section_path'] = _md.get('section_path')
+                                chunks_for_sql.append({
+                                    'text': _it.get('text',''),
+                                    'start_char': _md.get('start_offset'),
+                                    'end_char': _md.get('end_offset'),
+                                    'chunk_type': _ctype,
+                                    'metadata': _small,
+                                })
+                            # If processing produced extra chunks (e.g., VLM), merge them
+                            try:
+                                extra_chunks = (process_result or {}).get('extra_chunks')
+                                if isinstance(extra_chunks, list) and extra_chunks:
+                                    for ec in extra_chunks:
+                                        if not isinstance(ec, dict) or 'text' not in ec:
+                                            continue
+                                        chunks_for_sql.append({
+                                            'text': ec.get('text', ''),
+                                            'start_char': ec.get('start_char'),
+                                            'end_char': ec.get('end_char'),
+                                            'chunk_type': ec.get('chunk_type') or 'vlm',
+                                            'metadata': ec.get('metadata') if isinstance(ec.get('metadata'), dict) else {},
+                                        })
+                            except Exception:
+                                pass
+                    except Exception:
+                        chunks_for_sql = None
+
+                    # Merge VLM extra chunks even if chunking was disabled or failed
+                    try:
+                        extra_chunks_any = (process_result or {}).get('extra_chunks')
+                        if isinstance(extra_chunks_any, list) and extra_chunks_any:
+                            if chunks_for_sql is None:
+                                chunks_for_sql = []
+                            for ec in extra_chunks_any:
+                                if not isinstance(ec, dict) or 'text' not in ec:
+                                    continue
+                                chunks_for_sql.append({
+                                    'text': ec.get('text', ''),
+                                    'start_char': ec.get('start_char'),
+                                    'end_char': ec.get('end_char'),
+                                    'chunk_type': ec.get('chunk_type') or 'vlm',
+                                    'metadata': ec.get('metadata') if isinstance(ec.get('metadata'), dict) else {},
+                                })
+                    except Exception:
+                        pass
+
                     db_add_kwargs = dict(
                         url=str(original_input_ref),
                         title=title_for_db,
@@ -2577,6 +2873,7 @@ async def _process_batch_media(
                         author=author_for_db,
                         overwrite=form_data.overwrite_existing,
                         chunk_options=chunk_options,
+                        chunks=chunks_for_sql,
                     )
 
                     # --- Function to run in executor ---
@@ -2780,6 +3077,9 @@ async def _process_document_like_item(
                      # Use aiofiles directly here since we have the path
                      async with aiofiles.open(processing_filepath, "rb") as f:
                          file_bytes = await f.read()
+                 elif media_type == 'email':
+                      async with aiofiles.open(processing_filepath, "rb") as f:
+                          file_bytes = await f.read()
                  # Update source to the actual path used for processing
                  final_result["processing_source"] = str(processing_filepath) # Keep track of the temp file path
             else:
@@ -2793,6 +3093,9 @@ async def _process_document_like_item(
             processing_filename = path_obj.name
             if media_type == 'pdf':
                  async with aiofiles.open(processing_filepath, "rb") as f: # Use processing_filepath here
+                      file_bytes = await f.read()
+            elif media_type == 'email':
+                 async with aiofiles.open(processing_filepath, "rb") as f:
                       file_bytes = await f.read()
             # processing_source is already the path string
             final_result["processing_source"] = processing_source
@@ -2830,7 +3133,7 @@ async def _process_document_like_item(
         if media_type == 'pdf':
              # --- FIX: Check file_bytes which were read earlier ---
              if file_bytes is None: raise ValueError("PDF processing requires file bytes, but they were not read.")
-             processing_func = process_pdf_task # Use the async task wrapper
+             processing_func = process_pdf_task # Use the async task wrapper (module-level for test patching)
              run_in_executor = False # Task is already async
              specific_args = {
                  "file_bytes": file_bytes,
@@ -2857,7 +3160,7 @@ async def _process_document_like_item(
              if not processing_filepath: raise ValueError("Ebook processing requires a file path.")
              # Need a wrapper if process_epub is sync
              def _sync_process_ebook_wrapper(**kwargs):
-                 return process_epub(**kwargs)
+                return process_epub(**kwargs)
              processing_func = _sync_process_ebook_wrapper
              specific_args = {
                  "file_path": str(processing_filepath),
@@ -2868,6 +3171,53 @@ async def _process_document_like_item(
              if form_data.custom_chapter_pattern:
                  specific_args["custom_chapter_pattern"] = form_data.custom_chapter_pattern
              # Ensure all necessary args from common_args are passed if needed by process_epub
+
+        elif media_type == "email":
+            # For email, we operate on bytes (consistent with PDF pattern)
+            if file_bytes is None and processing_filepath:
+                try:
+                    async with aiofiles.open(processing_filepath, "rb") as f:
+                        file_bytes = await f.read()
+                except Exception as _e:
+                    raise ValueError(f"Email processing requires file bytes: {_e}")
+            if file_bytes is None:
+                raise ValueError("Email processing requires file bytes, but they were not available.")
+
+            # If this is a supported email container and accepted, process as multiple children
+            name_lower = (processing_filename or item_input_ref).lower()
+            if name_lower.endswith('.zip') and getattr(form_data, 'accept_archives', False):
+                processing_func = email_lib.process_eml_archive_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "archive_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+            elif name_lower.endswith('.mbox') and getattr(form_data, 'accept_mbox', False):
+                processing_func = email_lib.process_mbox_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "mbox_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+            elif (name_lower.endswith('.pst') or name_lower.endswith('.ost')) and getattr(form_data, 'accept_pst', False):
+                processing_func = email_lib.process_pst_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "pst_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+            else:
+                processing_func = email_lib.process_email_task
+                # Keep run_in_executor=True since it's sync
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "filename": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
 
         else:
              raise NotImplementedError(f"Processor not implemented for media type: '{media_type}'")
@@ -2890,13 +3240,62 @@ async def _process_document_like_item(
             else: # For async functions like process_pdf_task
                 process_result_dict = await processing_func(**final_args)
 
-            if not isinstance(process_result_dict, dict):
-                raise TypeError(f"Processor '{func_name}' returned non-dict: {type(process_result_dict)}")
+            # For email containers (zip/mbox), the processing function may return a list of children results
+            if media_type == 'email' and isinstance(process_result_dict, list) and (
+                getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)
+            ):
+                # Build a synthetic parent result to carry children; no parent DB persistence
+                final_result.update({
+                    "status": "Success",
+                    "media_type": "email",
+                    "content": None,
+                    "metadata": {"title": (form_data.title or (processing_filename or item_input_ref)), "parser_used": "builtin-email"},
+                    "children": process_result_dict,
+                })
+                # Ensure the parent reflects the container grouping keyword for client visibility
+                try:
+                    arch_name = (processing_filename or item_input_ref)
+                    arch_kw = None
+                    if arch_name and str(arch_name).lower().endswith('.zip'):
+                        arch_kw = f"email_archive:{FilePath(arch_name).stem}"
+                    elif arch_name and str(arch_name).lower().endswith('.mbox'):
+                        arch_kw = f"email_mbox:{FilePath(arch_name).stem}"
+                    elif arch_name and (str(arch_name).lower().endswith('.pst') or str(arch_name).lower().endswith('.ost')):
+                        arch_kw = f"email_pst:{FilePath(arch_name).stem}"
+                    if arch_kw:
+                        base_kws: list[str] = []
+                        try:
+                            if isinstance(getattr(form_data, 'keywords', None), list):
+                                base_kws = [str(k).strip().lower() for k in form_data.keywords if k]
+                        except Exception:
+                            base_kws = []
+                        final_result["keywords"] = sorted(set((final_result.get("keywords") or []) + base_kws + [arch_kw]))
+                except Exception:
+                    pass
+            else:
+                if not isinstance(process_result_dict, dict):
+                    raise TypeError(f"Processor '{func_name}' returned non-dict: {type(process_result_dict)}")
+                # Merge the result from the processing function into our final_result
+                final_result.update(process_result_dict)
+                final_result["status"] = process_result_dict.get("status", "Error" if process_result_dict.get("error") else "Success")
+            # Normalize warnings whether result is a dict or a list (archive children)
+            proc_warnings = None
+            if isinstance(process_result_dict, dict):
+                proc_warnings = process_result_dict.get("warnings")
+            elif isinstance(process_result_dict, list):
+                try:
+                    agg = []
+                    for _child in process_result_dict:
+                        if isinstance(_child, dict):
+                            w = _child.get("warnings")
+                            if isinstance(w, list):
+                                agg.extend(w)
+                            elif w:
+                                agg.append(str(w))
+                    proc_warnings = agg if agg else None
+                except Exception:
+                    proc_warnings = None
 
-            # Merge the result from the processing function into our final_result
-            final_result.update(process_result_dict)
-            final_result["status"] = process_result_dict.get("status", "Error" if process_result_dict.get("error") else "Success")
-            proc_warnings = process_result_dict.get("warnings")
             if isinstance(proc_warnings, list):
                  # Ensure warnings list exists before extending
                  if not isinstance(final_result.get("warnings"), list): final_result["warnings"] = []
@@ -2929,11 +3328,60 @@ async def _process_document_like_item(
         combined_keywords = set(form_data.keywords or []) # Use list from form
         if isinstance(extracted_keywords, list):
             combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and k.strip())
+        # If we processed an email archive, propagate child keywords (e.g., archive tag) to the parent
+        try:
+            if media_type == 'email':
+                children = final_result.get('children')
+                if isinstance(children, list):
+                    for _child in children:
+                        if isinstance(_child, dict):
+                            _kws = _child.get('keywords') or []
+                            for _kw in _kws:
+                                if isinstance(_kw, str) and _kw.strip():
+                                    combined_keywords.add(_kw.strip())
+        except Exception:
+            pass
+        # For email with attachment ingestion enabled, add a shared group tag for UI grouping
+        try:
+            if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
+                parent_msg_id = None
+                try:
+                    parent_msg_id = ((metadata_for_db or {}).get('email') or {}).get('message_id')
+                except Exception:
+                    parent_msg_id = None
+                if parent_msg_id:
+                    combined_keywords.add(f"email_group:{str(parent_msg_id)}")
+            # For email containers, add a grouping tag to keywords
+            if media_type == 'email' and (getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)):
+                try:
+                    arch_name = (processing_filename or item_input_ref)
+                    if arch_name:
+                        lower = str(arch_name).lower()
+                        if lower.endswith('.zip'):
+                            arch_tag = f"email_archive:{FilePath(arch_name).stem}"
+                            combined_keywords.add(arch_tag)
+                        elif lower.endswith('.mbox'):
+                            mbox_tag = f"email_mbox:{FilePath(arch_name).stem}"
+                            combined_keywords.add(mbox_tag)
+                        elif lower.endswith('.pst') or lower.endswith('.ost'):
+                            pst_tag = f"email_pst:{FilePath(arch_name).stem}"
+                            combined_keywords.add(pst_tag)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         final_keywords_list = sorted(list(combined_keywords))
+        # Reflect final keywords in the response object for client visibility
+        try:
+            final_result["keywords"] = final_keywords_list
+            logging.info(f"Archive parent keywords set for {item_input_ref}: {final_keywords_list}")
+        except Exception as _kw_err:
+            logging.warning(f"Failed to set parent keywords for {item_input_ref}: {_kw_err}")
 
         model_used = metadata_for_db.get('parser_used', 'Imported') # Check metadata first
         if not model_used and media_type == 'pdf': model_used = final_result.get('analysis_details', {}).get('parser', 'Imported')
-        title_for_db = metadata_for_db.get('title', form_data.title or (FilePath(item_input_ref).stem if item_input_ref else 'Untitled'))
+        # Prefer explicit user-provided title; fall back to extracted metadata; then filename stem
+        title_for_db = form_data.title or metadata_for_db.get('title', (FilePath(item_input_ref).stem if item_input_ref else 'Untitled'))
         author_for_db = metadata_for_db.get('author', form_data.author or 'Unknown')
 
 
@@ -2971,12 +3419,49 @@ async def _process_document_like_item(
                         safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
                 except Exception:
                     safe_metadata_json = None
+                # Build plaintext chunks for chunk-level FTS if chunking is requested
+                chunks_for_sql = None
+                try:
+                    _opts = chunk_options or {}
+                    if _opts:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=_opts.get('method') or 'sentences',
+                            max_size=_opts.get('max_size') or 500,
+                            overlap=_opts.get('overlap') or 50,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+
                 db_add_kwargs = dict(
                     url=item_input_ref, title=title_for_db, media_type=media_type,
                     content=content_for_db, keywords=final_keywords_list,
                     prompt=form_data.custom_prompt, analysis_content=analysis_for_db, safe_metadata=safe_metadata_json,
                     transcription_model=model_used, author=author_for_db,
                     overwrite=form_data.overwrite_existing, chunk_options=chunk_options,
+                    chunks=chunks_for_sql,
                 )
 
                 # --- Function to run in executor ---
@@ -3001,6 +3486,103 @@ async def _process_document_like_item(
                 final_result["media_uuid"] = media_uuid_result # Add UUID
                 logger.info(f"DB persistence result for {item_input_ref}: ID={media_id_result}, UUID={media_uuid_result}, Msg='{db_message_result}'")
 
+                # --- Persist child emails (if any and requested) ---
+                try:
+                    if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
+                        children = final_result.get('children') or []
+                        if isinstance(children, list) and children:
+                            # If any child is not a Success (e.g., guardrail), do not persist any children
+                            if any((isinstance(c, dict) and c.get('status') != 'Success') for c in children):
+                                final_result['child_db_results'] = None
+                            else:
+                                child_db_results = []
+                                for child in children:
+                                    try:
+                                        c_content = child.get('content')
+                                        c_meta = child.get('metadata') or {}
+                                        if not c_content:
+                                            continue
+                                        # Safe metadata subset for child
+                                        allowed_keys = {
+                                            'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                                            'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                                            'publisher','source','creators','rights','parent_media_uuid'
+                                        }
+                                        safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
+                                        safe_c_meta['parent_media_uuid'] = media_uuid_result
+                                        try:
+                                            from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+                                            safe_c_meta = normalize_safe_metadata(safe_c_meta)
+                                            safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
+                                        except Exception:
+                                            safe_c_meta_json = None
+
+                                        # Child chunking (optional)
+                                        c_chunks_for_sql = None
+                                        try:
+                                            _opts = chunk_options or {}
+                                            if _opts:
+                                                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                                                _ck = _Chunker()
+                                                _flat = _ck.chunk_text_hierarchical_flat(
+                                                    c_content,
+                                                    method=_opts.get('method') or 'sentences',
+                                                    max_size=_opts.get('max_size') or 500,
+                                                    overlap=_opts.get('overlap') or 50,
+                                                )
+                                                _kind_map = {
+                                                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                                                }
+                                                c_chunks_for_sql = []
+                                                for _it in _flat:
+                                                    _md = _it.get('metadata') or {}
+                                                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                                    _small = {}
+                                                    if _md.get('ancestry_titles'):
+                                                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                                    if _md.get('section_path'):
+                                                        _small['section_path'] = _md.get('section_path')
+                                                    c_chunks_for_sql.append({
+                                                        'text': _it.get('text',''),
+                                                        'start_char': _md.get('start_offset'),
+                                                        'end_char': _md.get('end_offset'),
+                                                        'chunk_type': _ctype,
+                                                        'metadata': _small,
+                                                    })
+                                        except Exception:
+                                            c_chunks_for_sql = None
+
+                                        c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (child)')
+                                        c_author = c_meta.get('author') or form_data.author or 'Unknown'
+                                        c_url = f"{item_input_ref}::child::{c_meta.get('filename') or c_title}"
+
+                                        def _db_child_worker():
+                                            worker_db = None
+                                            try:
+                                                worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                                                return worker_db.add_media_with_keywords(
+                                                    url=c_url, title=c_title, media_type=media_type,
+                                                    content=c_content, keywords=final_keywords_list,
+                                                    prompt=form_data.custom_prompt, analysis_content=None,
+                                                    safe_metadata=safe_c_meta_json, transcription_model=model_used,
+                                                    author=c_author, overwrite=form_data.overwrite_existing,
+                                                    chunk_options=chunk_options, chunks=c_chunks_for_sql,
+                                                )
+                                            finally:
+                                                if worker_db:
+                                                    worker_db.close_connection()
+
+                                        c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_worker)
+                                        child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
+                                    except Exception as child_db_err:
+                                        logging.warning(f"Child email persistence failed: {child_db_err}")
+                                if child_db_results:
+                                    final_result['child_db_results'] = child_db_results
+                except Exception:
+                    pass
+
+
             except (DatabaseError, InputError, ConflictError) as db_err:
                  logger.error(f"Database operation failed for {item_input_ref}: {db_err}", exc_info=True)
                  final_result['status'] = 'Warning' # Keep Warning status
@@ -3024,10 +3606,114 @@ async def _process_document_like_item(
                  final_result["db_id"] = None # Ensure None on error
                  final_result["media_uuid"] = None
         else:
-             logger.warning(f"Skipping DB persistence for {item_input_ref} due to missing content.")
-             final_result["db_message"] = "DB persistence skipped (no content)."
-             final_result["db_id"] = None # Ensure None
-             final_result["media_uuid"] = None
+             # No parent content: if this is an email container (zip/mbox/pst) with children, persist children directly
+             persisted_any_children = False
+             if media_type == 'email' and (getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)):
+                 try:
+                     children = final_result.get('children') or []
+                     if isinstance(children, list) and children:
+                         # If any child failed (e.g., guardrail error), skip child persistence entirely
+                         if any((isinstance(c, dict) and c.get('status') != 'Success') for c in children):
+                             final_result['child_db_results'] = None
+                             persisted_any_children = False
+                         else:
+                             child_db_results = []
+                         for child in children:
+                             try:
+                                 c_content = child.get('content')
+                                 c_meta = child.get('metadata') or {}
+                                 if not c_content:
+                                     continue
+                                 # Safe metadata for child
+                                 allowed_keys = {
+                                     'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                                     'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                                     'publisher','source','creators','rights'
+                                 }
+                                 safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
+                                 safe_c_meta_json = None
+                                 try:
+                                     from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+                                     safe_c_meta = normalize_safe_metadata(safe_c_meta)
+                                     safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
+                                 except Exception:
+                                     pass
+                                 # Chunking for child
+                                 c_chunks_for_sql = None
+                                 try:
+                                     _opts = chunk_options or {}
+                                     if _opts:
+                                         from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                                         _ck = _Chunker()
+                                         _flat = _ck.chunk_text_hierarchical_flat(
+                                             c_content,
+                                             method=_opts.get('method') or 'sentences',
+                                             max_size=_opts.get('max_size') or 500,
+                                             overlap=_opts.get('overlap') or 50,
+                                         )
+                                         _kind_map = {
+                                             'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                             'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                                         }
+                                         c_chunks_for_sql = []
+                                         for _it in _flat:
+                                             _md = _it.get('metadata') or {}
+                                             _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                             _small = {}
+                                             if _md.get('ancestry_titles'):
+                                                 _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                             if _md.get('section_path'):
+                                                 _small['section_path'] = _md.get('section_path')
+                                             c_chunks_for_sql.append({
+                                                 'text': _it.get('text',''),
+                                                 'start_char': _md.get('start_offset'),
+                                                 'end_char': _md.get('end_offset'),
+                                                 'chunk_type': _ctype,
+                                                 'metadata': _small,
+                                             })
+                                 except Exception:
+                                     c_chunks_for_sql = None
+
+                                 c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (archive child)')
+                                 c_author = c_meta.get('author') or form_data.author or 'Unknown'
+                                 c_url = f"{item_input_ref}::archive::{c_meta.get('filename') or c_title}"
+
+                                 def _db_child_arch_worker():
+                                     worker_db = None
+                                     try:
+                                         worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                                         return worker_db.add_media_with_keywords(
+                                             url=c_url, title=c_title, media_type=media_type,
+                                             content=c_content, keywords=final_keywords_list,
+                                             prompt=form_data.custom_prompt, analysis_content=None,
+                                             safe_metadata=safe_c_meta_json, transcription_model=model_used,
+                                             author=c_author, overwrite=form_data.overwrite_existing,
+                                             chunk_options=chunk_options, chunks=c_chunks_for_sql,
+                                         )
+                                     finally:
+                                         if worker_db:
+                                             worker_db.close_connection()
+
+                                 c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_arch_worker)
+                                 child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
+                                 persisted_any_children = True
+                             except Exception as child_db_err:
+                                 logging.warning(f"Archive child email persistence failed: {child_db_err}")
+                         try:
+                             if child_db_results:
+                                 final_result['child_db_results'] = child_db_results
+                         except Exception:
+                             pass
+                 except Exception:
+                     pass
+
+             if not persisted_any_children:
+                 logger.warning(f"Skipping DB persistence for {item_input_ref} due to missing content.")
+                 final_result["db_message"] = "DB persistence skipped (no content)."
+                 final_result["db_id"] = None # Ensure None
+                 final_result["media_uuid"] = None
+             else:
+                 final_result["db_message"] = "Persisted archive children."
     else:
         # If processing failed, set DB message accordingly
         final_result["db_message"] = "DB operation skipped (processing failed)."
@@ -3070,7 +3756,11 @@ def _determine_final_status(results: List[Dict[str, Any]]) -> int:
 # --- Main Endpoint ---
 @router.post("/add",
              # status_code=status.HTTP_200_OK, # Determined dynamically
-             dependencies=[Depends(get_media_db_for_user)],
+             dependencies=[
+                 Depends(get_media_db_for_user),
+                 Depends(PermissionChecker(MEDIA_CREATE)),
+                 Depends(rbac_rate_limit("media.create"))
+             ],
              summary="Add media (URLs/files) with processing and persistence",
              tags=["Media Ingestion & Persistence"], # Changed tag
              )
@@ -3124,7 +3814,8 @@ async def add_media(
     files: Optional[List[UploadFile]] = File(None, description="List of files to upload"),
     # --- DB Dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user), # Use the correct dependency
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Add Media Endpoint**
@@ -3145,6 +3836,18 @@ async def add_media(
     # Basic check for presence of inputs still useful here
     _validate_inputs(form_data.media_type, form_data.urls, files)
     logger.info(f"Received request to add {form_data.media_type} media.")
+    try:
+        usage_log.log_event(
+            "media.add",
+            tags=[str(form_data.media_type or "")],
+            metadata={
+                "has_urls": bool(form_data.urls),
+                "files_count": len(files) if files else 0,
+                "perform_analysis": bool(form_data.perform_analysis),
+            },
+        )
+    except Exception:
+        pass
     # TODO: Implement actual authentication logic using the 'token' if needed
 
     # --- 2. Database Dependency (Handled by `db` parameter) ---
@@ -3179,6 +3882,10 @@ async def add_media(
                 "audio": ['.mp3', '.aac', '.flac', '.wav', '.ogg', '.m4a', '.wma'],
                 "pdf": ['.pdf'],
                 "ebook": ['.epub'],
+                "email": ['.eml']
+                    + (['.zip'] if getattr(form_data, 'accept_archives', False) else [])
+                    + (['.mbox'] if getattr(form_data, 'accept_mbox', False) else [])
+                    + (['.pst', '.ost'] if getattr(form_data, 'accept_pst', False) else []),
                 # For 'document', allow a broad set; leave None to let validator handle
             }
             allowed_exts = allowed_ext_map.get(str(form_data.media_type).lower())
@@ -3604,6 +4311,7 @@ async def process_videos_endpoint(
     form_data: ProcessVideosForm = Depends(get_process_videos_form),
     # 4. File Uploads
     files: Optional[List[UploadFile]] = File(None, description="Video file uploads"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # user_info: dict = Depends(verify_token), # Optional Auth
 ):
     """
@@ -3622,6 +4330,14 @@ async def process_videos_endpoint(
     """
     # --- Validation and Logging ---
     logger.info("Request received for /process-videos. Form data validated via dependency.")
+    try:
+        usage_log.log_event(
+            "media.process.video",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
 
     if form_data.urls and form_data.urls == ['']:
         logger.info("Received urls=[''], treating as no URLs provided for video processing.")
@@ -4023,6 +4739,7 @@ async def process_audios_endpoint(
     form_data: ProcessAudiosForm = Depends(get_process_audios_form),
     # 4. File uploads remain separate
     files: Optional[List[UploadFile]] = File(None, description="Audio file uploads"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process Audios (No Persistence)**
@@ -4041,6 +4758,14 @@ async def process_audios_endpoint(
     # --- 0) Validation and Logging ---
     # Validation happened in the dependency. Log success or handle HTTPException.
     logger.info(f"Request received for /process-audios. Form data validated via dependency.")
+    try:
+        usage_log.log_event(
+            "media.process.audio",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
 
     if form_data.urls and form_data.urls == ['']:
         logger.info("Received urls=[''], treating as no URLs provided for audio processing.")
@@ -4343,7 +5068,7 @@ def _process_single_ebook(
     try:
         logger.info(f"Worker processing ebook: {original_ref} from path {ebook_path}")
         # Call the main library processing function
-        result_dict = process_epub(
+        result_dict = books.process_epub(
             file_path=str(ebook_path),
             title_override=title_override,
             author_override=author_override,
@@ -4534,6 +5259,7 @@ async def process_ebooks_endpoint(
     form_data: ProcessEbooksForm = Depends(get_process_ebooks_form), # Use the dependency
     # 4. File uploads remain separate
     files: Optional[List[UploadFile]] = File(None, description="EPUB file uploads (.epub)"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process Ebooks (No Persistence)**
@@ -4550,8 +5276,21 @@ async def process_ebooks_endpoint(
     ```
 
     Supports `.epub` files.
+    URL inputs must resolve to an EPUB. The server accepts URLs that either:
+    - end with `.epub`, or
+    - provide `Content-Disposition` with a filename ending in `.epub`, or
+    - set `Content-Type: application/epub+zip`.
+    Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-ebooks (no persistence).")
+    try:
+        usage_log.log_event(
+            "media.process.ebook",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
     # Log form data safely (exclude sensitive fields)
     # Use .model_dump() for Pydantic v2
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
@@ -4616,7 +5355,7 @@ async def process_ebooks_endpoint(
             if form_data.urls:
                 logger.info(f"Attempting to download {len(form_data.urls)} URLs asynchronously...")
                 download_tasks = [
-                    _download_url_async(client, url, temp_dir, allowed_extensions = {".epub", ".pdf", ".mobi"})
+                    _download_url_async(client, url, temp_dir, allowed_extensions={".epub"})
                     for url in form_data.urls
                 ]
                 # Associate tasks with original URLs for error reporting
@@ -4802,6 +5541,332 @@ async def process_ebooks_endpoint(
 # End of Ebook Processing Endpoint
 #################################################################################################
 
+######################## Email Processing Endpoint ###################################
+
+# ─────────────────────── Form Model ─────────────────────────
+class ProcessEmailsForm(AddMediaForm):
+    media_type: Literal["email"] = "email"
+    keep_original_file: bool = False # Always cleanup tmp dir for this endpoint
+
+    # Chunking defaults for emails
+    perform_chunking: bool = True
+    chunk_method: Optional[ChunkMethod] = Field('sentences', description="Default chunking method for emails")
+    chunk_size: int = Field(1000, gt=0, description="Target chunk size for emails")
+    chunk_overlap: int = Field(200, ge=0, description="Chunk overlap size for emails")
+    ingest_attachments: bool = Field(False, description="Parse and include nested .eml attachments as children")
+    max_depth: int = Field(2, ge=1, le=5, description="Max depth for nested email parsing when ingest_attachments=true")
+    accept_archives: bool = Field(False, description="Accept .zip archives of EMLs and expand/process members")
+    accept_mbox: bool = Field(False, description="Accept .mbox mailboxes and expand/process messages")
+    accept_pst: bool = Field(False, description="Accept .pst/.ost containers (feature-flag; parsing may require external tools)")
+
+
+# ────────────────────── Dependency Function ───────────────────
+def get_process_emails_form(
+    urls: Optional[List[str]] = Form(None, description="List of URLs of the emails (optional)"),
+    title: Optional[str] = Form(None, description="Optional title override"),
+    author: Optional[str] = Form(None, description="Optional author override"),
+    keywords: str = Form("", alias="keywords", description="Comma-separated keywords"),
+    custom_prompt: Optional[str] = Form(None, description="Optional custom prompt for analysis"),
+    system_prompt: Optional[str] = Form(None, description="Optional system prompt for analysis"),
+    overwrite_existing: bool = Form(False),
+    perform_analysis: bool = Form(False),
+    api_name: Optional[str] = Form(None),
+    use_cookies: bool = Form(False),
+    cookies: Optional[str] = Form(None),
+    summarize_recursively: bool = Form(False),
+    # Chunking options
+    perform_chunking: bool = Form(True),
+    chunk_method: Optional[ChunkMethod] = Form('sentences'),
+    chunk_language: Optional[str] = Form(None),
+    chunk_size: int = Form(1000),
+    chunk_overlap: int = Form(200),
+    custom_chapter_pattern: Optional[str] = Form(None),
+    use_adaptive_chunking: bool = Form(False),
+    use_multi_level_chunking: bool = Form(False),
+    # Contextual chunking (optional for emails)
+    enable_contextual_chunking: bool = Form(False),
+    contextual_llm_model: Optional[str] = Form(None),
+    context_window_size: Optional[int] = Form(None),
+    context_strategy: Optional[str] = Form(None),
+    context_token_budget: Optional[int] = Form(None),
+    # Attachment handling
+    ingest_attachments: bool = Form(False),
+    max_depth: int = Form(2),
+    accept_archives: bool = Form(False),
+    accept_mbox: bool = Form(False),
+    accept_pst: bool = Form(False),
+) -> "ProcessEmailsForm":
+    try:
+        form_data = {
+            "media_type": "email",
+            "keep_original_file": False,
+            "urls": urls,
+            "title": title,
+            "author": author,
+            "keywords": keywords,
+            "custom_prompt": custom_prompt,
+            "system_prompt": system_prompt,
+            "overwrite_existing": overwrite_existing,
+            "perform_analysis": perform_analysis,
+            "api_name": api_name,
+            "use_cookies": use_cookies,
+            "cookies": cookies,
+            "summarize_recursively": summarize_recursively,
+            # Chunking
+            "perform_chunking": perform_chunking,
+            "chunk_method": chunk_method,
+            "chunk_language": chunk_language,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "custom_chapter_pattern": custom_chapter_pattern,
+            "use_adaptive_chunking": use_adaptive_chunking,
+            "use_multi_level_chunking": use_multi_level_chunking,
+            # Contextual
+            "enable_contextual_chunking": enable_contextual_chunking,
+            "contextual_llm_model": contextual_llm_model,
+            "context_window_size": context_window_size,
+            "context_strategy": (context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
+            "context_token_budget": (int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
+            # Attachments
+            "ingest_attachments": ingest_attachments,
+            "max_depth": max_depth,
+            "accept_archives": accept_archives,
+            "accept_mbox": accept_mbox,
+            "accept_pst": accept_pst,
+            "accept_pst": accept_pst,
+        }
+        filtered = {k: v for k, v in form_data.items() if v is not None}
+        filtered["media_type"] = "email"
+        filtered["keep_original_file"] = False
+        return ProcessEmailsForm(**filtered)
+    except ValidationError as e:
+        serializable_errors = []
+        for error in e.errors():
+            serializable_error = error.copy()
+            if 'ctx' in serializable_error and isinstance(serializable_error.get('ctx'), dict):
+                serializable_error['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in serializable_error['ctx'].items()}
+            serializable_error['input'] = serializable_error.get('input', serializable_error.get('loc'))
+            serializable_errors.append(serializable_error)
+        logger.warning(f"Pydantic validation failed for Email processing: {json.dumps(serializable_errors)}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=serializable_errors) from e
+    except Exception as e:
+        logger.error(f"Unexpected error creating ProcessEmailsForm: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error during form processing: {type(e).__name__}")
+
+
+# ─────────────────────── Endpoint Implementation ────────────────
+@router.post(
+    "/process-emails",
+    summary="Extract, chunk, analyse Emails (NO DB Persistence)",
+    tags=["Media Processing (No DB)"]
+)
+async def process_emails_endpoint(
+    form_data: ProcessEmailsForm = Depends(get_process_emails_form),
+    files: Optional[List[UploadFile]] = File(None),
+):
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one EML file must be uploaded.")
+
+    loop = asyncio.get_running_loop()
+    batch_result: Dict[str, Any] = {
+        "results": [],
+        "processed_count": 0,
+        "errors_count": 0,
+        "errors": [],
+    }
+
+    temp_dir_mgr = TempDirManager(prefix="email_process_", cleanup=True)
+    with temp_dir_mgr as temp_dir:
+        # Save uploaded .eml files with validation
+        allowed_exts = ['.eml']
+        # Allow .zip when accept_archives is true; .mbox when accept_mbox is true
+        allowed_exts = (
+            ['.eml']
+            + (['.zip'] if form_data.accept_archives else [])
+            + (['.mbox'] if getattr(form_data, 'accept_mbox', False) else [])
+            + (['.pst', '.ost'] if getattr(form_data, 'accept_pst', False) else [])
+        )
+        saved_files_info, file_errors = await _save_uploaded_files(files or [], temp_dir, validator=file_validator_instance, allowed_extensions=allowed_exts)
+
+        for err in file_errors:
+            batch_result["results"].append({
+                "status": "Error",
+                "input_ref": err.get("input_ref"),
+                "processing_source": None,
+                "media_type": "email",
+                "error": err.get("error", "File save failed"),
+                "metadata": {}, "content": None, "chunks": None,
+                "analysis": None, "keywords": None, "warnings": None,
+                "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+            })
+            batch_result["errors_count"] += 1
+            if err.get("error"): batch_result["errors"].append(err.get("error"))
+
+        # Process saved files
+        for pf in saved_files_info:
+            try:
+                path = FilePath(pf["path"]).resolve()
+                # Read bytes
+                async with aiofiles.open(path, "rb") as f:
+                    file_bytes = await f.read()
+                # Chunk options
+                chunk_opts = {
+                    "method": form_data.chunk_method if form_data.chunk_method else "sentences",
+                    "max_size": form_data.chunk_size,
+                    "overlap": form_data.chunk_overlap,
+                }
+                # If this is a supported container and accepted, expand and process members
+                name_lower = (pf.get("original_filename") or path.name).lower()
+                if name_lower.endswith('.zip') and form_data.accept_archives:
+                    arch_name = pf.get("original_filename") or path.name
+                    processor = functools.partial(
+                        email_lib.process_eml_archive_bytes,
+                        file_bytes=file_bytes,
+                        archive_name=arch_name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res_list = await loop.run_in_executor(None, processor)
+                    # Append each child as its own result
+                    for r_item in res_list:
+                        r_item.setdefault("media_type", "email")
+                        r_item.setdefault("processing_source", f"archive:{str(path)}")
+                        r_item.setdefault("input_ref", r_item.get("input_ref") or arch_name)
+                        r_item.update({"db_id": None, "db_message": "Processing only endpoint."})
+                        batch_result["results"].append(r_item)
+                        if r_item.get("status") in ("Success", "Warning"):
+                            batch_result["processed_count"] += 1
+                        else:
+                            batch_result["errors_count"] += 1
+                            if r_item.get("error"): batch_result["errors"].append(r_item.get("error"))
+                elif name_lower.endswith('.mbox') and getattr(form_data, 'accept_mbox', False):
+                    mbox_name = pf.get("original_filename") or path.name
+                    processor = functools.partial(
+                        email_lib.process_mbox_bytes,
+                        file_bytes=file_bytes,
+                        mbox_name=mbox_name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res_list = await loop.run_in_executor(None, processor)
+                    for r_item in res_list:
+                        r_item.setdefault("media_type", "email")
+                        r_item.setdefault("processing_source", f"mbox:{str(path)}")
+                        r_item.setdefault("input_ref", r_item.get("input_ref") or mbox_name)
+                        r_item.update({"db_id": None, "db_message": "Processing only endpoint."})
+                        batch_result["results"].append(r_item)
+                        if r_item.get("status") in ("Success", "Warning"):
+                            batch_result["processed_count"] += 1
+                        else:
+                            batch_result["errors_count"] += 1
+                            if r_item.get("error"): batch_result["errors"].append(r_item.get("error"))
+                elif (name_lower.endswith('.pst') or name_lower.endswith('.ost')) and getattr(form_data, 'accept_pst', False):
+                    pst_name = pf.get("original_filename") or path.name
+                    processor = functools.partial(
+                        email_lib.process_pst_bytes,
+                        file_bytes=file_bytes,
+                        pst_name=pst_name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res_list = await loop.run_in_executor(None, processor)
+                    for r_item in res_list:
+                        r_item.setdefault("media_type", "email")
+                        r_item.setdefault("processing_source", f"pst:{str(path)}")
+                        r_item.setdefault("input_ref", r_item.get("input_ref") or pst_name)
+                        r_item.update({"db_id": None, "db_message": "Processing only endpoint."})
+                        batch_result["results"].append(r_item)
+                        if r_item.get("status") in ("Success", "Warning"):
+                            batch_result["processed_count"] += 1
+                        else:
+                            batch_result["errors_count"] += 1
+                            if r_item.get("error"): batch_result["errors"].append(r_item.get("error"))
+                else:
+                    # Run processor in executor (sync function)
+                    processor = functools.partial(
+                        email_lib.process_email_task,
+                        file_bytes=file_bytes,
+                        filename=pf.get("original_filename") or path.name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res = await loop.run_in_executor(None, processor)
+                    # Normalize minimal fields
+                    res.setdefault("media_type", "email")
+                    res.setdefault("processing_source", str(path))
+                    res.setdefault("input_ref", pf.get("original_filename") or path.name)
+                    # Remove DB related fields
+                    res.update({"db_id": None, "db_message": "Processing only endpoint."})
+                    batch_result["results"].append(res)
+                    if res.get("status") == "Success" or res.get("status") == "Warning":
+                        batch_result["processed_count"] += 1
+                    else:
+                        batch_result["errors_count"] += 1
+                        if res.get("error"): batch_result["errors"].append(res.get("error"))
+            except Exception as e:
+                batch_result["results"].append({
+                    "status": "Error", "input_ref": pf.get("original_filename"),
+                    "processing_source": str(pf.get("path")), "media_type": "email",
+                    "error": f"Processing failed: {e}",
+                    "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                    "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                })
+                batch_result["errors_count"] += 1
+                batch_result["errors"].append(str(e))
+
+    final_status = status.HTTP_200_OK if (batch_result["processed_count"] > 0 and batch_result["errors_count"] == 0) else (
+        status.HTTP_207_MULTI_STATUS if batch_result["results"] else status.HTTP_400_BAD_REQUEST
+    )
+    return JSONResponse(status_code=final_status, content=batch_result)
+
+#
+# End of Email Processing Endpoint
+#################################################################################################
+
 ######################## Document Processing Endpoint ###################################
 
 # ─────────────────────── Form Model ─────────────────────────
@@ -4956,6 +6021,7 @@ async def process_documents_endpoint(
     form_data: ProcessDocumentsForm = Depends(get_process_documents_form), # Use the dependency
     # 4. File Upload
     files: Optional[List[UploadFile]] = File(None, description="Document file uploads (.txt, .md, .docx, .rtf, .html, .xml)"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process Documents (No Persistence)**
@@ -4970,13 +6036,27 @@ async def process_documents_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
     process_document_content(Path("/abs/article.docx"), perform_chunking=True, perform_analysis=True, api_name="openai")
     ```
+    
+    URL inputs must resolve to a supported document format. The server accepts URLs that either:
+    - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, or
+    - provide `Content-Disposition` with a filename that ends with an allowed extension, or
+    - set a supported `Content-Type` (e.g., text/plain, text/markdown, text/html, application/xhtml+xml, application/xml, text/xml, application/rtf, text/rtf, application/vnd.openxmlformats-officedocument.wordprocessingml.document).
+    Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-documents (no persistence).")
+    try:
+        usage_log.log_event(
+            "media.process.document",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
 
-    # Define allowed extensions for this endpoint
-    # Make sure these match what convert_document_to_text supports
-    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml"] # Add others if supported
+    # Guardrails: restrict to a known set of document extensions for this endpoint.
+    # Dedicated code-file processing will be added separately.
+    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml"]
 
     _validate_inputs("document", form_data.urls, files)
 
@@ -4988,7 +6068,7 @@ async def process_documents_endpoint(
         "results": []
     }
     # Map to track original ref -> temp path
-    source_map: Dict[str, Path] = {} # Store Path objects
+    source_map: Dict[str, FilePath] = {} # Store Path objects
 
     loop = asyncio.get_running_loop()
     # Use TempDirManager for reliable cleanup
@@ -4996,11 +6076,11 @@ async def process_documents_endpoint(
         temp_dir = FilePath(temp_dir_path)
         logger.info(f"Using temporary directory: {temp_dir}")
 
-        local_paths_to_process: List[Tuple[str, Path]] = [] # (original_ref, local_path)
+        local_paths_to_process: List[Tuple[str, FilePath]] = [] # (original_ref, local_path)
 
         # --- Handle Uploads ---
         if files:
-            # Use specific allowed extensions for documents
+            # Enforce allowed document extensions for uploads
             saved_files, upload_errors = await _save_uploaded_files(
                 files,
                 temp_dir,
@@ -5037,16 +6117,21 @@ async def process_documents_endpoint(
 
             # --- MODIFICATION: Create client first ---
             async with httpx.AsyncClient() as client:
-                # --- MODIFICATION: Create tasks *inside* the client block ---
-                allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)  # Convert to set once
+                # Enforce allowed extensions for documents from URLs; still block generic HTML/XHTML/etc
+                allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
                 download_tasks = [
-                    # Pass the client instance here
                     _download_url_async(
-                        client=client,  # Pass the active client
+                        client=client,
                         url=url,
                         target_dir=temp_dir,
-                        allowed_extensions=allowed_ext_set,  # Pass the set
-                        check_extension=True  # Perform the check
+                        allowed_extensions=allowed_ext_set,
+                        check_extension=True,
+                        # Disallow only clearly unsupported/generic types. Allow HTML/XHTML/XML types here
+                        # because this endpoint handles .html/.htm/.xml content.
+                        disallow_content_types={
+                            "application/msword",
+                            "application/octet-stream",
+                        }
                     )
                     for url in form_data.urls
                 ]
@@ -5122,7 +6207,7 @@ async def process_documents_endpoint(
         processing_tasks = []
         for original_ref, doc_path in local_paths_to_process:
             partial_func = functools.partial(
-                process_document_content,
+                docs.process_document_content,
                 doc_path=doc_path,
                 # Pass relevant options from form_data
                 perform_chunking=form_data.perform_chunking,
@@ -5381,7 +6466,7 @@ def get_process_pdfs_form(
         )
 
 async def _single_pdf_worker(
-    pdf_path: Path,
+    pdf_path: FilePath,
     form,                      # ProcessPDFsForm instance
     chunk_opts: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -5415,7 +6500,7 @@ async def _single_pdf_worker(
         }
 
         # process_pdf_task is async
-        raw = await process_pdf_task(**pdf_kwargs)
+        raw = await pdf_lib.process_pdf_task(**pdf_kwargs)
 
         # Ensure minimal envelope consistency
         if isinstance(raw, dict):
@@ -5493,6 +6578,12 @@ async def process_pdfs_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
     files: Optional[List[UploadFile]] = File(None,  description="PDF uploads"),
+    # VLM controls (separate from OCR)
+    vlm_enable: bool = Form(False, description="Enable VLM detection (separate from OCR)"),
+    vlm_backend: Optional[str] = Form(None, description="VLM backend (e.g., 'hf_table_transformer')"),
+    vlm_detect_tables_only: bool = Form(True, description="Only keep 'table' detections"),
+    vlm_max_pages: Optional[int] = Form(None, description="Max pages to scan with VLM"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process PDFs (No Persistence)**
@@ -5507,8 +6598,22 @@ async def process_pdfs_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
     await process_pdf_task(file_bytes, filename="paper.pdf", parser="pymupdf4llm", perform_chunking=True, api_name="openai")
     ```
+    
+    URL inputs must resolve to a PDF. The server accepts URLs that either:
+    - end with `.pdf`, or
+    - provide `Content-Disposition` with a filename ending in `.pdf`, or
+    - set `Content-Type: application/pdf`.
+    Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-pdfs (no persistence).")
+    try:
+        usage_log.log_event(
+            "media.process.pdf",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
     ALLOWED_PDF_EXTENSIONS = ['.pdf']
     _validate_inputs("pdf", form_data.urls, files)
 
@@ -5568,73 +6673,55 @@ async def process_pdfs_endpoint(
                     batch_result["errors_count"] += 1
                     batch_result["errors"].append(f"{original_ref}: {error_detail}")
 
-        # Handle URLs (download bytes)
+        # Handle URLs (download bytes) with strict extension/content-type checking
         if form_data.urls:
-             async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-                 download_tasks = []
-                 for url in form_data.urls:
-                     download_tasks.append(client.get(url)) # Gather response futures
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+                download_tasks = [
+                    _download_url_async(
+                        client=client,
+                        url=url,
+                        target_dir=FilePath(temp_dir),
+                        allowed_extensions={".pdf"},
+                        check_extension=True,
+                    ) for url in form_data.urls
+                ]
+                download_results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
-                 download_responses = await asyncio.gather(*download_tasks, return_exceptions=True)
-
-                 for i, res in enumerate(download_responses):
-                     url = form_data.urls[i]
-                     if isinstance(res, httpx.Response):
-                         try:
-                             res.raise_for_status()
-                             content_type = res.headers.get('content-type', '').lower()
-                             # Basic check for PDF content type or .pdf extension in final URL
-                             final_url_path = FilePath(str(res.url)).name # Get filename from final redirected URL
-                             if 'application/pdf' in content_type or final_url_path.endswith('.pdf'):
-                                 file_bytes = res.content
-                                 pdf_inputs_to_process.append((url, file_bytes)) # Use original URL as ref
-                             else:
-                                 raise ValueError(f"Downloaded content from {url} is not a PDF (Content-Type: {content_type}, Final URL: {res.url})")
-                         except httpx.HTTPStatusError as status_err:
-                             logger.error(f"HTTP error downloading {url}: {status_err}")
-                             error_detail = f"Download failed (HTTP {status_err.response.status_code})"
-                             batch_result["results"].append({
-                                 "status": "Error", "input_ref": url,
-                                 "processing_source": url,
-                                 "error": error_detail,
-                                 "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
-                                 "metadata": {},  # <-- CHANGED
-                                 "content": None, "chunks": None,
-                                 "analysis": None, "keywords": None, "warnings": None,
-                                 "analysis_details": {}
-                             })
-                             batch_result["errors_count"] += 1
-                             batch_result["errors"].append(error_detail)
-                         except Exception as dl_err:
-                             logger.error(f"Error processing download for {url}: {dl_err}")
-                             error_detail = f"Download processing error: {dl_err}"
-                             batch_result["results"].append({
-                                 "status": "Error", "input_ref": url,
-                                 "processing_source": url,
-                                 "error": error_detail,
-                                 "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
-                                 "metadata": {},  # <-- CHANGED
-                                 "content": None, "chunks": None,
-                                 "analysis": None, "keywords": None, "warnings": None,
-                                 "analysis_details": {}
-                             })
-                             batch_result["errors_count"] += 1
-                             batch_result["errors"].append(error_detail)
-                     else:  # Handle exceptions during download (gather returned an exception)
-                         logger.error(f"Download failed for {url}: {res}", exc_info=isinstance(res, Exception))
-                         error_detail = f"Download failed: {res}"
-                         batch_result["results"].append({
-                             "status": "Error", "input_ref": url,
-                             "processing_source": url,
-                             "error": error_detail,
-                             "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
-                             "metadata": {}, # <-- CHANGED
-                             "content": None, "chunks": None,
-                             "analysis": None, "keywords": None, "warnings": None,
-                             "analysis_details": {}
-                         })
-                         batch_result["errors_count"] += 1
-                         batch_result["errors"].append(error_detail)
+            for url, result in zip(form_data.urls, download_results):
+                if isinstance(result, FilePath):
+                    try:
+                        file_bytes = FilePath(result).read_bytes()
+                        pdf_inputs_to_process.append((url, file_bytes))
+                    except Exception as read_err:
+                        logger.error(f"Failed to read downloaded PDF for {url} from {result}: {read_err}")
+                        error_detail = f"Failed to read downloaded PDF: {read_err}"
+                        batch_result["results"].append({
+                            "status": "Error", "input_ref": url,
+                            "processing_source": str(result),
+                            "error": error_detail,
+                            "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
+                            "metadata": {},
+                            "content": None, "chunks": None,
+                            "analysis": None, "keywords": None, "warnings": None,
+                            "analysis_details": {}
+                        })
+                        batch_result["errors_count"] += 1
+                        batch_result["errors"].append(error_detail)
+                else:
+                    logger.error(f"Download failed for {url}: {result}")
+                    error_detail = f"Download/preparation failed: {result}"
+                    batch_result["results"].append({
+                        "status": "Error", "input_ref": url,
+                        "processing_source": url,
+                        "error": error_detail,
+                        "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
+                        "metadata": {},
+                        "content": None, "chunks": None,
+                        "analysis": None, "keywords": None, "warnings": None,
+                        "analysis_details": {}
+                    })
+                    batch_result["errors_count"] += 1
+                    batch_result["errors"].append(error_detail)
 
         if not pdf_inputs_to_process:
             # Determine status based on whether *any* errors occurred during input handling
@@ -5643,40 +6730,45 @@ async def process_pdfs_endpoint(
 
         logger.debug(f"ENDPOINT: #1 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
         # --- Call process_pdf_task for each input ---
-        tasks = []
         for original_ref, file_bytes in pdf_inputs_to_process:
-             # --- Pass chunk options correctly ---
-             chunk_opts_for_task = {
-                 'method': form_data.chunk_method if form_data.chunk_method else 'sentences', # Use enum value or default
-                 'max_size': form_data.chunk_size,
-                 'overlap': form_data.chunk_overlap
-             }
-             logger.debug(
-                 f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
-             # Create the async task
-             task = asyncio.create_task(
-                 process_pdf_task(
-                     file_bytes=file_bytes,
-                     filename=original_ref, # Use original ref as filename hint
-                     parser=str(form_data.pdf_parsing_engine) or "pymupdf4llm",
-                     # Pass options from form
-                     title_override=form_data.title,
-                     author_override=form_data.author,
-                     keywords=form_data.keywords, # Pass list
-                     perform_chunking=form_data.perform_chunking or None,
-                     # Pass individual chunk params from form model
-                     chunk_method=chunk_opts_for_task['method'],
-                     max_chunk_size=chunk_opts_for_task['max_size'],
-                     chunk_overlap=chunk_opts_for_task['overlap'],
-                     perform_analysis=form_data.perform_analysis,
-                     api_name=form_data.api_name,
-                     # api_key removed - retrieved from server config
-                     custom_prompt=form_data.custom_prompt,
-                     system_prompt=form_data.system_prompt,
-                     summarize_recursively=form_data.summarize_recursively,
-                 )
-             )
-             tasks_with_refs.append((original_ref, task))
+            # --- Pass chunk options correctly ---
+            chunk_opts_for_task = {
+                "method": form_data.chunk_method if form_data.chunk_method else "sentences",  # Use enum value or default
+                "max_size": form_data.chunk_size,
+                "overlap": form_data.chunk_overlap,
+            }
+            logger.debug(
+                f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'"
+            )
+            # Create the async task
+            task = asyncio.create_task(
+                pdf_lib.process_pdf_task(
+                    file_bytes=file_bytes,
+                    filename=original_ref,  # Use original ref as filename hint
+                    parser=str(form_data.pdf_parsing_engine) or "pymupdf4llm",
+                    # Pass options from form
+                    title_override=form_data.title,
+                    author_override=form_data.author,
+                    keywords=form_data.keywords,  # Pass list
+                    perform_chunking=form_data.perform_chunking or None,
+                    # Pass individual chunk params from form model
+                    chunk_method=chunk_opts_for_task["method"],
+                    max_chunk_size=chunk_opts_for_task["max_size"],
+                    chunk_overlap=chunk_opts_for_task["overlap"],
+                    perform_analysis=form_data.perform_analysis,
+                    api_name=form_data.api_name,
+                    # api_key removed - retrieved from server config
+                    custom_prompt=form_data.custom_prompt,
+                    system_prompt=form_data.system_prompt,
+                    summarize_recursively=form_data.summarize_recursively,
+                    # VLM
+                    enable_vlm=vlm_enable,
+                    vlm_backend=vlm_backend,
+                    vlm_detect_tables_only=vlm_detect_tables_only,
+                    vlm_max_pages=vlm_max_pages,
+                )
+            )
+            tasks_with_refs.append((original_ref, task))
 
         # Gather results from processing tasks
         gathered_results = await asyncio.gather(*[task for _, task in tasks_with_refs], return_exceptions=True)
@@ -5882,6 +6974,7 @@ def get_mediawiki_form_data(
     "/mediawiki/ingest-dump",
     summary="Ingest and process a MediaWiki XML dump, storing results to database and vector store.",
     tags=["MediaWiki Processing"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
     # No specific response_model for StreamingResponse, individual yielded items can be documented.
 )
 async def ingest_mediawiki_dump_endpoint(
@@ -5910,8 +7003,9 @@ async def ingest_mediawiki_dump_endpoint(
     if not dump_file.filename:
         raise HTTPException(status_code=400, detail="Dump file has no filename.")
 
-    # Using the existing TempDirManager
-    with TempDirManager(prefix="mediawiki_ingest_") as temp_dir:
+    # Use a temp directory that persists for the duration of streaming
+    # Cleanup is handled at the end of the streaming generator.
+    with TempDirManager(prefix="mediawiki_ingest_", cleanup=False) as temp_dir:
         temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
         try:
             async with aiofiles.open(temp_file_path, 'wb') as f:
@@ -5926,20 +7020,28 @@ async def ingest_mediawiki_dump_endpoint(
         logger.info(f"MediaWiki dump for ingestion saved to temporary path: {temp_file_path}")
 
         async def stream_ingestion_results():
-            # store_to_db and store_to_vector_db are True for ingest
-            for result_event in core_import_mediawiki_dump(
-                    file_path=str(temp_file_path),
-                    wiki_name=form_data["wiki_name"],
-                    namespaces=form_data["namespaces"],
-                    skip_redirects=form_data["skip_redirects"],
-                    chunk_options_override=form_data["chunk_options_override"],
-                    store_to_db=True,
-                    store_to_vector_db=True,
-                    api_name_vector_db=form_data.get("api_name_vector_db"),
-                    api_key_vector_db=form_data.get("api_key_vector_db"),
-            ):
-                yield json.dumps(result_event) + "\n"
-                await asyncio.sleep(0.01)  # Allow other tasks to run, prevent tight loop blocking
+            try:
+                # store_to_db and store_to_vector_db are True for ingest
+                for result_event in core_import_mediawiki_dump(
+                        file_path=str(temp_file_path),
+                        wiki_name=form_data["wiki_name"],
+                        namespaces=form_data["namespaces"],
+                        skip_redirects=form_data["skip_redirects"],
+                        chunk_options_override=form_data["chunk_options_override"],
+                        store_to_db=True,
+                        store_to_vector_db=True,
+                        api_name_vector_db=form_data.get("api_name_vector_db"),
+                        api_key_vector_db=form_data.get("api_key_vector_db"),
+                ):
+                    yield json.dumps(result_event) + "\n"
+                    await asyncio.sleep(0.01)  # Allow other tasks to run, prevent tight loop blocking
+            finally:
+                # Ensure temp directory is cleaned up after streaming completes
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                except Exception:
+                    logger.warning(f"Failed to cleanup temporary directory: {temp_dir}")
 
         return StreamingResponse(stream_ingestion_results(), media_type="application/x-ndjson")
 
@@ -5971,7 +7073,7 @@ async def process_mediawiki_dump_ephemeral_endpoint(
     if not dump_file.filename:
         raise HTTPException(status_code=400, detail="Dump file has no filename.")
 
-    with TempDirManager(prefix="mediawiki_process_") as temp_dir:
+    with TempDirManager(prefix="mediawiki_process_", cleanup=False) as temp_dir:
         temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
         try:
             async with aiofiles.open(temp_file_path, 'wb') as f:
@@ -5986,46 +7088,54 @@ async def process_mediawiki_dump_ephemeral_endpoint(
         logger.info(f"MediaWiki dump for ephemeral processing saved to: {temp_file_path}")
 
         async def stream_processed_data():
-            # store_to_db and store_to_vector_db are False for ephemeral processing
-            for result_event in core_import_mediawiki_dump(
-                    file_path=str(temp_file_path),
-                    wiki_name=form_data["wiki_name"],  # Still useful for collection naming if vector DB was used
-                    namespaces=form_data["namespaces"],
-                    skip_redirects=form_data["skip_redirects"],
-                    chunk_options_override=form_data["chunk_options_override"],
-                    store_to_db=False,
-                    store_to_vector_db=False,  # No storage to ChromaDB either for this endpoint
-                    # api_name_vector_db and api_key_vector_db are not strictly needed if store_to_vector_db is False,
-                    # but pass them in case some underlying part of process_single_item still uses them for non-storage tasks.
-                    # However, the modified process_single_item only uses them if store_to_vector_db is True.
-                    api_name_vector_db=form_data.get("api_name_vector_db"),
-                    # Will be ignored by process_single_item if store_to_vector_db is False
-                    api_key_vector_db=form_data.get("api_key_vector_db")  # Same as above
-            ):
-                # We are interested in the "item_result" type which contains the processed page data
-                if result_event.get("type") == "item_result":
-                    page_data = result_event.get("data", {})
-                    # Validate with Pydantic model before yielding for this endpoint
-                    try:
-                        # The page_data from process_single_item should now match ProcessedMediaWikiPage
-                        processed_page_model = ProcessedMediaWikiPage(**page_data)
-                        yield json.dumps(processed_page_model.model_dump()) + "\n"  # Use .model_dump() for Pydantic v2+
-                    except ValidationError as ve:
-                        # Log validation error and yield a structured error for this item
-                        logger.error(
-                            f"Validation error for processed MediaWiki page '{page_data.get('title', 'Unknown')}': {ve.errors()}")
-                        error_output = {
-                            "type": "validation_error",
-                            "title": page_data.get("title", "Unknown"),
-                            "page_id": page_data.get("page_id"),
-                            "detail": ve.errors()
-                        }
-                        yield json.dumps(error_output) + "\n"
-                elif result_event.get("type") in ["error", "progress_total", "summary"]:
-                    # Stream other event types as well (errors, total count, final summary)
-                    yield json.dumps(result_event) + "\n"
+            try:
+                # store_to_db and store_to_vector_db are False for ephemeral processing
+                for result_event in core_import_mediawiki_dump(
+                        file_path=str(temp_file_path),
+                        wiki_name=form_data["wiki_name"],  # Still useful for collection naming if vector DB was used
+                        namespaces=form_data["namespaces"],
+                        skip_redirects=form_data["skip_redirects"],
+                        chunk_options_override=form_data["chunk_options_override"],
+                        store_to_db=False,
+                        store_to_vector_db=False,  # No storage to ChromaDB either for this endpoint
+                        # api_name_vector_db and api_key_vector_db are not strictly needed if store_to_vector_db is False,
+                        # but pass them in case some underlying part of process_single_item still uses them for non-storage tasks.
+                        # However, the modified process_single_item only uses them if store_to_vector_db is True.
+                        api_name_vector_db=form_data.get("api_name_vector_db"),
+                        # Will be ignored by process_single_item if store_to_vector_db is False
+                        api_key_vector_db=form_data.get("api_key_vector_db")  # Same as above
+                ):
+                    # We are interested in the "item_result" type which contains the processed page data
+                    if result_event.get("type") == "item_result":
+                        page_data = result_event.get("data", {})
+                        # Validate with Pydantic model before yielding for this endpoint
+                        try:
+                            # The page_data from process_single_item should now match ProcessedMediaWikiPage
+                            processed_page_model = ProcessedMediaWikiPage(**page_data)
+                            yield json.dumps(processed_page_model.model_dump()) + "\n"  # Use .model_dump() for Pydantic v2+
+                        except ValidationError as ve:
+                            # Log validation error and yield a structured error for this item
+                            logger.error(
+                                f"Validation error for processed MediaWiki page '{page_data.get('title', 'Unknown')}': {ve.errors()}")
+                            error_output = {
+                                "type": "validation_error",
+                                "title": page_data.get("title", "Unknown"),
+                                "page_id": page_data.get("page_id"),
+                                "detail": ve.errors()
+                            }
+                            yield json.dumps(error_output) + "\n"
+                    elif result_event.get("type") in ["error", "progress_total", "summary"]:
+                        # Stream other event types as well (errors, total count, final summary)
+                        yield json.dumps(result_event) + "\n"
 
-                await asyncio.sleep(0.01)  # Prevent tight loop blocking
+                    await asyncio.sleep(0.01)  # Prevent tight loop blocking
+            finally:
+                # Ensure temp directory is cleaned up after streaming completes
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                except Exception:
+                    logger.warning(f"Failed to cleanup temporary directory: {temp_dir}")
 
         return StreamingResponse(stream_processed_data(), media_type="application/x-ndjson")
 #
@@ -6037,12 +7147,13 @@ async def process_mediawiki_dump_ephemeral_endpoint(
 # Endpoints:
 #
 
-@router.post("/ingest-web-content")
+@router.post("/ingest-web-content", dependencies=[Depends(guard_backpressure_and_quota)])
 async def ingest_web_content(
     request: IngestWebContentRequest,
     background_tasks: BackgroundTasks,
     token: str = Header(..., description="Authentication token"),
     db=Depends(get_media_db_for_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     A single endpoint that supports multiple advanced scraping methods:
@@ -6057,6 +7168,30 @@ async def ingest_web_content(
     # 1) Basic checks
     if not request.urls:
         raise HTTPException(status_code=400, detail="At least one URL is required")
+
+    # Log usage for web scraping ingest
+    try:
+        usage_log.log_event(
+            "webscrape.ingest",
+            tags=[str(request.scrape_method or "")],
+            metadata={"url_count": len(request.urls or []), "perform_analysis": bool(getattr(request, 'perform_analysis', False))},
+        )
+    except Exception:
+        pass
+
+    # Topic monitoring (non-blocking): URLs and provided titles
+    try:
+        from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+        mon = get_topic_monitoring_service()
+        uid = getattr(db, 'client_id', None) if hasattr(db, 'client_id') else None
+        for u in (request.urls or [])[:10]:  # bound to avoid large payloads
+            if u:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(u), source="ingestion.web", scope_type="user", scope_id=str(uid) if uid else None)
+        for t in (request.titles or [])[:10]:
+            if t:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(t), source="ingestion.web", scope_type="user", scope_id=str(uid) if uid else None)
+    except Exception:
+        pass
 
     # If any array is shorter than # of URLs, pad it so we can zip them easily
     num_urls = len(request.urls)
@@ -6371,19 +7506,31 @@ class WebScrapingRequest(BaseModel):
     user_agent: Optional[str] = None
     custom_headers: Optional[Dict[str, str]] = None
 
-@router.post("/process-web-scraping")
+@router.post("/process-web-scraping",
+             dependencies=[Depends(PermissionChecker(MEDIA_CREATE)), Depends(rbac_rate_limit("media.create"))])
 async def process_web_scraping_endpoint(
         payload: WebScrapingRequest,
         # 1. Auth + UserID Determined through `get_db_by_user`
         # token: str = Header(None), # Use Header(None) for optional
         # 2. DB Dependency
         db: MediaDatabase = Depends(get_media_db_for_user),
+        usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     ):
     """
     Ingest / scrape data from websites or sitemaps, optionally summarize,
     then either store ephemeral or persist in DB.
     """
     try:
+        # Log usage for web scraping process endpoint
+        try:
+            usage_log.log_event(
+                "webscrape.process",
+                tags=[str(payload.scrape_method or "")],
+                metadata={"mode": payload.mode, "max_pages": payload.max_pages, "max_depth": payload.max_depth},
+            )
+        except Exception:
+            pass
+
         # Delegates to the service
         result = await process_web_scraping_task(
             scrape_method=payload.scrape_method,
@@ -6467,7 +7614,8 @@ async def _download_url_async(
         url: str,
         target_dir: Path,
         allowed_extensions: Optional[Set[str]] = None,  # Use a Set for faster lookups
-        check_extension: bool = True  # Flag to enable/disable check
+        check_extension: bool = True,  # Flag to enable/disable check
+        disallow_content_types: Optional[Set[str]] = None,  # Optional set of content-types to reject for inference
 ) -> Path:
     """
     Downloads a URL asynchronously and saves it to the target directory.
@@ -6476,48 +7624,96 @@ async def _download_url_async(
     if allowed_extensions is None:
         allowed_extensions = set()  # Default to empty set if None
 
-    # Generate a safe filename
+    # Generate a safe filename (defer final naming until after we see headers)
     try:
-        # Basic filename extraction - consider more robust libraries if needed
+        # Extract last path segment from original URL as a fallback seed
         try:
             url_path_segment = httpx.URL(url).path.split('/')[-1]
-            if url_path_segment:
-                # Basic sanitization (replace potentially invalid chars) - enhance if needed
-                safe_segment = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in url_path_segment)
-                filename = safe_segment
-            else:
-                # Fallback if no path segment
-                filename = f"downloaded_{hash(url)}.tmp"
+            seed_segment = url_path_segment or f"downloaded_{hash(url)}.tmp"
         except Exception:  # Broad catch for URL parsing issues
-            filename = f"downloaded_{hash(url)}.tmp"
-
-        target_path = target_dir / filename
-        # Simple collision avoidance (add number if exists) - improve if high concurrency expected
-        counter = 1
-        base_name = target_path.stem
-        suffix = target_path.suffix
-        while target_path.exists():
-            target_path = target_dir / f"{base_name}_{counter}{suffix}"
-            counter += 1
+            seed_segment = f"downloaded_{hash(url)}.tmp"
 
         async with client.stream("GET", url, follow_redirects=True, timeout=60.0) as response:
             response.raise_for_status()  # Raise HTTPStatusError for 4xx/5xx
 
-            if check_extension and allowed_extensions:
-                # Get the actual suffix from the final target path
-                actual_suffix = target_path.suffix.lower()  # Use the generated path's suffix
-                if not actual_suffix:
-                    # Try getting from Content-Disposition header if available
-                    content_disposition = response.headers.get('content-disposition')
-                    if content_disposition:
-                        match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
-                        disp_filename = match.group(1) if match else None
-                        if disp_filename:
-                            actual_suffix = FilePath(disp_filename).suffix.lower()
+            # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
+            candidate_name = None
+            content_disposition = response.headers.get('content-disposition')
+            if content_disposition:
+                # Try RFC 5987 filename* then fallback to filename
+                match_star = re.search(r"filename\*=(?:UTF-8''|)([^;]+)", content_disposition)
+                if match_star:
+                    candidate_name = match_star.group(1).strip('"\' ')
+                if not candidate_name:
+                    match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
+                    candidate_name = (match.group(1) if match else None)
 
-                if not actual_suffix or actual_suffix not in allowed_extensions:
-                    raise ValueError(
-                        f"Downloaded file '{target_path.name}' from {url} does not have an allowed extension (allowed: {', '.join(allowed_extensions)})")
+            if not candidate_name:
+                try:
+                    final_path_seg = response.url.path.split('/')[-1]
+                    candidate_name = final_path_seg or seed_segment
+                except Exception:
+                    candidate_name = seed_segment
+
+            # Basic sanitization
+            candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
+
+            # Determine effective suffix with fallbacks
+            effective_suffix = FilePath(candidate_name).suffix.lower()
+            # If suffix missing or not allowed, try alternatives
+            if check_extension and allowed_extensions:
+                if not effective_suffix or effective_suffix not in allowed_extensions:
+                    # Attempt to derive from response URL path
+                    try:
+                        alt_seg = response.url.path.split('/')[-1]
+                        alt_suffix = FilePath(alt_seg).suffix.lower()
+                    except Exception:
+                        alt_suffix = ''
+                    if alt_suffix and alt_suffix in allowed_extensions:
+                        effective_suffix = alt_suffix
+                        # ensure filename has this suffix
+                        base = FilePath(candidate_name).stem
+                        candidate_name = f"{base}{effective_suffix}"
+                    else:
+                        # As a last resort, rely on Content-Type for known mappings
+                        content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
+                        # If the caller provided disallowed content-types (e.g., text/html for documents), enforce here
+                        if disallow_content_types and content_type in disallow_content_types:
+                            allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
+                            raise ValueError(
+                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+                        content_type_map = {
+                            'application/epub+zip': '.epub',
+                            'application/pdf': '.pdf',
+                            'text/plain': '.txt',
+                            'text/markdown': '.md',
+                            'text/x-markdown': '.md',
+                            'text/html': '.html',
+                            'application/xhtml+xml': '.html',
+                            'application/xml': '.xml',
+                            'text/xml': '.xml',
+                            'application/rtf': '.rtf',
+                            'text/rtf': '.rtf',
+                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                        }
+                        mapped_ext = content_type_map.get(content_type)
+                        if mapped_ext and (mapped_ext in allowed_extensions):
+                            effective_suffix = mapped_ext
+                            base = FilePath(candidate_name).stem
+                            candidate_name = f"{base}{effective_suffix}"
+                        else:
+                            allowed_list = ', '.join(sorted(allowed_extensions))
+                            raise ValueError(
+                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+
+            # Finalize target path and ensure uniqueness
+            target_path = target_dir / (candidate_name or seed_segment)
+            counter = 1
+            base_name = target_path.stem
+            suffix = target_path.suffix
+            while target_path.exists():
+                target_path = target_dir / f"{base_name}_{counter}{suffix}"
+                counter += 1
 
             async with aiofiles.open(target_path, 'wb') as f:
                 async for chunk in response.aiter_bytes(chunk_size=8192):

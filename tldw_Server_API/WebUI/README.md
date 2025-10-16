@@ -116,7 +116,14 @@ This tool is designed for:
 
 ### Audio Endpoints
 - `POST /api/v1/audio/speech` — Text-to-Speech (streaming and non-streaming)
-- `GET  /api/v1/audio/voices` — List available TTS voices (supports `?provider=elevenlabs`)
+- `GET  /api/v1/audio/voices/catalog` — List available TTS voices (supports `?provider=openai|elevenlabs`)
+
+#### Recording Settings (TTS & Audio Tabs)
+- The TTS tab (per provider) and the Audio → TTS / File Transcription panels include a collapsible “Recording Settings” section.
+- Use “Max sec” to set a soft cap for microphone recordings; a countdown shows remaining seconds during capture.
+- On the TTS tab, caps persist per provider; in Audio → TTS and File Transcription, caps persist per panel.
+- If a recording is present, it overrides the file input and shows a “Using recorded sample” badge. Click “Clear” to restore file selection.
+- Recommended reference clips: 3–15 seconds, mono, minimal background noise.
 
 ### OCR Providers
 
@@ -215,6 +222,41 @@ WebUI/
   - `GET /api/v1/llm/models`
   - `GET /api/v1/llm/models/metadata`
 - Docs: `Docs/API-related/Providers_API_Documentation.md`
+
+### RAG Guardrails Tip (Request Payload Helper)
+
+When testing the RAG endpoint from the WebUI, you can add the following guardrails in the JSON request builder on the RAG tab:
+
+```json
+{
+  "query": "What was WidgetCo revenue in 2024?",
+  "enable_generation": true,
+  "enable_injection_filter": true,
+  "require_hard_citations": true,
+  "enable_numeric_fidelity": true,
+  "numeric_fidelity_behavior": "retry"  // continue | ask | decline | retry
+}
+```
+
+Notes:
+- The response will include `metadata.hard_citations` (per‑sentence citations with `doc_id` and `start/end` offsets) and `metadata.numeric_fidelity` (present/missing/source_numbers).
+- In production mode (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the server defaults to enabling numeric fidelity and hard citations; you can still tighten behavior per request.
+
+### RAG Streaming Tip: Contexts and "Why These Sources"
+
+The streaming endpoint `POST /api/v1/rag/search/stream` now emits early context information, followed by reasoning and incremental answer chunks. Events are NDJSON lines:
+
+```
+{"type":"contexts","contexts":[{"id":"...","title":"...","score":0.73,"url":"...","source":"media_db"}, ...],"why":{"topicality":0.82,"diversity":null,"freshness":null}}
+{"type":"reasoning","plan":["Gather top-k contexts","Rerank using strategy=...","Ground claims","Synthesize final answer"]}
+{"type":"delta","text":"...partial token(s)..."}
+{"type":"claims_overlay","spans":[...],"claims":[...]}  // optional overlays when enabled
+{"type":"final_claims", ...}                          // final overlay summary
+```
+
+- The non‑streaming search (`/api/v1/rag/search`) response includes `metadata.why_these_sources` with:
+  - `diversity` (unique host/source ratio), `freshness` (recentness portion), `topicality` (normalized score), and `top_contexts` list.
+- In the WebUI RAG tab, you can watch the Response area for the initial `contexts` line to quickly preview which documents are being considered and a lightweight `why` summary.
 
 ## Configuration
 
@@ -344,3 +386,74 @@ This module is part of the TLDW Server project and follows the same licensing te
 ---
 
 *Version 1.2.0 - Auto-configuration support for local installations*
+#### RAG Post‑Verification (Adaptive)
+
+The RAG tab supports the unified pipeline. To validate answers against evidence and optionally run a bounded repair pass, include these fields in your request JSON (Advanced section → Custom payload), or in your client code:
+
+```
+{
+  "query": "What is CRISPR?",
+  "sources": ["media_db"],
+  "enable_generation": true,
+  "enable_post_verification": true,
+  "adaptive_max_retries": 1,
+  "adaptive_unsupported_threshold": 0.15,
+  "adaptive_max_claims": 20,
+  "low_confidence_behavior": "ask"
+}
+```
+
+Environment toggles:
+- `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) — uses HyDE + multi‑strategy rewrites + diversity during the adaptive pass; set `false` to use a simpler single‑query retrieval.
+- `RAG_ADAPTIVE_TIME_BUDGET_SEC` — optional hard cap (seconds) for the post‑verification phase.
+
+When generation is enabled, the response attaches `metadata.post_verification` with `unsupported_ratio`, `total_claims`, `unsupported_count`, `fixed`, and `reason`.
+
+#### RAG Two‑Tier Reranking (Overrides)
+
+To enable cost‑aware reranking with cross‑encoder shortlist → LLM rerank and optional per‑request gating overrides, use the RAG tab’s Advanced → Custom payload with the following fields:
+
+```
+{
+  "query": "Summarize the CUDA memory model",
+  "sources": ["media_db"],
+  "enable_generation": true,
+  "enable_reranking": true,
+  "reranking_strategy": "two_tier",
+  // Optional request-level gating overrides (fall back to env defaults if omitted)
+  "rerank_min_relevance_prob": 0.5,
+  "rerank_sentinel_margin": 0.15,
+  // Optional corpus namespace for per‑corpus synonyms
+  "corpus": "my_corpus"
+}
+```
+
+Notes:
+- If the calibrated relevance probability of the top document is below `rerank_min_relevance_prob`, or too close to the sentinel probability (margin < `rerank_sentinel_margin`), the server gates answer generation and returns `metadata.generation_gate` along with `metadata.reranking_calibration`.
+- Dashboard panel “Generation Gated (5m)” shows recent gating activity. Metric name: `rag_generation_gated_total`.
+
+#### Corpus Synonyms (Alias of index_namespace)
+
+Place a JSON file with term → aliases under `Config_Files/Synonyms/<corpus>.json` (server side), for example:
+
+```
+{
+  "cuda": ["compute unified device architecture"],
+  "gpu": ["graphics processing unit"]
+}
+```
+
+Then include `"corpus": "<corpus>"` (or `"index_namespace"`) in your RAG request payload to enrich query rewrites with these aliases.
+
+### Feedback & Learning Tip
+To enable the learning loop and per‑user personalization while testing from the WebUI, add the following fields to your RAG payload (Advanced → Custom payload):
+
+```
+{
+  "collect_feedback": true,
+  "apply_feedback_boost": true,
+  "feedback_user_id": "alice"
+}
+```
+
+The WebUI also emits lightweight implicit feedback (click/expand/copy) for the documents in the response list. These signals are stored per‑user under `Databases/user_databases/<user_id>/` to learn simple priors and pairwise preferences for learning‑to‑rank. No sensitive content is sent back to the server beyond the document id and event type.

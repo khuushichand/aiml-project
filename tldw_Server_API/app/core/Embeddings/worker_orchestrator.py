@@ -2,13 +2,16 @@
 # Orchestrates and manages worker pools for the embedding pipeline
 
 import asyncio
+import json
 import signal
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional
+import os
 
 from loguru import logger
-from prometheus_client import start_http_server, Gauge, Counter
+from prometheus_client import start_http_server, Gauge, Counter, Histogram
+from tldw_Server_API.app.core.Metrics import initialize_telemetry, OTEL_AVAILABLE
 
 from .job_manager import EmbeddingJobManager, JobManagerConfig
 from .worker_config import (
@@ -25,12 +28,23 @@ from .workers import (
     StorageWorker,
     WorkerConfig,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 # Prometheus metrics
 WORKER_COUNT = Gauge("embedding_worker_count", "Number of active workers", ["worker_type"])
 QUEUE_DEPTH = Gauge("embedding_queue_depth", "Current queue depth", ["queue_name"])
+DLQ_QUEUE_DEPTH = Gauge("embedding_dlq_queue_depth", "Current DLQ queue depth", ["queue_name"])
+DLQ_INGEST_RATE = Gauge("embedding_dlq_ingest_rate", "Estimated DLQ ingest rate per second", ["queue_name"])
+STAGE_JOBS_PROCESSED = Counter("embedding_stage_jobs_processed_total", "Total jobs processed per stage", ["stage"])
+STAGE_JOBS_FAILED = Counter("embedding_stage_jobs_failed_total", "Total jobs failed per stage", ["stage"])
 JOBS_TOTAL = Counter("embedding_jobs_total", "Total jobs processed", ["status"])
+QUEUE_AGE_SECONDS = Histogram("embedding_queue_age_seconds", "Age of oldest message in seconds", ["queue_name"])
+STAGE_PROCESS_LATENCY_SECONDS = Histogram("embedding_stage_processing_latency_seconds", "Observed per-message processing latency", ["stage"])
+
+# Worker liveness gauges
+WORKERS_ACTIVE = Gauge("embedding_workers_active", "Workers with valid heartbeat TTL", ["worker_type"])
+WORKERS_STALLED = Gauge("embedding_workers_stalled", "Workers missing/expired heartbeat", ["worker_type"])
 
 
 class WorkerPool:
@@ -130,7 +144,7 @@ class WorkerPool:
                 gpu_id = self.config.gpu_allocation[worker_index % len(self.config.gpu_allocation)]
             
             embedding_config = EmbeddingWorkerConfig(
-                **base_config.dict(),
+                **model_dump_compat(base_config),
                 default_model_provider=self.config.default_model_provider,
                 default_model_name=self.config.default_model_name,
                 max_batch_size=self.config.batch_size,
@@ -155,6 +169,13 @@ class WorkerOrchestrator:
         self.running = False
         self._tasks: List[asyncio.Task] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._dlq_prev: Dict[str, tuple] = {}
+        self._stage_prev: Dict[str, Dict[str, float]] = {}
+        self._delayed_last_run: float = 0.0
+        # Token bucket state per live queue to guard requeue storms
+        self._requeue_buckets: Dict[str, Dict[str, float]] = {}
+        self._requeue_rate = float(os.getenv("EMBEDDINGS_REQUEUE_RATE", "50"))  # tokens per second
+        self._requeue_burst = float(os.getenv("EMBEDDINGS_REQUEUE_BURST", "200"))  # max tokens
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -196,6 +217,13 @@ class WorkerOrchestrator:
         except Exception:
             self._loop = None
         
+        # Initialize OpenTelemetry (optional; console exporter by default)
+        try:
+            initialize_telemetry()
+            logger.info(f"Telemetry initialized (OTEL_AVAILABLE={OTEL_AVAILABLE})")
+        except Exception as _otel_e:
+            logger.debug(f"Telemetry initialization skipped: {_otel_e}")
+
         # Start monitoring if enabled
         if self.config.enable_monitoring:
             start_http_server(self.config.monitoring_port)
@@ -217,6 +245,7 @@ class WorkerOrchestrator:
         # Start background tasks
         self._tasks = [
             asyncio.create_task(self._monitor_queues()),
+            asyncio.create_task(self._drain_delayed_queues()),
         ]
         
         if self.config.enable_autoscaling:
@@ -261,10 +290,161 @@ class WorkerOrchestrator:
         while self.running:
             try:
                 if self.job_manager:
-                    stats = await self.job_manager.get_queue_stats()
-                    
+                    # Queue depths + DLQ rates
+                    stats = await self.job_manager.get_queue_stats_with_dlq()
+                    now = datetime.utcnow().timestamp()
                     for queue_name, depth in stats.items():
-                        QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+                        if queue_name.endswith(":dlq"):
+                            DLQ_QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+                            prev = self._dlq_prev.get(queue_name)
+                            if prev is not None:
+                                prev_ts, prev_depth = prev
+                                dt = max(1e-3, now - prev_ts)
+                                delta = depth - prev_depth
+                                rate = max(0.0, delta / dt)
+                                DLQ_INGEST_RATE.labels(queue_name=queue_name).set(rate)
+                            self._dlq_prev[queue_name] = (now, depth)
+                        else:
+                            QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+                            # Observe age of oldest message via stream ID timestamp
+                            try:
+                                client = self.job_manager.redis_client
+                                if client:
+                                    rng = await client.xrange(queue_name, min='-', max='+', count=1)
+                                    if rng:
+                                        first_id, _ = rng[0]
+                                        # Stream ID format: millis-seq
+                                        ts_ms = int(str(first_id).split('-')[0])
+                                        age_s = max(0.0, (now * 1000 - ts_ms) / 1000.0)
+                                        QUEUE_AGE_SECONDS.labels(queue_name=queue_name).observe(age_s)
+                            except Exception:
+                                pass
+
+                    # Aggregate worker metrics from Redis to update per-stage counters
+                    try:
+                        client = self.job_manager.redis_client
+                        if client:
+                            cursor = 0
+                            totals: Dict[str, Dict[str, float]] = {}
+                            # Stale detection window for worker metrics (seconds)
+                            try:
+                                _STALE_MAX_AGE = float(os.getenv("EMB_ORCH_METRICS_STALE_MAX_AGE", "120") or 120.0)
+                            except Exception:
+                                _STALE_MAX_AGE = 120.0
+                            now_ts = datetime.utcnow().timestamp()
+                            # We compute cumulative totals by stage from worker snapshots
+                            while True:
+                                cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
+                                for k in keys:
+                                    # Skip or prune stale snapshots
+                                    try:
+                                        ttl = await client.ttl(k)  # type: ignore[attr-defined]
+                                    except Exception:
+                                        ttl = None
+                                    data = await client.get(k)
+                                    if not data:
+                                        continue
+                                    try:
+                                        m = json.loads(data)
+                                        # Drop metrics that appear stale by last_heartbeat
+                                        try:
+                                            hb = m.get("last_heartbeat")
+                                            if hb:
+                                                # best-effort ISO parse
+                                                ts = datetime.fromisoformat(str(hb)).timestamp()
+                                                if (now_ts - ts) > _STALE_MAX_AGE:
+                                                    # Best-effort prune if no TTL is set
+                                                    try:
+                                                        if ttl is not None and int(ttl) < 0:
+                                                            await client.delete(k)  # type: ignore[attr-defined]
+                                                    except Exception:
+                                                        pass
+                                                    continue
+                                        except Exception:
+                                            pass
+                                        stage = str(m.get("worker_type", "unknown"))
+                                        processed = float(m.get("jobs_processed", 0) or 0)
+                                        failed = float(m.get("jobs_failed", 0) or 0)
+                                        last_ms = float(m.get("last_processing_time_ms", 0) or 0)
+                                        agg = totals.setdefault(stage, {"processed": 0.0, "failed": 0.0})
+                                        agg["processed"] += processed
+                                        agg["failed"] += failed
+                                        if last_ms > 0:
+                                            STAGE_PROCESS_LATENCY_SECONDS.labels(stage=stage).observe(last_ms / 1000.0)
+                                    except Exception:
+                                        continue
+                                if cursor == 0:
+                                    break
+                            # Emit deltas as counter increments
+                            prev = self._stage_prev
+                            for stage, vals in totals.items():
+                                prev_vals = prev.get(stage, {"processed": 0.0, "failed": 0.0})
+                                d_proc = max(0.0, vals["processed"] - prev_vals.get("processed", 0.0))
+                                d_fail = max(0.0, vals["failed"] - prev_vals.get("failed", 0.0))
+                                if d_proc > 0:
+                                    STAGE_JOBS_PROCESSED.labels(stage=stage).inc(d_proc)
+                                if d_fail > 0:
+                                    STAGE_JOBS_FAILED.labels(stage=stage).inc(d_fail)
+                            self._stage_prev = totals
+                    except Exception as agg_err:
+                        logger.debug(f"Worker metrics aggregation error: {agg_err}")
+
+                    # Worker liveness from heartbeats
+                    try:
+                        client = self.job_manager.redis_client
+                        if client:
+                            # Reset gauges each tick
+                            for wt in ("chunking", "embedding", "storage"):
+                                WORKERS_ACTIVE.labels(worker_type=wt).set(0)
+                                WORKERS_STALLED.labels(worker_type=wt).set(0)
+                            # Scan heartbeats with cap to prevent unbounded work per tick
+                            cursor = 0
+                            processed_hb = 0
+                            try:
+                                _HB_MAX = int(os.getenv("EMB_ORCH_HEARTBEATS_MAX_KEYS", "2000") or 2000)
+                            except Exception:
+                                _HB_MAX = 2000
+                            counts: Dict[str, Dict[str, int]] = {"chunking": {"a": 0, "s": 0},
+                                                                 "embedding": {"a": 0, "s": 0},
+                                                                 "storage": {"a": 0, "s": 0}}
+                            while True:
+                                cursor, keys = await client.scan(cursor, match="worker:heartbeat:*", count=200)
+                                for key in keys:
+                                    if processed_hb >= _HB_MAX:
+                                        cursor = 0
+                                        break
+                                    try:
+                                        wid = str(key).split(":", 2)[-1]
+                                        wtype = wid.split("-", 1)[0] if "-" in wid else "unknown"
+                                        # Prefer PTTL if available
+                                        ttl_ms = None
+                                        try:
+                                            ttl_ms = await client.pttl(key)  # type: ignore[attr-defined]
+                                        except Exception:
+                                            ttl_ms = None
+                                        if ttl_ms is not None and ttl_ms > 0:
+                                            counts.setdefault(wtype, {"a": 0, "s": 0})["a"] += 1
+                                        else:
+                                            # Fallback: if key exists but no TTL, treat as active; else stalled
+                                            val = await client.get(key)
+                                            if val:
+                                                counts.setdefault(wtype, {"a": 0, "s": 0})["a"] += 1
+                                            else:
+                                                counts.setdefault(wtype, {"a": 0, "s": 0})["s"] += 1
+                                    except Exception:
+                                        continue
+                                    finally:
+                                        processed_hb += 1
+                                if cursor == 0:
+                                    break
+                            for wt, cs in counts.items():
+                                try:
+                                    WORKERS_ACTIVE.labels(worker_type=wt).set(cs.get("a", 0))
+                                    WORKERS_STALLED.labels(worker_type=wt).set(cs.get("s", 0))
+                                except Exception:
+                                    pass
+                    except Exception as hb_err:
+                        logger.debug(f"Heartbeat scan error: {hb_err}")
                 
                 await asyncio.sleep(30)  # Update every 30 seconds
                 
@@ -320,6 +500,64 @@ class WorkerOrchestrator:
     def _total_workers(self) -> int:
         """Get total number of workers across all pools"""
         return sum(len(pool.workers) for pool in self.pools.values())
+
+    async def _drain_delayed_queues(self):
+        """Move due items from delayed ZSETs into their live streams."""
+        while self.running:
+            try:
+                if not self.job_manager:
+                    await asyncio.sleep(1)
+                    continue
+                client = self.job_manager.redis_client
+                now_ms = int(datetime.utcnow().timestamp() * 1000)
+                # derive queues from configured pools
+                live_queues: List[str] = []
+                for pool in self.pools.values():
+                    q = getattr(pool.config, 'queue_name', None)
+                    if q:
+                        live_queues.append(q)
+                for q in set(live_queues):
+                    delayed_key = f"{q}:delayed"
+                    try:
+                        # Token bucket throttle per queue
+                        bkt = self._requeue_buckets.get(q)
+                        now_s = now_ms / 1000.0
+                        if not bkt:
+                            bkt = {"tokens": self._requeue_burst, "last": now_s}
+                            self._requeue_buckets[q] = bkt
+                        # Refill tokens
+                        elapsed = max(0.0, now_s - float(bkt.get("last", now_s)))
+                        tokens = float(bkt.get("tokens", 0.0)) + self._requeue_rate * elapsed
+                        tokens = min(self._requeue_burst, tokens)
+                        bkt["last"] = now_s
+                        allow = int(min(100, max(0, int(tokens))))
+                        if allow <= 0:
+                            continue
+                        # Take up to 'allow' due items at a time
+                        due = await client.zrangebyscore(delayed_key, min='-inf', max=now_ms, start=0, num=allow)
+                        for raw in due:
+                            try:
+                                payload = json.loads(raw)
+                            except Exception:
+                                payload = None
+                            if payload:
+                                try:
+                                    await client.xadd(q, payload)
+                                except Exception:
+                                    pass
+                            # Remove regardless to avoid hot-looping on bad entries
+                            await client.zrem(delayed_key, raw)
+                        # Consume tokens used
+                        try:
+                            used = len(due)
+                            bkt["tokens"] = max(0.0, tokens - used)
+                        except Exception:
+                            pass
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            await asyncio.sleep(1)
 
 
 async def main():

@@ -57,12 +57,12 @@ class ABTestCleanupPolicy(BaseModel):
 class EmbeddingsABTestConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     # Allow single arm for toggle-style tests; still supports classic A/B with 2+ arms
-    arms: List[ABTestArm] = Field(min_items=1, description="Embedding models to compare")
+    arms: List[ABTestArm] = Field(min_length=1, description="Embedding models to compare")
     # Permit empty corpus in test-mode where synthetic or pre-existing collections may be used
-    media_ids: List[int] = Field(default_factory=list, min_items=0, description="Media IDs to build the corpus from")
-    chunking: ABTestChunking
+    media_ids: List[int] = Field(default_factory=list, min_length=0, description="Media IDs to build the corpus from")
+    chunking: Optional[ABTestChunking] = None
     retrieval: ABTestRetrieval
-    queries: List[ABTestQuery] = Field(min_items=1, description="Queries to evaluate")
+    queries: List[ABTestQuery] = Field(min_length=1, description="Queries to evaluate")
     metric_level: Optional[Literal['media', 'chunk']] = Field(default='media', description="Metric granularity")
     limits: Optional[ABTestLimits] = None
     reuse_existing: Optional[bool] = Field(default=True, description="Reuse matching collections if available")

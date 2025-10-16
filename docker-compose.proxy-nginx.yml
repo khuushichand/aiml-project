@@ -1,0 +1,31 @@
+# Add an Nginx reverse proxy in front of the app.
+# Use with the base compose file:
+#   docker compose -f docker-compose.yml -f docker-compose.proxy-nginx.yml up -d --build
+#
+# Certificates:
+# - Map your host's /etc/letsencrypt into the container (read-only), or
+# - Replace paths in Samples/Nginx/nginx.conf and mount your certs accordingly.
+
+services:
+  app:
+    # Do not publish the app port directly; proxy will expose 80/443
+    ports: []
+    expose:
+      - "8000"
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://your.domain.com}
+
+  nginx:
+    image: nginx:stable
+    container_name: tldw-nginx
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Samples/Nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Map your certs directory or change paths in nginx.conf
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    restart: unless-stopped
+

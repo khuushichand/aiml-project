@@ -123,13 +123,19 @@ def cleanup_db(ctx, days, dry_run):
     try:
         cli_context.load_config()
         
-        from tldw_Server_API.app.core.Evaluations.audit_logger import audit_logger
+        from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
         
         if dry_run:
             print_info(f"DRY RUN: Would clean up records older than {days} days")
         else:
-            cleaned_count = audit_logger.cleanup_old_events(days)
-            print_success(f"Cleaned up {cleaned_count} old records")
+            # Cleanup unified audit logs by retention window
+            svc = UnifiedAuditService()
+            import asyncio as _asyncio
+            _asyncio.get_event_loop().run_until_complete(svc.initialize())
+            # Set retention_days temporarily and execute cleanup
+            svc.retention_days = days
+            _asyncio.get_event_loop().run_until_complete(svc.cleanup_old_logs())
+            print_success(f"Unified audit cleanup completed for records older than {days} days")
         
     except Exception as e:
         logger.exception("Database cleanup failed")

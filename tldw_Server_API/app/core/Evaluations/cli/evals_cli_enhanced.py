@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationMa
 from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
 # Mapping of config keys to friendly API names

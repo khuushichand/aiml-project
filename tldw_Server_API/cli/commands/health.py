@@ -176,9 +176,13 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
     
     # Rate limiting service health
     try:
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
-        # Simple health check - try to get user stats
-        test_stats = user_rate_limiter.get_user_stats('health_check_user')
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        # Use per-user limiter bound to single-user ID for health checks
+        _uid = _DP.get_single_user_id()
+        _limiter = get_user_rate_limiter_for_user(_uid)
+        # Simple health check - try to get user stats in that DB
+        test_stats = _limiter.get_user_stats('health_check_user')
         health_data['components']['rate_limiting'] = {
             'status': 'ok',
             'message': 'Rate limiting service operational'
@@ -227,23 +231,24 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
         }
         # Metrics failure is not critical
     
-    # Audit logging health
+    # Audit logging health (unified)
     try:
-        from tldw_Server_API.app.core.Evaluations.audit_logger import audit_logger
-        # Test audit logging
-        audit_logger.get_recent_events(limit=1)
+        from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+        svc = UnifiedAuditService()
+        import asyncio as _asyncio
+        _asyncio.get_event_loop().run_until_complete(svc.initialize())
+        events = _asyncio.get_event_loop().run_until_complete(svc.query_events(limit=1))
         health_data['components']['audit_logging'] = {
             'status': 'ok',
-            'message': 'Audit logging operational'
+            'message': 'Unified audit logging operational',
+            'recent_events': len(events)
         }
-        
     except Exception as e:
-        logger.error(f"Audit logging health check failed: {e}")
+        logger.error(f"Unified audit logging health check failed: {e}")
         health_data['components']['audit_logging'] = {
             'status': 'error',
             'error': str(e)
         }
-        # Audit logging failure is not critical for basic operations
     
     return health_data
 

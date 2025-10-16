@@ -88,6 +88,8 @@ providers:
     
 performance:
   max_concurrent_generations: 4
+  # Error streaming policy (compatibility vs. strict HTTP errors)
+  stream_errors_as_audio: true
   memory_warning_threshold: 80
   memory_critical_threshold: 90
   
@@ -112,6 +114,16 @@ export ELEVENLABS_API_KEY="..."
 export TTS_DEFAULT_PROVIDER="openai"
 export TTS_DEVICE="cuda"
 ```
+
+### Concurrency Control
+
+TTSServiceV2 honors `performance.max_concurrent_generations` from the TTS configuration. This value sets the internal semaphore that limits how many TTS generations run concurrently across providers. If unset or invalid, the service defaults to `4`.
+
+### Error Streaming Policy
+
+Use `performance.stream_errors_as_audio` to control how streaming failures are surfaced:
+- `true` (default): embed `ERROR: ...` messages in the audio stream (HTTP 200).
+- `false`: raise TTS exceptions so the API returns appropriate HTTP error codes.
 
 ## Usage
 

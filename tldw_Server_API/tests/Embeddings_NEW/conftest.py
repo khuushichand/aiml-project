@@ -65,8 +65,8 @@ def test_env_vars():
     # Set test mode
     os.environ["TEST_MODE"] = "true"
     os.environ["DEFAULT_LLM_PROVIDER"] = "openai"
-    os.environ["SINGLE_USER_API_KEY"] = "default-secret-key-for-single-user"
-    os.environ["API_BEARER"] = "default-secret-key-for-single-user"
+    os.environ["SINGLE_USER_API_KEY"] = "test-api-key-12345"
+    os.environ["API_BEARER"] = "test-api-key-12345"
     os.environ["EMBEDDING_MODEL"] = "sentence-transformers/all-MiniLM-L6-v2"
     os.environ["CHROMA_BATCH_SIZE"] = "100"
     os.environ["EMBEDDING_BATCH_SIZE"] = "32"
@@ -546,7 +546,7 @@ def test_client(test_env_vars):
 @pytest.fixture
 def auth_headers():
     """Authentication headers for API requests."""
-    api_key = os.environ.get("SINGLE_USER_API_KEY", "default-secret-key-for-single-user")
+    api_key = os.environ.get("SINGLE_USER_API_KEY", "test-api-key-12345")
     return {
         "X-API-KEY": api_key,
         "Authorization": f"Bearer {api_key}",

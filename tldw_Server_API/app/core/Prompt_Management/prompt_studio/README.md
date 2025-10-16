@@ -54,7 +54,7 @@ prompt_studio/
 │   ├── endpoints/                  # FastAPI endpoints
 │   └── schemas/                     # Pydantic models
 └── Supporting Systems
-    ├── auth_permissions.py         # Authentication & authorization
+    ├── auth_permissions.py         # Authentication & authorization (deprecated; use core AuthNZ/JWT + RBAC)
     ├── monitoring.py                # Metrics & health checks
     └── evaluation_reports.py        # Report generation
 ```
@@ -62,13 +62,14 @@ prompt_studio/
 ## Installation
 
 ### Prerequisites
+- Install the project requirements:
 ```bash
-# Required
-pip install fastapi sqlalchemy pydantic loguru numpy
-
-# Optional but recommended
-pip install rapidfuzz pandas matplotlib scipy jwt
+pip install -r tldw_Server_API/requirements.txt
 ```
+
+- Optional extras:
+  - Redis: enables distributed/shared rate limiting and background coordination via the core AuthNZ limiter
+  - Playwright and other tools depending on your workflows (see repository requirements)
 
 ### Database Setup
 The database tables are automatically created on first use. To manually initialize:
@@ -79,6 +80,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptSt
 db = PromptStudioDatabase("path/to/prompts.db", "client_id")
 # Tables are created automatically
 ```
+For PostgreSQL deployments, provide a configured backend via `DB_Manager`. Idempotency mappings are supported and used by endpoints that accept an `Idempotency-Key` header.
 
 ## Quick Start
 
@@ -571,6 +573,17 @@ PROMPT_STUDIO_CACHE_SIZE=1000
 
 # Monitoring
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+
+# Prompt Studio job processing
+TLDW_PS_JOB_LEASE_SECONDS=60      # Lease duration for in-progress jobs (default 60)
+TLDW_PS_HEARTBEAT_SECONDS=0       # Heartbeat; if 0, derived from lease
+
+# Shared rate limiting (via core AuthNZ limiter)
+# Set REDIS_URL to enable Redis-backed distributed limits
+REDIS_URL=redis://localhost:6379/0
+
+# Test mode (bypasses certain checks; do not enable in production)
+TEST_MODE=false
 ```
 
 ### Config File (prompt_studio_config.yaml)

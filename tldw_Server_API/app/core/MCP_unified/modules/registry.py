@@ -6,7 +6,7 @@ Manages module lifecycle and provides intelligent routing with failover.
 
 import asyncio
 from typing import Dict, Any, Optional, List, Set, Type
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from enum import Enum
 from dataclasses import dataclass, field
 from loguru import logger
@@ -124,7 +124,7 @@ class ModuleRegistry:
                 module_instance=None,
                 config=config,
                 status=ModuleStatus.PENDING,
-                registered_at=datetime.utcnow()
+                registered_at=datetime.now(UTC)
             )
             
             self._modules[module_id] = registration
@@ -165,7 +165,7 @@ class ModuleRegistry:
                 registration.status = ModuleStatus.DEGRADED
                 logger.warning(f"Module {registration.module_id} initialized but degraded: {health.message}")
             
-            registration.last_health_check = datetime.utcnow()
+            registration.last_health_check = datetime.now(UTC)
             
         except Exception as e:
             logger.error(f"Module initialization failed: {registration.module_id} - {e}")
@@ -262,6 +262,10 @@ class ModuleRegistry:
                 return module
         
         return None
+
+    def get_module_id_for_tool(self, tool_name: str) -> Optional[str]:
+        """Return module id mapped to a tool, if known."""
+        return self._tool_registry.get(tool_name)
     
     async def find_module_for_resource(self, uri: str) -> Optional[BaseModule]:
         """Find module that provides a specific resource"""
@@ -276,6 +280,10 @@ class ModuleRegistry:
                 return module
         
         return None
+
+    def get_module_id_for_resource(self, uri: str) -> Optional[str]:
+        """Return module id for a resource uri, if cached."""
+        return self._resource_registry.get(uri)
     
     async def find_module_for_prompt(self, name: str) -> Optional[BaseModule]:
         """Find module that provides a specific prompt"""
@@ -290,6 +298,10 @@ class ModuleRegistry:
                 return module
         
         return None
+
+    def get_module_id_for_prompt(self, name: str) -> Optional[str]:
+        """Return module id for a prompt name, if cached."""
+        return self._prompt_registry.get(name)
     
     async def check_all_health(self) -> Dict[str, ModuleHealth]:
         """Check health of all modules"""
@@ -325,7 +337,7 @@ class ModuleRegistry:
                     else:
                         registration.status = ModuleStatus.INACTIVE
                 
-                registration.last_health_check = datetime.utcnow()
+                registration.last_health_check = datetime.now(UTC)
         
         return health_results
     

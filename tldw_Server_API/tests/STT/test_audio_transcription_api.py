@@ -8,9 +8,10 @@ import os
 import tempfile
 import numpy as np
 import soundfile as sf
-from httpx import AsyncClient
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 # Mock audio data for testing
@@ -36,7 +37,8 @@ async def test_transcription_endpoint():
         tmp_path = tmp_file.name
     
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Read file for upload
             with open(tmp_path, 'rb') as f:
                 files = {'file': ('test.wav', f, 'audio/wav')}
@@ -44,9 +46,11 @@ async def test_transcription_endpoint():
                     'model': 'whisper-1',
                     'response_format': 'json'
                 }
-                
+                settings = get_settings()
+                headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
                 response = await client.post(
                     "/api/v1/audio/transcriptions",
+                    headers=headers,
                     files=files,
                     data=data
                 )
@@ -76,7 +80,8 @@ async def test_transcription_with_parakeet():
         tmp_path = tmp_file.name
     
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             with open(tmp_path, 'rb') as f:
                 files = {'file': ('test.wav', f, 'audio/wav')}
                 data = {
@@ -84,9 +89,11 @@ async def test_transcription_with_parakeet():
                     'response_format': 'json',
                     'language': 'en'
                 }
-                
+                settings = get_settings()
+                headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
                 response = await client.post(
                     "/api/v1/audio/transcriptions",
+                    headers=headers,
                     files=files,
                     data=data
                 )
@@ -118,7 +125,8 @@ async def test_transcription_formats():
         tmp_path = tmp_file.name
     
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Test different formats
             formats = ['json', 'text', 'srt', 'vtt', 'verbose_json']
             
@@ -129,9 +137,11 @@ async def test_transcription_formats():
                         'model': 'whisper-1',
                         'response_format': fmt
                     }
-                    
+                    settings = get_settings()
+                    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
                     response = await client.post(
                         "/api/v1/audio/transcriptions",
+                        headers=headers,
                         files=files,
                         data=data
                     )
@@ -172,16 +182,19 @@ async def test_translation_endpoint():
         tmp_path = tmp_file.name
     
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             with open(tmp_path, 'rb') as f:
                 files = {'file': ('test.wav', f, 'audio/wav')}
                 data = {
                     'model': 'whisper-1',
                     'response_format': 'json'
                 }
-                
+                settings = get_settings()
+                headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
                 response = await client.post(
                     "/api/v1/audio/translations",
+                    headers=headers,
                     files=files,
                     data=data
                 )

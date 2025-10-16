@@ -17,13 +17,14 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Set
 from collections import defaultdict, deque
-import sqlite3
 from pathlib import Path
 from contextlib import asynccontextmanager
 import statistics
 
 from loguru import logger
 import numpy as np
+
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 from .analytics_db import get_analytics_db, AnalyticsDatabase
 
@@ -266,33 +267,57 @@ class UserFeedbackStore:
     
     def _init_schema(self):
         """Ensure feedback tables exist in ChaChaNotes_DB."""
+        statements_sqlite = (
+            """
+            CREATE TABLE IF NOT EXISTS conversation_feedback (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT,
+                query TEXT,
+                document_ids TEXT,
+                chunk_ids TEXT,
+                relevance_score INTEGER CHECK(relevance_score BETWEEN 1 AND 5),
+                helpful INTEGER,
+                user_notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_feedback_conv ON conversation_feedback(conversation_id)",
+            "CREATE INDEX IF NOT EXISTS idx_feedback_created ON conversation_feedback(created_at)",
+        )
+
+        statements_postgres = (
+            """
+            CREATE TABLE IF NOT EXISTS conversation_feedback (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT,
+                query TEXT,
+                document_ids TEXT,
+                chunk_ids TEXT,
+                relevance_score INTEGER CHECK(relevance_score BETWEEN 1 AND 5),
+                helpful BOOLEAN,
+                user_notes TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_conversation
+                    FOREIGN KEY (conversation_id)
+                    REFERENCES conversations(id)
+                    ON DELETE CASCADE
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_feedback_conv ON conversation_feedback(conversation_id)",
+            "CREATE INDEX IF NOT EXISTS idx_feedback_created ON conversation_feedback(created_at)",
+        )
+
+        statements = statements_sqlite if self.db.backend_type == BackendType.SQLITE else statements_postgres
+
         try:
-            with sqlite3.connect(self.db.db_path) as conn:
-                # Create conversation feedback table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS conversation_feedback (
-                        id TEXT PRIMARY KEY,
-                        conversation_id TEXT NOT NULL,
-                        message_id TEXT,
-                        query TEXT,
-                        document_ids TEXT,  -- JSON array
-                        chunk_ids TEXT,  -- JSON array
-                        relevance_score INTEGER CHECK(relevance_score BETWEEN 1 AND 5),
-                        helpful INTEGER,  -- 0 or 1 for false/true
-                        user_notes TEXT,
-                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-                    )
-                """)
-                
-                # Create indexes
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_conv ON conversation_feedback(conversation_id)")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_created ON conversation_feedback(created_at)")
-                
-                conn.commit()
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize feedback schema: {e}")
+            with self.db.transaction() as conn:
+                for statement in statements:
+                    conn.execute(statement)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
     
     async def add_feedback(
         self,
@@ -313,15 +338,25 @@ class UserFeedbackStore:
         """
         feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode()).hexdigest()[:8]}"
         
+        helpful_value: Optional[bool]
+        if helpful is None:
+            helpful_value = None
+        else:
+            helpful_value = bool(helpful)
+
+        insert_sql = """
+            INSERT INTO conversation_feedback 
+                (id, conversation_id, message_id, query, document_ids, chunk_ids,
+                 relevance_score, helpful, user_notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        if self.db.backend_type == BackendType.SQLITE:
+            insert_sql = insert_sql.replace('%s', '?')
+
         try:
-            with sqlite3.connect(self.db.db_path) as conn:
+            with self.db.transaction() as conn:
                 conn.execute(
-                    """
-                    INSERT INTO conversation_feedback 
-                    (id, conversation_id, message_id, query, document_ids, chunk_ids,
-                     relevance_score, helpful, user_notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    insert_sql,
                     (
                         feedback_id,
                         conversation_id,
@@ -330,17 +365,15 @@ class UserFeedbackStore:
                         json.dumps(document_ids),
                         json.dumps(chunk_ids),
                         relevance_score,
-                        1 if helpful else 0 if helpful is not None else None,
-                        user_notes
-                    )
+                        helpful_value,
+                        user_notes,
+                    ),
                 )
-                conn.commit()
-                
-                logger.info(f"Added feedback {feedback_id} for conversation {conversation_id}")
-                return feedback_id
-                
-        except Exception as e:
-            logger.error(f"Failed to add feedback: {e}")
+
+            logger.info(f"Added feedback {feedback_id} for conversation {conversation_id}")
+            return feedback_id
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to add feedback: {exc}")
             raise
     
     async def get_conversation_feedback(
@@ -348,31 +381,28 @@ class UserFeedbackStore:
         conversation_id: str
     ) -> List[Dict[str, Any]]:
         """Get all feedback for a conversation."""
+        select_sql = """
+            SELECT *
+            FROM conversation_feedback
+            WHERE conversation_id = %s
+            ORDER BY created_at DESC
+        """
+        if self.db.backend_type == BackendType.SQLITE:
+            select_sql = select_sql.replace('%s', '?')
+
         try:
-            with sqlite3.connect(self.db.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.execute(
-                    """
-                    SELECT * FROM conversation_feedback 
-                    WHERE conversation_id = ?
-                    ORDER BY created_at DESC
-                    """,
-                    (conversation_id,)
-                )
-                
-                feedback = []
-                for row in cursor.fetchall():
-                    fb = dict(row)
-                    # Parse JSON fields
-                    fb["document_ids"] = json.loads(fb["document_ids"])
-                    fb["chunk_ids"] = json.loads(fb["chunk_ids"])
-                    fb["helpful"] = bool(fb["helpful"]) if fb["helpful"] is not None else None
-                    feedback.append(fb)
-                
-                return feedback
-                
-        except Exception as e:
-            logger.error(f"Failed to get conversation feedback: {e}")
+            cursor = self.db.execute_query(select_sql, (conversation_id,))
+            feedback: List[Dict[str, Any]] = []
+            for row in cursor.fetchall():
+                fb = dict(row)
+                fb["document_ids"] = json.loads(fb["document_ids"]) if fb.get("document_ids") else []
+                fb["chunk_ids"] = json.loads(fb["chunk_ids"]) if fb.get("chunk_ids") else []
+                helpful_value = fb.get("helpful")
+                fb["helpful"] = None if helpful_value is None else bool(helpful_value)
+                feedback.append(fb)
+            return feedback
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to get conversation feedback: {exc}")
             return []
 
 
@@ -490,6 +520,50 @@ class UnifiedFeedbackSystem:
                 result["errors"].append(f"Analytics error: {str(e)}")
         
         return result
+
+    async def record_implicit_interaction(
+        self,
+        *,
+        user_id: Optional[str],
+        query: Optional[str],
+        doc_id: Optional[str],
+        event_type: str,
+        impression: Optional[List[str]] = None,
+        corpus: Optional[str] = None,
+    ) -> None:
+        """Record a lightweight implicit signal (click/expand/copy).
+
+        Updates per-user personalization priors and pairwise preferences.
+        Also emits anonymized analytics event when enabled.
+        """
+        try:
+            # Update per-user store (isolated per tenant)
+            try:
+                from .user_personalization_store import UserPersonalizationStore  # lazy import
+                store = UserPersonalizationStore(user_id or "anon")
+                store.record_event(event_type=event_type, doc_id=doc_id, corpus=corpus, impression=impression or [])
+            except Exception as e:
+                logger.debug(f"Personalization store update failed: {e}")
+
+            # Emit anonymized analytics
+            if self.enable_analytics and self.analytics:
+                qh = None
+                if query:
+                    import hashlib
+                    qh = hashlib.sha256(query.encode()).hexdigest()
+                evt = AnalyticsEvent(
+                    event_type=AnalyticsEventType.FEEDBACK,
+                    query_hash=qh,
+                    metrics={
+                        "implicit": True,
+                        "type": event_type,
+                        "doc_id": doc_id,
+                        "list_size": len(impression or []),
+                    },
+                )
+                await self.analytics.record_event(evt)
+        except Exception as e:
+            logger.debug(f"Implicit interaction recording failed: {e}")
     
     async def record_search(
         self,
@@ -657,12 +731,15 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
 
 
 async def apply_feedback_boost(context: Any, **kwargs) -> Any:
-    """Apply feedback-based boosting to search results."""
+    """Apply feedback-based boosting to search results using per-user priors."""
     if not context.config.get("feedback", {}).get("apply_boost", False):
         return context
-    
-    # This would require accessing historical feedback data
-    # to boost documents that have received positive feedback
-    # Implementation depends on specific requirements
-    
-    return context
+    try:
+        user_id = context.config.get("user_id")
+        from .user_personalization_store import UserPersonalizationStore
+        store = UserPersonalizationStore(user_id or "anon")
+        context.documents = store.boost_documents(context.documents, corpus=context.config.get("index_namespace"))
+        return context
+    except Exception as e:
+        logger.debug(f"Feedback boost failed: {e}")
+        return context

@@ -88,6 +88,13 @@ Key settings in `.env`:
 | `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
 | `ENABLE_REGISTRATION` | Allow new user registration | `false` |
 | `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
+| `ROTATE_REFRESH_TOKENS` | Rotate refresh tokens on use | `true` |
+| `JWT_ISSUER` | Expected JWT `iss` claim (optional) | unset |
+| `JWT_AUDIENCE` | Expected JWT `aud` claim (optional) | unset |
+| `JWT_PRIVATE_KEY` | PEM-encoded private key (RS256/ES256) | unset |
+| `JWT_PUBLIC_KEY` | PEM-encoded public key (RS256/ES256) | unset |
+| `PII_REDACT_LOGS` | Redact usernames/IPs in auth logs | `false` |
+| `CSRF_BIND_TO_USER` | Bind CSRF token to user context (HMAC) | `false` |
 
 ### Single-User API Key (How to obtain)
 
@@ -133,7 +140,15 @@ Key settings in `.env`:
 3. **Enable HTTPS in production** - Required for secure cookies
 4. **Rotate keys periodically** - Use the API key rotation feature
 5. **Monitor authentication failures** - Check logs for attacks
-6. See the Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
+6. See the Production Hardening Checklist: `./Production_Hardening_Checklist.md`
+
+JWT hardening (recommended):
+- Set `JWT_ISSUER` to a stable service identifier (e.g., `tldw_server`).
+- Set `JWT_AUDIENCE` to the intended audience (e.g., `tldw_api`).
+- Clients should include the returned refresh token after each `/auth/refresh` when `ROTATE_REFRESH_TOKENS=true`.
+- For multi-service deployments, prefer `RS256` and set `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`.
+
+Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 
 ### Security Controls (env)
 
@@ -157,8 +172,7 @@ Key settings in `.env`:
 
 ### Documentation
 
-- AuthNZ Developer Guide: `Docs/Development/AuthNZ-Developer-Guide.md`
-- AuthNZ API Guide: `Docs/API-related/AuthNZ-API-Guide.md`
+- AuthNZ API Guide: `../API-related/AuthNZ-API-Guide.md`
 
 ## Quick Setup (Multi‑User with SQLite – Dev)
 
@@ -206,4 +220,3 @@ require_registration_code = false
 ```
 
 Environment precedence and a complete list of environment variables is in `Env_Vars.md`.
-

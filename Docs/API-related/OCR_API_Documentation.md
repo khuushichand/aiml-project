@@ -6,6 +6,11 @@ Status: Initial placeholder for OCR endpoints and integration. This page will ex
 
 The OCR module integrates with media ingestion to extract text from scanned PDFs or images when native text is unavailable. The public API currently exposes lightweight endpoints for backend discovery and preloading, while full OCR execution is driven via the media ingestion APIs.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; OCR preloading is low-cost, while end-to-end OCR via media ingestion follows media service limits.
+
 ## Endpoints
 
 1) GET `/api/v1/ocr/backends`
@@ -59,8 +64,8 @@ Enable OCR in media ingestion (illustrative JSON fragment)
 
 ## Backend Notes
 
-- POINTS Reader: see `Docs/OCR/POINTS-Reader.md`
-- OCR Providers overview: see `Docs/OCR/OCR_Providers.md`
+- POINTS Reader: documentation coming soon
+- OCR Providers overview: documentation coming soon
 
 ## Roadmap (Placeholder)
 
@@ -71,4 +76,3 @@ Enable OCR in media ingestion (illustrative JSON fragment)
 ---
 
 If you need additional OCR endpoints or deeper docs, please open an issue with your use case.
-

@@ -22,6 +22,7 @@ import numpy as np
 from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query
+from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 import tiktoken
 from loguru import logger
@@ -326,6 +327,23 @@ connection_manager = ConnectionPoolManager()
 limiter = Limiter(key_func=get_remote_address)
 
 # Router configuration
+@asynccontextmanager
+async def _embeddings_router_lifespan(app):
+    # Startup
+    logger.info("Starting embeddings service v5 (production)")
+    await embedding_cache.start_cleanup_task()
+    if not EMBEDDINGS_AVAILABLE:
+        logger.error("Embeddings implementation not available - service will not function")
+    logger.info("Embeddings service started successfully")
+    try:
+        yield
+    finally:
+        # Shutdown
+        logger.info("Shutting down embeddings service")
+        await embedding_cache.stop_cleanup_task()
+        await connection_manager.close_all()
+        logger.info("Embeddings service shutdown complete")
+
 router = APIRouter(
     tags=["Embeddings"],
     responses={
@@ -334,39 +352,11 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"},
         500: {"description": "Internal server error"},
         503: {"description": "Service unavailable"}
-    }
+    },
+    lifespan=_embeddings_router_lifespan,
 )
 
-# ============================================================================
-# Startup and Shutdown Events
-# ============================================================================
-
-@router.on_event("startup")
-async def startup_event():
-    """Initialize services on startup"""
-    logger.info("Starting embeddings service v5 (production)")
-    
-    # Start cache cleanup task
-    await embedding_cache.start_cleanup_task()
-    
-    # Verify embeddings implementation
-    if not EMBEDDINGS_AVAILABLE:
-        logger.error("Embeddings implementation not available - service will not function")
-        
-    logger.info("Embeddings service started successfully")
-
-@router.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down embeddings service")
-    
-    # Stop cache cleanup
-    await embedding_cache.stop_cleanup_task()
-    
-    # Close connection pools
-    await connection_manager.close_all()
-    
-    logger.info("Embeddings service shutdown complete")
+# Startup/Shutdown handled via router lifespan
 
 # ============================================================================
 # Helper Functions

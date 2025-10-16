@@ -19,6 +19,7 @@
 import os
 import sys
 import logging
+from loguru import logger
 import tempfile
 from pathlib import Path
 from typing import Optional, Union, Tuple, Dict, Any, Callable

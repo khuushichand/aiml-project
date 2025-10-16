@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional, Union
 from uuid import uuid4
-import logging
+from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.backends.base import (
@@ -27,7 +27,6 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-logger = logging.getLogger(__name__)
 
 ########################################################################################################################
 # Custom Exceptions
@@ -99,7 +98,7 @@ class UserDatabase:
         self._initialize_schema()
         
         logger.info(f"UserDatabase initialized with {self.backend.backend_type.value} backend for client {client_id}")
-    
+
     def _initialize_schema(self):
         """Initialize database schema if needed."""
         # Determine schema file based on backend type
@@ -115,26 +114,37 @@ class UserDatabase:
             logger.warning(f"No schema path defined for backend type: {self.backend.backend_type}")
             return
         
+        schema_statements: Optional[List[str]] = None
+        loaded_from_file = False
+
         if schema_path.exists():
             try:
-                with open(schema_path, 'r') as f:
+                with open(schema_path, 'r', encoding='utf-8') as f:
                     schema_sql = f.read()
-                
-                # Execute schema initialization
-                with self.backend.transaction() as conn:
-                    if self.backend.backend_type == BackendType.SQLITE:
-                        # SQLite needs executescript for multi-statement SQL
-                        conn.executescript(schema_sql)
-                    else:
-                        # PostgreSQL can handle multi-statement SQL
-                        self.backend.execute(schema_sql)
-                
-                logger.info(f"Database schema initialized from {schema_path}")
-            except Exception as e:
-                logger.error(f"Failed to initialize schema: {e}")
-        else:
-            logger.warning(f"Schema file not found at {schema_path}")
-    
+                schema_statements = self._split_sql_statements(schema_sql)
+                logger.info(f"Database schema loaded from {schema_path}")
+                loaded_from_file = True
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Failed to read schema file {schema_path}: {exc}")
+
+        if not schema_statements:
+            logger.warning(
+                "Schema file not available for %s backend, using embedded defaults",
+                self.backend.backend_type.value,
+            )
+            schema_statements = self._default_schema_statements()
+
+        try:
+            self._apply_schema_statements(schema_statements)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Schema application failed: {exc}")
+            if loaded_from_file:
+                fallback_statements = self._default_schema_statements()
+                logger.info("Retrying schema initialization with embedded defaults")
+                self._apply_schema_statements(fallback_statements)
+
+        self._seed_default_data()
+
     ########################################################################################################################
     # User Management Methods
     ########################################################################################################################
@@ -158,6 +168,16 @@ class UserDatabase:
             DuplicateUserError: If username or email already exists
         """
         try:
+            # Basic validation
+            if not isinstance(username, str) or not username.strip():
+                raise ValueError("Username cannot be empty")
+            if not isinstance(email, str) or not email.strip():
+                raise ValueError("Email cannot be empty")
+            # Enforce max lengths similar to typical DB constraints
+            if username is not None and len(username) > 255:
+                username = username[:255]
+            if email is not None and len(email) > 255:
+                email = email[:255]
             with self.backend.transaction() as conn:
                 # Check for duplicates
                 existing = self.backend.execute(
@@ -202,8 +222,12 @@ class UserDatabase:
                 return user_id
                 
         except Exception as e:
-            if "duplicate" in str(e).lower() or "unique" in str(e).lower():
-                raise DuplicateUserError(f"Username or email already exists")
+            # Preserve explicit duplicate signal
+            if isinstance(e, DuplicateUserError):
+                raise
+            emsg = str(e).lower()
+            if ("duplicate" in emsg) or ("unique" in emsg) or ("already exists" in emsg):
+                raise DuplicateUserError("Username or email already exists")
             raise UserDatabaseError(f"Failed to create user: {e}")
     
     def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None, 
@@ -236,6 +260,15 @@ class UserDatabase:
         
         if result.rows:
             user_dict = result.rows[0]
+            # Normalize metadata to dict
+            try:
+                meta = user_dict.get('metadata')
+                if isinstance(meta, str) and meta:
+                    user_dict['metadata'] = json.loads(meta)
+                elif meta is None:
+                    user_dict['metadata'] = {}
+            except Exception:
+                user_dict['metadata'] = {}
             # Add roles
             user_dict['roles'] = self.get_user_roles(user_dict['id'])
             return user_dict
@@ -335,7 +368,8 @@ class UserDatabase:
             )
             
             if not role_result.rows:
-                raise InvalidPermissionError(f"Role '{role_name}' does not exist")
+                # Gracefully handle unknown roles per tests
+                return False
             
             role_id = role_result.rows[0]['id']
             
@@ -672,6 +706,340 @@ class UserDatabase:
             )
         except Exception as e:
             logger.error(f"Failed to create audit log: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # Internal helpers for schema/bootstrap
+    # ------------------------------------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _split_sql_statements(sql: str) -> List[str]:
+        return [stmt.strip() for stmt in sql.split(';') if stmt.strip()]
+
+    def _apply_schema_statements(self, statements: List[str]) -> None:
+        if not statements:
+            return
+
+        with self.backend.transaction() as conn:
+            if self.backend.backend_type == BackendType.SQLITE:
+                for stmt in statements:
+                    conn.execute(stmt)
+            else:
+                cursor = conn.cursor()
+                try:
+                    for stmt in statements:
+                        cursor.execute(stmt)
+                finally:
+                    cursor.close()
+
+    def _default_schema_statements(self) -> List[str]:
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            return self._default_schema_statements_postgres()
+        return self._default_schema_statements_sqlite()
+
+    @staticmethod
+    def _default_schema_statements_sqlite() -> List[str]:
+        return [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL CHECK (length(username) <= 255),
+                email TEXT UNIQUE NOT NULL CHECK (length(email) <= 255),
+                password_hash TEXT NOT NULL,
+                metadata TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_verified INTEGER NOT NULL DEFAULT 0,
+                is_superuser INTEGER NOT NULL DEFAULT 0,
+                failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until TIMESTAMP,
+                last_login TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
+            "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+            """
+            CREATE TABLE IF NOT EXISTS roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                is_system INTEGER NOT NULL DEFAULT 0
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                category TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_id INTEGER NOT NULL,
+                permission_id INTEGER NOT NULL,
+                granted_by INTEGER,
+                granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (role_id, permission_id),
+                FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+                FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_roles (
+                user_id INTEGER NOT NULL,
+                role_id INTEGER NOT NULL,
+                granted_by INTEGER,
+                expires_at TIMESTAMP,
+                PRIMARY KEY (user_id, role_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_permissions (
+                user_id INTEGER NOT NULL,
+                permission_id INTEGER NOT NULL,
+                granted INTEGER NOT NULL DEFAULT 1,
+                granted_by INTEGER,
+                expires_at TIMESTAMP,
+                PRIMARY KEY (user_id, permission_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS registration_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                created_by INTEGER,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                max_uses INTEGER NOT NULL DEFAULT 1,
+                times_used INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                role_id INTEGER,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS registration_code_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                ip_address TEXT,
+                user_agent TEXT,
+                used_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (code_id) REFERENCES registration_codes(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS auth_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                user_id INTEGER,
+                target_user_id INTEGER,
+                details TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """,
+        ]
+
+    @staticmethod
+    def _default_schema_statements_postgres() -> List[str]:
+        return [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                username VARCHAR(255) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                metadata JSONB,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
+                failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until TIMESTAMPTZ,
+                last_login TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)",
+            "CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)",
+            """
+            CREATE TABLE IF NOT EXISTS roles (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                is_system BOOLEAN NOT NULL DEFAULT FALSE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS permissions (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                category TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                permission_id BIGINT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                granted_by BIGINT,
+                granted_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (role_id, permission_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_roles (
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                granted_by BIGINT,
+                expires_at TIMESTAMPTZ,
+                PRIMARY KEY (user_id, role_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_permissions (
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                permission_id BIGINT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                granted BOOLEAN NOT NULL DEFAULT TRUE,
+                granted_by BIGINT,
+                expires_at TIMESTAMPTZ,
+                PRIMARY KEY (user_id, permission_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS registration_codes (
+                id BIGSERIAL PRIMARY KEY,
+                code TEXT UNIQUE NOT NULL,
+                created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ,
+                max_uses INTEGER NOT NULL DEFAULT 1,
+                times_used INTEGER NOT NULL DEFAULT 0,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                role_id BIGINT REFERENCES roles(id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS registration_code_usage (
+                id BIGSERIAL PRIMARY KEY,
+                code_id BIGINT NOT NULL REFERENCES registration_codes(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                ip_address TEXT,
+                user_agent TEXT,
+                used_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS auth_audit_log (
+                id BIGSERIAL PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                target_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                details JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+        ]
+
+    def _seed_default_data(self) -> None:
+        # Seed roles
+        default_roles = [
+            ("admin", "Administrator", True),
+            ("user", "Standard User", True),
+            ("viewer", "Read-only User", True),
+            ("custom", "Custom role (no default permissions)", False),
+        ]
+
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            role_sql = (
+                "INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?) "
+                "ON CONFLICT (name) DO NOTHING"
+            )
+            perm_sql = (
+                "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?) "
+                "ON CONFLICT (name) DO NOTHING"
+            )
+            rp_sql = (
+                "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?) "
+                "ON CONFLICT DO NOTHING"
+            )
+            sel_role_id = "SELECT id FROM roles WHERE name = ?"
+            sel_perm_id = "SELECT id FROM permissions WHERE name = ?"
+        else:
+            role_sql = "INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)"
+            perm_sql = "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)"
+            rp_sql = "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)"
+            sel_role_id = "SELECT id FROM roles WHERE name = ?"
+            sel_perm_id = "SELECT id FROM permissions WHERE name = ?"
+
+        for name, description, is_system in default_roles:
+            try:
+                self.backend.execute(role_sql, (name, description, is_system))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Skipping role seed for %s: %s", name, exc)
+
+        # Seed baseline permissions
+        default_perms = [
+            ("media.read", "Read media", "media"),
+            ("media.create", "Create media", "media"),
+            ("media.delete", "Delete media", "media"),
+            ("system.configure", "Configure system", "system"),
+            ("users.manage_roles", "Manage user roles", "users"),
+        ]
+        for name, desc, cat in default_perms:
+            try:
+                self.backend.execute(perm_sql, (name, desc, cat))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping permission seed for %s: %s", name, exc)
+
+        # Map permissions to roles
+        def _get_id(query: str, value: str) -> Optional[int]:
+            res = self.backend.execute(query, (value,))
+            return res.rows[0]['id'] if res.rows else None
+
+        admin_id = _get_id(sel_role_id, "admin")
+        user_id = _get_id(sel_role_id, "user")
+        viewer_id = _get_id(sel_role_id, "viewer")
+
+        def _pid(name: str) -> Optional[int]:
+            return _get_id(sel_perm_id, name)
+
+        # user role defaults
+        for pname in ("media.read", "media.create"):
+            rid = user_id
+            pid = _pid(pname)
+            if rid and pid:
+                try:
+                    self.backend.execute(rp_sql, (rid, pid))
+                except Exception:
+                    pass
+        # viewer role
+        rid = viewer_id
+        pid = _pid("media.read")
+        if rid and pid:
+            try:
+                self.backend.execute(rp_sql, (rid, pid))
+            except Exception:
+                pass
+        # admin all
+        if admin_id:
+            for pname in ("media.read", "media.create", "media.delete", "system.configure", "users.manage_roles"):
+                pid = _pid(pname)
+                if pid:
+                    try:
+                        self.backend.execute(rp_sql, (admin_id, pid))
+                    except Exception:
+                        pass
+
 
 #
 # End of UserDatabase_v2.py

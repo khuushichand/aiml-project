@@ -10,7 +10,7 @@ Manages user quotas for storage, export/import operations, and rate limits.
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Any
 from pathlib import Path
 from loguru import logger
 
@@ -38,7 +38,7 @@ class QuotaManager:
         'max_chatbooks': 200
     }
     
-    def __init__(self, user_id: str, user_tier: str = 'free'):
+    def __init__(self, user_id: str, user_tier: str = 'free', db: Optional[Any] = None):
         """
         Initialize quota manager for a user.
         
@@ -49,6 +49,7 @@ class QuotaManager:
         self.user_id = user_id
         self.user_tier = user_tier
         self.quotas = self._get_quotas_for_tier(user_tier)
+        self.db = db  # Optional DB handle for persistent quota checks
         
         # Usage tracking (in production, use database)
         self.usage_cache: Dict[str, any] = {}
@@ -223,14 +224,64 @@ class QuotaManager:
     
     async def _get_operations_count_today(self, operation_type: str) -> int:
         """Get count of operations performed today."""
-        # In production, query database
-        # For now, return cached value or 0
+        # Prefer database-backed counts when available
+        try:
+            if self.db is not None and hasattr(self.db, 'execute_query'):
+                start = datetime.now().date().isoformat()
+                if operation_type == 'export':
+                    # Count exports created today
+                    cursor = self.db.execute_query(
+                        "SELECT COUNT(1) as c FROM export_jobs WHERE user_id = ? AND created_at >= ?",
+                        (self.user_id, start)
+                    )
+                else:
+                    cursor = self.db.execute_query(
+                        "SELECT COUNT(1) as c FROM import_jobs WHERE user_id = ? AND created_at >= ?",
+                        (self.user_id, start)
+                    )
+                # Cursor may be list or cursor
+                if hasattr(cursor, 'fetchone'):
+                    row = cursor.fetchone()
+                    return int(row[0] if isinstance(row, (list, tuple)) else row.get('c', 0)) if row else 0
+                elif isinstance(cursor, list) and cursor:
+                    row = cursor[0]
+                    if isinstance(row, dict):
+                        return int(row.get('c', 0))
+                    if isinstance(row, (list, tuple)):
+                        return int(row[0])
+                return 0
+        except Exception as e:
+            logger.debug(f"QuotaManager DB count fallback due to error: {e}")
+        # Fallback to cached value
         cache_key = f"{operation_type}_count_{datetime.now().date()}"
         return self.usage_cache.get(cache_key, 0)
     
     async def _get_active_jobs_count(self) -> int:
         """Get count of currently active jobs."""
-        # In production, query database for jobs with status IN ('pending', 'in_progress')
+        # Prefer database-backed counts when available
+        try:
+            if self.db is not None and hasattr(self.db, 'execute_query'):
+                active_statuses = ('pending', 'in_progress')
+                # Count both export and import active jobs
+                c1 = self.db.execute_query(
+                    "SELECT COUNT(1) FROM export_jobs WHERE user_id = ? AND status IN (?, ?)",
+                    (self.user_id, *active_statuses)
+                )
+                c2 = self.db.execute_query(
+                    "SELECT COUNT(1) FROM import_jobs WHERE user_id = ? AND status IN (?, ?)",
+                    (self.user_id, *active_statuses)
+                )
+                def _to_int(cur):
+                    if hasattr(cur, 'fetchone'):
+                        r = cur.fetchone()
+                        return int(r[0]) if r else 0
+                    if isinstance(cur, list) and cur:
+                        r = cur[0]
+                        return int(r.get('COUNT(1)', 0) if isinstance(r, dict) else r[0])
+                    return 0
+                return _to_int(c1) + _to_int(c2)
+        except Exception as e:
+            logger.debug(f"QuotaManager DB active job count fallback: {e}")
         return self.usage_cache.get('active_jobs', 0)
     
     def cleanup_expired_files(self, days_old: int = 7) -> int:

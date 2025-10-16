@@ -27,6 +27,7 @@ The TTS module provides a production-ready, extensible Text-to-Speech service wi
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
 | **Dia** | Local PyTorch | EN | ❌ | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
+| **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, GGUF streaming |
 
 ## Architecture
 
@@ -127,6 +128,8 @@ providers:
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 ```
+
+For NeuTTS installation and usage, see `Docs/STT-TTS/NEUTTS_TTS_SETUP.md`.
 
 ## API Usage
 
@@ -307,6 +310,9 @@ circuit_breaker:
 # Performance settings
 performance:
   max_concurrent_generations: 4
+  # When true, embed error messages into the audio stream (compat mode)
+  # When false, raise errors so the API returns proper HTTP errors
+  stream_errors_as_audio: true
   cache_enabled: false
 ```
 
@@ -347,6 +353,16 @@ Notes
 - Environment variables still work and may override YAML (e.g., `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`).
 - Adapters that already read generic names (e.g., Kokoro’s `sample_rate`) don’t require aliasing for those fields.
 - If you add new provider options in YAML, prefer generic names; the registry can be extended to alias them.
+
+#### Concurrency Control
+
+The service (`TTSServiceV2`) reads `performance.max_concurrent_generations` and sets an internal semaphore to enforce this limit at runtime. This controls total concurrent TTS generations across providers. If not specified, it defaults to `4` and is clamped to a minimum of `1`.
+
+#### Error Streaming Policy
+
+Set `performance.stream_errors_as_audio` to control failure behavior during streaming:
+- `true` (default for compatibility): embed `ERROR: ...` text chunks in the audio stream and return HTTP 200. Suitable for clients/tests that expect bytes regardless of outcome.
+- `false` (recommended for production): raise provider/service errors instead. The API endpoint maps these to appropriate HTTP status codes (e.g., 400/402/429/5xx).
 
 ### Voice Cloning Requirements
 

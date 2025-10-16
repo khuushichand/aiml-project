@@ -1,0 +1,91 @@
+groups:
+  - name: workflows.rules
+    interval: 30s
+    rules:
+      # High failure rate of runs (over 5 minutes)
+      - alert: WorkflowsHighRunFailureRate
+        expr: |
+          (sum(increase(workflows_runs_failed[5m])) by (tenant))
+          /
+          clamp_min(sum(increase(workflows_runs_started[5m])) by (tenant), 1)
+          > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          team: workflows
+        annotations:
+          summary: "High run failure rate for tenant {{ $labels.tenant }}"
+          description: |
+            In the last 5 minutes, over 30% of started runs failed.
+            Investigate failing definitions, providers, or recent deployments.
+
+      # Webhook delivery failures (any non-zero failures sustained)
+      - alert: WorkflowsWebhookFailures
+        expr: |
+          sum(rate(workflows_webhook_deliveries_total{status="failed"}[5m])) by (host) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: workflows
+        annotations:
+          summary: "Webhook failures observed for host {{ $labels.host }}"
+          description: |
+            Sustained webhook delivery failures in the last 10 minutes.
+            Check egress policy, target availability, and secrets.
+
+      # Webhook deliveries blocked by policy (sustained)
+      - alert: WorkflowsWebhookBlocked
+        expr: |
+          sum(rate(workflows_webhook_deliveries_total{status="blocked"}[5m])) by (host) > 0
+        for: 10m
+        labels:
+          severity: info
+          team: workflows
+        annotations:
+          summary: "Webhook deliveries blocked for host {{ $labels.host }}"
+          description: |
+            Webhook deliveries are being blocked by egress policy.
+            Review allowlists and profile settings if this is unexpected.
+
+      # Engine queue depth high (backlog)
+      - alert: WorkflowsQueueDepthHigh
+        expr: |
+          workflows_engine_queue_depth > 50
+        for: 10m
+        labels:
+          severity: warning
+          team: workflows
+        annotations:
+          summary: "Workflows engine queue depth high"
+          description: |
+            Queue depth has exceeded 50 for over 10 minutes.
+            Consider scaling workers, increasing concurrency, or reducing load.
+
+      # Slow runs at p90 (over 1 minute)
+      - alert: WorkflowsRunLatencyHigh
+        expr: |
+          histogram_quantile(0.9, sum(rate(workflows_run_duration_ms_bucket[5m])) by (le)) > 60000
+        for: 10m
+        labels:
+          severity: warning
+          team: workflows
+        annotations:
+          summary: "High run latency at p90"
+          description: |
+            p90 run duration exceeds 60s for the last 10 minutes.
+            Check provider latencies, retries, and step timeouts.
+
+      # Slow steps at p99 (over 5 seconds)
+      - alert: WorkflowsStepLatencyHigh
+        expr: |
+          histogram_quantile(0.99, sum(rate(workflows_step_duration_ms_bucket[5m])) by (le)) > 5000
+        for: 10m
+        labels:
+          severity: info
+          team: workflows
+        annotations:
+          summary: "High step latency at p99"
+          description: |
+            p99 step duration exceeds 5s for the last 10 minutes.
+            Inspect specific step types for hotspots.
+

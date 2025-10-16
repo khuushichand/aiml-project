@@ -18,7 +18,7 @@ from tldw_Server_API.cli.utils.output import (
     print_error, print_success, print_info, print_evaluation_results,
     print_json, print_table, print_progress_bar, format_timestamp
 )
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
 @click.group()

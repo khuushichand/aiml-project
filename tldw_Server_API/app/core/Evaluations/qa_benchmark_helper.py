@@ -9,10 +9,10 @@ import json
 import re
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
-import logging
+from loguru import logger
 from difflib import SequenceMatcher
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class QAEvaluation:

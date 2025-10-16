@@ -43,9 +43,13 @@ def _import_transformers():
 #
 # Local Imports
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import get_openai_embeddings_batch
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Embeddings.audit_logger import get_audit_logger, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+    log_model_evicted,
+    log_memory_limit_exceeded,
+)
 
 #
 ########################################################################################################################
@@ -140,6 +144,7 @@ class ONNXModelCfg(BaseModelCfg):
 
 class OpenAIModelCfg(BaseModelCfg):
     provider: str = "openai"
+    api_key: Optional[str] = None
 
 
 class LocalAPICfg(BaseModelCfg):
@@ -329,14 +334,15 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
             
             if lru_model_id:
                 logging.info(f"Evicting LRU model: {lru_model_id}")
-                # Audit log the eviction
-                audit_logger = get_audit_logger()
-                audit_logger.log_resource_event(
-                    AuditEventType.MODEL_EVICTED,
-                    model_id=lru_model_id,
-                    memory_usage_gb=model_memory_usage.get(lru_model_id, 0),
-                    reason="lru_eviction"
-                )
+                # Unified audit (non-blocking)
+                try:
+                    log_model_evicted(
+                        model_id=lru_model_id,
+                        memory_usage_gb=model_memory_usage.get(lru_model_id, 0),
+                        reason="lru_eviction",
+                    )
+                except Exception:
+                    pass
                 _remove_model(lru_model_id)
             else:
                 break
@@ -570,9 +576,46 @@ class HuggingFaceEmbedder:
             embeddings_tensor: Optional["torch.Tensor"] = None
 
             try:
-                # current_tokenizer is an instance of AutoTokenizer, which is callable
+                # Qwen3 Embeddings: apply instruction-aware formatting and use last-token pooling
+                model_l = (self.config.model_name_or_path or "").lower()
+                is_qwen3_embed = ("qwen3" in model_l and "embedding" in model_l)
+
+                fmt_texts = texts
+                if is_qwen3_embed:
+                    # Load optional instruction and mode from embeddings.prompts
+                    instr = load_prompt("embeddings", "qwen3_embeddings_instruction") or (
+                        "Given a web search query, retrieve relevant passages that answer the query"
+                    )
+                    mode = (load_prompt("embeddings", "qwen3_embeddings_mode") or "auto").strip().lower()
+
+                    def _likely_query(s: str) -> bool:
+                        t = (s or "").strip().lower()
+                        if t.endswith("?"):
+                            return True
+                        prefixes = ("what ", "who ", "when ", "where ", "why ", "how ", "explain ", "define ")
+                        return len(t) <= 160 and any(t.startswith(p) for p in prefixes)
+
+                    def _format_query(q: str) -> str:
+                        return f"<Instruct>: {instr}\n<Query>: {q}"
+
+                    def _format_doc(d: str) -> str:
+                        return f"<Instruct>: {instr}\n<Document>: {d}"
+
+                    fmt_texts = []
+                    for t in texts:
+                        if isinstance(t, str) and "<Instruct>:" in t:
+                            fmt_texts.append(t)
+                            continue
+                        if mode == "query":
+                            fmt_texts.append(_format_query(t))
+                        elif mode == "document":
+                            fmt_texts.append(_format_doc(t))
+                        else:  # auto
+                            fmt_texts.append(_format_query(t) if _likely_query(t) else _format_doc(t))
+
+                # Tokenize
                 inputs = current_tokenizer(
-                    texts,
+                    fmt_texts,
                     return_tensors="pt",
                     padding=True,
                     truncation=True,
@@ -583,7 +626,20 @@ class HuggingFaceEmbedder:
                 with torch.no_grad():
                     # current_model is an instance of a PreTrainedModel, which is callable (its forward method)
                     outputs = current_model(**inputs)
-                embeddings_tensor = outputs.last_hidden_state.mean(dim=1)
+                last_hidden_state = outputs.last_hidden_state
+                if is_qwen3_embed:
+                    # last-token pooling
+                    attn = inputs.get("attention_mask")
+                    if attn is not None:
+                        lengths = attn.sum(dim=1) - 1
+                        bsz, dim = last_hidden_state.size(0), last_hidden_state.size(-1)
+                        idx = lengths.view(bsz, 1, 1).expand(bsz, 1, dim)
+                        embeddings_tensor = last_hidden_state.gather(1, idx).squeeze(1)
+                    else:
+                        embeddings_tensor = last_hidden_state[:, -1, :]
+                else:
+                    # default: mean pooling
+                    embeddings_tensor = last_hidden_state.mean(dim=1)
 
             except RuntimeError as e:
                 # Handle BFloat16 issue
@@ -606,13 +662,25 @@ class HuggingFaceEmbedder:
 
                     # Retry embedding creation with the converted model
                     logging.info(f"Retrying embedding creation for {self.model_identifier} with float32 model.")
+                    # Re-tokenize with same formatting
                     inputs = current_tokenizer(  # Use current_tokenizer, it hasn't changed
-                        texts, return_tensors="pt", padding=True, truncation=True, max_length=self.config.max_length
+                        fmt_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.config.max_length
                     )
                     inputs = {k: v.to(self.device) for k, v in inputs.items()}
                     with torch.no_grad():
                         outputs = current_model(**inputs)  # Use the now-float current_model
-                    embeddings_tensor = outputs.last_hidden_state.mean(dim=1)
+                    last_hidden_state = outputs.last_hidden_state
+                    if is_qwen3_embed:
+                        attn = inputs.get("attention_mask")
+                        if attn is not None:
+                            lengths = attn.sum(dim=1) - 1
+                            bsz, dim = last_hidden_state.size(0), last_hidden_state.size(-1)
+                            idx = lengths.view(bsz, 1, 1).expand(bsz, 1, dim)
+                            embeddings_tensor = last_hidden_state.gather(1, idx).squeeze(1)
+                        else:
+                            embeddings_tensor = last_hidden_state[:, -1, :]
+                    else:
+                        embeddings_tensor = last_hidden_state.mean(dim=1)
                 else:
                     log_counter("huggingface_create_embeddings_failure", labels={"model_id": self.model_identifier})
                     logging.error(f"RuntimeError during HuggingFace embedding for {self.model_identifier}: {e}",
@@ -934,14 +1002,15 @@ def create_embeddings_batch(
                     
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        audit_logger = get_audit_logger()
-                        audit_logger.log_resource_event(
-                            AuditEventType.MEMORY_LIMIT_EXCEEDED,
-                            model_id=model_id_to_use,
-                            memory_usage_gb=estimated_size,
-                            current_usage_gb=sum(model_memory_usage.values()),
-                            limit_gb=MAX_MODEL_MEMORY_GB
-                        )
+                        try:
+                            log_memory_limit_exceeded(
+                                model_id=model_id_to_use,
+                                memory_usage_gb=estimated_size,
+                                current_usage_gb=sum(model_memory_usage.values()),
+                                limit_gb=MAX_MODEL_MEMORY_GB,
+                            )
+                        except Exception:
+                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                     
                     # Evict LRU models if at capacity
@@ -976,14 +1045,15 @@ def create_embeddings_batch(
                     
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        audit_logger = get_audit_logger()
-                        audit_logger.log_resource_event(
-                            AuditEventType.MEMORY_LIMIT_EXCEEDED,
-                            model_id=model_id_to_use,
-                            memory_usage_gb=estimated_size,
-                            current_usage_gb=sum(model_memory_usage.values()),
-                            limit_gb=MAX_MODEL_MEMORY_GB
-                        )
+                        try:
+                            log_memory_limit_exceeded(
+                                model_id=model_id_to_use,
+                                memory_usage_gb=estimated_size,
+                                current_usage_gb=sum(model_memory_usage.values()),
+                                limit_gb=MAX_MODEL_MEMORY_GB,
+                            )
+                        except Exception:
+                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                     
                     # Evict LRU models if at capacity

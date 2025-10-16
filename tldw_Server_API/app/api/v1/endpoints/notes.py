@@ -2,7 +2,7 @@
 #
 #
 # Imports
-import logging
+from loguru import logger
 import time
 from collections import defaultdict
 import sys
@@ -19,6 +19,7 @@ from fastapi import (
     Body,
     Header  # Keep Header for expected_version
 )
+from fastapi.responses import StreamingResponse, PlainTextResponse
 from loguru import logger  # Using loguru as in your chat example
 #
 # Local Imports
@@ -36,6 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 #
 #
 #######################################################################################################################
@@ -191,6 +193,16 @@ async def create_note(
         # The user context (user_id) is implicitly handled by `get_chacha_db_for_user`
         # The `db` instance is already specific to the authenticated user.
         logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{note_in.title[:30]}...'")
+        # Topic monitoring (non-blocking) for title and content
+        try:
+            mon = get_topic_monitoring_service()
+            uid = getattr(db, 'client_id', None)
+            if note_in.title:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.title, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
+            if note_in.content:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
+        except Exception:
+            pass
         note_id = db.add_note(
             title=note_in.title,
             content=note_in.content,
@@ -279,6 +291,7 @@ async def list_notes(
         offset: int = Query(0, ge=0, description="Offset for pagination"),
         include_keywords: bool = Query(False, description="If true, include linked keywords inline per note")
 ):
+    """Always returns a consistent object with a `notes` array and pagination fields."""
     try:
         logger.debug(f"User (DB client_id: {db.client_id}) listing notes: limit={limit}, offset={offset}")
         notes_data = db.list_notes(limit=limit, offset=offset)
@@ -292,11 +305,25 @@ async def list_notes(
                         logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
             except Exception as outer_err:
                 logger.warning(f"Attaching keywords for notes list failed: {outer_err}")
-        # To satisfy both tests: return dict when no explicit pagination params provided; else list
-        qp = request.query_params
-        if ("limit" in qp) or ("offset" in qp):
-            return notes_data
-        return {"notes": notes_data}
+        # Lightweight total count
+        total = None
+        try:
+            cursor = db.execute_query("SELECT COUNT(*) AS cnt FROM notes WHERE deleted = 0")
+            row = cursor.fetchone()
+            total = int(row["cnt"]) if row is not None else None
+        except Exception:
+            # Fallback: approximate if count not available
+            total = None
+        # Back-compat aliases for list consumers
+        return {
+            "notes": notes_data,
+            "items": notes_data,
+            "results": notes_data,
+            "count": len(notes_data),
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+        }
     except Exception as e:
         handle_db_errors(e, "notes list")
 
@@ -323,6 +350,16 @@ async def update_note(
     try:
         logger.info(
             f"User (DB client_id: {db.client_id}) updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
+        # Topic monitoring (non-blocking) for updated fields
+        try:
+            mon = get_topic_monitoring_service()
+            uid = getattr(db, 'client_id', None)
+            if 'title' in update_data and update_data['title']:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['title']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+            if 'content' in update_data and update_data['content']:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['content']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+        except Exception:
+            pass
         success = db.update_note(
             note_id=note_id,
             update_data=update_data,
@@ -452,6 +489,172 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
         handle_db_errors(e, "notes search")
 
 
+@router.get(
+    "/export",
+    response_model=Any,
+    summary="Export notes as JSON",
+    tags=["notes"]
+)
+async def export_notes(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        q: Optional[str] = Query(None, description="Optional search query to filter notes"),
+        limit: int = Query(1000, ge=1, le=10000, description="Max notes to export"),
+        offset: int = Query(0, ge=0, description="Offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        format: str = Query("json", pattern="^(json|csv)$", description="Export format")
+):
+    """Simple JSON export for notes. If `q` is provided, uses FTS search; otherwise lists notes."""
+    try:
+        total = None
+        if q:
+            # emulate offset by over-fetching then slicing
+            rows = db.search_notes(search_term=q, limit=limit + offset)
+            notes_data = rows[offset: offset + limit]
+            # Total count for FTS path (best-effort)
+            try:
+                if getattr(db, 'backend_type', None).name == 'POSTGRESQL':
+                    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
+                    tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
+                    c = db.execute_query(
+                        "SELECT COUNT(*) AS cnt FROM notes n WHERE n.deleted = FALSE AND n.notes_fts_tsv @@ to_tsquery('english', ?)",
+                        (tsquery,)
+                    )
+                else:
+                    c = db.execute_query(
+                        "SELECT COUNT(*) AS cnt FROM notes_fts fts JOIN notes n ON fts.rowid = n.rowid WHERE n.deleted = 0 AND notes_fts MATCH ?",
+                        (f'"{q}"',)
+                    )
+                r = c.fetchone()
+                total = int(r["cnt"]) if r is not None else None
+            except Exception:
+                total = None
+        else:
+            notes_data = db.list_notes(limit=limit, offset=offset)
+            try:
+                c = db.execute_query("SELECT COUNT(*) AS cnt FROM notes WHERE deleted = 0")
+                r = c.fetchone()
+                total = int(r["cnt"]) if r is not None else None
+            except Exception:
+                total = None
+        if include_keywords:
+            for nd in notes_data:
+                try:
+                    nd['keywords'] = db.get_keywords_for_note(note_id=nd.get('id'))
+                except Exception as kw_err:
+                    logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
+        if format == "csv":
+            import io, csv
+            output = io.StringIO()
+            writer = csv.writer(output)
+            headers = ["id", "title", "content", "created_at", "last_modified", "version", "client_id"]
+            if include_keywords:
+                headers.append("keywords")
+            writer.writerow(headers)
+            for n in notes_data:
+                row = [
+                    n.get("id"),
+                    n.get("title"),
+                    n.get("content"),
+                    n.get("created_at"),
+                    n.get("last_modified") or n.get("updated_at"),
+                    n.get("version"),
+                    n.get("client_id"),
+                ]
+                if include_keywords:
+                    kws = n.get("keywords") or []
+                    row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
+                writer.writerow(row)
+            output.seek(0)
+            return StreamingResponse(output, media_type="text/csv")
+
+        return {
+            "notes": notes_data,
+            "data": notes_data,
+            "items": notes_data,
+            "results": notes_data,
+            "count": len(notes_data),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "exported_at": __import__("datetime").datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        handle_db_errors(e, "notes export")
+
+
+@router.post(
+    "/export",
+    response_model=Any,
+    summary="Export selected notes by ID",
+    tags=["notes"]
+)
+async def export_notes_post(
+        payload: Dict[str, Any] = Body(..., description="Export request with note_ids and optional format"),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    """Export notes by explicit IDs (parity with E2E scaffold)."""
+    try:
+        note_ids = payload.get("note_ids") or []
+        include_keywords = bool(payload.get("include_keywords", False))
+        fmt = str(payload.get("format", "json")).lower()
+        if not isinstance(note_ids, list) or not all(isinstance(n, str) for n in note_ids):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="note_ids must be a list of strings")
+
+        results: List[Dict[str, Any]] = []
+        for nid in note_ids:
+            try:
+                nd = db.get_note_by_id(note_id=nid)
+                if not nd:
+                    continue
+                if include_keywords:
+                    try:
+                        nd['keywords'] = db.get_keywords_for_note(note_id=nid)
+                    except Exception:
+                        pass
+                results.append(nd)
+            except Exception:
+                # Skip bad ids
+                continue
+
+        if fmt == "csv":
+            import io, csv
+            output = io.StringIO()
+            writer = csv.writer(output)
+            headers = ["id", "title", "content", "created_at", "last_modified", "version", "client_id"]
+            if include_keywords:
+                headers.append("keywords")
+            writer.writerow(headers)
+            for n in results:
+                row = [
+                    n.get("id"),
+                    n.get("title"),
+                    n.get("content"),
+                    n.get("created_at"),
+                    n.get("last_modified") or n.get("updated_at"),
+                    n.get("version"),
+                    n.get("client_id"),
+                ]
+                if include_keywords:
+                    kws = n.get("keywords") or []
+                    row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
+                writer.writerow(row)
+            output.seek(0)
+            return StreamingResponse(output, media_type="text/csv")
+
+        return {
+            "notes": results,
+            "data": results,
+            "items": results,
+            "results": results,
+            "count": len(results),
+            "exported_at": __import__("datetime").datetime.utcnow().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        handle_db_errors(e, "notes export (POST)")
+
+
 # --- Keyword Endpoints (related to Notes) ---
 @router.post(
     "/bulk",
@@ -470,6 +673,16 @@ async def bulk_create_notes(
 
     for item in request.notes:
         try:
+            # Topic monitoring (non-blocking) per item
+            try:
+                mon = get_topic_monitoring_service()
+                uid = getattr(db, 'client_id', None)
+                if getattr(item, 'title', None):
+                    mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.title, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
+                if getattr(item, 'content', None):
+                    mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
+            except Exception:
+                pass
             note_id = db.add_note(
                 title=item.title,
                 content=item.content,

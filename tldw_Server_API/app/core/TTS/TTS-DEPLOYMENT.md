@@ -238,6 +238,8 @@ circuit_breaker:
 # Performance settings
 performance:
   max_concurrent_generations: 4
+  # Production default: return HTTP errors instead of embedding error bytes
+  stream_errors_as_audio: false
   request_timeout: 60
   stream_chunk_size: 4096
   cache_enabled: false

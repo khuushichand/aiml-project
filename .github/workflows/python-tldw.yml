@@ -71,6 +71,19 @@ jobs:
           pip install bandit
           bandit -r tldw_Server_API -x tldw_Server_API/tests -lll || true
 
+      - name: Verify Postgres image tags pinned to 18.* across repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -RInE "image:[[:space:]]*postgres:" -- . || true)
+          echo "Found Postgres image references:\n${matches}"
+          violations=$(echo "$matches" | grep -v "postgres:18" || true)
+          if [ -n "$violations" ]; then
+            echo "Non-18 Postgres images detected (should be 18.*):"
+            echo "$violations"
+            exit 1
+          fi
+
   # Job 2: Unit Tests
   unit-tests:
     name: Unit Tests - ${{ matrix.os }} - Python ${{ matrix.python-version }}
@@ -79,7 +92,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         exclude:
           # Exclude Python 3.13 on Windows if issues arise
           - os: windows-latest
@@ -233,6 +246,230 @@ jobs:
         with:
           name: test-results-integration
           path: test-results-*.xml
+
+  postgres-tests:
+    name: PostgreSQL Backend Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    needs: unit-tests
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw
+          POSTGRES_PASSWORD: tldw
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tldw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      POSTGRES_TEST_HOST: localhost
+      POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
+      POSTGRES_TEST_DB: tldw_content
+      POSTGRES_TEST_USER: tldw
+      POSTGRES_TEST_PASSWORD: tldw
+      # Keep Prompt Studio heavy tests at moderate defaults in CI
+      TLDW_PS_STRESS: "0"
+      TLDW_PS_TC_COUNT: "250"
+      TLDW_PS_ITERATIONS: "5"
+      TLDW_PS_OPT_COUNT: "3"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install email-validator
+          pip install pytest-xdist
+          pip install -e ".[dev]"
+
+      - name: Run PostgreSQL-backed tests (serialized)
+        run: |
+          pytest -v -n 1 \
+            tldw_Server_API/tests/DB_Management/test_media_postgres_support.py \
+            tldw_Server_API/tests/DB_Management/test_media_postgres_migrations.py \
+            tldw_Server_API/tests/RAG/test_analytics_backend.py \
+            tldw_Server_API/tests/RAG/test_dual_backend_rag_flow.py \
+            tldw_Server_API/tests/RAG/test_dual_backend_end_to_end.py \
+            tldw_Server_API/tests/DB_Management/test_migration_tools.py \
+            tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py \
+            tldw_Server_API/tests/prompt_studio/integration/test_dual_backend_prompt_studio.py \
+            tldw_Server_API/tests/Workflows/test_workflows_postgres_migrations.py \
+            tldw_Server_API/tests/Workflows/test_dual_backend_engine.py \
+            tldw_Server_API/tests/Workflows/test_dual_backend_workflows.py \
+            --timeout=300 --junit-xml=postgres-tests.xml
+
+      - name: Upload postgres test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-postgres-py-${{ matrix.python-version }}
+          path: postgres-tests.xml
+
+  postgres-heavy-ps-tests:
+    name: PostgreSQL Prompt Studio Heavy Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    needs: postgres-tests
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw
+          POSTGRES_PASSWORD: tldw
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tldw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      POSTGRES_TEST_HOST: localhost
+      POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
+      POSTGRES_TEST_DB: tldw_content
+      POSTGRES_TEST_USER: tldw
+      POSTGRES_TEST_PASSWORD: tldw
+      # Moderate defaults; adjust as needed
+      TLDW_PS_STRESS: "0"
+      TLDW_PS_TC_COUNT: "250"
+      TLDW_PS_ITERATIONS: "5"
+      TLDW_PS_OPT_COUNT: "3"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install email-validator
+          pip install pytest-xdist
+          pip install -e ".[dev]"
+
+      - name: Run Prompt Studio heavy tests (Postgres, serialized)
+        run: |
+          pytest -v -n 1 \
+            tldw_Server_API/tests/prompt_studio/integration/test_optimizations_dual_backend_heavy.py \
+            --timeout=300 --junit-xml=postgres-heavy-ps-tests.xml
+
+      - name: Upload heavy PS test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-postgres-heavy-ps-py-${{ matrix.python-version }}
+      path: postgres-heavy-ps-tests.xml
+
+  postgres-authnz-tests:
+    name: PostgreSQL AuthNZ Tests (isolated, allow-fail)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    needs: postgres-tests
+    timeout-minutes: 30
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw
+          POSTGRES_PASSWORD: tldw
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tldw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      # AuthNZ Postgres fixture env
+      TEST_DB_HOST: localhost
+      TEST_DB_PORT: ${{ job.services.postgres.ports[5432] }}
+      TEST_DB_USER: tldw
+      TEST_DB_PASSWORD: tldw
+      TEST_MODE: "true"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install email-validator
+          pip install asyncpg
+          pip install -e ".[dev]"
+
+      - name: Run AuthNZ tests (serialized; allow failure)
+        run: |
+          pytest -v -n 1 tldw_Server_API/tests/AuthNZ -k "not comprehensive" --timeout=900 --maxfail=1
+
+      - name: Upload authnz test results (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-postgres-authnz
+          path: .pytest_cache
 
   # Job 4: External API Tests (only on main branch or manual trigger)
   external-api-tests:
@@ -511,3 +748,128 @@ jobs:
         run: |
           echo "Test results processed"
           # Here you could update a badge in README or create a gist
+
+  pgvector-live-tests:
+    name: PGVector Live Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ secrets.PG_TEST_DSN != '' }}
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      PG_TEST_DSN: ${{ secrets.PG_TEST_DSN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install email-validator
+          pip install -e ".[dev]"
+          pip install "psycopg[binary,pool]"
+
+      - name: Run pg_integration tests
+        run: |
+          pytest -v -m "pg_integration" --timeout=600
+
+  mcp-metrics-smoke:
+    name: MCP Metrics Smoke
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tldw_Server_API/requirements.txt
+
+      - name: Start server (background)
+        env:
+          MCP_JWT_SECRET: test_secret_key_for_ci_only_32_chars_minimum
+          MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
+          MCP_PROMETHEUS_PUBLIC: '1'
+        run: |
+          nohup python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for MCP status
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/api/v1/mcp/status >/dev/null; then
+              echo "MCP status OK"; exit 0; fi; sleep 2; done; exit 1
+
+      - name: Scrape Prometheus metrics
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/v1/mcp/metrics/prometheus -o mcp_metrics.txt
+          grep -q "mcp_requests_total" mcp_metrics.txt
+          grep -q "mcp_request_duration_seconds" mcp_metrics.txt
+          grep -q "mcp_active_connections" mcp_metrics.txt
+
+      - name: Print server logs (on failure)
+        if: failure()
+        run: |
+          echo '===== server.log ====='
+          cat server.log || true
+
+      - name: Stop server
+        if: always()
+        run: |
+          kill $(cat server.pid) || true
+
+  mcp-tests:
+    name: MCP Tests (gated)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      RUN_MCP_TESTS: "1"
+      TEST_MODE: "true"
+      DISABLE_HEAVY_STARTUP: "1"
+      MCP_JWT_SECRET: test_secret_key_for_ci_only_32_chars_minimum
+      MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run MCP unit/integration tests
+        run: |
+          pytest -v -n 1 \
+            tldw_Server_API/app/core/MCP_unified/tests \
+            tldw_Server_API/tests/MCP \
+            --timeout=600

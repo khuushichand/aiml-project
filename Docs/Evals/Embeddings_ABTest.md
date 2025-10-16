@@ -28,6 +28,10 @@ A/B testing of embeddings compares two or more embedding models on the same corp
   - Body: `EmbeddingsABTestCreateRequest { name, config, run_immediately? }`
   - Returns: `{ test_id, status: 'created' }`
 - `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` (admin-only by default)
+
+Idempotency:
+- Supply `Idempotency-Key` to `POST /embeddings/abtest` to avoid creating duplicate tests when retrying.
+- `POST /embeddings/abtest/{test_id}/run` also accepts `Idempotency-Key`; repeated calls with the same key return the current running status without enqueuing an additional job.
   - Launches background job; returns `{ test_id, status: 'running' }`
 - `GET /api/v1/evaluations/embeddings/abtest/{test_id}`
   - Returns status + summary with per‑arm metrics, latency, and doc/chunk counts.

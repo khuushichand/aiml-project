@@ -11,8 +11,9 @@ from typing import Dict, Any
 import json
 
 from tldw_Server_API.app.core.Chat import Chat_Functions
+from tldw_Server_API.app.core.Chat import provider_config as provider_cfg
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.Chat.Chat_Functions import (
-    chat_api_call,
     process_user_input,
     update_chat_content,
     ChatAPIError,
@@ -29,12 +30,12 @@ class TestChatAPICall:
     """Test the chat_api_call function."""
     
     @pytest.mark.unit
-    @patch.dict('tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS')
+    @patch.dict('tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS')
     def test_successful_api_call(self, mock_llm_response):
         """Test successful chat API call."""
         mock_handler = MagicMock(return_value=mock_llm_response)
         mock_handler.__name__ = 'mock_chat_with_openai'  # Add __name__ attribute
-        Chat_Functions.API_CALL_HANDLERS['openai'] = mock_handler
+        provider_cfg.API_CALL_HANDLERS['openai'] = mock_handler
         
         result = chat_api_call(
             api_endpoint="openai",
@@ -48,12 +49,12 @@ class TestChatAPICall:
         mock_handler.assert_called_once()
     
     @pytest.mark.unit
-    @patch.dict('tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS')
+    @patch.dict('tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS')
     def test_api_call_with_system_message(self, mock_llm_response):
         """Test API call with system message."""
         mock_handler = MagicMock(return_value=mock_llm_response)
         mock_handler.__name__ = 'mock_chat_with_openai'
-        Chat_Functions.API_CALL_HANDLERS['openai'] = mock_handler
+        provider_cfg.API_CALL_HANDLERS['openai'] = mock_handler
         
         messages = [
             {"role": "system", "content": "You are helpful."},
@@ -70,12 +71,12 @@ class TestChatAPICall:
         mock_handler.assert_called_once()
     
     @pytest.mark.unit
-    @patch.dict('tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS')
+    @patch.dict('tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS')
     def test_api_call_rate_limit_error(self):
         """Test handling of rate limit errors."""
         mock_handler = MagicMock(side_effect=ChatRateLimitError("Rate limit exceeded", provider="openai"))
         mock_handler.__name__ = 'mock_chat_with_openai'
-        Chat_Functions.API_CALL_HANDLERS['openai'] = mock_handler
+        provider_cfg.API_CALL_HANDLERS['openai'] = mock_handler
         
         with pytest.raises(ChatRateLimitError) as exc_info:
             chat_api_call(
@@ -87,12 +88,12 @@ class TestChatAPICall:
         assert "Rate limit exceeded" in str(exc_info.value)
     
     @pytest.mark.unit
-    @patch.dict('tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS')
+    @patch.dict('tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS')
     def test_api_call_auth_error(self):
         """Test handling of authentication errors."""
         mock_handler = MagicMock(side_effect=ChatAuthenticationError("Invalid API key", provider="openai"))
         mock_handler.__name__ = 'mock_chat_with_openai'
-        Chat_Functions.API_CALL_HANDLERS['openai'] = mock_handler
+        provider_cfg.API_CALL_HANDLERS['openai'] = mock_handler
         
         with pytest.raises(ChatAuthenticationError) as exc_info:
             chat_api_call(
@@ -104,7 +105,7 @@ class TestChatAPICall:
         assert "Invalid API key" in str(exc_info.value)
     
     @pytest.mark.unit
-    @patch.dict('tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS')
+    @patch.dict('tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS')
     def test_api_call_provider_routing(self, mock_llm_response):
         """Test that different providers are routed correctly."""
         providers = ["openai", "anthropic", "groq", "mistral"]
@@ -114,7 +115,7 @@ class TestChatAPICall:
         for provider in providers:
             mock_handler = MagicMock(return_value=mock_llm_response)
             mock_handler.__name__ = f'mock_chat_with_{provider}'
-            Chat_Functions.API_CALL_HANDLERS[provider] = mock_handler
+            provider_cfg.API_CALL_HANDLERS[provider] = mock_handler
             mocks[provider] = mock_handler
         
         # Call each provider

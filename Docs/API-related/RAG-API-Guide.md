@@ -21,12 +21,23 @@ The RAG API provides powerful search and question-answering capabilities across 
 http://localhost:8000/api/v1/rag
 ```
 
+OpenAPI tags: `rag-unified`, `rag-health`
+
 ### Available Endpoints
-- `POST /search` - Simple search across your content
-- `POST /search/advanced` - Advanced search with full control
-- `POST /agent` - Simple Q&A agent
-- `POST /agent/advanced` - Research agent with tools
-- `GET /health` - Service health check
+- `POST /search`              - Unified RAG search (all features via params)
+- `POST /search/stream`       - Streaming answer chunks (NDJSON)
+- `GET  /simple`              - Simple search (query param)
+- `GET  /advanced`            - Advanced search with common flags
+- `GET  /capabilities`        - Pipeline capabilities and defaults
+- `GET  /features`            - List of available feature flags
+- `GET  /health`              - Comprehensive health
+- `GET  /health/live`         - Liveness
+- `GET  /health/ready`        - Readiness
+- `GET  /metrics/summary`     - Metrics summary
+- `GET  /cache/stats`         - Cache statistics
+- `POST /cache/clear`         - Clear cache
+- `GET  /cache/warm`          - Cache warming status
+- `GET  /costs/summary`       - Cost tracking summary
 
 ### Quick Example
 
@@ -44,62 +55,49 @@ curl -X POST http://localhost:8000/api/v1/rag/search \
 
 ## Authentication
 
-All RAG endpoints require authentication via API key.
+- Most RAG endpoints require authentication.
+- Single-user mode: `X-API-KEY: <key>` header
+- Multi-user mode: `Authorization: Bearer <JWT>` header
+- Read-only informational endpoints like `/capabilities` and `/health*` do not require auth by default, but deployments may enforce AuthNZ globally.
 
-### Single-User Mode
-Use the default API key in the header:
-```http
-X-API-KEY: default-secret-key-for-single-user
-```
-
-### Multi-User Mode
-Use your personal API key:
-```http
-X-API-KEY: your-personal-api-key
-```
-
-### Example Headers
+Example headers:
 ```javascript
-const headers = {
-  'X-API-KEY': 'your-api-key',
-  'Content-Type': 'application/json'
-};
+// Single-user
+{ 'X-API-KEY': 'your-api-key', 'Content-Type': 'application/json' }
+
+// Multi-user
+{ 'Authorization': 'Bearer <JWT>', 'Content-Type': 'application/json' }
 ```
 
 ## Endpoint Reference
 
-### 1. Simple Search - `POST /search`
+### 1. Unified Search - `POST /search`
 
-Perform a straightforward search across your content with minimal configuration.
+Unified RAG search with all features available via parameters. Minimal usage shown below.
 
-#### Request
+Request (subset of fields from UnifiedRAGRequest):
 ```typescript
-interface SimpleSearchRequest {
-  query: string;                    // Search query (1-1000 chars)
-  search_type?: "hybrid" | "semantic" | "fulltext";  // Default: "hybrid"
-  limit?: number;                    // Max results (1-100, default: 10)
-  databases?: string[];              // Default: ["media_db"]
-  keywords?: string[];               // Optional keyword filters
+interface UnifiedSearchRequest {
+  query: string;                              // Required
+  search_mode?: 'hybrid' | 'vector' | 'fts';  // Default: 'hybrid'
+  top_k?: number;                             // 1-100, Default: 10
+  sources?: ('media_db'|'notes'|'characters'|'chats')[]; // Default: ['media_db']
+  keyword_filter?: string[];                  // Optional
+  enable_generation?: boolean;                // Include model-generated answer
+  enable_citations?: boolean;                 // Include citations
 }
 ```
 
-#### Response
+Response (UnifiedRAGResponse excerpt):
 ```typescript
-interface SimpleSearchResponse {
-  results: SearchResult[];
-  total_results: number;
-  search_type: string;
-  databases_searched: string[];
-  keywords_used?: string[];
-}
-
-interface SearchResult {
-  id: string;
-  title: string;
-  content: string;          // Snippet (max 500 chars)
-  score: number;
-  source: string;
-  metadata?: object;
+interface UnifiedSearchResponse {
+  documents: { id: string; content: string; score: number; metadata: object }[];
+  query: string;
+  expanded_queries: string[];
+  metadata: object;
+  timings: Record<string, number>;
+  generated_answer?: string;
+  citations?: object[];
 }
 ```
 
@@ -123,95 +121,29 @@ const response = await fetch('http://localhost:8000/api/v1/rag/search', {
 const data = await response.json();
 ```
 
-### 2. Advanced Search - `POST /search/advanced`
+### 2. Advanced Search - `GET /advanced`
 
-Full control over search with advanced filtering and strategies.
+Convenience endpoint enabling common features by default (citations, optional answer generation). Use query parameters.
 
-#### Request
-```typescript
-interface AdvancedSearchRequest {
-  query: string;
-  strategy?: "vanilla" | "query_fusion" | "hyde";  // Default: "vanilla"
-  search_config?: {
-    search_type?: "hybrid" | "semantic" | "fulltext";
-    limit?: number;
-    offset?: number;
-    databases?: string[];
-    keywords?: string[];
-    metadata_filters?: object;
-    date_range?: {
-      start?: string;  // ISO date
-      end?: string;
-    };
-    include_full_content?: boolean;
-    include_scores?: boolean;
-  };
-  hybrid_config?: {
-    semantic_weight?: number;  // 0.0-1.0
-    fulltext_weight?: number;  // 0.0-1.0
-    rrf_k?: number;           // Default: 60
-  };
-  semantic_config?: {
-    similarity_threshold?: number;  // 0.0-1.0
-    rerank?: boolean;
-  };
-}
+Query parameters:
+```text
+query            (required)
+with_citations   (bool, default true)
+with_answer      (bool, default true)
 ```
 
-#### Response
-```typescript
-interface AdvancedSearchResponse {
-  results: SearchResult[];
-  total_results: number;
-  search_metadata: {
-    strategy_used: string;
-    databases_searched: string[];
-    processing_time_ms: number;
-    config_applied: object;
-  };
-  debug_info?: object;  // If debug enabled
-}
+Example:
+```bash
+curl -G http://localhost:8000/api/v1/rag/advanced \
+  -H "X-API-KEY: your-api-key" \
+  --data-urlencode "query=quantum computing breakthroughs" \
+  --data-urlencode "with_citations=true" \
+  --data-urlencode "with_answer=true"
 ```
 
-#### Example with Query Fusion
-```javascript
-const response = await fetch('http://localhost:8000/api/v1/rag/search/advanced', {
-  method: 'POST',
-  headers: {
-    'X-API-KEY': 'your-api-key',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    query: "quantum computing breakthroughs",
-    strategy: "query_fusion",
-    search_config: {
-      search_type: "hybrid",
-      limit: 20,
-      databases: ["media_db", "notes"],
-      metadata_filters: {
-        "language": "en",
-        "quality": "high"
-      },
-      date_range: {
-        start: "2023-01-01",
-        end: "2024-12-31"
-      },
-      include_full_content: true
-    },
-    hybrid_config: {
-      semantic_weight: 0.7,
-      fulltext_weight: 0.3,
-      rrf_k: 60
-    },
-    semantic_config: {
-      similarity_threshold: 0.5,
-      rerank: true
-    }
-  })
-});
-```
+### 3. Simple Agent - `POST /agent` (Deprecated)
 
-### 3. Simple Agent - `POST /agent`
+Note: Agent endpoints are not exposed in the current server. Use `POST /api/v1/rag/search` (with `enable_generation=true`) or `POST /api/v1/rag/search/stream` instead.
 
 Conversational Q&A with automatic context retrieval.
 
@@ -273,7 +205,9 @@ response = await fetch('http://localhost:8000/api/v1/rag/agent', {
 });
 ```
 
-### 4. Advanced Agent - `POST /agent/advanced`
+### 4. Advanced Agent - `POST /agent/advanced` (Deprecated)
+
+Note: This endpoint is not available. Use `POST /api/v1/rag/search/stream` for streaming answers.
 
 Research agent with tools and streaming support.
 
@@ -362,16 +296,53 @@ while (true) {
 }
 ```
 
+### 3. Streaming Search - `POST /search/stream`
+
+Streams generated answer chunks as NDJSON. When `enable_claims=true`, periodic claim overlays may be emitted.
+
+Client example (NDJSON):
+```javascript
+const response = await fetch('http://localhost:8000/api/v1/rag/search/stream', {
+  method: 'POST',
+  headers: { 'X-API-KEY': 'your-api-key', 'Content-Type': 'application/json' },
+  body: JSON.stringify({ query: 'Explain transformers', enable_generation: true })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = '';
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+  let idx;
+  while ((idx = buffer.indexOf('\n')) >= 0) {
+    const line = buffer.slice(0, idx); buffer = buffer.slice(idx + 1);
+    if (!line.trim()) continue;
+    const evt = JSON.parse(line);
+    if (evt.type === 'delta') console.log(evt.text);
+    if (evt.type === 'claims_overlay') console.log('[claims]', evt);
+    if (evt.type === 'final_claims') console.log('[final_claims]', evt);
+  }
+}
+```
+
 ### 5. Health Check - `GET /health`
 
 Check service availability.
 
-#### Response
-```typescript
-interface HealthResponse {
-  status: "healthy" | "unhealthy";
-  service: "rag_v2";
-  timestamp: number;
+#### Response (example)
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "version": "1.0.0",
+  "components": {
+    "cache": { "status": "healthy", "hit_rate": 0.62, "size": 123 },
+    "metrics": { "status": "healthy", "recent_queries": 42 },
+    "batch_processor": { "status": "healthy", "active_jobs": 0, "success_rate": 1.0 }
+  }
 }
 ```
 
@@ -393,24 +364,20 @@ if (health.status === 'healthy') {
 |----------|---------|-------------|
 | `media_db` | `media` | Ingested videos, audio, documents |
 | `notes` | - | Personal notes and annotations |
-| `characters` | - | Character cards and personas |
-| `chat_history` | `chats` | Conversation history |
+| `characters` | `character_cards` | Character cards and personas |
+| `chats` | `chat_history` | Conversation history |
 
-### Search Types
+### Search Modes
 
-| Type | Description | Use Case |
+| Mode | Description | Use Case |
 |------|-------------|----------|
-| `hybrid` | Combines BM25 and vector search | Best overall results (default) |
-| `semantic` | Vector similarity only | Conceptual searches |
-| `fulltext` | BM25 full-text only | Exact phrase matching |
+| `hybrid` | Combines BM25 (FTS5) and vector search | Best overall results (default) |
+| `vector` | Vector similarity only | Conceptual searches |
+| `fts` | BM25 full-text only | Exact phrase matching |
 
-### Search Strategies
+### Query Expansion
 
-| Strategy | Description | Use Case |
-|----------|-------------|----------|
-| `vanilla` | Standard single query | Simple searches (default) |
-| `query_fusion` | Multiple query variants | Improve coverage |
-| `hyde` | Hypothetical Document Embeddings | Better semantic matching |
+Enable expansion to improve recall using strategies like acronym, synonym, domain, and entity expansion. Control via `expand_query` and `expansion_strategies` in `POST /search`.
 
 ## Search Types & Strategies
 
@@ -452,37 +419,10 @@ Generates a hypothetical answer to improve semantic search:
 // Then searches for similar documents
 ```
 
-## Agent Modes & Tools
+## Capabilities & Features
 
-### RAG Mode (Default)
-
-Standard retrieval-augmented generation:
-1. Search databases for relevant context
-2. Generate response using retrieved information
-3. Include source citations
-
-### Research Mode
-
-Multi-step reasoning with tool usage:
-
-#### Available Tools
-
-| Tool | Description | Example Use |
-|------|-------------|-------------|
-| `web_search` | Search current web information | Latest news, current events |
-| `reasoning` | Multi-step logical reasoning | Complex problem solving |
-| `calculator` | Mathematical calculations | Numerical analysis |
-| `code_execution` | Execute code (sandboxed) | Data processing, algorithms |
-
-#### Research Mode Example
-```javascript
-{
-  "message": "Analyze the environmental impact of cryptocurrency mining in 2024",
-  "mode": "research",
-  "tools": ["web_search", "reasoning", "calculator"],
-  "system_prompt": "You are an environmental analyst. Provide data-driven insights."
-}
-```
+- `GET /capabilities`: Returns supported features, defaults, and limits for the unified pipeline.
+- `GET /features`: Lists feature groups and their parameters (query expansion, caching, security, citations, generation, reranking, feedback, monitoring, table processing, enhanced chunking, batch processing, resilience).
 
 ## Code Examples
 
@@ -498,7 +438,7 @@ class RAGClient {
     this.apiKey = apiKey;
   }
 
-  async search(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
+  async search(query: string, options: SearchOptions = {}): Promise<any> {
     const response = await fetch(`${this.baseUrl}/search`, {
       method: 'POST',
       headers: {
@@ -507,10 +447,10 @@ class RAGClient {
       },
       body: JSON.stringify({
         query,
-        search_type: options.searchType || 'hybrid',
-        limit: options.limit || 10,
-        databases: options.databases || ['media_db'],
-        keywords: options.keywords
+        search_mode: options.searchMode || 'hybrid',
+        top_k: options.limit || 10,
+        sources: options.databases || ['media_db'],
+        keyword_filter: options.keywords
       })
     });
 
@@ -521,58 +461,31 @@ class RAGClient {
     return response.json();
   }
 
-  async ask(message: string, conversationId?: string): Promise<AgentResponse> {
-    const response = await fetch(`${this.baseUrl}/agent`, {
+  async *streamSearch(query: string): AsyncGenerator<string> {
+    const response = await fetch(`${this.baseUrl}/search/stream`, {
       method: 'POST',
       headers: {
         'X-API-KEY': this.apiKey,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        message,
-        conversation_id: conversationId
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Agent request failed: ${response.statusText}`);
-    }
-
-    return response.json();
-  }
-
-  async *streamAgent(message: string, config: AgentConfig = {}): AsyncGenerator<string> {
-    const response = await fetch(`${this.baseUrl}/agent/advanced`, {
-      method: 'POST',
-      headers: {
-        'X-API-KEY': this.apiKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        message,
-        mode: config.mode || 'rag',
-        generation_config: {
-          ...config.generationConfig,
-          stream: true
-        }
-      })
+      body: JSON.stringify({ query, enable_generation: true })
     });
 
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.slice(6));
-          yield data.content;
-        }
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx); buffer = buffer.slice(idx + 1);
+        if (!line.trim()) continue;
+        const evt = JSON.parse(line);
+        if (evt.type === 'delta') yield evt.text;
       }
     }
   }
@@ -588,11 +501,8 @@ const results = await rag.search('machine learning', {
   databases: ['media_db', 'notes']
 });
 
-// Q&A
-const answer = await rag.ask('What is deep learning?');
-
-// Streaming
-for await (const chunk of rag.streamAgent('Explain quantum computing')) {
+// Streaming answer chunks
+for await (const chunk of rag.streamSearch('Explain quantum computing')) {
   process.stdout.write(chunk);
 }
 ```
@@ -764,50 +674,24 @@ curl -X POST http://localhost:8000/api/v1/rag/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "machine learning",
-    "limit": 5
+    "top_k": 5
   }'
 
-# Advanced search with filters
-curl -X POST http://localhost:8000/api/v1/rag/search/advanced \
+# Advanced search
+curl -G http://localhost:8000/api/v1/rag/advanced \
   -H "X-API-KEY: your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "neural networks",
-    "strategy": "query_fusion",
-    "search_config": {
-      "search_type": "hybrid",
-      "limit": 10,
-      "metadata_filters": {
-        "language": "en"
-      }
-    },
-    "hybrid_config": {
-      "semantic_weight": 0.8,
-      "fulltext_weight": 0.2
-    }
-  }'
+  --data-urlencode "query=neural networks" \
+  --data-urlencode "with_citations=true" \
+  --data-urlencode "with_answer=true"
 
-# Agent Q&A
-curl -X POST http://localhost:8000/api/v1/rag/agent \
+# Streaming unified search (NDJSON)
+curl -N -X POST http://localhost:8000/api/v1/rag/search/stream \
   -H "X-API-KEY: your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{
-    "message": "Explain gradient descent"
-  }'
-
-# Research agent with tools
-curl -X POST http://localhost:8000/api/v1/rag/agent/advanced \
-  -H "X-API-KEY: your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "Compare BERT and GPT architectures",
-    "mode": "research",
-    "tools": ["web_search", "reasoning"]
-  }'
+  -d '{ "query": "Explain transformers", "enable_generation": true }'
 
 # Health check
-curl -X GET http://localhost:8000/api/v1/rag/health \
-  -H "X-API-KEY: your-api-key"
+curl -X GET http://localhost:8000/api/v1/rag/health
 ```
 
 ## Best Practices
@@ -854,30 +738,9 @@ limit: 10-20
 limit: 50-100
 ```
 
-### 4. Conversation Management
+### 4. Observability
 
-Maintain conversation context:
-
-```javascript
-class ConversationManager {
-  private conversations = new Map();
-  
-  async ask(userId: string, message: string) {
-    let conversationId = this.conversations.get(userId);
-    
-    const response = await ragClient.ask(message, conversationId);
-    
-    // Store conversation ID for follow-ups
-    this.conversations.set(userId, response.conversation_id);
-    
-    return response;
-  }
-  
-  clearConversation(userId: string) {
-    this.conversations.delete(userId);
-  }
-}
-```
+- Use `enable_observability` and `trace_id` fields on `POST /search` to correlate logs and metrics.
 
 ### 5. Streaming for Long Responses
 
@@ -1021,10 +884,14 @@ Handle validation errors gracefully:
 
 ### Rate Limits
 
-Default rate limits (configurable):
-- **Search endpoints**: 100 requests/minute
-- **Agent endpoints**: 30 requests/minute
-- **Health check**: Unlimited
+Defaults are configured via AuthNZ settings and enforced per client/IP (token bucket):
+- RATE_LIMIT_ENABLED: true
+- RATE_LIMIT_PER_MINUTE: 60
+- RATE_LIMIT_BURST: 10
+
+Notes:
+- Endpoints apply a general `check_rate_limit` dependency; administrators can tune settings via environment or config.
+- Health endpoints may be left open or gated by global policies per deployment.
 
 ### Rate Limit Headers
 

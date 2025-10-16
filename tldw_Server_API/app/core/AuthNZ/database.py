@@ -3,6 +3,7 @@
 #
 # Imports
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Any, Dict
@@ -41,6 +42,8 @@ class DatabasePool:
         self.db_path: Optional[str] = None
         self._initialized = False
         self._lock = asyncio.Lock()
+        # Track the event loop this pool is attached to (Postgres only)
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
     async def initialize(self):
         """Initialize database connection pool"""
@@ -64,6 +67,12 @@ class DatabasePool:
                         max_inactive_connection_lifetime=self.settings.DATABASE_MAX_INACTIVE_CONNECTION_LIFETIME,
                         command_timeout=60
                     )
+                    # Remember loop for compatibility checks
+                    try:
+                        self._loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        # Fallback for contexts without a running loop
+                        self._loop = None
                     
                     # Test connection
                     async with self.pool.acquire() as conn:
@@ -161,27 +170,22 @@ class DatabasePool:
         
         if self.pool:
             # PostgreSQL transaction
-            conn = None
             try:
-                conn = await self.pool.acquire()
-                # Start a transaction using async with
-                async with conn.transaction():
-                    yield conn
+                async with self.pool.acquire() as conn:
+                    async with conn.transaction():
+                        yield conn
                 logger.debug("PostgreSQL transaction committed successfully")
             except asyncpg.exceptions.TooManyConnectionsError:
                 raise ConnectionPoolExhaustedError()
-            except HTTPException as e:
+            except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
-            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError) as e:
+            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError):
                 # Re-raise registration exceptions unchanged
                 raise
             except Exception as e:
                 logger.error(f"PostgreSQL transaction error: {e}")
                 raise TransactionError("PostgreSQL transaction", str(e))
-            finally:
-                if conn:
-                    await self.pool.release(conn)
         else:
             # SQLite transaction
             conn = None
@@ -248,58 +252,89 @@ class DatabasePool:
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                return await conn.execute(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                return await conn.execute(pg_query, *params)
             else:
                 # SQLite
-                await conn.execute(query, args)
+                # Flatten args if a single list/tuple was provided by an adapter
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 await conn.commit()
+                return cursor
     
     async def fetchone(self, query: str, *args) -> Optional[Dict[str, Any]]:
         """Fetch a single row"""
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                row = await conn.fetchrow(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                row = await conn.fetchrow(pg_query, *params)
                 return dict(row) if row else None
             else:
                 # SQLite
-                cursor = await conn.execute(query, args)
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 if row:
                     # Convert Row to dict
                     return {key: row[key] for key in row.keys()}
                 return None
     
-    async def fetchall(self, query: str, *args) -> list[Dict[str, Any]]:
-        """Fetch all rows"""
+    async def fetchall(self, query: str, *args) -> list[Any]:
+        """Fetch all rows.
+
+        PostgreSQL returns a list of dict-like records (converted via dict(row)).
+        SQLite returns aiosqlite.Row objects (supporting both dict-style and index access)
+        to maximize compatibility with tests that may use numeric indexing (r[0])
+        or key access (r['col']).
+        """
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                rows = await conn.fetch(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                rows = await conn.fetch(pg_query, *params)
                 return [dict(row) for row in rows]
             else:
                 # SQLite
-                cursor = await conn.execute(query, args)
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 rows = await cursor.fetchall()
-                return [{key: row[key] for key in row.keys()} for row in rows]
+                # Return native Row objects to support both index and key access
+                return list(rows)
     
     async def fetchval(self, query: str, *args) -> Any:
         """Fetch a single value"""
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                return await conn.fetchval(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                return await conn.fetchval(pg_query, *params)
             else:
                 # SQLite
-                cursor = await conn.execute(query, args)
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 return row[0] if row else None
     
     async def close(self):
         """Close database connections"""
         if self.pool:
-            await self.pool.close()
-            self.pool = None
+            try:
+                await self.pool.close()
+            except Exception as e:
+                # In test teardown, the loop bound to the pool may already be closed.
+                logger.debug(f"Ignoring pool.close() error during shutdown: {e}")
+            finally:
+                self.pool = None
+                self._loop = None
         self._initialized = False
         logger.info("Database pool closed")
     
@@ -356,6 +391,22 @@ async def get_db_pool() -> DatabasePool:
     if not _db_pool:
         _db_pool = DatabasePool()
         await _db_pool.initialize()
+        return _db_pool
+    # Ensure the pool is compatible with the current running loop (Postgres path)
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    # If an existing Postgres pool is bound to a different loop, recreate it
+    if getattr(_db_pool, 'pool', None) is not None and getattr(_db_pool, '_loop', None) is not None:
+        if _db_pool._loop is not None and current_loop is not None and _db_pool._loop is not current_loop:
+            logger.info("Detected DB pool bound to a different event loop; recreating for current loop")
+            try:
+                await _db_pool.close()
+            except Exception as e:
+                logger.debug(f"Ignoring error while closing incompatible pool: {e}")
+            _db_pool = DatabasePool()
+            await _db_pool.initialize()
     return _db_pool
 
 
@@ -363,7 +414,11 @@ async def reset_db_pool():
     """Reset database pool (mainly for testing)"""
     global _db_pool
     if _db_pool:
-        await _db_pool.close()
+        try:
+            await _db_pool.close()
+        except Exception as e:
+            # The loop might already be closed by a TestClient; best-effort cleanup.
+            logger.debug(f"reset_db_pool: ignoring close error: {e}")
     _db_pool = None
 
 
@@ -405,7 +460,65 @@ async def execute_migration(migration_sql: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Migration failed: {e}")
-        return False
+    return False
+
+
+# --- Internal helpers ---
+_DOLLAR_PARAM = re.compile(r"\$\d+")
+
+#######################################################################################################################
+#
+# Shared backend detection helper
+
+async def is_postgres_backend() -> bool:
+    """Return True if the configured AuthNZ database backend is PostgreSQL.
+
+    Uses the presence of an asyncpg pool on the DatabasePool singleton as the
+    definitive signal, avoiding fragile attribute checks on per-request
+    connections.
+    """
+    pool = await get_db_pool()
+    return getattr(pool, "pool", None) is not None
+
+def _normalize_sqlite_sql(query: str) -> str:
+    """Convert Postgres-style $1 placeholders to SQLite '?' when needed.
+
+    The admin endpoints and services generally branch on backend, but this
+    normalization provides a safety net to avoid aiosqlite warnings when a
+    $-style query slips through the SQLite path.
+    """
+    if "$" not in query:
+        return query
+    # Replace all occurrences of $N with '?' keeping ordering intact
+    return _DOLLAR_PARAM.sub("?", query)
+
+
+def _flatten_params(args: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Support both variadic and single-sequence parameter passing."""
+    if len(args) == 1 and isinstance(args[0], (list, tuple)):
+        return tuple(args[0])
+    return tuple(args)
+
+
+def _convert_question_mark_to_dollar(query: str, params: tuple[Any, ...]) -> str:
+    """Convert '?' placeholders to Postgres-style '$N' placeholders when needed."""
+    if "?" not in query or "$" in query:
+        return query
+    count = query.count("?")
+    if count != len(params):
+        logger.warning(
+            "Query placeholder count mismatch (found {} '?', got {} params). Leaving query unchanged.",
+            count,
+            len(params),
+        )
+        return query
+    parts = query.split("?")
+    rebuilt = []
+    for idx, part in enumerate(parts[:-1]):
+        rebuilt.append(part)
+        rebuilt.append(f"${idx + 1}")
+    rebuilt.append(parts[-1])
+    return "".join(rebuilt)
 
 
 #

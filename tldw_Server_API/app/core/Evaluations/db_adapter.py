@@ -297,11 +297,10 @@ def get_database_adapter(config: Optional[DatabaseConfig] = None) -> DatabaseAda
     
     if _global_adapter is None:
         if config is None:
-            # Default to SQLite for backward compatibility
-            db_dir = Path(__file__).parent.parent.parent.parent / "Databases"
-            db_dir.mkdir(parents=True, exist_ok=True)
-            db_path = db_dir / "evaluations.db"
-            
+            # Default to SQLite per-user (single-user ID) for backward compatibility
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+            db_path = _DP.get_evaluations_db_path(_DP.get_single_user_id())
+            db_path.parent.mkdir(parents=True, exist_ok=True)
             config = DatabaseConfig(
                 db_type=DatabaseType.SQLITE,
                 connection_string=str(db_path)

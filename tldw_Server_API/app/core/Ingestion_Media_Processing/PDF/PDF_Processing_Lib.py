@@ -28,6 +28,13 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
+try:
+    # Optional VLM module (vision backends)
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
+        get_backend as _get_vlm_backend,
+    )
+except Exception:
+    _get_vlm_backend = lambda name=None: None  # type: ignore
 #
 # Constants
 # Get configuration values or use defaults
@@ -215,6 +222,11 @@ def process_pdf(
     ocr_dpi: int = 300,
     ocr_mode: Optional[str] = "fallback",
     ocr_min_page_text_chars: int = 40,
+    # VLM options
+    enable_vlm: bool = False,
+    vlm_backend: Optional[str] = None,
+    vlm_detect_tables_only: bool = True,
+    vlm_max_pages: Optional[int] = None,
     # write_to_temp_file: bool = False # This param seems unused/obsolete now
 ) -> dict[str, Any] | None:
     """
@@ -276,6 +288,7 @@ def process_pdf(
             "custom_prompt_used": custom_prompt if perform_analysis else None,
             "system_prompt_used": system_prompt if perform_analysis else None,
             "summarized_recursively": summarize_recursively if perform_analysis else False,
+            "vlm": None,
         }
     }
     log_counter("pdf_processing_attempt", labels={"file_name": filename, "parser": parser})
@@ -516,6 +529,119 @@ def process_pdf(
                  "title": title_override or Path(filename).stem, "author": author_override or "Unknown",
                  "page_count": 0, "raw": {"error": f"Metadata extraction failed: {meta_fail_reason}"}
              }
+
+
+        # --- Step 2.5: VLM (Vision) Analysis / Detections ---
+        try:
+            if enable_vlm:
+                backend = _get_vlm_backend(vlm_backend if vlm_backend not in (None, "auto") else None)
+                if backend is None:
+                    result["warnings"].append("VLM requested but no backend available")
+                else:
+                    vlm_summary: Dict[str, Any] = {
+                        "backend": getattr(backend, "name", "unknown"),
+                        "pages_scanned": 0,
+                        "detections_total": 0,
+                        "by_page": [],
+                    }
+                    extra_chunks: List[Dict[str, Any]] = []
+
+                    # Prefer document-level processing if backend exposes it (e.g., docling)
+                    if hasattr(backend, "process_pdf"):
+                        try:
+                            res = backend.process_pdf(path_for_processing, max_pages=vlm_max_pages)
+                            # res.extra may contain by_page
+                            by_page = []
+                            if isinstance(getattr(res, "extra", None), dict):
+                                by_page = res.extra.get("by_page") or []
+
+                            # Build summary + chunks from by_page if present
+                            for entry in by_page:
+                                page_no = entry.get("page")
+                                dets = entry.get("detections") or []
+                                vlm_summary["pages_scanned"] += 1
+                                page_dets = []
+                                for d in dets:
+                                    label = str(d.get("label"))
+                                    score = float(d.get("score", 0.0))
+                                    bbox = d.get("bbox") or [0.0, 0.0, 0.0, 0.0]
+                                    if vlm_detect_tables_only and label.lower() != "table":
+                                        continue
+                                    page_dets.append({"label": label, "score": score, "bbox": bbox})
+                                    # Extra chunk
+                                    chunk_text = f"Detected {label} ({score:.2f}) on page {page_no} at {bbox}"
+                                    extra_chunks.append({
+                                        "text": chunk_text,
+                                        "start_char": None,
+                                        "end_char": None,
+                                        "chunk_type": "vlm" if label.lower() != "table" else "table",
+                                        "metadata": {"page": page_no, "bbox": bbox, "label": label, "score": score},
+                                    })
+                                    vlm_summary["detections_total"] += 1
+                                vlm_summary["by_page"].append({"page": page_no, "detections": page_dets})
+
+                            # If no by_page provided, fall back to top-level detections
+                            if not by_page and getattr(res, "detections", None):
+                                page_no = None
+                                page_dets = []
+                                for det in res.detections:
+                                    if vlm_detect_tables_only and str(det.label).lower() != "table":
+                                        continue
+                                    page_dets.append({"label": det.label, "score": det.score, "bbox": det.bbox})
+                                    chunk_text = f"Detected {det.label} ({det.score:.2f}) on page {page_no} at {det.bbox}"
+                                    extra_chunks.append({
+                                        "text": chunk_text,
+                                        "start_char": None,
+                                        "end_char": None,
+                                        "chunk_type": "vlm" if str(det.label).lower() != "table" else "table",
+                                        "metadata": {"page": page_no, "bbox": det.bbox, "label": det.label, "score": det.score},
+                                    })
+                                    vlm_summary["detections_total"] += 1
+                                vlm_summary["by_page"].append({"page": page_no, "detections": page_dets})
+                        except Exception as _pdf_vlm_err:
+                            logging.warning(f"VLM document-level processing failed: {_pdf_vlm_err}")
+                    else:
+                        with pymupdf.open(path_for_processing) as doc:
+                            total_pages = len(doc)
+                            max_pages = min(vlm_max_pages or total_pages, total_pages)
+                            for i, page in enumerate(doc, start=1):
+                                if i > max_pages:
+                                    break
+                                # Render a medium-resolution bitmap
+                                scale = 2.0  # ~144 DPI for detection
+                                pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+                                img_bytes = pix.tobytes("png")
+                                res = backend.process_image(img_bytes, context={"page": i, "pdf_path": path_for_processing})
+
+                                page_dets = []
+                                for det in res.detections:
+                                    if vlm_detect_tables_only and str(det.label).lower() != "table":
+                                        continue
+                                    page_dets.append({
+                                        "label": det.label,
+                                        "score": det.score,
+                                        "bbox": det.bbox,
+                                    })
+                                    # Add a compact text chunk for retrieval
+                                    chunk_text = f"Detected {det.label} ({det.score:.2f}) on page {i} at {det.bbox}"
+                                    extra_chunks.append({
+                                        "text": chunk_text,
+                                        "start_char": None,
+                                        "end_char": None,
+                                        "chunk_type": "vlm" if str(det.label).lower() != "table" else "table",
+                                        "metadata": {"page": i, "bbox": det.bbox, "label": det.label, "score": det.score},
+                                    })
+
+                                vlm_summary["by_page"].append({"page": i, "detections": page_dets})
+                                vlm_summary["pages_scanned"] += 1
+                                vlm_summary["detections_total"] += len(page_dets)
+
+                    result.setdefault("analysis_details", {})["vlm"] = vlm_summary
+                    if extra_chunks:
+                        result["extra_chunks"] = extra_chunks
+        except Exception as vlm_err:
+            logging.warning(f"VLM processing failed for {filename}: {vlm_err}")
+            result["warnings"].append(f"VLM processing error: {vlm_err}")
 
 
         # --- Step 3: Chunking ---
@@ -882,6 +1008,11 @@ async def process_pdf_task(
     ocr_dpi: int = 300,
     ocr_mode: Optional[str] = "fallback",
     ocr_min_page_text_chars: int = 40,
+    # VLM options
+    enable_vlm: bool = False,
+    vlm_backend: Optional[str] = None,
+    vlm_detect_tables_only: bool = True,
+    vlm_max_pages: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Async wrapper task to process a single PDF (provided as bytes)
@@ -924,6 +1055,10 @@ async def process_pdf_task(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            enable_vlm=enable_vlm,
+            vlm_backend=vlm_backend,
+            vlm_detect_tables_only=vlm_detect_tables_only,
+            vlm_max_pages=vlm_max_pages,
             # No need to pass write_to_temp_file
         )
 

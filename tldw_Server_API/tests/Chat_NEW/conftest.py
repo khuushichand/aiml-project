@@ -10,8 +10,8 @@ import os
 # Set test environment variables before any imports
 os.environ["TEST_MODE"] = "true"
 os.environ["DEFAULT_LLM_PROVIDER"] = "openai"
-os.environ["API_BEARER"] = "default-secret-key-for-single-user"
-os.environ["SINGLE_USER_API_KEY"] = "default-secret-key-for-single-user"
+os.environ["API_BEARER"] = os.environ.get("API_BEARER", "test-api-key-12345")
+os.environ["SINGLE_USER_API_KEY"] = os.environ.get("SINGLE_USER_API_KEY", "test-api-key-12345")
 # Deterministic chat rate limits for integration tests
 os.environ.setdefault("TEST_CHAT_PER_USER_RPM", "2")
 os.environ.setdefault("TEST_CHAT_PER_CONVERSATION_RPM", "2")
@@ -39,6 +39,7 @@ from datetime import datetime
 import uuid
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
@@ -63,6 +64,37 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: Tests that take > 1 second")
     config.addinivalue_line("markers", "requires_llm: Tests requiring LLM API")
     config.addinivalue_line("markers", "streaming: Tests for streaming responses")
+
+# =====================================================================
+# Rate Limiter Reset Between Tests
+# =====================================================================
+
+@pytest.fixture(autouse=True)
+def _reset_chat_rate_limiter_between_tests():
+    """Reset chat rate limiter state before each test to avoid cross-test 429s.
+
+    Ensures deterministic behavior for tests that expect 200 responses by
+    restoring token buckets to full capacity for the default test user.
+    """
+    try:
+        # Ensure TEST_MODE so limiter uses deterministic config
+        os.environ.setdefault("TEST_MODE", "true")
+        from tldw_Server_API.app.core.Chat.rate_limiter import (
+            get_rate_limiter,
+            initialize_rate_limiter,
+        )
+        rl = get_rate_limiter()
+        if rl is None:
+            rl = initialize_rate_limiter()
+        # Reset per-user and global buckets (both common test ids)
+        rl.reset_user_limits("test_user")
+        rl.reset_user_limits("1")  # single_user mode default user id
+        if hasattr(rl, "global_bucket") and hasattr(rl.global_bucket, "capacity"):
+            rl.global_bucket.tokens = rl.global_bucket.capacity
+    except Exception:
+        # Best effort; tests that validate 429s will still function
+        pass
+    yield
 
 # =====================================================================
 # Environment Configuration
@@ -281,7 +313,7 @@ def test_client(test_env_vars):
     with TestClient(app) as client:
         yield client
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_client(test_env_vars):
     """Create an async test client for streaming tests."""
     from tldw_Server_API.app.main import app
@@ -294,9 +326,10 @@ async def async_client(test_env_vars):
 @pytest.fixture
 def auth_headers():
     """Authentication headers for API requests."""
+    api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     return {
-        "Token": "Bearer default-secret-key-for-single-user",
-        "X-API-KEY": "default-secret-key-for-single-user",
+        "Token": f"Bearer {api_key}",
+        "X-API-KEY": api_key,
         "Content-Type": "application/json"
     }
 

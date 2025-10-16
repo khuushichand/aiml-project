@@ -17,11 +17,12 @@ describe('APIClient', () => {
     vi.unstubAllGlobals();
   });
 
-  it('generateCurl includes headers/body', () => {
-    const curl = client.generateCurl('POST', '/x', { body: { a: 1 }, query: { q: 'y' } });
+  it('generateCurlV2 includes headers/body', () => {
+    const curl = client.generateCurlV2('POST', '/x', { body: { a: 1 }, query: { q: 'y' } });
     expect(curl).toContain('curl -X POST');
     expect(curl).toContain('Content-Type: application/json');
-    expect(curl).toContain('Token: sk-test');
+    // Auth-aware header now mirrors request behavior (single-user => X-API-KEY)
+    expect(curl).toContain('X-API-KEY: sk-test');
     expect(curl).toContain('q=y');
   });
 
@@ -42,4 +43,3 @@ describe('APIClient', () => {
     await expect(client.get('/bad')).rejects.toThrow();
   });
 });
-

@@ -6,15 +6,15 @@ Precompute concise, verifiable factual statements ("claims") for each chunk at i
 - Retrieval can target claims (FTS and optionally vectors) to improve precision for fact-seeking queries.
 - RAG factuality workflows can leverage pre-extracted claims to reduce runtime cost.
 
-This feature is optional, gated by settings, and designed to be reversible and low-risk.
+This feature is optional, gated by settings, and designed to be reversible and low-risk. It is wired into the embeddings pipeline and can also be rebuilt asynchronously.
 
-## Scope (Stage 1)
+## Scope
 
-- Add schema support for storing claims in the Media database (SQLite, default).
-- Create optional FTS table for claims. No triggers or auto-sync in Stage 1 (search integration comes later).
-- Provide minimal CRUD/helpers to insert and read claims.
+- Add schema support for storing claims in the Media database (SQLite by default; PostgreSQL supported).
+- Create FTS table for claims and keep it synchronized. SQLite uses FTS5 with triggers; PostgreSQL uses a tsvector column.
+- Provide minimal CRUD/helpers to insert, search, and rebuild the FTS index.
 
-Later stages (not in this change): background processing, embedding claims into Chroma, retriever integration, and RAG usage.
+Later stages (already partially implemented): background processing, embedding claims into Chroma, retriever integration, and RAG usage.
 
 ## Data Model
 
@@ -44,28 +44,39 @@ Indexes
 - `idx_claims_uuid` UNIQUE on `(uuid)`
 - `idx_claims_deleted` on `(deleted)`
 
-FTS (optional for Stage 1)
-- `claims_fts` (FTS5) with `claim_text`, `content='Claims'`, `content_rowid='id'`
-- Stage 1: created but not yet synchronized via triggers; insertion helpers may update FTS explicitly in later stages.
+FTS
+- `claims_fts` (FTS5) with `claim_text`, `content='Claims'`, `content_rowid='id'` (SQLite)
+- SQLite triggers keep `claims_fts` synchronized on INSERT/UPDATE/DELETE of `Claims`.
+- PostgreSQL maintains a `claims_fts_tsv` column (tsvector) and rebuild support is provided.
 
-## Configuration (future)
+## Configuration
 
 - `ENABLE_INGESTION_CLAIMS` (bool, default: false)
 - `CLAIM_EXTRACTOR_MODE` (heuristic|llm|auto, default: heuristic)
 - `CLAIMS_MAX_PER_CHUNK` (default: 3)
 - `CLAIMS_EMBED` (bool, default: false)
 - `CLAIMS_EMBED_MODEL_ID` (string)
+- `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE` (used when `CLAIM_EXTRACTOR_MODE` uses an LLM)
 
-## Pipeline Hook (future)
+## Pipeline Hook
 
-After chunking and before/alongside embedding, optionally run a lightweight extractor (heuristic first) and store results in `Claims`. Embedding and retriever integration will follow in later stages.
+After chunking and before/alongside embedding, optionally run a lightweight extractor (heuristic first by default) and store results in `Claims`. See `tldw_Server_API.app.core.Embeddings.ChromaDB_Library` for the integration behind `ENABLE_INGESTION_CLAIMS`. Optionally, claims can be embedded into a separate collection when `CLAIMS_EMBED=True`.
 
-## Testing (Stage 1)
+## Testing
 
-- Verify `Claims` table and `claims_fts` exist for new DBs and are created for existing DBs at initialization.
-- Insert and read back claims tied to a media row.
+- Verify `Claims` table and `claims_fts` exist and triggers are installed for SQLite.
+- Insert and read back claims tied to a media row; confirm `claims_fts` reflects changes.
+- Exercise rebuild endpoints and background service.
 
 ## Rollback
 
 Feature is additive. If disabled, code paths do not write to `Claims`. Removing the table is not required for rollback.
 
+## APIs & Services
+
+- `GET /api/v1/claims/{media_id}` — list claims for a media item
+- `POST /api/v1/claims/{media_id}/rebuild` — enqueue rebuild for a media item
+- `POST /api/v1/claims/rebuild/all` — enqueue rebuild for all items (policies: `missing|all|stale`)
+- `POST /api/v1/claims/rebuild_fts` — rebuild `claims_fts` from `Claims`
+
+Background service: `ClaimsRebuildService` manages a worker thread that rebuilds claims by chunking, extracting (`heuristic|llm|auto`), and storing with chunk hashes. See `tldw_Server_API.app.services.claims_rebuild_service`.

@@ -57,6 +57,32 @@ class Settings(BaseSettings):
         default="HS256",
         description="JWT signing algorithm"
     )
+    JWT_PRIVATE_KEY: Optional[str] = Field(
+        default=None,
+        description="PEM-encoded private key for asymmetric JWT signing (RS256/ES256)"
+    )
+    JWT_PUBLIC_KEY: Optional[str] = Field(
+        default=None,
+        description="PEM-encoded public key for asymmetric JWT verification (RS256/ES256)"
+    )
+    JWT_SECONDARY_SECRET: Optional[str] = Field(
+        default=None,
+        description="Optional secondary HS secret for dual-validation during rotations"
+    )
+    JWT_SECONDARY_PUBLIC_KEY: Optional[str] = Field(
+        default=None,
+        description="Optional secondary public key (RS/ES) for dual-validation during rotations"
+    )
+    
+    # Optional JWT claims enforcement (recommended in production)
+    JWT_ISSUER: Optional[str] = Field(
+        default=None,
+        description="Expected JWT issuer (iss). If set, tokens must include matching iss"
+    )
+    JWT_AUDIENCE: Optional[str] = Field(
+        default=None,
+        description="Expected JWT audience (aud). If set, tokens must include matching aud"
+    )
     
     # ===== Password Settings =====
     PASSWORD_MIN_LENGTH: int = Field(
@@ -230,6 +256,120 @@ class Settings(BaseSettings):
         description="Additional secret for API key hashing (recommended for production)"
     )
     
+    # Optional: log a lightweight 'used' entry when an API key validates
+    API_KEY_AUDIT_LOG_USAGE: bool = Field(
+        default=False,
+        description="If true, log a 'used' event in API key audit log on successful validation"
+    )
+
+    # ===== Token Rotation =====
+    ROTATE_REFRESH_TOKENS: bool = Field(
+        default=True,
+        description="Rotate refresh tokens on use (recommended). Returns new refresh token in /auth/refresh"
+    )
+
+    # ===== Logging / PII =====
+    PII_REDACT_LOGS: bool = Field(
+        default=False,
+        description="Redact usernames/IPs in auth logs (recommended in production)"
+    )
+
+    # ===== CSRF Binding (Optional) =====
+    CSRF_BIND_TO_USER: bool = Field(
+        default=False,
+        description="Bind CSRF token to user context via HMAC when user_id available"
+    )
+
+    # ===== RBAC / Usage Logging =====
+    RBAC_SOFT_ENFORCE: bool = Field(
+        default=False,
+        description="If true, permission checks log warnings instead of 403 (deployment opt-in)"
+    )
+    USAGE_LOG_ENABLED: bool = Field(
+        default=False,
+        description="If true, record lightweight per-request usage into usage_log"
+    )
+    USAGE_LOG_EXCLUDE_PREFIXES: list[str] = Field(
+        default_factory=lambda: [
+            "/docs", "/redoc", "/openapi.json", "/metrics", "/static", "/favicon.ico", "/webui"
+        ],
+        description="Request path prefixes to exclude from usage logging"
+    )
+    USAGE_AGGREGATOR_INTERVAL_MINUTES: int = Field(
+        default=60,
+        ge=1,
+        le=24 * 60,
+        description="Background usage aggregator interval in minutes"
+    )
+    # Disable capturing IP/User-Agent in usage_log.meta entirely
+    USAGE_LOG_DISABLE_META: bool = Field(
+        default=False,
+        description="When true, do not store IP/User-Agent in usage_log meta (stores '{}')"
+    )
+
+    # ===== LLM Usage Logging =====
+    LLM_USAGE_ENABLED: bool = Field(
+        default=True,
+        description="If true, record per-request LLM usage into llm_usage_log (can be overridden by env)"
+    )
+
+    # ===== LLM Usage Aggregation =====
+    LLM_USAGE_AGGREGATOR_ENABLED: bool = Field(
+        default=True,
+        description="Enable background aggregation of llm_usage_log into llm_usage_daily"
+    )
+    LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES: int = Field(
+        default=60,
+        ge=1,
+        le=24 * 60,
+        description="Background LLM usage aggregator interval in minutes"
+    )
+
+    # ===== Usage Log Retention =====
+    USAGE_LOG_RETENTION_DAYS: int = Field(
+        default=180,
+        ge=1,
+        le=3650,
+        description="Retention window for usage_log rows (days)"
+    )
+    LLM_USAGE_LOG_RETENTION_DAYS: int = Field(
+        default=180,
+        ge=1,
+        le=3650,
+        description="Retention window for llm_usage_log rows (days)"
+    )
+
+    # Optional: retention for daily aggregates
+    USAGE_DAILY_RETENTION_DAYS: int = Field(
+        default=365,
+        ge=1,
+        le=3650,
+        description="Retention window for usage_daily rows (days)"
+    )
+    LLM_USAGE_DAILY_RETENTION_DAYS: int = Field(
+        default=365,
+        ge=1,
+        le=3650,
+        description="Retention window for llm_usage_daily rows (days)"
+    )
+
+    # ===== Virtual Keys / LLM Budgeting =====
+    VIRTUAL_KEYS_ENABLED: bool = Field(
+        default=True,
+        description="Enable Virtual API Keys features (org/team association, budgets)"
+    )
+    LLM_BUDGET_ENFORCE: bool = Field(
+        default=True,
+        description="Reject requests from over-budget virtual keys"
+    )
+    LLM_BUDGET_ENDPOINTS: list[str] = Field(
+        default_factory=lambda: [
+            "/api/v1/chat/completions",
+            "/api/v1/embeddings"
+        ],
+        description="Paths where LLM budget middleware is applied"
+    )
+    
     # ===== Monitoring =====
     ENABLE_HEALTH_CHECK: bool = Field(
         default=True,
@@ -239,6 +379,82 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = Field(
         default=True,
         description="Enable Prometheus metrics"
+    )
+    
+    # ===== Security Alerting =====
+    SECURITY_ALERTS_ENABLED: bool = Field(
+        default=False,
+        description="Enable AuthNZ security alerts (file/webhook/email)."
+    )
+    SECURITY_ALERT_MIN_SEVERITY: str = Field(
+        default="high",
+        description="Minimum severity to dispatch security alerts (low|medium|high|critical)."
+    )
+    SECURITY_ALERT_FILE_PATH: str = Field(
+        default="Databases/security_alerts.log",
+        description="File path for security alert JSONL sink."
+    )
+    SECURITY_ALERT_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Webhook URL for security alerts (optional)."
+    )
+    SECURITY_ALERT_WEBHOOK_HEADERS: Optional[str] = Field(
+        default=None,
+        description="JSON object of additional headers to include in security alert webhooks."
+    )
+    SECURITY_ALERT_EMAIL_TO: Optional[str] = Field(
+        default=None,
+        description="Comma-separated list of email recipients for security alerts."
+    )
+    SECURITY_ALERT_EMAIL_FROM: Optional[str] = Field(
+        default=None,
+        description="Email sender address for security alerts."
+    )
+    SECURITY_ALERT_EMAIL_SUBJECT_PREFIX: str = Field(
+        default="[AuthNZ]",
+        description="Subject prefix for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_HOST: Optional[str] = Field(
+        default=None,
+        description="SMTP host for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_PORT: int = Field(
+        default=587,
+        description="SMTP port for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_STARTTLS: bool = Field(
+        default=True,
+        description="Use STARTTLS for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_USERNAME: Optional[str] = Field(
+        default=None,
+        description="SMTP username for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="SMTP password for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_TIMEOUT: int = Field(
+        default=10,
+        ge=1,
+        description="Timeout (seconds) for SMTP connections when sending security alerts."
+    )
+    SECURITY_ALERT_BACKOFF_SECONDS: int = Field(
+        default=30,
+        ge=0,
+        description="Backoff window after a sink failure before retrying (seconds)."
+    )
+    SECURITY_ALERT_FILE_MIN_SEVERITY: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to write alerts to the file sink (default: use global threshold)."
+    )
+    SECURITY_ALERT_WEBHOOK_MIN_SEVERITY: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to deliver alerts to the webhook sink (default: use global threshold)."
+    )
+    SECURITY_ALERT_EMAIL_MIN_SEVERITY: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to deliver alerts via email (default: use global threshold)."
     )
     
     METRICS_PORT: int = Field(
@@ -333,8 +549,8 @@ class Settings(BaseSettings):
     def _validate_api_key(self):
         """Validate API key for single-user mode with deterministic test fallback."""
         if self.AUTH_MODE == "single_user":
-            # If an explicit key is provided via env/.env, honor it
-            explicit_env_key = os.getenv("SINGLE_USER_API_KEY")
+            # If an explicit key is provided via env/.env, honor it (legacy API_KEY supported)
+            explicit_env_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
 
             # Detect test contexts where the server should expose a stable key so client tests can authenticate
             # Only rely on environment of the server process, never trust request headers
@@ -349,13 +565,24 @@ class Settings(BaseSettings):
                     # Loaded by pydantic from env but still None here? Ensure it's applied
                     self.SINGLE_USER_API_KEY = explicit_env_key
                     logger.info("Using SINGLE_USER_API_KEY from environment for single-user mode")
+                elif in_test_context:
+                    # Deterministic key so tests can authenticate reliably.
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                    self.SINGLE_USER_API_KEY = test_key
+                    logger.debug("Using deterministic SINGLE_USER_API_KEY for test context")
                 else:
-                    # Deterministic key so clients (including tests) can authenticate reliably
-                    # Projects should override via SINGLE_USER_API_KEY in production
-                    self.SINGLE_USER_API_KEY = "test-api-key-12345"
-                    logger.warning(
-                        "No SINGLE_USER_API_KEY provided. Using deterministic default for single-user mode."
+                    raise ValueError(
+                        "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
+                        "Generate a secure key by running:\n"
+                        "  python -m tldw_Server_API.app.core.AuthNZ.initialize\n"
+                        "and follow the prompts (option \"Generate secure keys\").\n"
+                        "Then set SINGLE_USER_API_KEY in your environment or .env file."
                     )
+            # In test contexts, normalize known placeholder keys to the deterministic test key
+            elif in_test_context and self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}:
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                self.SINGLE_USER_API_KEY = test_key
+                logger.debug("Normalized placeholder SINGLE_USER_API_KEY to deterministic test key for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
@@ -481,6 +708,24 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
+        maybe_set("SECURITY_ALERTS_ENABLED", "security_alerts_enabled", _bool_from_str)
+        maybe_set("SECURITY_ALERT_MIN_SEVERITY", "security_alert_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_FILE_PATH", "security_alert_file_path", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_WEBHOOK_URL", "security_alert_webhook_url", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_WEBHOOK_HEADERS", "security_alert_webhook_headers", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_TO", "security_alert_email_to", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_FROM", "security_alert_email_from", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_SUBJECT_PREFIX", "security_alert_email_subject_prefix", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_HOST", "security_alert_smtp_host", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_PORT", "security_alert_smtp_port", lambda v: int(v))
+        maybe_set("SECURITY_ALERT_SMTP_STARTTLS", "security_alert_smtp_starttls", _bool_from_str)
+        maybe_set("SECURITY_ALERT_SMTP_USERNAME", "security_alert_smtp_username", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_PASSWORD", "security_alert_smtp_password", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_TIMEOUT", "security_alert_smtp_timeout", lambda v: int(v))
+        maybe_set("SECURITY_ALERT_FILE_MIN_SEVERITY", "security_alert_file_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_WEBHOOK_MIN_SEVERITY", "security_alert_webhook_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_MIN_SEVERITY", "security_alert_email_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_BACKOFF_SECONDS", "security_alert_backoff_seconds", lambda v: int(v))
 
         # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
         if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:
@@ -510,6 +755,17 @@ def get_settings() -> Settings:
     if not _settings:
         overrides = _load_overrides_from_config()
         _settings = Settings(**overrides)
+        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic
+        try:
+            import os as _os, sys as _sys
+            if (
+                _os.getenv("PYTEST_CURRENT_TEST")
+                or _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+                or "pytest" in _sys.modules
+            ):
+                _settings.RATE_LIMIT_ENABLED = False
+        except Exception:
+            pass
         logger.info(f"Settings initialized - Auth mode: {_settings.AUTH_MODE}")
     return _settings
 

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tldw-app-config
+  namespace: tldw
+data:
+  AUTH_MODE: "multi_user"
+  tldw_production: "true"
+  SHOW_API_KEY_ON_STARTUP: "false"
+  UVICORN_WORKERS: "4"
+  LOG_LEVEL: "info"
+  ALLOWED_ORIGINS: "https://your.domain.com"
+

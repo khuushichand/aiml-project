@@ -2,7 +2,7 @@
 # Description: This module provides a service layer for managing notes and note keywords
 #
 # Imports
-import logging
+from loguru import logger
 import threading
 import sqlite3  # For exception handling in _get_db
 from pathlib import Path
@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 #
 # Functions:
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class NotesInteropService:

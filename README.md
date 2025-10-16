@@ -5,6 +5,11 @@
 
 
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue)](https://github.com/rmusser01/tldw_server/releases)
+[![CI - Python](https://github.com/rmusser01/tldw_server/actions/workflows/python-tldw.yml/badge.svg)](.github/workflows/python-tldw.yml)
+[![CI - Workflows Suite](https://github.com/rmusser01/tldw_server/actions/workflows/workflows-tests.yml/badge.svg)](.github/workflows/workflows-tests.yml)
+[![CodeQL](https://github.com/rmusser01/tldw_server/actions/workflows/codeql.yml/badge.svg)](.github/workflows/codeql.yml)
+[![Pre-commit](https://github.com/rmusser01/tldw_server/actions/workflows/pre-commit.yml/badge.svg)](.github/workflows/pre-commit.yml)
+[![Coverage](https://img.shields.io/badge/coverage-codecov-blue)](https://app.codecov.io/gh/rmusser01/tldw_server)
 
 [![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server) 
 
@@ -29,6 +34,21 @@
 Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 
 - Docs Hub: `Docs/Documentation.md`
+- MCP Rate Limits Tuning: `Docs/Deployment/Operations/MCP_Rate_Limits_Tuning.md`
+- Database Backends & Migrations: `Docs/Database-Backends.md`
+- Moderation/Guardrails: `Docs/Moderation-Guardrails.md`
+- Usage & Cost Tracking: `Docs/User_Guides/Usage_Module.md`
+
+### Admin Reporting
+- HTTP usage (daily): `GET /api/v1/admin/usage/daily`
+- HTTP top users: `GET /api/v1/admin/usage/top`
+- LLM usage log: `GET /api/v1/admin/llm-usage`
+- LLM usage summary: `GET /api/v1/admin/llm-usage/summary` (group_by=`user|provider|model|operation|day`)
+- LLM top spenders: `GET /api/v1/admin/llm-usage/top-spenders`
+- LLM CSV export: `GET /api/v1/admin/llm-usage/export.csv`
+- Grafana dashboard JSON (LLM cost + tokens): `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
+ - Grafana dashboard JSON (LLM Daily Spend): `Docs/Deployment/Monitoring/Grafana_LLM_Daily_Spend.json`
+- Prometheus alert rules (daily spend thresholds): `Samples/Prometheus/alerts.yml`
 
 ### Media Processing
 - **Multi-format Support** [Stable]: Video, audio, PDF, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps
@@ -42,9 +62,65 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **1000+ Sites** [Stable]: Compatible with any site supported by yt-dlp
 - **OCR Backends** [Stable]: List/health for OCR backends and preload support (`GET /api/v1/ocr/backends`, `POST /api/v1/ocr/points/preload`). Docs: `Docs/API-related/OCR_API_Documentation.md`
 
+#### Email Archives (ZIP of .eml, MBOX, PST/OST)
+- Supported: Single `.eml` files (default), ZIP archives of `.eml`, and MBOX mailboxes when explicitly enabled per request. PST/OST is feature‑flagged with informative errors until external tools are configured.
+- Opt-in flags:
+  - `accept_archives=true` to allow `.zip` uploads of `.eml` files.
+  - `accept_mbox=true` to allow `.mbox` uploads.
+  - `accept_pst=true` to allow `.pst`/`.ost` uploads (feature flag; parsing requires external tools).
+- Grouping: Each child email extracted from a ZIP receives `email_archive:<zip_file_stem>`; from an MBOX receives `email_mbox:<mbox_file_stem>`; PST/OST include `email_pst:<pst_file_stem>` for easy filtering in UI and search.
+- Persistence: For `/api/v1/media/add`, each child email is persisted individually; the synthetic parent (ZIP/MBOX/PST) is not persisted.
+
+Examples (cURL)
+
+Process-only (returns child results, does not persist):
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/media/process-emails \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "accept_archives=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.zip;type=application/zip"
+```
+
+Add to media (persists each child email):
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/media/add \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "media_type=email" \
+  -F "accept_archives=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.zip;type=application/zip"
+```
+
+MBOX (process-only and add):
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/media/process-emails \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "accept_mbox=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.mbox;type=application/mbox"
+
+curl -X POST http://127.0.0.1:8000/api/v1/media/add \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "media_type=email" \
+  -F "accept_mbox=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.mbox;type=application/mbox"
+```
+
+Notes:
+- By default, only `.eml` is accepted for `media_type=email`. When `accept_archives=true`, `.zip` is also allowed; when `accept_mbox=true`, `.mbox` is also allowed; when `accept_pst=true`, `.pst`/`.ost` uploads are accepted but require external tooling to parse.
+- Non-`.eml` entries inside the ZIP are ignored. Container limits (member count and uncompressed size) are enforced for safety; MBOX enforces message count and size limits.
+
+PST/OST note
+- When `pypff` (libpff) is installed, PST/OST messages are expanded and processed like MBOX with guardrails. Without `pypff`, enabling `accept_pst=true` returns an informative error; grouping keyword is still included for UI filtering.
+
 ### Content Analysis
 - **17+ LLM Providers** [Stable]: 
-  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
+  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen, AWS Bedrock
   - Local: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, Custom OpenAI API endpoints supported
 - **Flexible Analysis** [Stable]: Multiple chunking strategies and prompt customization
 - **Evaluation System** [Stable]: G-Eval, RAG evaluation, response quality metrics
@@ -62,6 +138,12 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **Chat Dictionaries** [Stable]: CRUD + processing endpoints (`/api/v1/chat/*dictionaries*`)
 - **Providers** [Stable]: 16+ providers + local backends; listing/health and model metadata (`/api/v1/llm/providers`, `/api/v1/llm/providers/{name}`, `/api/v1/llm/models`, `/api/v1/llm/models/metadata`, `/api/v1/llm/health`; code: `app/api/v1/endpoints/llm_providers.py`)
 
+### AuthNZ, Organizations, and Keys
+- **Auth Modes** [Stable]: Single-user API key; Multi-user JWT
+- **Organizations & Teams** [New]: Group users into orgs and teams; membership management APIs
+- **Virtual Keys** [New]: API keys with endpoint allowlists and day/month token/USD budgets for LLM usage control; optional provider/model allowlists
+  - See: Docs/API-related/Virtual_Keys.md
+
 ### Audio
 - **Speech-to-Text** [Stable]: faster_whisper, NeMo, Qwen2Audio; WebSocket streaming (`/api/v1/audio/stream/transcribe`)
 - **File Transcription** [Stable]: OpenAI-compatible file API (`/api/v1/audio/transcriptions`)
@@ -76,11 +158,153 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **Flexible Configuration** [Stable]: Tune FTS/vector weights, thresholds, and reranking
 - **RAG Docs**: `tldw_Server_API/app/core/RAG/README.md`, `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`, `tldw_Server_API/app/core/RAG/UNIFIED_PIPELINE_EXAMPLES.md`, `tldw_Server_API/app/core/RAG/CAPABILITIES.md`
 
+#### RAG Operational Notes
+- Production guard: when `tldw_production=true`, retrievers disable raw SQL fallbacks and require database adapters (MediaDatabase / ChaChaNotesDB). Unified endpoints already pass adapters; direct pipeline usage must supply them.
+- LLM reranker guardrails (for `llm_scoring` strategy): defaults enforce per-call timeout, total time budget, and max documents scored. Tune via env:
+  - `RAG_LLM_RERANK_TIMEOUT_SEC` (default `10`)
+  - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` (default `20`)
+  - `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
+
+- Adaptive Post‑Verification (optional):
+  - Enable with request flags on `/api/v1/rag/search`:
+    - `enable_post_verification: true`
+    - `adaptive_max_retries: 1` (0–3)
+    - `adaptive_unsupported_threshold: 0.15` (trigger when (refuted + NEI)/total_claims exceeds threshold)
+    - `adaptive_max_claims: 20`
+    - `adaptive_time_budget_sec: 10`
+    - `low_confidence_behavior: "continue|ask|decline"`
+  - Env toggles:
+    - `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) — enables HyDE + multi‑strategy rewrites + diversity during adaptive pass; set to `false` for a simple, single‑query retrieval.
+    - `RAG_ADAPTIVE_TIME_BUDGET_SEC` — optional hard cap (seconds) for post‑verification.
+  - Response attaches `metadata.post_verification` with `unsupported_ratio`, `total_claims`, `unsupported_count`, `fixed`, `reason`.
+
+### Reranking (llama.cpp, GGUF: Qwen3, BGE, Jina-AI)
+- **HTTP Reranker Endpoints** [Stable]:
+  - `POST /v1/reranking` and `POST /v1/rerank` (versioned public aliases; auth required)
+  - `POST /api/v1/llamacpp/reranking` (namespaced; fine‑grained controls)
+- **Models**: Use GGUF embedding models via llama.cpp `llama-embedding`, including:
+  - Qwen3 (e.g., `Qwen3-Embedding-0.6B_f16.gguf`)
+  - BGE (e.g., `bge-small-en-v1.5.gguf`)
+  - Jina-AI (e.g., `jina-embeddings-v2-base-en.gguf`)
+- **Scoring**: Cosine(query, passage) similarity normalized to [0,1]
+- **Config**: `.env`/`tldw_Server_API/Config_Files/config.txt` `[RAG]` keys like `llama_reranker_model`, `llama_reranker_binary`, `llama_reranker_ngl`, etc.
+- **Model formatting**: Auto-instruct formatting for BGE (adds `query: ` and `passage: ` prefixes). You can override with `llama_reranker_template_mode`, `llama_reranker_query_prefix`, `llama_reranker_doc_prefix`. Default pooling automatically selected per model family (BGE/Jina → `mean`, Qwen → `last`).
+
+Try it (cURL)
+
+```bash
+curl http://127.0.0.1:8000/v1/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "model": "/abs/path/Qwen3-Embedding-0.6B_f16.gguf",
+    "query": "What is panda?",
+    "top_n": 3,
+    "documents": [
+      "hi",
+      "it is a bear",
+      "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
+    ]
+  }'
+```
+
+Use Transformers backend (GPU):
+
+```bash
+curl http://127.0.0.1:8000/v1/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "backend": "transformers",
+    "model": "BAAI/bge-reranker-v2-m3",
+    "query": "What is panda?",
+    "top_n": 3,
+    "documents": [
+      "hi",
+      "it is a bear",
+      "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
+    ]
+  }'
+```
+
+Use Transformers with Qwen3 Reranker (official yes/no prompt):
+
+```bash
+curl http://127.0.0.1:8000/v1/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "backend": "transformers",
+    "model": "Qwen/Qwen3-Reranker-8B",
+    "query": "What is the capital of China?",
+    "top_n": 2,
+    "documents": [
+      "The capital of China is Beijing.",
+      "Shanghai is the largest city in China."
+    ]
+  }'
+```
+
+- To customize the Qwen3 reranker instruction used in the `<Instruct>:` block, edit:
+  - `tldw_Server_API/Config_Files/Prompts/rag.prompts.yaml: qwen3_reranker_instruction`
+  - If unset, the default is: `Given a web search query, retrieve relevant passages that answer the query`.
+  - You can also customize the ChatML system message via `qwen3_reranker_system`.
+
+Programmatic (namespaced)
+
+```bash
+curl http://127.0.0.1:8000/api/v1/llamacpp/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "query": "What do llamas eat?",
+    "passages": [
+      {"id": "a", "text": "Llamas eat bananas"},
+      {"id": "b", "text": "Llamas in pyjamas"}
+    ],
+    "top_k": 2,
+    "model": "/abs/path/Qwen3-Embedding-0.6B_f16.gguf",
+    "ngl": 99,
+    "separator": "<#sep#>",
+    "output_format": "json+",
+    "pooling": "last",
+    "normalize": -1
+  }'
+```
+
 ### API Capabilities
 - **OpenAI Compatible** [Stable]: `/chat/completions` endpoint for drop-in replacement
 - **RESTful Design** [Stable]: Consistent endpoint patterns following OpenAPI 3.0
 - **WebSocket Support** [Stable]: Real-time connections via MCP (Model Context Protocol)
 - **Comprehensive Docs** [Stable]: Auto-generated OpenAPI documentation at `/docs`
+
+## Tokenizer Configuration (Chat Dictionaries & World Books)
+
+Dictionary and World Book modules estimate tokens when enforcing token budgets. You can read and adjust the server’s token counting strategy via API:
+
+- GET `/api/v1/config/tokenizer` → returns current mode (`whitespace`|`char_approx`) and divisor
+- PUT `/api/v1/config/tokenizer` → updates mode and divisor (in‑memory; not persisted)
+
+Example:
+
+```
+GET /api/v1/config/tokenizer
+{
+  "mode": "whitespace",
+  "divisor": 4,
+  "available_modes": ["whitespace", "char_approx"]
+}
+
+PUT /api/v1/config/tokenizer
+{
+  "mode": "char_approx",
+  "divisor": 4
+}
+```
+
+Notes:
+- Affects token budgets in Chat Dictionary and World Book processing.
+- Process‑wide and non‑persistent; add to env/config for defaults if needed.
 
 ### Knowledge Management
 - **Note System** [Stable]: Create, search, and organize research notes
@@ -104,7 +328,7 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **Sharing** [Stable]: Share curated collections with colleagues or team members
 
 ### Advanced Features
-- **MCP Unified** [Stable core]: Production MCP server + tools with JWT/RBAC and WS/HTTP; Experimental tag in 0.1 OpenAPI. Endpoints: `/api/v1/mcp/ws`, `/api/v1/mcp/request`, `/api/v1/mcp/tools`, `/api/v1/mcp/tools/execute`, `/api/v1/mcp/modules`, `/api/v1/mcp/modules/health`, `/api/v1/mcp/status`, `/api/v1/mcp/metrics`, `/api/v1/mcp/health` (see `app/api/v1/endpoints/mcp_unified_endpoint.py`).
+- **MCP Unified** [Stable core]: Production MCP server + tools with JWT/RBAC and WS/HTTP; Experimental tag in 0.1 OpenAPI. Endpoints: `/api/v1/mcp/ws`, `/api/v1/mcp/request`, `/api/v1/mcp/tools`, `/api/v1/mcp/tools/execute`, `/api/v1/mcp/modules`, `/api/v1/mcp/modules/health`, `/api/v1/mcp/status`, `/api/v1/mcp/metrics`, `/api/v1/mcp/metrics/prometheus`, `/api/v1/mcp/health` (see `app/api/v1/endpoints/mcp_unified_endpoint.py`).
 - **Database Migrations** [Stable]: Automatic schema updates with versioning
 - **Authentication** [Stable]: JWT-based auth with RBAC for MCP connections
 - **Evaluation Tools** [Stable]: Benchmark your configurations and LLM performance
@@ -122,7 +346,7 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 
 ### Research & Web
 - **Paper Search** [Stable]: arXiv and related endpoints (`/api/v1/paper-search/*`)
-- **Web Search Aggregator** [WIP]: Multi-provider search + aggregation (`/api/v1/research/websearch`)
+- **Web Search Aggregator** [WIP]: Multi-provider search + aggregation (`/api/v1/research/websearch`) — supports Google, Bing, DuckDuckGo, and Brave today.
 - **Browser Extension** [WIP]: `https://github.com/rmusser01/tldw_browser_assistant`
 
 ### Tooling & Integration
@@ -157,6 +381,20 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - Traefik sample dynamic config: `Samples/Traefik/traefik-dynamic.yml`
 - Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
 - Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
+- VibeVoice TTS (getting started): `Docs/VIBEVOICE_GETTING_STARTED.md`
+ - NeuTTS Air (voice cloning, local): `Docs/STT-TTS/NEUTTS_TTS_SETUP.md`
+
+### Monitoring (Prometheus + Grafana)
+- Prometheus scrape endpoints:
+  - Unauthenticated scrape: `GET /metrics` (Prometheus text)
+  - MCP Prometheus text: `GET /api/v1/mcp/metrics/prometheus`
+- LLM usage dashboard (cost + tokens):
+  - Import JSON: `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
+  - Panels included:
+    - Cost rate by provider: `sum by (provider) (rate(llm_cost_dollars[$__rate_interval]))`
+    - Top 5 providers by cost (range): `topk(5, sum by (provider) (increase(llm_cost_dollars[$__range])))`
+    - Token rate by provider and type: `sum by (provider, type) (rate(llm_tokens_used_total[$__rate_interval]))`
+  - Set Prometheus datasource UID to `prometheus` or edit to match your setup.
 
 ## QuickStart
 
@@ -384,8 +622,8 @@ Prebuilt configuration samples are included to speed up deployments:
   - Ensures WebSocket upgrades and long request timeouts
 
 - Traefik dynamic config: `Samples/Traefik/traefik-dynamic.yml`
-- Grafana dashboard (security): `Samples/Grafana/security-dashboard.json`
- - Prometheus alerts (near-quota): `Samples/Prometheus/alerts.yml`
+- Grafana dashboard (security): `Docs/Deployment/Monitoring/security-dashboard.json`
+- Prometheus alerts (near-quota): `Samples/Prometheus/alerts.yml`
   - Mount into Traefik file provider (e.g., `/etc/traefik/dynamic`)
   - Configure static settings for Docker provider, entrypoints, and LetsEncrypt
 
@@ -393,7 +631,7 @@ See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Dock
 
 ## Metrics Cheatsheet
 
-- Moved to: `Docs/Monitoring/Metrics_Cheatsheet.md` (Prometheus endpoints, metric names, and PromQL examples).
+- See: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md` (Prometheus endpoints, metric names, and PromQL examples).
 
 </details>
 
@@ -440,6 +678,11 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 - `POST /api/v1/media/ingest` - Ingest media into database
 - `GET /api/v1/media/search` - Search ingested content
 - `GET /api/v1/media/{id}` - Get media details
+  - Query params:
+    - `include_content` (bool, default: true): include the main content text
+    - `include_versions` (bool, default: true): include versions list summary
+    - `include_version_content` (bool, default: false): include content text for each version
+  - Notes: Response shape is unified across GET/PUT/POST version/rollback and conforms to `MediaDetailResponse`
 
 #### Chat (OpenAI Compatible)
 - `POST /api/v1/chat/completions` - Chat completion (OpenAI format)
@@ -449,6 +692,7 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 #### RAG (Retrieval-Augmented Generation)
 - `POST /api/v1/rag/search` - Unified search with all features accessible
 - `POST /api/v1/rag/search/stream` - Streamed answer with incremental claim overlay (NDJSON)
+- `POST /api/v1/rag/ablate` - Compare baseline vs +rerank vs agentic variants
 - `POST /api/v1/rag/batch` - Batch processing for multiple queries
 - `GET /api/v1/rag/simple` - Simplified search interface
 - `GET /api/v1/rag/advanced` - Advanced search with common features
@@ -542,7 +786,16 @@ Sample response (aggregate=false):
 Set `aggregate: true` to also get a `final_answer` and `relevant_results` generated by the server:
 ```json
 {
-  "final_answer": "The capital of France is Paris.",
+"final_answer": {
+  "text": "The capital of France is Paris.",
+  "confidence": 0.9,
+  "evidence": [
+    {"content": "Paris is the capital of France...", "reasoning": "Direct statement"}
+  ],
+  "chunks": [
+    {"chunk_index": 1, "summary": "Chunk 1 Summary...", "generated": true}
+  ]
+},
   "relevant_results": {"0": {"title": "Paris - Wikipedia", "url": "https://..."}},
   "web_search_results_dict": {"results": [...]},
   "sub_query_dict": {"main_goal": "...", "sub_questions": ["..."]}
@@ -629,7 +882,8 @@ curl -X POST "http://localhost:8000/api/v1/rag/search/stream" \
   -d '{
     "query": "What is CRISPR?",
     "enable_generation": true,
-    "enable_claims": true
+    "enable_claims": true,
+    "claims_concurrency": 8
   }'
 ## Events:
 # {"type":"delta","text":"..."}
@@ -653,6 +907,7 @@ https://huggingface.co/google/gemma-7b-aps-it
   - The APS extractor calls your default OpenAI‑compatible chat endpoint; to back it with a specific APS‑IT model, set your gateway (vLLM/TabbyAPI/OpenRouter/custom‑openai) to use that model by default.
   - For ingestion‑time claims (non‑APS path), you can also set `CLAIMS_LLM_PROVIDER` and `CLAIMS_LLM_MODEL` in `tldw_Server_API/Config_Files/config.txt`.
   - For local verification, set `RAG_NLI_MODEL` (e.g., `roberta-large-mnli`).
+  - For streaming overlays, control verification fan‑out with `claims_concurrency` (default 8, range 1–32).
 
 # Simple search interface
 curl -X GET "http://localhost:8000/api/v1/rag/simple?q=machine%20learning&limit=5" \
@@ -700,6 +955,39 @@ The RAG module has comprehensive documentation for both developers and API consu
 
 - **[RAG Developer Guide](Docs/Development/RAG-Developer-Guide.md)** - Architecture, components, testing, and extending the RAG module
 - **[RAG API Guide](Docs/API-related/RAG-API-Guide.md)** - Complete API reference with examples in JavaScript, Python, and cURL
+
+### Agentic Chunking (experimental)
+- Design doc: `Docs/Design/Agentic_Chunking.md`
+- Quick start (agentic search):
+```
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Summarize key findings of ResNet",
+    "strategy": "agentic",
+    "search_mode": "hybrid",
+    "top_k": 8,
+    "enable_generation": false,
+    "agentic_enable_tools": true,
+    "agentic_max_tool_calls": 6
+  }'
+```
+- Ablation helper:
+```
+curl -X POST "http://localhost:8000/api/v1/rag/ablate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How does dropout prevent overfitting?",
+    "top_k": 10,
+    "search_mode": "hybrid",
+    "with_answer": false,
+    "reranking_strategy": "none"
+  }'
+```
+- Capabilities (includes agentic knobs and quick_start examples):
+```
+curl -X GET "http://localhost:8000/api/v1/rag/capabilities"
+```
 
 ### Anthropic Contextual RAG (example config)
 
@@ -771,6 +1059,37 @@ Override config.txt with environment variables:
 - `ANTHROPIC_API_KEY`
 - `DATABASE_PATH`
 
+Chunking (regex safety)
+- `CHUNKING_REGEX_TIMEOUT` — float seconds to cap regex execution for chapter/section detection in the ebook chunker. Default: `2`. Values <= 0 are ignored. On timeout, the strategy falls back to size-based splitting. Example: `export CHUNKING_REGEX_TIMEOUT=0.5`.
+- `CHUNKING_DISABLE_MP` — disable process-based isolation for regex. Default: Enabled (multiprocessing is disabled) when unset, for cross‑platform stability. Set to `0`/`false`/`no` to enable the optional process fallback; set to `1`/`true`/`yes` to keep it disabled. Note: enabling MP may not be supported in restricted environments or on some platforms.
+- `CHUNKING_REGEX_SIMPLE_ONLY` — when set to `1`/`true`/`yes`, only a safe subset of regex constructs is permitted for custom chapter patterns (no grouping `()`, alternation `|`, wildcard `.`, `?`, `*`; allows literals, `^`/`$`, character classes, `\d`/`\w`, and `+` after safe atoms). Unsafe patterns are rejected during validation.
+
+Test/CI (Prompt Studio)
+- `TLDW_PS_BACKEND` = `sqlite` | `postgres` — select backend for the heavy optimization suite (default: `sqlite`).
+- `TLDW_PS_STRESS` = `1` — enable larger datasets/iterations in heavy tests.
+- `TLDW_PS_TC_COUNT` — override test-case volume (default 250; stress 1000).
+- `TLDW_PS_ITERATIONS` — override iteration count (default 5; stress 10).
+- `TLDW_PS_OPT_COUNT` — override concurrent optimizations (default 3; stress 8).
+- `TLDW_TEST_POSTGRES_REQUIRED` = `1` — fail fast if Postgres probe fails; otherwise Postgres tests are skipped when unreachable.
+- `TLDW_PS_SQLITE_WAL` = `1` — opt-in to WAL for per-test SQLite DBs; default is DELETE mode to reduce CI file churn.
+- `DISABLE_HEAVY_STARTUP` = `1` — skip unrelated heavy app startup (MCP, TTS, chat workers, background loops) during tests; `TEST_MODE=true` also enables this.
+- `TLDW_PS_JOB_LEASE_SECONDS` — lease window (seconds) for Prompt Studio job processing; expired processing jobs are reclaimed on the next acquire (default: 60).
+- `TLDW_PS_HEARTBEAT_SECONDS` — heartbeat interval (seconds) for renewing job leases (default: half of lease window, up to 30).
+
+Usage logging and LLM cost aggregation
+- `USAGE_LOG_ENABLED` — enable HTTP usage logging middleware.
+- `USAGE_LOG_EXCLUDE_PREFIXES` — JSON array of excluded path prefixes.
+- `USAGE_AGGREGATOR_INTERVAL_MINUTES` — cadence for HTTP daily aggregation.
+- `USAGE_LOG_RETENTION_DAYS` — retention window for `usage_log` pruning.
+- `USAGE_LOG_DISABLE_META` — store `{}` instead of IP/User-Agent in meta.
+- `DISABLE_USAGE_AGGREGATOR` — skip starting HTTP usage aggregator at startup.
+- `LLM_USAGE_ENABLED` — enable LLM usage logging (tokens/cost).
+- `LLM_USAGE_AGGREGATOR_ENABLED` — enable background LLM daily aggregation.
+- `LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES` — cadence for LLM daily aggregation.
+- `LLM_USAGE_LOG_RETENTION_DAYS` — retention window for `llm_usage_log` pruning.
+- `DISABLE_LLM_USAGE_AGGREGATOR` — skip starting LLM usage aggregator at startup.
+- `PRICING_OVERRIDES` — JSON pricing overrides for token costs (see `Docs/User_Guides/Usage_Module.md`).
+
 </details>
 
 ---
@@ -828,6 +1147,44 @@ python -m pytest tests/Media_Ingestion_Modification/ -v
 python -m pytest --cov=tldw_Server_API --cov-report=html
 ```
 
+Fast test (unit + integration only)
+```bash
+# Skips e2e and slow suites by default; trims heavy startup
+TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integration"
+```
+
+Strict fast test (avoid audio/LLM flakes)
+```bash
+# Further exclude external/networked/audio-heavy bits for quick local sanity
+TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integration" -k "not nemo and not parakeet and not elevenlabs and not transcription and not audio and not postgres"
+```
+
+### Test Suite Toggles and CI Profile
+- Postgres-backed AuthNZ integration tests are skipped unless Postgres is reachable. Force run by setting `TLDW_TEST_POSTGRES_REQUIRED=1`.
+- MCP Unified tests are disabled by default. Enable with `RUN_MCP_TESTS=1`.
+- Mock OpenAI server tests are disabled by default. Enable with `RUN_MOCK_OPENAI=1`.
+- WebUI end-to-end tests are skipped by default. Enable with `-m e2e`.
+  - external_api tests are also excluded by default via pytest.ini; enable with `-m external_api`.
+
+Recommended CI env for broad coverage without heavy services:
+```bash
+TEST_MODE=true DISABLE_HEAVY_STARTUP=1 DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true \
+RUN_MCP_TESTS=0 RUN_MOCK_OPENAI=0 python -m pytest -q
+```
+Use targeted jobs to run MCP or Postgres suites by enabling the corresponding flags and ensuring dependencies are available.
+
+Suggested CI job profiles:
+- Baseline (fast, wide coverage):
+  - `TEST_MODE=true DISABLE_HEAVY_STARTUP=1 DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true`
+  - `RUN_MCP_TESTS=0 RUN_MOCK_OPENAI=0`
+- MCP Unified (integration):
+  - `RUN_MCP_TESTS=1`
+  - Do not set `DISABLE_HEAVY_STARTUP` for this job (MCP server initialization required)
+- AuthNZ Postgres (integration):
+  - `AUTH_MODE=multi_user` and `DATABASE_URL=postgresql://...`
+  - `TLDW_TEST_POSTGRES_REQUIRED=1` to fail-fast if Postgres is unreachable
+  - Provide Postgres service in CI (docker service/container)
+
 ### Pytest Markers
 Use markers to target the right slice of the suite:
 
@@ -847,11 +1204,27 @@ python -m pytest -m "integration" -v
 
 # Property tests for a specific area
 python -m pytest -m "property" tldw_Server_API/tests/Embeddings_NEW/property -v
+
+# Only e2e (WebUI) tests
+python -m pytest -m "e2e" -v
 ```
 
 Notes
 - Legacy RAG tests under `tldw_Server_API/tests/RAG` are deprecated and skipped by default. The unified pipeline lives under `tldw_Server_API/tests/RAG_NEW`.
 - Integration tests should not mock internal components; prefer local, real fixtures (e.g., a local HTTP webhook server) for deterministic behavior.
+
+#### Prompt Studio tests
+- Heavy optimization suite is marked `slow` and runs against a single backend per run.
+- Select backend with `TLDW_PS_BACKEND=sqlite|postgres` (default sqlite).
+- Useful env vars: `TLDW_PS_STRESS=1`, `TLDW_PS_TC_COUNT`, `TLDW_PS_ITERATIONS`, `TLDW_PS_OPT_COUNT`, `TLDW_TEST_POSTGRES_REQUIRED=1`, `TLDW_PS_SQLITE_WAL=1`, `DISABLE_HEAVY_STARTUP=1`.
+
+### Prompt Studio Metrics (quick reference)
+- Gauges/counters: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.backlog{job_type}`, `prompt_studio.jobs.stale_processing`.
+- Histograms: `prompt_studio.jobs.duration_seconds{job_type}`, `prompt_studio.jobs.queue_latency_seconds{job_type}`.
+- Counters: `prompt_studio.jobs.retries_total{job_type}`, `prompt_studio.jobs.failures_total{job_type,reason}`, `prompt_studio.jobs.lease_renewals_total{job_type}`, `prompt_studio.jobs.reclaims_total{job_type}`.
+- Idempotency counters: `prompt_studio.idempotency.hit_total{entity_type}`, `prompt_studio.idempotency.miss_total{entity_type}`.
+- Postgres advisory locks: `prompt_studio.pg_advisory.lock_attempts_total`, `locks_acquired_total`, `unlocks_total`.
+- See Docs: `Docs/API-related/Prompt_Studio_API.md` and `Docs/Postgres_Support_Status_and_Testing.md` for details.
 </details>
 
 
@@ -1037,3 +1410,102 @@ Long-term vision: Building towards a personal AI research assistant inspired by 
 ---
 
 **Note**: This is v0.1.0 with stable core functionality. Some features are still in development. Check the [roadmap](https://github.com/rmusser01/tldw_server/milestone/22) for upcoming features.
+- AWS Bedrock (OpenAI-compatible Chat API)
+
+  - Env vars (or config.txt [API] keys):
+    - `BEDROCK_API_KEY` or `AWS_BEARER_TOKEN_BEDROCK`
+    - `BEDROCK_REGION` (e.g., `us-west-2`) or `BEDROCK_RUNTIME_ENDPOINT` (e.g., `https://bedrock-runtime.us-west-2.amazonaws.com`)
+    - `BEDROCK_MODEL` (optional default, e.g., `openai.gpt-oss-20b-1:0`)
+
+  - Request example (Bedrock guardrails supported):
+
+    POST /api/v1/chat/completions
+    {
+      "api_provider": "bedrock",
+      "model": "openai.gpt-oss-20b-1:0",
+      "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"}
+      ],
+      "extra_headers": {
+        "X-Amzn-Bedrock-GuardrailIdentifier": "gr-123",
+        "X-Amzn-Bedrock-GuardrailVersion": "1",
+        "X-Amzn-Bedrock-Trace": "ENABLED"
+      },
+      "extra_body": {
+        "amazon-bedrock-guardrailConfig": {"tagSuffix": "audit-tag"}
+      }
+    }
+
+  - See Docs/Providers/AWS_Bedrock.md for details.
+- performance: opt-in performance/scale tests (e.g., large ZIP/MBOX containers). Run with `-m "performance"`.
+- requires_pypff: tests that require `pypff`/`libpff` to be installed locally. Run with `-m "requires_pypff"` (these skip if the module is not available).
+
+Examples:
+
+```
+python -m pytest -q -m "performance" tldw_Server_API/tests/Media_Ingestion_Modification
+python -m pytest -q -m "requires_pypff" tldw_Server_API/tests/Media_Ingestion_Modification
+```
+## Organizations, Teams, and Virtual Keys
+
+You can logically group users into Organizations and Teams (teams belong to an org) and issue Virtual API Keys with tight scopes and budgets to limit LLM usage and reduce blast radius if a key leaks.
+
+- Hierarchy
+  - Organization → Teams → Users (membership tables managed by admin endpoints)
+- Virtual Keys (API keys with extra metadata)
+  - Endpoint allowlists: e.g., allow only `chat.completions` and/or `embeddings`
+  - Budgets: day/month token limits and day/month USD limits
+  - Optional provider/model allowlists: set allowlists and send `X-LLM-Provider` header; models are read from request JSON when available
+
+Server-side enforcement
+- Middleware checks Virtual Keys on LLM endpoints (`/api/v1/chat/completions`, `/api/v1/embeddings` by default)
+- Blocks disallowed endpoints with 403
+- Checks budgets from `llm_usage_log` and returns 402 if exceeded
+
+Admin API (selected)
+- POST `/api/v1/admin/orgs` — create organization; GET `/api/v1/admin/orgs` — list
+- POST `/api/v1/admin/orgs/{org_id}/teams` — create team; GET `/api/v1/admin/orgs/{org_id}/teams` — list
+- POST `/api/v1/admin/teams/{team_id}/members` — add user to team; GET `/api/v1/admin/teams/{team_id}/members` — list
+- POST `/api/v1/admin/users/{user_id}/virtual-keys` — create virtual key with budgets/scopes
+- GET `/api/v1/admin/users/{user_id}/virtual-keys` — list virtual keys (metadata only)
+  - For a fuller RBAC endpoint list with OpenAPI snippets, see `Docs/Published/Admin_RBAC_API.md`.
+
+RBAC: Effective Permissions View
+- GET `/api/v1/admin/roles/{role_id}/permissions/effective` — Convenience view that combines a role’s granted permissions and tool-execution permissions.
+  - Response fields:
+    - `role_id`, `role_name`
+    - `permissions`: non-tool permissions (e.g., `media.read`)
+    - `tool_permissions`: tool permissions (e.g., `tools.execute:my_tool`)
+    - `all_permissions`: union of both, sorted
+- Example:
+  ```bash
+  curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+    http://127.0.0.1:8000/api/v1/admin/roles/2/permissions/effective | jq
+  ```
+
+Configuration
+- `VIRTUAL_KEYS_ENABLED` default true
+- `LLM_BUDGET_ENFORCE` default true
+- `LLM_BUDGET_ENDPOINTS`: defaults to `[/api/v1/chat/completions, /api/v1/embeddings]`
+
+Notes
+- Budgets use the `llm_usage_log` table (already part of usage/cost tracking)
+- Provider/model allowlist enforcement is optional and best-effort (parses JSON body when possible)
+### Schedulers & Background Jobs
+
+- AuthNZ Scheduled Jobs: The AuthNZ scheduler runs maintenance tasks such as session cleanup, API key cleanup, rate limit cleanup, audit log pruning, and usage log pruning according to configured retention periods.
+  - Enabled by default at app startup.
+  - Disable via `DISABLE_AUTHNZ_SCHEDULER=1` (or `true/yes/on`).
+  - Recommended to keep enabled in production so retention and cleanup run automatically.
+
+- Usage Aggregators: Background tasks aggregate request and LLM usage into daily tables to power reporting endpoints.
+  - HTTP usage aggregator: controlled by `USAGE_LOG_ENABLED` and `USAGE_AGGREGATOR_INTERVAL_MINUTES`.
+  - LLM usage aggregator: controlled by `LLM_USAGE_AGGREGATOR_ENABLED` and `LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES`.
+  - Disable via `DISABLE_USAGE_AGGREGATOR=1` or `DISABLE_LLM_USAGE_AGGREGATOR=1`.
+
+Environment flags summary:
+
+- `DISABLE_AUTHNZ_SCHEDULER`: Disable AuthNZ scheduler (retention/cleanup). Default: off.
+- `DISABLE_USAGE_AGGREGATOR`: Disable HTTP usage daily aggregator. Default: off.
+- `DISABLE_LLM_USAGE_AGGREGATOR`: Disable LLM usage daily aggregator. Default: off.

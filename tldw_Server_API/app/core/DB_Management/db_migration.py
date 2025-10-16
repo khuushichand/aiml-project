@@ -19,10 +19,9 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-import logging
+from loguru import logger
 from contextlib import contextmanager
 
-logger = logging.getLogger(__name__)
 
 
 class MigrationError(Exception):

@@ -4,9 +4,8 @@ from typing import List, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
-
+#
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio import JobManager
-
 try:
     from pydantic import field_validator  # Pydantic v2
 except Exception:  # Fallback to v1 naming
@@ -15,7 +14,7 @@ except Exception:  # Fallback to v1 naming
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
-
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from fastapi.responses import StreamingResponse
 import asyncio
 import json as _json

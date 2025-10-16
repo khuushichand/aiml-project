@@ -91,12 +91,20 @@ class EvaluationConfigValidator:
                     message="No API key configured for single-user mode",
                     recommendation="Set API_BEARER or SINGLE_USER_API_KEY environment variable"
                 ))
-            elif api_key == "default-secret-key-for-single-user":
+            elif api_key in {
+                "default-secret-key-for-single-user",
+                "test-api-key-12345",
+                "change-me-in-production",
+            }:
                 self.issues.append(ConfigurationIssue(
                     severity="error",
                     category="security",
                     message="Using default API key is not secure",
-                    recommendation="Generate a secure API key: openssl rand -hex 32"
+                    recommendation=(
+                        "Generate a secure API key, e.g. "
+                        "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"` "
+                        "and set SINGLE_USER_API_KEY"
+                    )
                 ))
         
         elif auth_mode == "multi_user":

@@ -159,6 +159,41 @@ class MetricsRegistry:
                 labels=["provider", "model"]
             )
         )
+        # Detailed LLM usage variants for dashboards
+        self.register_metric(
+            MetricDefinition(
+                name="llm_cost_dollars_by_user",
+                type=MetricType.COUNTER,
+                description="Cumulative LLM API cost in dollars by user",
+                unit="$",
+                labels=["provider", "model", "user_id"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="llm_cost_dollars_by_operation",
+                type=MetricType.COUNTER,
+                description="Cumulative LLM API cost in dollars by operation",
+                unit="$",
+                labels=["provider", "model", "operation"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="llm_tokens_used_total_by_user",
+                type=MetricType.COUNTER,
+                description="Total number of tokens used by user",
+                labels=["provider", "model", "type", "user_id"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="llm_tokens_used_total_by_operation",
+                type=MetricType.COUNTER,
+                description="Total number of tokens used by operation",
+                labels=["provider", "model", "type", "operation"],
+            )
+        )
         
         # RAG metrics
         self.register_metric(
@@ -206,6 +241,252 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total RAG cache misses",
                 labels=["cache_type"]
+            )
+        )
+
+        # RAG reranker (LLM scoring) guardrails and activity
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_timeouts_total",
+                type=MetricType.COUNTER,
+                description="Total LLM reranker timeouts",
+                labels=["strategy"]  # e.g., llm_scoring
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_exceptions_total",
+                type=MetricType.COUNTER,
+                description="Total LLM reranker exceptions",
+                labels=["strategy"]
+            )
+        )
+        
+        # Post-generation verification (adaptive check) metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_retries_total",
+                type=MetricType.COUNTER,
+                description="Total adaptive post-check repair retries",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_unsupported_claims_total",
+                type=MetricType.COUNTER,
+                description="Total unsupported claims (refuted + NEI) observed in post-check",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_fix_success_total",
+                type=MetricType.COUNTER,
+                description="Total adaptive post-check repairs that succeeded",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_postcheck_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration of post-generation verification and repair",
+                unit="s",
+                labels=["outcome"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
+            )
+        )
+        # Adaptive rerun metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_rerun_performed_total",
+                type=MetricType.COUNTER,
+                description="Total number of adaptive RAG reruns performed",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_rerun_adopted_total",
+                type=MetricType.COUNTER,
+                description="Total number of adaptive RAG reruns whose results were adopted",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_rerun_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration of adaptive RAG reruns",
+                unit="s",
+                labels=["adopted"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_budget_exhausted_total",
+                type=MetricType.COUNTER,
+                description="Total LLM reranker budget exhaustions",
+                labels=["strategy"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_docs_scored_total",
+                type=MetricType.COUNTER,
+                description="Total documents scored by LLM reranker",
+                labels=["strategy"]
+            )
+        )
+
+        # Per-phase timers and budgets (observability/SLOs)
+        self.register_metric(
+            MetricDefinition(
+                name="rag_phase_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration per RAG pipeline phase",
+                unit="s",
+                labels=["phase", "difficulty"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranking_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Reranking duration (overall) in seconds",
+                unit="s",
+                labels=["strategy"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+            )
+        )
+        # Rewrite cache metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_rewrite_cache_hits_total",
+                type=MetricType.COUNTER,
+                description="Total rewrite cache hits",
+                labels=["corpus", "intent"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_rewrite_cache_misses_total",
+                type=MetricType.COUNTER,
+                description="Total rewrite cache misses",
+                labels=["corpus", "intent", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_rewrite_cache_puts_total",
+                type=MetricType.COUNTER,
+                description="Total rewrite cache writes",
+                labels=["corpus", "intent"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_batch_query_reuse_total",
+                type=MetricType.COUNTER,
+                description="Total reused results in batch planning",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_phase_budget_exhausted_total",
+                type=MetricType.COUNTER,
+                description="Budget exhaustion events per phase",
+                labels=["phase"]
+            )
+        )
+
+        # Faithfulness tracking for SLOs
+        self.register_metric(
+            MetricDefinition(
+                name="rag_total_claims_checked_total",
+                type=MetricType.COUNTER,
+                description="Total claims evaluated during post-generation verification",
+            )
+        )
+
+        # Quality evaluation (nightly eval set) — dashboard inputs
+        self.register_metric(
+            MetricDefinition(
+                name="rag_eval_faithfulness_score",
+                type=MetricType.GAUGE,
+                description="Average faithfulness score (1 - unsupported_ratio) on eval set",
+                labels=["dataset"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_eval_coverage_score",
+                type=MetricType.GAUGE,
+                description="Average citation coverage on eval set",
+                labels=["dataset"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_eval_last_run_timestamp",
+                type=MetricType.GAUGE,
+                description="Last successful eval run UNIX timestamp",
+                labels=["dataset"],
+            )
+        )
+
+        # Generation gating due to low evidence after reranking calibration
+        self.register_metric(
+            MetricDefinition(
+                name="rag_generation_gated_total",
+                type=MetricType.COUNTER,
+                description="Total number of times answer generation was gated due to low relevance probability",
+                labels=["strategy"]
+            )
+        )
+
+        # Content policy / sanitation metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_policy_filtered_chunks_total",
+                type=MetricType.COUNTER,
+                description="Documents affected by content policy (pii/phi)",
+                labels=["mode"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_sanitized_docs_total",
+                type=MetricType.COUNTER,
+                description="Documents sanitized by HTML allow-list",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_ocr_dropped_docs_total",
+                type=MetricType.COUNTER,
+                description="Documents dropped due to low OCR confidence",
+            )
+        )
+
+        # Generation guardrails
+        self.register_metric(
+            MetricDefinition(
+                name="rag_injection_chunks_downweighted_total",
+                type=MetricType.COUNTER,
+                description="Total retrieved chunks downweighted due to instruction-injection risk",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_numeric_mismatches_total",
+                type=MetricType.COUNTER,
+                description="Total numeric tokens from answers not found in sources",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_missing_hard_citations_total",
+                type=MetricType.COUNTER,
+                description="Total answers with missing supporting spans for one or more sentences",
             )
         )
         
@@ -340,6 +621,95 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total circuit breaker trips",
                 labels=["service", "reason"]
+            )
+        )
+
+        # Prompt Studio metrics
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_queue_depth",
+                type=MetricType.GAUGE,
+                description="Number of queued Prompt Studio jobs",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_processing",
+                type=MetricType.GAUGE,
+                description="Number of processing Prompt Studio jobs",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_leases_active",
+                type=MetricType.GAUGE,
+                description="Active leases for Prompt Studio jobs",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_leases_expiring_soon",
+                type=MetricType.GAUGE,
+                description="Prompt Studio leases expiring soon",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_leases_stale_processing",
+                type=MetricType.GAUGE,
+                description="Processing jobs with missing/expired lease",
+                labels=["backend"],
+            )
+        )
+
+        # Agentic RAG metrics
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_tool_calls_total",
+                type=MetricType.COUNTER,
+                description="Total agentic tool calls",
+                labels=["tool"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_tool_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration per agentic tool call",
+                unit="s",
+                labels=["tool"],
+                buckets=[0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_cache_hits_total",
+                type=MetricType.COUNTER,
+                description="Total agentic cache hits",
+                labels=["cache_type"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_span_length_chars",
+                type=MetricType.HISTOGRAM,
+                description="Histogram of agentic span lengths (chars)",
+                unit="chars",
+                labels=["phase"],
+                buckets=[64, 128, 256, 512, 1024, 2048, 4096]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="span_bytes_read_total",
+                type=MetricType.COUNTER,
+                description="Total bytes read while assembling spans",
+                unit="bytes",
+                labels=["tool"],
             )
         )
     
@@ -548,8 +918,9 @@ class MetricsRegistry:
         # Filter values by labels if provided
         values = list(self.values[metric_name])
         if labels:
-            values = [v for v in values if all(
-                v.labels.get(k) == v for k, v in labels.items()
+            # Filter by exact match on provided labels
+            values = [val for val in values if all(
+                val.labels.get(key) == expected for key, expected in labels.items()
             )]
         
         if not values:
@@ -605,7 +976,14 @@ class MetricsRegistry:
             
             # Add HELP and TYPE lines
             lines.append(f"# HELP {metric_name} {definition.description}")
-            lines.append(f"# TYPE {metric_name} {definition.type.value}")
+            # Map internal metric types to Prometheus types
+            prom_type = (
+                "counter" if definition.type == MetricType.COUNTER else
+                "gauge" if definition.type in (MetricType.GAUGE, MetricType.UP_DOWN_COUNTER) else
+                "histogram" if definition.type == MetricType.HISTOGRAM else
+                definition.type.value
+            )
+            lines.append(f"# TYPE {metric_name} {prom_type}")
             
             # Group values by labels
             label_groups = defaultdict(list)
@@ -652,6 +1030,36 @@ class MetricsRegistry:
                         lines.append(f"{metric_name}_bucket{{le=\"+Inf\"}} {len(numeric_values)}")
                         lines.append(f"{metric_name}_sum {sum(numeric_values)}")
                         lines.append(f"{metric_name}_count {len(numeric_values)}")
+
+            # Emit alias series for cache_* metrics to rag_cache_* for consistency
+            if metric_name in {"cache_hits_total", "cache_misses_total"}:
+                alias_name = (
+                    "rag_cache_hits_total" if metric_name == "cache_hits_total" else "rag_cache_misses_total"
+                )
+                # Only emit alias if rag_* has no own values recorded
+                if alias_name not in self.values:
+                    # HELP/TYPE for alias
+                    lines.append(f"# HELP {alias_name} Aliased from {metric_name} for RAG cache consistency")
+                    lines.append(f"# TYPE {alias_name} counter")
+                    # Build alias series with label key remapped: cache -> cache_type
+                    for label_str, values in label_groups.items():
+                        # Rebuild labels mapping and rename key
+                        # label_str format: key="val",key2="val2" ...
+                        # Convert back to dict to manipulate keys
+                        if label_str:
+                            pairs = [s.split("=", 1) for s in label_str.split(",") if "=" in s]
+                            label_dict = {k: v.strip('"') for k, v in pairs}
+                        else:
+                            label_dict = {}
+                        if "cache" in label_dict:
+                            label_dict["cache_type"] = label_dict.pop("cache")
+                        # Serialize
+                        alias_labels = ",".join(f"{k}=\"{v}\"" for k, v in sorted(label_dict.items()))
+                        total = sum(v.value for v in values)
+                        if alias_labels:
+                            lines.append(f"{alias_name}{{{alias_labels}}} {total}")
+                        else:
+                            lines.append(f"{alias_name} {total}")
         
         return "\n".join(lines) + "\n"
 

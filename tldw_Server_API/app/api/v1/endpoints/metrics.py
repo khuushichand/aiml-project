@@ -1,19 +1,22 @@
 # metrics.py
 # Metrics endpoint for Prometheus and health monitoring
 
-from fastapi import APIRouter, Response, HTTPException, status
+from fastapi import APIRouter, Response, HTTPException, status, Depends
 from typing import Dict, Any, Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 
 router = APIRouter(tags=["metrics"])
 
 
-@router.get("/metrics", 
-            summary="Get metrics in Prometheus format",
+# Note: Avoid path conflict with the JSON metrics in main.py (`/api/v1/metrics`).
+# Expose text format under `/api/v1/metrics/text`.
+@router.get("/metrics/text",
+            summary="Get metrics in Prometheus text format",
             response_class=Response)
 async def get_prometheus_metrics() -> Response:
     """
@@ -31,8 +34,12 @@ async def get_prometheus_metrics() -> Response:
     """
     try:
         registry = get_metrics_registry()
-        prometheus_text = registry.export_prometheus_format()
-        
+        prometheus_text = registry.export_prometheus_format() or ""
+        try:
+            from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
+            prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
+        except Exception:
+            pass
         return Response(
             content=prometheus_text,
             media_type="text/plain; version=0.0.4",
@@ -174,7 +181,7 @@ async def get_chat_metrics_endpoint() -> Dict[str, Any]:
 @router.post("/metrics/reset",
              summary="Reset metrics (admin only)",
              response_model=Dict[str, str])
-async def reset_metrics() -> Dict[str, str]:
+async def reset_metrics(_: Any = Depends(require_admin)) -> Dict[str, str]:
     """
     Reset all metrics to their initial state.
     
@@ -183,10 +190,6 @@ async def reset_metrics() -> Dict[str, str]:
     in production.
     """
     try:
-        # In production, add authentication check here
-        # if not is_admin(request):
-        #     raise HTTPException(status_code=403, detail="Admin access required")
-        
         # Reinitialize metrics
         registry = get_metrics_registry()
         chat_metrics = get_chat_metrics()

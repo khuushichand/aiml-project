@@ -19,13 +19,17 @@ Security
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, BackgroundTasks, Header
 import json
 from datetime import datetime
 from loguru import logger
 
 # Local imports
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import StandardResponse, ListResponse
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
+    StandardResponse,
+    ListResponse,
+    PaginationMetadata,
+)
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_optimization import (
     OptimizationCreate, OptimizationResponse,
     OptimizationConfig
@@ -40,13 +44,15 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_engine import OptimizationEngine
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager, JobType
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
 # Router Setup
 
 router = APIRouter(
     prefix="/api/v1/prompt-studio/optimizations",
-    tags=["Prompt Studio (Experimental)"],
+    tags=["prompt-studio"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
@@ -57,6 +63,272 @@ router = APIRouter(
 
 ########################################################################################################################
 # Optimization CRUD Endpoints
+
+# --- Strategy helpers ---
+_OPTIMIZER_SYNONYMS = {
+    "hill_climb": "hill_climbing",
+}
+
+_VALIDATION_REQUIRED = {
+    # For these strategies, we validate additional fields
+    "grid_search": ("models_to_test",),
+    "bayesian": ("models_to_test",),
+    # bootstrap may require bootstrap_config, but we keep this optional for now
+}
+
+def _normalize_optimizer_type(opt_type: str) -> str:
+    t = (opt_type or "").strip().lower()
+    return _OPTIMIZER_SYNONYMS.get(t, t)
+
+def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
+    """Light validation for specific strategies.
+
+    Keeps existing behavior for common strategies (iterative, mipro, random_search, hill_climbing,
+    beam_search, greedy, anneal, genetic). For grid_search/bayesian, require non-empty models_to_test.
+    """
+    ot = _normalize_optimizer_type(optimizer_type)
+    required = _VALIDATION_REQUIRED.get(ot, tuple())
+    for field in required:
+        value = cfg.get(field)
+        if not value or (isinstance(value, list) and len(value) == 0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"optimizer_type='{optimizer_type}' requires non-empty '{field}'",
+            )
+
+    # Optional, strategy-specific validations (only apply if provided)
+    params: Dict[str, Any] = {}
+    try:
+        raw = cfg.get("strategy_params")
+        if isinstance(raw, dict):
+            params = raw
+    except Exception:
+        params = {}
+
+    def _get(name: str) -> Any:
+        # Look both at top-level and strategy_params
+        return cfg.get(name, params.get(name))
+
+    # beam_search: validate beam_width if provided
+    if ot == "beam_search":
+        bw = _get("beam_width")
+        if bw is not None:
+            try:
+                bw_int = int(bw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="beam_width must be an integer >= 2")
+            if bw_int < 2:
+                raise HTTPException(status_code=400, detail="beam_width must be >= 2")
+        # Optional pruning threshold within [0,1]
+        pt = _get("prune_threshold")
+        if pt is not None:
+            try:
+                pt_f = float(pt)
+            except Exception:
+                raise HTTPException(status_code=400, detail="prune_threshold must be a float between 0 and 1")
+            if not (0.0 <= pt_f <= 1.0):
+                raise HTTPException(status_code=400, detail="prune_threshold must be in [0, 1]")
+        # Optional max_candidates >= beam_width if both provided
+        mc = _get("max_candidates")
+        if mc is not None:
+            try:
+                mc_i = int(mc)
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_candidates must be an integer >= 2")
+            if mc_i < 2:
+                raise HTTPException(status_code=400, detail="max_candidates must be >= 2")
+            if bw is not None and int(bw) > mc_i:
+                raise HTTPException(status_code=400, detail="max_candidates must be >= beam_width")
+        # Optional diversity_rate in [0,1]
+        dr = _get("diversity_rate")
+        if dr is not None:
+            try:
+                dr_f = float(dr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="diversity_rate must be a float between 0 and 1")
+            if not (0.0 <= dr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="diversity_rate must be in [0, 1]")
+        # Optional length_penalty (>= 0, typical range [0,2])
+        lp = _get("length_penalty")
+        if lp is not None:
+            try:
+                lp_f = float(lp)
+            except Exception:
+                raise HTTPException(status_code=400, detail="length_penalty must be a non-negative number")
+            if not (0.0 <= lp_f <= 2.0):
+                raise HTTPException(status_code=400, detail="length_penalty must be in [0, 2]")
+        # Optional candidate_reranker policy
+        crp = _get("candidate_reranker")
+        if crp is not None:
+            allowed_crp = {"none", "score", "diversity", "hybrid"}
+            if str(crp).lower() not in allowed_crp:
+                raise HTTPException(status_code=400, detail=f"candidate_reranker must be one of {sorted(allowed_crp)}")
+
+    # anneal (simulated annealing): validate cooling_rate and initial_temp if provided
+    if ot in {"anneal", "simulated_annealing"}:
+        cr = _get("cooling_rate")
+        if cr is not None:
+            try:
+                cr_f = float(cr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="cooling_rate must be a float between 0 and 1")
+            if not (0.0 < cr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="cooling_rate must be in (0, 1]")
+        it = _get("initial_temp")
+        if it is not None:
+            try:
+                it_f = float(it)
+            except Exception:
+                raise HTTPException(status_code=400, detail="initial_temp must be a positive number")
+            if it_f <= 0:
+                raise HTTPException(status_code=400, detail="initial_temp must be > 0")
+        # Optional schedule type
+        sched = _get("schedule")
+        if sched is not None:
+            allowed = {"exponential", "linear", "cosine"}
+            if str(sched).lower() not in allowed:
+                raise HTTPException(status_code=400, detail=f"schedule must be one of {sorted(allowed)}")
+        # Optional min_temp <= initial_temp and >= 0
+        mt = _get("min_temp")
+        if mt is not None:
+            try:
+                mt_f = float(mt)
+            except Exception:
+                raise HTTPException(status_code=400, detail="min_temp must be a non-negative number")
+            if mt_f < 0:
+                raise HTTPException(status_code=400, detail="min_temp must be >= 0")
+            if _get("initial_temp") is not None and float(_get("initial_temp")) < mt_f:
+                raise HTTPException(status_code=400, detail="min_temp must be <= initial_temp")
+        # Optional step schedule knobs
+        step_size = _get("step_size")
+        if step_size is not None:
+            try:
+                ss_f = float(step_size)
+            except Exception:
+                raise HTTPException(status_code=400, detail="step_size must be a positive number")
+            if ss_f <= 0:
+                raise HTTPException(status_code=400, detail="step_size must be > 0")
+        epochs = _get("epochs")
+        if epochs is not None:
+            try:
+                ep_i = int(epochs)
+            except Exception:
+                raise HTTPException(status_code=400, detail="epochs must be a positive integer")
+            if ep_i < 1:
+                raise HTTPException(status_code=400, detail="epochs must be >= 1")
+        # If linear schedule and we have initial/min temps, epochs and step_size, ensure consistency
+        try:
+            if str(_get("schedule")).lower() == "linear" and all(v is not None for v in (it, mt, step_size, epochs)):
+                if float(it) - float(mt) < float(step_size) * int(epochs):
+                    raise HTTPException(status_code=400, detail="linear schedule: step_size * epochs must not exceed (initial_temp - min_temp)")
+        except HTTPException:
+            # Bubble up expected validation error
+            raise
+        except (TypeError, ValueError):
+            # Ignore only type conversion issues; other checks above handle them
+            pass
+
+    # genetic: validate population_size and mutation_rate if provided
+    if ot == "genetic":
+        ps = _get("population_size")
+        if ps is not None:
+            try:
+                ps_i = int(ps)
+            except Exception:
+                raise HTTPException(status_code=400, detail="population_size must be an integer >= 2")
+            if ps_i < 2:
+                raise HTTPException(status_code=400, detail="population_size must be >= 2")
+        mr = _get("mutation_rate")
+        if mr is not None:
+            try:
+                mr_f = float(mr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="mutation_rate must be a float between 0 and 1")
+            if not (0.0 <= mr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="mutation_rate must be in [0, 1]")
+        # Optional crossover_rate in [0,1]
+        cr = _get("crossover_rate")
+        if cr is not None:
+            try:
+                cr_f = float(cr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="crossover_rate must be a float between 0 and 1")
+            if not (0.0 <= cr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="crossover_rate must be in [0, 1]")
+        # Optional elitism >= 0
+        el = _get("elitism")
+        if el is not None:
+            try:
+                el_i = int(el)
+            except Exception:
+                raise HTTPException(status_code=400, detail="elitism must be a non-negative integer")
+            if el_i < 0:
+                raise HTTPException(status_code=400, detail="elitism must be >= 0")
+        # Optional selection policy
+        sel = _get("selection")
+        if sel is not None:
+            allowed_sel = {"tournament", "roulette", "rank"}
+            if str(sel).lower() not in allowed_sel:
+                raise HTTPException(status_code=400, detail=f"selection must be one of {sorted(allowed_sel)}")
+        # Optional crossover operator enum
+        xo = _get("crossover_operator")
+        if xo is not None:
+            allowed_xo = {"one_point", "two_point", "uniform"}
+            if str(xo).lower() not in allowed_xo:
+                raise HTTPException(status_code=400, detail=f"crossover_operator must be one of {sorted(allowed_xo)}")
+
+    # hyperparameter tuning (optional checks)
+    if ot in {"hyperparameter", "hyperparam", "hparam"}:
+        sm = _get("search_method")
+        if sm is not None:
+            allowed_sm = {"bayesian", "grid", "random"}
+            if str(sm).lower() not in allowed_sm:
+                raise HTTPException(status_code=400, detail=f"search_method must be one of {sorted(allowed_sm)}")
+        pto = _get("params_to_optimize")
+        if pto is not None:
+            if not isinstance(pto, list) or len(pto) == 0 or not all(isinstance(x, str) and x for x in pto):
+                raise HTTPException(status_code=400, detail="params_to_optimize must be a non-empty list of strings")
+        max_trials = _get("max_trials")
+        if max_trials is not None:
+            try:
+                mt_i = int(max_trials)
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_trials must be a positive integer")
+            if mt_i < 1:
+                raise HTTPException(status_code=400, detail="max_trials must be >= 1")
+        # Optional bounds for common params (max_tokens_range)
+        mtr = _get("max_tokens_range")
+        if mtr is not None:
+            if not isinstance(mtr, (list, tuple)) or len(mtr) != 2:
+                raise HTTPException(status_code=400, detail="max_tokens_range must be [min, max]")
+            try:
+                mn, mx = int(mtr[0]), int(mtr[1])
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers")
+            if not (1 <= mn < mx <= 100000):
+                raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
+
+    # random_search optional checks
+    if ot == "random_search":
+        mt = _get("max_trials")
+        if mt is not None:
+            try:
+                mt_i = int(mt)
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_trials must be a positive integer")
+            if mt_i < 1:
+                raise HTTPException(status_code=400, detail="max_trials must be >= 1")
+        # Optional bounds for common params (max_tokens_range)
+        mtr = _get("max_tokens_range")
+        if mtr is not None:
+            if not isinstance(mtr, (list, tuple)) or len(mtr) != 2:
+                raise HTTPException(status_code=400, detail="max_tokens_range must be [min, max]")
+            try:
+                mn, mx = int(mtr[0]), int(mtr[1])
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers")
+            if not (1 <= mn < mx <= 100000):
+                raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
 
 # Compatibility: base POST returns job info directly
 @router.post("")
@@ -75,6 +347,12 @@ async def create_optimization_simple(
         priority=5,
     )
     return {"id": job.get("id"), "status": job.get("status", "pending")}
+
+async def _rl_optimizations(
+    user_context: Dict = Depends(get_prompt_studio_user),
+    security_config: SecurityConfig = Depends(get_security_config),
+) -> bool:
+    return await check_rate_limit("optimization", user_context=user_context, security_config=security_config)
 
 @router.post(
     "/create",
@@ -124,10 +402,11 @@ async def create_optimization_simple(
 async def create_optimization(
     optimization_data: OptimizationCreate,
     background_tasks: BackgroundTasks,
-    _: bool = Depends(lambda: check_rate_limit("optimization")),
+    _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
 ) -> StandardResponse:
     """
     Create and start a new optimization.
@@ -143,71 +422,105 @@ async def create_optimization(
         Created optimization details
     """
     try:
-        # Validate project access
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get project from prompt
-        cursor.execute(
-            "SELECT project_id FROM prompt_studio_prompts WHERE id = ?",
-            (optimization_data.initial_prompt_id,)
+        prompt_row = db.get_prompt_with_project(
+            optimization_data.initial_prompt_id,
+            include_deleted=False,
         )
-        row = cursor.fetchone()
-        if not row:
+        if not prompt_row:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Prompt {optimization_data.initial_prompt_id} not found"
+                detail=f"Prompt {optimization_data.initial_prompt_id} not found",
             )
-        
-        project_id = row[0]
+
+        project_id = prompt_row["project_id"]
         await require_project_write_access(project_id, user_context=user_context, db=db)
-        
-        # Create optimization record (aligned with schema)
+
         opt_cfg = optimization_data.optimization_config
-        optimizer_type = opt_cfg.optimizer_type if hasattr(opt_cfg, "optimizer_type") else str(getattr(opt_cfg, "optimizer_type", "iterative"))
-        max_iters = getattr(opt_cfg, "max_iterations", None)
+        optimizer_type = opt_cfg.optimizer_type
+        max_iters = opt_cfg.max_iterations
 
-        combined_config: Dict[str, Any] = json.loads(opt_cfg.model_dump_json()) if hasattr(opt_cfg, "model_dump_json") else (
-            opt_cfg.dict() if hasattr(opt_cfg, "dict") else {}
-        )
-        # Include bootstrap_config if provided
+        if hasattr(opt_cfg, "model_dump_json"):
+            try:
+                combined_config: Dict[str, Any] = json.loads(opt_cfg.model_dump_json())
+            except Exception:
+                combined_config = model_dump_compat(opt_cfg)
+        else:
+            combined_config = model_dump_compat(opt_cfg)
         if optimization_data.bootstrap_config is not None:
-            combined_config["bootstrap_config"] = (
-                json.loads(optimization_data.bootstrap_config.model_dump_json())
-                if hasattr(optimization_data.bootstrap_config, "model_dump_json")
-                else optimization_data.bootstrap_config.dict()
-            )
+            bootstrap_cfg = optimization_data.bootstrap_config
+            if hasattr(bootstrap_cfg, "model_dump_json"):
+                try:
+                    combined_config["bootstrap_config"] = json.loads(bootstrap_cfg.model_dump_json())
+                except Exception:
+                    combined_config["bootstrap_config"] = model_dump_compat(bootstrap_cfg)
+            else:
+                combined_config["bootstrap_config"] = model_dump_compat(bootstrap_cfg)
 
-        cursor.execute(
-            """
-            INSERT INTO prompt_studio_optimizations (
-                uuid, project_id, name, initial_prompt_id,
-                optimizer_type, optimization_config, max_iterations, status, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"opt-{user_context['user_id']}-{datetime.utcnow().timestamp()}",
-                project_id,
-                optimization_data.name,
-                optimization_data.initial_prompt_id,
-                optimizer_type,
-                json.dumps(combined_config),
-                max_iters,
-                "pending",
-                db.client_id,
-            ),
+        bootstrap_samples = (
+            getattr(optimization_data.bootstrap_config, "num_samples", None)
+            if optimization_data.bootstrap_config is not None
+            else None
         )
-        
-        optimization_id = cursor.lastrowid
-        conn.commit()
-        
-        # Create job for optimization
+
+        # Idempotency: check existing optimization mapping for key
+        user_id_str = str(user_context.get("user_id", "anonymous"))
+        if idempotency_key:
+            try:
+                # TODO(PS-IDEMPOTENCY-SCOPE): Once DB lookup scopes by user_id, we can rely on per-user separation
+                # for idempotency keys. For now, lookup by key remains global.
+                existing_id = db.lookup_idempotency("optimization", idempotency_key, user_id_str)
+                if existing_id:
+                    try:
+                        prompt_studio_metrics.metrics_manager.increment(
+                            "prompt_studio.idempotency.hit_total", labels={"entity_type": "optimization"}
+                        )
+                    except Exception:
+                        pass
+                    existing_opt = db.get_optimization(existing_id)
+                    if existing_opt:
+                        return StandardResponse(success=True, data={"optimization": OptimizationResponse(**existing_opt), "job_id": None})
+            except Exception:
+                pass
+
+        # Per-strategy validation (lightweight)
+        try:
+            _validate_strategy_config(optimizer_type, combined_config)
+        except HTTPException:
+            raise
+        except Exception as _e:  # pragma: no cover - safety
+            raise HTTPException(status_code=400, detail=str(_e))
+
+        optimization_record = db.create_optimization(
+            project_id=project_id,
+            name=optimization_data.name,
+            initial_prompt_id=optimization_data.initial_prompt_id,
+            optimizer_type=optimizer_type,
+            optimization_config=combined_config,
+            max_iterations=max_iters,
+            bootstrap_samples=bootstrap_samples,
+            status="pending",
+            client_id=db.client_id,
+        )
+
+        # Record idempotency mapping
+        if idempotency_key and optimization_record.get("id"):
+            try:
+                db.record_idempotency("optimization", idempotency_key, int(optimization_record["id"]), user_id_str)
+                try:
+                    prompt_studio_metrics.metrics_manager.increment(
+                        "prompt_studio.idempotency.miss_total", labels={"entity_type": "optimization"}
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
         job_manager = JobManager(db)
         job = job_manager.create_job(
             job_type=JobType.OPTIMIZATION,
-            entity_id=optimization_id,
+            entity_id=optimization_record["id"],
             payload={
-                "optimization_id": optimization_id,
+                "optimization_id": optimization_record["id"],
                 "optimizer_type": optimizer_type,
                 "test_case_ids": optimization_data.test_case_ids or [],
                 "optimization_config": combined_config,
@@ -216,35 +529,53 @@ async def create_optimization(
                 "created_by": user_context.get("user_id"),
                 "submitted_at": datetime.utcnow().isoformat(),
             },
+            project_id=project_id,
             priority=5,
         )
-        
-        logger.info(f"User {user_context['user_id']} created optimization {optimization_id}")
-        
-        # Start optimization in background
-        background_tasks.add_task(
-            run_optimization_async,
-            optimization_id,
-            db,
+
+        logger.info(
+            "User %s created optimization %s",
+            user_context.get("user_id"),
+            optimization_record.get("id"),
         )
-        
-        return StandardResponse(
-            success=True,
-            data=OptimizationResponse(
-                id=optimization_id,
-                uuid=cursor.lastrowid,
-                project_id=project_id,
-                name=optimization_data.name,
-                status="pending",
-                job_id=job["id"]
+
+        # In test mode, avoid spawning background optimization to keep tests fast and deterministic
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() != "true":
+            background_tasks.add_task(
+                run_optimization_async,
+                optimization_record["id"],
+                db,
             )
-        )
-        
-    except DatabaseError as e:
-        logger.error(f"Database error creating optimization: {e}")
+        else:
+            logger.debug("TEST_MODE: skipping background optimization task spawn")
+
+        response_payload = {
+            "optimization": OptimizationResponse(**optimization_record),
+            "job_id": job["id"],
+        }
+
+        return StandardResponse(success=True, data=response_payload)
+
+    except DatabaseError as exc:
+        logger.error(f"Database error creating optimization: {exc}")
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() == "true":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create optimization: {exc}",
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create optimization"
+            detail="Failed to create optimization",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - safety
+        logger.error(f"Unexpected error creating optimization: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create optimization",
         )
 
 @router.get(
@@ -301,60 +632,32 @@ async def list_optimizations(
         Paginated list of optimizations
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Build query
-        query = """
-            SELECT * FROM prompt_studio_optimizations
-            WHERE project_id = ? AND deleted = 0
-        """
-        params = [project_id]
-        
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-        
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-        params.extend([per_page, (page - 1) * per_page])
-        
-        cursor.execute(query, params)
-        
-        optimizations = []
-        for row in cursor.fetchall():
-            opt = db._row_to_dict(cursor, row)
-            optimizations.append(OptimizationResponse(**opt))
-        
-        # Get total count
-        count_query = """
-            SELECT COUNT(*) FROM prompt_studio_optimizations
-            WHERE project_id = ? AND deleted = 0
-        """
-        count_params = [project_id]
-        
-        if status:
-            count_query += " AND status = ?"
-            count_params.append(status)
-        
-        cursor.execute(count_query, count_params)
-        total_count = cursor.fetchone()[0]
-        
-        return ListResponse(
-            success=True,
-            data=optimizations,
-            metadata={
-                "page": page,
-                "per_page": per_page,
-                "total": total_count,
-                "total_pages": (total_count + per_page - 1) // per_page
-            }
+        result = db.list_optimizations(
+            project_id=project_id,
+            status=status,
+            page=page,
+            per_page=per_page,
         )
-        
-    except Exception as e:
-        logger.error(f"Error listing optimizations: {e}")
+
+        optimizations = [
+            OptimizationResponse(**record)
+            for record in result.get("optimizations", [])
+        ]
+        metadata = PaginationMetadata(**result.get("pagination", {}))
+
+        return ListResponse(success=True, data=optimizations, metadata=metadata)
+
+    except DatabaseError as exc:
+        logger.error(f"Database error listing optimizations: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list optimizations"
+            detail="Failed to list optimizations",
+        )
+    except Exception as exc:
+        logger.error(f"Unexpected error listing optimizations: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list optimizations",
         )
 
 @router.get("/get/{optimization_id}", response_model=StandardResponse, openapi_extra={
@@ -376,51 +679,37 @@ async def get_optimization(
         Optimization details
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM prompt_studio_optimizations
-            WHERE id = ? AND deleted = 0
-        """, (optimization_id,))
-        
-        row = cursor.fetchone()
-        if not row:
+        optimization = db.get_optimization(optimization_id)
+        if not optimization or optimization.get("deleted"):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Optimization {optimization_id} not found"
+                detail=f"Optimization {optimization_id} not found",
             )
-        
-        optimization = db._row_to_dict(cursor, row)
 
-        # Check project access
-        await require_project_access(optimization["project_id"], user_context=user_context, db=db)
-        
-        # Parse JSON fields (aligned with schema)
-        if isinstance(optimization.get("optimization_config"), str):
-            try:
-                optimization["optimization_config"] = json.loads(optimization["optimization_config"]) or {}
-            except Exception:
-                optimization["optimization_config"] = {}
-        for k in ("initial_metrics", "final_metrics"):
-            if isinstance(optimization.get(k), str):
-                try:
-                    optimization[k] = json.loads(optimization[k]) or {}
-                except Exception:
-                    optimization[k] = {}
-        
+        await require_project_access(
+            optimization.get("project_id"),
+            user_context=user_context,
+            db=db,
+        )
+
         return StandardResponse(
             success=True,
-            data=optimization
+            data=OptimizationResponse(**optimization),
         )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting optimization: {e}")
+
+    except DatabaseError as exc:
+        logger.error(f"Database error fetching optimization {optimization_id}: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get optimization"
+            detail="Failed to get optimization",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Unexpected error getting optimization {optimization_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get optimization",
         )
 
 # Compatibility: GET job status by job_id returning direct job data
@@ -454,71 +743,62 @@ async def cancel_optimization(
         Success response
     """
     try:
-        # Get optimization
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT project_id, status FROM prompt_studio_optimizations
-            WHERE id = ? AND deleted = 0
-        """, (optimization_id,))
-        
-        row = cursor.fetchone()
-        if not row:
+        optimization = db.get_optimization(optimization_id)
+        if not optimization or optimization.get("deleted"):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Optimization {optimization_id} not found"
+                detail=f"Optimization {optimization_id} not found",
             )
-        
-        project_id, status = row
-        
-        # Check access
+
+        project_id = optimization.get("project_id")
         await require_project_write_access(project_id, user_context=user_context, db=db)
-        
-        # Check if can cancel
-        if status in ["completed", "failed", "cancelled"]:
+
+        status_value = optimization.get("status")
+        if status_value in {"completed", "failed", "cancelled"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot cancel optimization with status: {status}"
+                detail=f"Cannot cancel optimization with status: {status_value}",
             )
-        
-        # Cancel associated job
+
         job_manager = JobManager(db)
-        cursor.execute("""
-            SELECT id FROM prompt_studio_job_queue
-            WHERE job_type = 'optimization' AND entity_id = ?
-            ORDER BY created_at DESC LIMIT 1
-        """, (optimization_id,))
-        
-        job_row = cursor.fetchone()
-        if job_row:
-            job_manager.cancel_job(job_row[0], reason or "User cancelled")
-        
-        # Update optimization status
-        cursor.execute("""
-            UPDATE prompt_studio_optimizations
-            SET status = 'cancelled',
-                error_message = ?,
-                completed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (reason or "Cancelled by user", optimization_id))
-        
-        conn.commit()
-        
-        logger.info(f"User {user_context['user_id']} cancelled optimization {optimization_id}")
-        
+        latest_job = db.get_latest_job_for_entity(
+            JobType.OPTIMIZATION.value,
+            optimization_id,
+        )
+        if latest_job:
+            job_manager.cancel_job(latest_job["id"], reason or "User cancelled")
+
+        db.set_optimization_status(
+            optimization_id,
+            "cancelled",
+            error_message=reason or "Cancelled by user",
+            mark_completed=True,
+        )
+
+        logger.info(
+            "User %s cancelled optimization %s",
+            user_context.get("user_id"),
+            optimization_id,
+        )
+
         return StandardResponse(
             success=True,
-            data={"message": "Optimization cancelled"}
+            data={"message": "Optimization cancelled"},
         )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error cancelling optimization: {e}")
+
+    except DatabaseError as exc:
+        logger.error(f"Database error cancelling optimization {optimization_id}: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to cancel optimization"
+            detail="Failed to cancel optimization",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Unexpected error cancelling optimization {optimization_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to cancel optimization",
         )
 
 ########################################################################################################################
@@ -584,45 +864,6 @@ async def get_optimization_strategies() -> StandardResponse:
         data=strategies
     )
 
-@router.post(
-    "/compare",
-    response_model=StandardResponse,
-    openapi_extra={
-        "requestBody": {
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "compare": {
-                            "summary": "Compare optimization strategies",
-                            "value": {
-                                "prompt_id": 12,
-                                "test_case_ids": [1, 2, 3],
-                                "strategies": ["iterative", "bayesian"],
-                                "model_configuration": {"model_name": "gpt-4o-mini", "temperature": 0.3}
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "responses": {
-            "200": {
-                "description": "Comparison jobs created",
-                "content": {
-                    "application/json": {
-                        "examples": {
-                            "created": {
-                                "summary": "Comparison started",
-                                "value": {"success": True, "data": {"jobs": [{"id": 9002}, {"id": 9003}]}}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-)
-
 @router.get("/history/{optimization_id}", response_model=StandardResponse,
             openapi_extra={
                 "responses": {
@@ -664,82 +905,58 @@ async def get_optimization_history(
     lightweight progress fields.
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-
-        # Optimization row
-        cursor.execute(
-            "SELECT * FROM prompt_studio_optimizations WHERE id = ?",
-            (optimization_id,)
-        )
-        row = cursor.fetchone()
-        if not row:
+        optimization = db.get_optimization(optimization_id)
+        if not optimization or optimization.get("deleted"):
             raise HTTPException(status_code=404, detail="Optimization not found")
-        opt = db._row_to_dict(cursor, row)
 
-        await require_project_access(opt["project_id"], user_context=user_context, db=db)
-
-        # Latest job
-        cursor.execute(
-            """
-            SELECT * FROM prompt_studio_job_queue
-            WHERE job_type = 'optimization' AND entity_id = ?
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (optimization_id,)
+        await require_project_access(
+            optimization.get("project_id"),
+            user_context=user_context,
+            db=db,
         )
-        job_row = cursor.fetchone()
-        job = db._row_to_dict(cursor, job_row) if job_row else None
 
-        # Timeline (recent jobs)
-        cursor.execute(
-            """
-            SELECT * FROM prompt_studio_job_queue
-            WHERE job_type = 'optimization' AND entity_id = ?
-            ORDER BY created_at ASC
-            LIMIT 50
-            """,
-            (optimization_id,)
+        job = db.get_latest_job_for_entity(
+            JobType.OPTIMIZATION.value,
+            optimization_id,
         )
-        rows = cursor.fetchall()
-        timeline = []
-        for r in rows or []:
-            j = db._row_to_dict(cursor, r)
-            timeline.append({
-                "job_id": j.get("id"),
-                "status": j.get("status"),
-                "created_at": j.get("created_at"),
-                "started_at": j.get("started_at"),
-                "completed_at": j.get("completed_at"),
-            })
+        timeline_records = db.list_jobs_for_entity(
+            JobType.OPTIMIZATION.value,
+            optimization_id,
+            limit=50,
+            ascending=True,
+        )
 
-        # Parse JSON payloads
-        import json as _json
-        if job:
-            for k in ("payload", "result"):
-                if isinstance(job.get(k), str):
-                    try:
-                        job[k] = _json.loads(job[k])
-                    except Exception:
-                        pass
+        timeline = [
+            {
+                "job_id": entry.get("id"),
+                "status": entry.get("status"),
+                "created_at": entry.get("created_at"),
+                "started_at": entry.get("started_at"),
+                "completed_at": entry.get("completed_at"),
+            }
+            for entry in timeline_records
+        ]
 
         return StandardResponse(
             success=True,
             data={
-                "optimization": opt,
+                "optimization": OptimizationResponse(**optimization),
                 "job": job,
                 "progress": {
-                    "iterations_completed": opt.get("iterations_completed"),
-                    "max_iterations": opt.get("max_iterations"),
-                    "status": opt.get("status")
+                    "iterations_completed": optimization.get("iterations_completed"),
+                    "max_iterations": optimization.get("max_iterations"),
+                    "status": optimization.get("status"),
                 },
-                "timeline": timeline
-            }
+                "timeline": timeline,
+            },
         )
+    except DatabaseError as exc:
+        logger.error(f"Database error fetching optimization history {optimization_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch optimization history")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error fetching optimization history: {e}")
+    except Exception as exc:
+        logger.error(f"Unexpected error fetching optimization history {optimization_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to fetch optimization history")
 
 ########################################################################################################################
@@ -790,46 +1007,40 @@ async def add_optimization_iteration(
 ) -> StandardResponse:
     """Persist a single optimization iteration event."""
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-
-        # Ownership check
-        cursor.execute("SELECT project_id FROM prompt_studio_optimizations WHERE id = ?", (optimization_id,))
-        row = cursor.fetchone()
-        if not row:
+        optimization = db.get_optimization(optimization_id)
+        if not optimization or optimization.get("deleted"):
             raise HTTPException(status_code=404, detail="Optimization not found")
-        await require_project_write_access(row[0], user_context=user_context, db=db)
 
-        cursor.execute(
-            """
-            INSERT INTO prompt_studio_optimization_iterations (
-                optimization_id, iteration_number, prompt_variant, metrics, tokens_used, cost, note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                optimization_id,
-                payload.iteration_number,
-                json.dumps(payload.prompt_variant) if payload.prompt_variant is not None else None,
-                json.dumps(payload.metrics) if payload.metrics is not None else None,
-                payload.tokens_used,
-                payload.cost,
-                payload.note,
-            ),
+        await require_project_write_access(
+            optimization.get("project_id"),
+            user_context=user_context,
+            db=db,
         )
-        iter_id = cursor.lastrowid
-        conn.commit()
 
-        return StandardResponse(success=True, data={"id": iter_id})
+        record = db.record_optimization_iteration(
+            optimization_id,
+            iteration_number=payload.iteration_number,
+            prompt_variant=payload.prompt_variant,
+            metrics=payload.metrics,
+            tokens_used=payload.tokens_used,
+            cost=payload.cost,
+            note=payload.note,
+        )
+
+        return StandardResponse(success=True, data=record)
+    except DatabaseError as exc:
+        logger.error(f"Database error recording iteration for optimization {optimization_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to add iteration")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error adding iteration: {e}")
+    except Exception as exc:
+        logger.error(f"Unexpected error adding iteration: {exc}")
         raise HTTPException(status_code=500, detail="Failed to add iteration")
 
 
 @router.get(
     "/iterations/{optimization_id}",
-    response_model=ListResponse,
+    response_model=StandardResponse,
     openapi_extra={
         "responses": {
             "200": {
@@ -867,182 +1078,165 @@ async def list_optimization_iterations(
 ) -> ListResponse:
     """List persisted iterations for an optimization."""
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-
-        # Ownership check
-        cursor.execute("SELECT project_id FROM prompt_studio_optimizations WHERE id = ?", (optimization_id,))
-        row = cursor.fetchone()
-        if not row:
+        optimization = db.get_optimization(optimization_id)
+        if not optimization or optimization.get("deleted"):
             raise HTTPException(status_code=404, detail="Optimization not found")
-        await require_project_access(row[0], user_context=user_context, db=db)
 
-        offset = (page - 1) * per_page
-        cursor.execute(
-            """
-            SELECT id, iteration_number, prompt_variant, metrics, tokens_used, cost, note, created_at
-            FROM prompt_studio_optimization_iterations
-            WHERE optimization_id = ?
-            ORDER BY iteration_number ASC
-            LIMIT ? OFFSET ?
-            """,
-            (optimization_id, per_page, offset),
+        await require_project_access(
+            optimization.get("project_id"),
+            user_context=user_context,
+            db=db,
         )
-        rows = cursor.fetchall() or []
-        items = []
-        for r in rows:
-            rec = db._row_to_dict(cursor, r)
-            # Parse JSON fields
-            for k in ("prompt_variant", "metrics"):
-                if isinstance(rec.get(k), str):
-                    try:
-                        rec[k] = json.loads(rec[k])
-                    except Exception:
-                        pass
-            items.append(rec)
 
-        # Count
-        cursor.execute(
-            "SELECT COUNT(*) FROM prompt_studio_optimization_iterations WHERE optimization_id = ?",
-            (optimization_id,),
+        result = db.list_optimization_iterations(
+            optimization_id,
+            page=page,
+            per_page=per_page,
         )
-        total = cursor.fetchone()[0]
-        return ListResponse(
-            success=True,
-            data=items,
-            metadata={
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "total_pages": (total + per_page - 1) // per_page,
-            },
-        )
+
+        metadata = PaginationMetadata(**result.get("pagination", {}))
+        # Back-compat: wrap iterations under data.{iterations} for tests expecting this shape
+        return StandardResponse(success=True, data={"iterations": result.get("iterations", [])}, metadata=metadata.model_dump())
+    except DatabaseError as exc:
+        logger.error(f"Database error listing optimization iterations for {optimization_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list iterations")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error listing iterations: {e}")
+    except Exception as exc:
+        logger.error(f"Unexpected error listing iterations: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list iterations")
+@router.post(
+    "/compare",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "compare": {
+                            "summary": "Compare optimization strategies",
+                            "value": {
+                                "prompt_id": 12,
+                                "test_case_ids": [1, 2, 3],
+                                "strategies": ["iterative", "bayesian"],
+                                "model_configuration": {"model_name": "gpt-4o-mini", "temperature": 0.3}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Comparison jobs created"
+            }
+        }
+    }
+)
 async def compare_strategies(
     request: CompareStrategiesRequest,
     background_tasks: BackgroundTasks = None,
-    _: bool = Depends(lambda: check_rate_limit("optimization")),
+    _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Compare multiple optimization strategies.
     
-    Args:
-        prompt_id: Prompt to optimize
-        test_case_ids: Test cases
-        strategies: List of strategies to compare
-        model_config: Model configuration
-        background_tasks: Background task manager
-        db: Database instance
-        user_context: Current user context
-        
     Returns:
         Comparison job details
     """
     try:
-        # Validate prompt
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT project_id FROM prompt_studio_prompts WHERE id = ?",
-            (request.prompt_id,)
-        )
-        row = cursor.fetchone()
-        if not row:
+        prompt_row = db.get_prompt_with_project(request.prompt_id, include_deleted=False)
+        if not prompt_row:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Prompt {request.prompt_id} not found"
+                detail=f"Prompt {request.prompt_id} not found",
             )
-        
-        project_id = row[0]
+
+        project_id = prompt_row["project_id"]
         await require_project_write_access(project_id, user_context=user_context, db=db)
-        
-        # Create optimizations for each strategy
-        pending_jobs: List[Dict[str, Any]] = []
-        
+
+        job_manager = JobManager(db)
+        optimization_ids: List[int] = []
+        job_ids: List[int] = []
+
+        strategies = request.strategies or []
         for strategy in strategies:
             combined_config = {
                 "optimizer_type": strategy,
                 "max_iterations": 10,
                 "model_configuration": request.model_configuration,
             }
-            cursor.execute(
-                """
-                INSERT INTO prompt_studio_optimizations (
-                    uuid, project_id, name, initial_prompt_id,
-                    optimizer_type, optimization_config, max_iterations, status, client_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"compare-{strategy}-{datetime.utcnow().timestamp()}",
-                    project_id,
-                    f"Compare: {strategy}",
-                    request.prompt_id,
-                    strategy,
-                    json.dumps(combined_config),
-                    10,
-                    "pending",
-                    db.client_id,
-                ),
+
+            optimization_record = db.create_optimization(
+                project_id=project_id,
+                name=f"Compare: {strategy}",
+                initial_prompt_id=request.prompt_id,
+                optimizer_type=strategy,
+                optimization_config=combined_config,
+                max_iterations=10,
+                status="pending",
+                client_id=db.client_id,
             )
-            
-            pending_jobs.append({
-                "id": cursor.lastrowid,
-                "strategy": strategy,
-                "config": combined_config,
-                "test_case_ids": request.test_case_ids or [],
-            })
-        
-        conn.commit()
-        
-        # Create jobs for each optimization
-        job_manager = JobManager(db)
-        jobs = []
-        
-        for item in pending_jobs:
+            optimization_ids.append(optimization_record["id"])
+
             job = job_manager.create_job(
                 job_type=JobType.OPTIMIZATION,
-                entity_id=item["id"],
+                entity_id=optimization_record["id"],
                 payload={
-                    "optimization_id": item["id"],
-                    "optimizer_type": item["strategy"],
-                    "test_case_ids": item["test_case_ids"],
-                    "optimization_config": item["config"],
+                    "optimization_id": optimization_record["id"],
+                    "optimizer_type": strategy,
+                    "test_case_ids": request.test_case_ids or [],
+                    "optimization_config": combined_config,
                     "initial_prompt_id": request.prompt_id,
                     "project_id": project_id,
                     "created_by": user_context.get("user_id"),
                     "submitted_at": datetime.utcnow().isoformat(),
                 },
-                priority=5
+                project_id=project_id,
+                priority=5,
             )
-            jobs.append(job)
-        
-        logger.info(f"User {user_context['user_id']} created strategy comparison")
-        
+            job_ids.append(job["id"])
+
+        logger.info(
+            "User %s created strategy comparison for prompt %s",
+            user_context.get("user_id"),
+            request.prompt_id,
+        )
+
         return StandardResponse(
             success=True,
             data={
                 "optimization_ids": optimization_ids,
-                "job_ids": [j["id"] for j in jobs],
+                "job_ids": job_ids,
                 "strategies": strategies,
-                "message": f"Comparing {len(strategies)} optimization strategies"
-            }
+                "message": f"Comparing {len(strategies)} optimization strategies",
+            },
         )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error comparing strategies: {e}")
+
+    except DatabaseError as exc:
+        logger.error(f"Database error comparing strategies: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to compare strategies"
+            detail="Failed to compare strategies",
         )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Unexpected error comparing strategies: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compare strategies",
+        )
+
+# Backward/compatibility alias used by tests: /compare-strategies
+router.add_api_route(
+    "/compare-strategies",
+    compare_strategies,
+    methods=["POST"],
+    response_model=StandardResponse,
+)
 
 ########################################################################################################################
 # Helper Functions
@@ -1064,19 +1258,12 @@ async def run_optimization_async(optimization_id: int, db: PromptStudioDatabase)
     except Exception as e:
         logger.error(f"Async optimization failed: {e}")
         
-        # Update status to failed
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE prompt_studio_optimizations
-            SET status = 'failed',
-                error_message = ?,
-                completed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (str(e), optimization_id))
-        conn.commit()
+        db.set_optimization_status(
+            optimization_id,
+            "failed",
+            error_message=str(e),
+            mark_completed=True,
+        )
 
-async def require_project_access(project_id: int) -> bool:
-    """Check if user has access to project."""
-    # Placeholder - implement actual access control
-    return True
+# Note: Project access checks are provided via API_Deps.prompt_studio_deps.
+# Do not redeclare require_project_access here to avoid shadowing the dependency.

@@ -16,7 +16,7 @@
 import queue
 import threading
 import time
-import logging
+from loguru import logger
 import numpy as np
 from typing import Optional, Callable, List, Dict, Any, Union
 from dataclasses import dataclass

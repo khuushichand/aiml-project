@@ -4,7 +4,6 @@
 # Imports
 import configparser
 import json
-import logging
 import os
 import yaml
 from functools import lru_cache
@@ -371,7 +370,7 @@ def load_settings():
     single_user_fixed_id = int(os.getenv("SINGLE_USER_FIXED_ID", "1")) # Default to user ID 1
     # API Key for accessing the single-user instance
     # Check both SINGLE_USER_API_KEY (AuthNZ standard) and API_KEY (legacy) environment variables
-    single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY", "default-secret-key-for-single-user")
+    single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
 
     # --- Multi-User Settings (JWT) ---
     jwt_secret_key = os.getenv("JWT_SECRET_KEY", "a_very_insecure_default_secret_key_for_dev_only")
@@ -493,6 +492,21 @@ def load_settings():
                 if isinstance(comprehensive_config, dict) else None
             )
         ),
+        # --- HYDE/doc2query (per-chunk) feature flags ---
+        "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
+        "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),
+        "HYDE_PROVIDER": os.getenv("HYDE_PROVIDER"),
+        "HYDE_MODEL": os.getenv("HYDE_MODEL"),
+        "HYDE_TEMPERATURE": float(os.getenv("HYDE_TEMPERATURE", "0.2")),
+        "HYDE_MAX_TOKENS": int(os.getenv("HYDE_MAX_TOKENS", "96")),
+        "HYDE_LANGUAGE": os.getenv("HYDE_LANGUAGE", "auto"),
+        "HYDE_PROMPT_VERSION": int(os.getenv("HYDE_PROMPT_VERSION", "1")),
+        # Retrieval side HYDE controls
+        "HYDE_WEIGHT_QUESTION_MATCH": float(os.getenv("HYDE_WEIGHT_QUESTION_MATCH", "0.05")),
+        "HYDE_K_FRACTION": float(os.getenv("HYDE_K_FRACTION", "0.5")),
+        "HYDE_ONLY_IF_NEEDED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ONLY_IF_NEEDED", "true")),
+        "HYDE_SCORE_FLOOR": float(os.getenv("HYDE_SCORE_FLOOR", "0.30")),
+        "HYDE_DEDUPE_BY_PARENT": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         # You can continue to merge other specific keys or whole sections
@@ -620,6 +634,70 @@ def load_settings():
             )
         ))(os.getenv('RAG_LLM_RERANKER_MODEL'), load_comprehensive_config()),
 
+        # RAG llama.cpp (GGUF) reranker configuration
+        "RAG_LLAMA_RERANKER_BIN": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_binary', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_BIN'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_MODEL'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_NGL": (lambda _env, _cp: (
+            int(_env) if _env is not None else (
+                int(_cp.get('RAG', 'llama_reranker_ngl', fallback='0')) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 0
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_NGL'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_SEP": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_separator', fallback='<#sep#>') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else '<#sep#>'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_SEP'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_OUTPUT": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_output', fallback='json+') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'json+'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_OUTPUT'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_POOLING": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_pooling', fallback='last') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'last'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_POOLING'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_NORMALIZE": (lambda _env, _cp: (
+            int(_env) if _env is not None else (
+                int(_cp.get('RAG', 'llama_reranker_normalize', fallback='-1')) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else -1
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_NORMALIZE'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_MAX_DOC_CHARS": (lambda _env, _cp: (
+            int(_env) if _env is not None else (
+                int(_cp.get('RAG', 'llama_reranker_max_doc_chars', fallback='2000')) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 2000
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_MAX_DOC_CHARS'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_TEMPLATE_MODE": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_template_mode', fallback='auto') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'auto'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_TEMPLATE_MODE'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_QUERY_PREFIX": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_query_prefix', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_QUERY_PREFIX'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_DOC_PREFIX": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_doc_prefix', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_DOC_PREFIX'), load_comprehensive_config()),
+
+        # Transformers cross-encoder reranker defaults
+        "RAG_TRANSFORMERS_RERANKER_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'transformers_reranker_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_TRANSFORMERS_RERANKER_MODEL'), load_comprehensive_config()),
+
         # RAG HyDE configuration (provider/model)
         "RAG_HYDE_PROVIDER": (lambda _env, _cp: (
             _env if _env is not None else (
@@ -643,12 +721,64 @@ def load_settings():
                 _cp.get('RAG', 'default_llm_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
             )
         ))(os.getenv('RAG_DEFAULT_LLM_MODEL'), load_comprehensive_config()),
+
+        # RAG default FTS level ('media' or 'chunk')
+        "RAG_DEFAULT_FTS_LEVEL": (lambda _env, _cp: (
+            (_env.lower() if isinstance(_env, str) else None) if _env is not None else (
+                (_cp.get('RAG', 'default_fts_level', fallback='media').lower() if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'media')
+            )
+        ))(os.getenv('RAG_DEFAULT_FTS_LEVEL'), load_comprehensive_config()),
+
+        # --- Feature Flags: Personalization & Persona Agent ---
+        # Personalization
+        "PERSONALIZATION_ENABLED": (lambda _cp: (
+            _cp.getboolean('personalization', 'enabled', fallback=True) if _cp and hasattr(_cp, 'has_section') and _cp.has_section('personalization') else True
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_ALPHA": (lambda _cp: (
+            float(_cp.get('personalization', 'alpha', fallback='0.2')) if _cp and _cp.has_section('personalization') else 0.2
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_BETA": (lambda _cp: (
+            float(_cp.get('personalization', 'beta', fallback='0.6')) if _cp and _cp.has_section('personalization') else 0.6
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_GAMMA": (lambda _cp: (
+            float(_cp.get('personalization', 'gamma', fallback='0.2')) if _cp and _cp.has_section('personalization') else 0.2
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_RECENCY_HALF_LIFE_DAYS": (lambda _cp: (
+            int(_cp.get('personalization', 'recency_half_life_days', fallback='14')) if _cp and _cp.has_section('personalization') else 14
+        ))(load_comprehensive_config()),
+
+        # Persona Agent and RBAC
+        "PERSONA_ENABLED": (lambda _cp: (
+            _cp.getboolean('persona', 'enabled', fallback=True) if _cp and hasattr(_cp, 'has_section') and _cp.has_section('persona') else True
+        ))(load_comprehensive_config()),
+        "PERSONA_DEFAULT_PERSONA": (lambda _cp: (
+            _cp.get('persona', 'default_persona', fallback='Research Assistant') if _cp and _cp.has_section('persona') else 'Research Assistant'
+        ))(load_comprehensive_config()),
+        "PERSONA_VOICE": (lambda _cp: (
+            _cp.get('persona', 'voice', fallback='default') if _cp and _cp.has_section('persona') else 'default'
+        ))(load_comprehensive_config()),
+        "PERSONA_STT": (lambda _cp: (
+            _cp.get('persona', 'stt', fallback='faster_whisper') if _cp and _cp.has_section('persona') else 'faster_whisper'
+        ))(load_comprehensive_config()),
+        "PERSONA_MAX_TOOL_STEPS": (lambda _cp: (
+            int(_cp.get('persona', 'max_tool_steps', fallback='3')) if _cp and _cp.has_section('persona') else 3
+        ))(load_comprehensive_config()),
+        "PERSONA_RBAC_ALLOW_EXPORT": (lambda _cp: (
+            _cp.getboolean('persona.rbac', 'allow_export', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
+        ))(load_comprehensive_config()),
+        "PERSONA_RBAC_ALLOW_DELETE": (lambda _cp: (
+            _cp.getboolean('persona.rbac', 'allow_delete', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
+        ))(load_comprehensive_config()),
     }
 
     # --- Warnings ---
-    if config_dict["SINGLE_USER_MODE"] and config_dict["SINGLE_USER_API_KEY"] == "default-secret-key-for-single-user":
-        logger.warning("Using default API_KEY for single-user mode. Set the API_KEY environment variable for security.")
-        logger.debug(f"Using default API_KEY for single-user mode: '{config_dict['SINGLE_USER_API_KEY']}'")
+    if config_dict["SINGLE_USER_MODE"]:
+        if not config_dict["SINGLE_USER_API_KEY"]:
+            logger.error(
+                "SINGLE_USER_API_KEY is not configured. The server will refuse to start in single-user mode.\n"
+                "Run `python -m tldw_Server_API.app.core.AuthNZ.initialize` and generate secure keys, "
+                "then set SINGLE_USER_API_KEY in your environment or .env file."
+            )
     if not config_dict["SINGLE_USER_MODE"] and config_dict["JWT_SECRET_KEY"] == "a_very_insecure_default_secret_key_for_dev_only":
         logger.critical("SECURITY WARNING: Using default JWT_SECRET_KEY in multi-user mode. Set a strong JWT_SECRET_KEY environment variable!")
     if not config_dict["SINGLE_USER_MODE"] and not config_dict["USERS_DB_CONFIGURED"]:
@@ -945,6 +1075,19 @@ def load_and_log_configs():
         openrouter_api_timeout = config_parser_object.get('API', 'openrouter_api_timeout', fallback='90')
         openrouter_api_retries = config_parser_object.get('API', 'openrouter_api_retry', fallback='3')
         openrouter_api_retry_delay = config_parser_object.get('API', 'openrouter_api_retry_delay', fallback='5')
+
+        # Bedrock
+        bedrock_api_key = os.getenv('BEDROCK_API_KEY') or os.getenv('AWS_BEARER_TOKEN_BEDROCK') or config_parser_object.get('API', 'bedrock_api_key', fallback=None)
+        bedrock_region = os.getenv('BEDROCK_REGION') or config_parser_object.get('API', 'bedrock_region', fallback='us-west-2')
+        bedrock_runtime_endpoint = os.getenv('BEDROCK_RUNTIME_ENDPOINT') or config_parser_object.get('API', 'bedrock_runtime_endpoint', fallback=None)
+        bedrock_model = os.getenv('BEDROCK_MODEL') or config_parser_object.get('API', 'bedrock_model', fallback=None)
+        bedrock_streaming = config_parser_object.get('API', 'bedrock_streaming', fallback='False')
+        bedrock_temperature = config_parser_object.get('API', 'bedrock_temperature', fallback='0.7')
+        bedrock_top_p = config_parser_object.get('API', 'bedrock_top_p', fallback='')
+        bedrock_max_tokens = config_parser_object.get('API', 'bedrock_max_tokens', fallback='')
+        bedrock_api_timeout = config_parser_object.get('API', 'bedrock_api_timeout', fallback='90')
+        bedrock_api_retries = config_parser_object.get('API', 'bedrock_api_retry', fallback='3')
+        bedrock_api_retry_delay = config_parser_object.get('API', 'bedrock_api_retry_delay', fallback='5')
 
         # Logging Checks for model loads
         # logging.debug(f"Loaded Anthropic Model: {anthropic_model}")
@@ -1531,6 +1674,19 @@ def load_and_log_configs():
                 'api_retries': openrouter_api_retries,
                 'api_retry_delay': openrouter_api_retry_delay
             },
+            'bedrock_api': {
+                'api_key': bedrock_api_key,
+                'region': bedrock_region,
+                'runtime_endpoint': bedrock_runtime_endpoint,
+                'model': bedrock_model,
+                'streaming': bedrock_streaming,
+                'temperature': bedrock_temperature,
+                'top_p': bedrock_top_p,
+                'max_tokens': bedrock_max_tokens,
+                'api_timeout': bedrock_api_timeout,
+                'api_retries': bedrock_api_retries,
+                'api_retry_delay': bedrock_api_retry_delay
+            },
             'openai_api': {
                 'api_key': openai_api_key,
                 'model': openai_model,
@@ -1947,6 +2103,12 @@ def load_and_log_configs():
                     'password': config_parser_object.get('RAG', 'pgvector_password', fallback=os.getenv('PGVECTOR_PASSWORD', '')),
                     'sslmode': config_parser_object.get('RAG', 'pgvector_sslmode', fallback=os.getenv('PGVECTOR_SSLMODE', 'prefer')),
                     'dsn': config_parser_object.get('RAG', 'pgvector_dsn', fallback=os.getenv('PGVECTOR_DSN', '')) or None,
+                    # Pool configuration (psycopg_pool)
+                    'pool_min_size': config_parser_object.getint('RAG', 'pgvector_pool_min_size', fallback=int(os.getenv('PGVECTOR_POOL_MIN_SIZE', '1'))),
+                    'pool_max_size': config_parser_object.getint('RAG', 'pgvector_pool_max_size', fallback=int(os.getenv('PGVECTOR_POOL_MAX_SIZE', '5'))),
+                    'pool_size': config_parser_object.getint('RAG', 'pgvector_pool_size', fallback=int(os.getenv('PGVECTOR_POOL_SIZE', '5'))),
+                    # HNSW tuning
+                    'hnsw_ef_search': config_parser_object.getint('RAG', 'pgvector_hnsw_ef_search', fallback=int(os.getenv('PGVECTOR_HNSW_EF_SEARCH', '64'))),
                 }
             return_dict['RAG'] = rag_section
         except Exception:

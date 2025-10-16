@@ -55,25 +55,23 @@ class TestCaseGenerator:
         # Get signature schema if provided
         input_schema = None
         output_schema = None
-        
+
         if signature_id:
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT input_schema, output_schema
-                FROM prompt_studio_signatures
-                WHERE id = ? AND deleted = 0
-            """, (signature_id,))
-            
-            row = cursor.fetchone()
-            if row:
-                try:
-                    input_schema = json.loads(row[0]) if row[0] else None
-                    output_schema = json.loads(row[1]) if row[1] else None
-                except:
-                    pass
-        
+            signature = self.db.get_signature(signature_id)
+            if signature:
+                def _load_schema(raw):
+                    if raw is None:
+                        return None
+                    if isinstance(raw, (dict, list)):
+                        return raw
+                    try:
+                        return json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        return None
+
+                input_schema = _load_schema(signature.get("input_schema"))
+                output_schema = _load_schema(signature.get("output_schema"))
+
         # Generate test cases based on description
         for i in range(num_cases):
             test_case = self._generate_single_case_from_description(
@@ -91,17 +89,10 @@ class TestCaseGenerator:
                 is_golden=False,
                 signature_id=signature_id
             )
-            
+
             # Mark as generated
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE prompt_studio_test_cases
-                SET is_generated = 1
-                WHERE id = ?
-            """, (created["id"],))
-            conn.commit()
-            
+            self.manager.update_test_case(created["id"], {"is_generated": True})
+
             generated_cases.append(created)
         
         logger.info(f"Generated {len(generated_cases)} test cases from description")
@@ -120,27 +111,17 @@ class TestCaseGenerator:
         Returns:
             List of generated test cases
         """
-        # Get signature schema
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT name, input_schema, output_schema
-            FROM prompt_studio_signatures
-            WHERE id = ? AND deleted = 0
-        """, (signature_id,))
-        
-        row = cursor.fetchone()
-        if not row:
+        signature = self.db.get_signature(signature_id)
+        if not signature:
             raise ValueError(f"Signature {signature_id} not found")
-        
-        sig_name, input_schema_str, output_schema_str = row
-        
-        try:
-            input_schema = json.loads(input_schema_str) if input_schema_str else []
-            output_schema = json.loads(output_schema_str) if output_schema_str else []
-        except:
+
+        sig_name = signature.get("name", f"Signature-{signature_id}")
+        input_schema = signature.get("input_schema") or []
+        output_schema = signature.get("output_schema") or []
+
+        if not isinstance(input_schema, list):
             input_schema = []
+        if not isinstance(output_schema, list):
             output_schema = []
         
         generated_cases = []
@@ -168,12 +149,7 @@ class TestCaseGenerator:
             )
             
             # Mark as generated
-            cursor.execute("""
-                UPDATE prompt_studio_test_cases
-                SET is_generated = 1
-                WHERE id = ?
-            """, (created["id"],))
-            conn.commit()
+            self.manager.update_test_case(created["id"], {"is_generated": True})
             
             generated_cases.append(created)
         
@@ -215,16 +191,9 @@ class TestCaseGenerator:
                 signature_id=signature_id
             )
             
-            # Mark as generated
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE prompt_studio_test_cases
-                SET is_generated = 1
-                WHERE id = ?
-            """, (created["id"],))
-            conn.commit()
-            
+            # Mark as generated using backend-aware update
+            self.manager.update_test_case(created["id"], {"is_generated": True})
+
             generated_cases.append(created)
         
         logger.info(f"Generated {len(generated_cases)} test cases from existing data")

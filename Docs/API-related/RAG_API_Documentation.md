@@ -10,8 +10,12 @@
 2. [Architecture](#architecture)
 3. [Authentication](#authentication)
 4. [Endpoints](#endpoints)
+   - [Unified Search](#unified-search)
+   - [Streaming Search](#streaming-search)
+   - [Batch Search](#batch-search)
    - [Simple Search](#simple-search)
-   - [Complex Search](#complex-search)
+   - [Advanced Search](#advanced-search)
+   - [Capabilities & Features](#capabilities--features)
    - [Health Check](#health-check)
 5. [Data Models](#data-models)
 6. [Configuration](#configuration)
@@ -23,6 +27,11 @@
 ## Overview
 
 The RAG (Retrieval-Augmented Generation) API provides powerful search and AI-powered question-answering capabilities across your indexed content. It uses a **functional pipeline architecture** where composable functions are chained together to create custom retrieval workflows.
+
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; unified `/rag/search` enforces typical RPM. Streaming endpoints count per-chunk toward limits in some deployments.
 
 ### Key Features
 
@@ -51,17 +60,23 @@ Query → [Expand] → [Cache Check] → [Retrieve] → [Rerank] → [Cache Stor
       (optional)  (optional)    (required)   (optional)   (optional)
 ```
 
-Pre-built pipelines:
-- **minimal**: Retrieve → Rerank (fastest)
-- **standard**: Expand → Cache → Retrieve → Rerank → Store (balanced)
-- **quality**: All features enabled (most accurate)
+Pre-built wrappers (for convenience):
+- **/simple**: sensible defaults for quick lookups
+- **/advanced**: common features enabled (expansion, citations, answer)
+The primary API is a single unified endpoint where all features are parameters.
 
 ## Authentication
 
-In single-user mode (default), use the API key from config:
+In single-user mode (default), generate a strong API key and set it via `SINGLE_USER_API_KEY`:
+
+```bash
+export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+
+Use that value when calling the API:
 
 ```http
-X-API-Key: default-secret-key-for-single-user
+X-API-Key: YOUR_API_KEY
 ```
 
 In multi-user mode, use JWT Bearer tokens:
@@ -72,129 +87,68 @@ Authorization: Bearer <your-jwt-token>
 
 ## Endpoints
 
-### Simple Search
+### Unified Search
 
-**POST** `/api/v1/rag/search/simple`
+POST `/api/v1/rag/search`
 
-Simplified search interface with essential parameters.
+Single endpoint with all features as parameters (UnifiedRAGRequest).
 
-#### Request Body
-
-```json
-{
-  "query": "What is machine learning?",
-  "databases": ["media", "notes"],
-  "max_context_size": 4000,
-  "top_k": 10,
-  "enable_reranking": true,
-  "enable_citations": false,
-  "keywords": ["python", "tensorflow"]
-}
-```
-
-#### Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| query | string | required | Search query (1-1000 chars) |
-| databases | array | ["media"] | Databases to search: media, notes, characters, chats |
-| max_context_size | integer | 4000 | Maximum total size of returned content |
-| top_k | integer | 10 | Number of top results (1-100) |
-| enable_reranking | boolean | true | Enable document reranking |
-| enable_citations | boolean | false | Include source citations |
-| keywords | array | null | Filter results by keywords |
-
-#### Response
-
-```json
-{
-  "results": [
-    {
-      "content": "Machine learning is a subset of artificial intelligence...",
-      "source": "media",
-      "metadata": {
-        "title": "Introduction to ML",
-        "media_id": 123,
-        "timestamp": "2024-01-15T10:30:00Z"
-      },
-      "score": 0.95,
-      "citation": "Introduction to ML, timestamp: 10:30"
-    }
-  ],
-  "total_results": 42,
-  "processing_time": 0.234,
-  "cache_hit": false,
-  "query_expanded": ["machine learning", "ML", "artificial intelligence"]
-}
-```
-
-### Complex Search
-
-**POST** `/api/v1/rag/search/complex`
-
-Advanced search with full configuration options.
-
-#### Request Body
+Example request:
 
 ```json
 {
   "query": "machine learning applications",
-  "config": {
-    "pipeline": "quality",
-    "databases": {
-      "media_db_path": "/path/to/media.db",
-      "notes_db_path": "/path/to/notes.db"
-    },
-    "sources": ["media_db", "notes"],
-    "retrieval": {
-      "top_k": 20,
-      "min_score": 0.5,
-      "use_fts": true,
-      "use_vector": true,
-      "hybrid_alpha": 0.7
-    },
-    "expansion": {
-      "enabled": true,
-      "strategies": ["acronym", "synonym", "domain", "entity"],
-      "max_expansions": 5
-    },
-    "caching": {
-      "enabled": true,
-      "threshold": 0.85,
-      "adaptive": true,
-      "ttl": 3600
-    },
-    "reranking": {
-      "enabled": true,
-      "strategy": "hybrid",
-      "top_k": 10,
-      "diversity": 0.3
-    },
-    "processing": {
-      "chunk_size": 512,
-      "overlap": 50,
-      "process_tables": true,
-      "extract_metadata": true
-    },
-    "resilience": {
-      "enable_resilience": true,
-      "retry": {
-        "enabled": true,
-        "max_attempts": 3,
-        "initial_delay": 0.5
-      },
-      "circuit_breaker": {
-        "enabled": true,
-        "failure_threshold": 5,
-        "timeout": 60
-      }
-    },
-    "monitoring": {
-      "enable_monitoring": true,
-      "enable_tracing": false,
-      "log_level": "INFO"
+  "sources": ["media_db", "notes"],
+  "search_mode": "hybrid",
+  "top_k": 10,
+  "expand_query": true,
+  "enable_reranking": true,
+  "enable_citations": false
+}
+```
+
+Example response (UnifiedRAGResponse):
+
+```json
+{
+  "documents": [
+    {
+      "id": "doc_123",
+      "content": "Full document content...",
+      "metadata": {"title": "ML Applications", "source": "media_db"},
+      "score": 0.92
     }
-  }
+  ],
+  "query": "machine learning applications",
+  "expanded_queries": ["machine learning applications", "ML applications"],
+  "metadata": {"cache_hit": false, "sources_searched": ["media_db", "notes"]},
+  "timings": {"retrieval": 0.234, "reranking": 0.089, "total": 0.456}
+}
+```
+
+### Streaming Search
+
+POST `/api/v1/rag/search/stream`
+
+Streams NDJSON events. Requires `enable_generation: true` in the request.
+
+Events:
+- `{"type":"delta","text":"..."}`
+- `{"type":"claims_overlay", ...}` (when claims enabled)
+- `{"type":"final_claims", ...}`
+
+### Batch Search
+
+POST `/api/v1/rag/batch`
+
+Process multiple queries concurrently (UnifiedBatchRequest).
+
+```json
+{
+  "queries": ["What is AI?", "Explain neural networks"],
+  "max_concurrent": 5,
+  "top_k": 5,
+  "enable_reranking": true
 }
 ```
 
@@ -285,68 +239,57 @@ Advanced search with full configuration options.
 }
 ```
 
+### Simple Search
+
+GET `/api/v1/rag/simple?query=...&top_k=10`
+
+Returns `{"query": str, "documents": [...], "count": int}`.
+
+### Advanced Search
+
+GET `/api/v1/rag/advanced?query=...&with_citations=true&with_answer=true`
+
+Returns unified response with common features enabled.
+
+### Capabilities & Features
+
+GET `/api/v1/rag/capabilities` — service capabilities, defaults, limits
+
+GET `/api/v1/rag/features` — available feature list and parameters
+
 ### Health Check
 
-**GET** `/api/v1/rag/health`
+GET `/api/v1/rag/health`
 
-Check the health status of the RAG service.
-
-#### Response
+Sample response:
 
 ```json
 {
   "status": "healthy",
+  "timestamp": "2025-08-19T12:00:00",
+  "version": "1.0.0",
   "components": {
-    "database": "healthy",
-    "cache": "healthy",
-    "vector_store": "healthy",
-    "llm_connection": "healthy"
-  },
-  "metrics": {
-    "queries_processed": 1234,
-    "average_latency_ms": 234,
-    "cache_hit_rate": 0.45,
-    "error_rate": 0.002
-  },
-  "version": "3.0.0",
-  "uptime_seconds": 3600
+    "cache": {"status": "healthy", "hit_rate": 0.45, "size": 123},
+    "metrics": {"status": "healthy", "recent_queries": 42},
+    "batch_processor": {"status": "healthy", "active_jobs": 0, "success_rate": 1.0}
+  }
 }
 ```
+
+Additional health endpoints:
+- GET `/api/v1/rag/health/simple`
+- GET `/api/v1/rag/health/live`
+- GET `/api/v1/rag/health/ready`
+- GET `/api/v1/rag/cache/stats`
+- POST `/api/v1/rag/cache/clear`
 
 ## Data Models
 
-### SimpleSearchRequest
-```python
-{
-  "query": str,                    # Required, 1-1000 chars
-  "databases": List[str],          # Default: ["media"]
-  "max_context_size": int,         # Default: 4000
-  "top_k": int,                    # Default: 10, range: 1-100
-  "enable_reranking": bool,        # Default: true
-  "enable_citations": bool,        # Default: false
-  "keywords": Optional[List[str]]  # Optional keyword filters
-}
-```
+Key requests and responses:
 
-### ComplexSearchRequest
-```python
-{
-  "query": str,                    # Required
-  "config": Dict[str, Any]         # Full configuration object
-}
-```
-
-### SearchResult
-```python
-{
-  "id": str,                       # Document ID
-  "content": str,                  # Document content
-  "source": str,                   # Source database
-  "metadata": Dict[str, Any],      # Document metadata
-  "score": float,                  # Relevance score (0-1)
-  "citation": Optional[str]        # Citation if enabled
-}
-```
+- UnifiedRAGRequest: unified POST body with fields like `query`, `sources`, `search_mode`, `top_k`, `expand_query`, `enable_reranking`, `enable_citations`, `enable_generation`, `enable_claims`, etc.
+- UnifiedRAGResponse: fields include `documents`, `query`, `expanded_queries`, `metadata`, `timings`, `citations`, `generated_answer` (optional), `cache_hit`, `errors`, `total_time`.
+- UnifiedBatchRequest / UnifiedBatchResponse: for POST `/batch`.
 
 ## Configuration
 
@@ -481,9 +424,9 @@ import asyncio
 
 async def search(query: str):
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search/simple",
-            json={"query": query},
+        response = await client.get(
+            "http://localhost:8000/api/v1/rag/simple",
+            params={"query": query},
             headers={"X-API-Key": "your-api-key"}
         )
         return response.json()
@@ -500,9 +443,9 @@ async def complex_search(query: str):
     }
     
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search/complex",
-            json={"query": query, "config": config},
+        response = await client.get(
+            "http://localhost:8000/api/v1/rag/advanced",
+            params={"query": query, "with_citations": True, "with_answer": True},
             headers={"X-API-Key": "your-api-key"}
         )
         return response.json()
@@ -512,22 +455,20 @@ async def complex_search(query: str):
 
 ```bash
 # Simple search
-curl -X POST http://localhost:8000/api/v1/rag/search/simple \
-  -H "Content-Type: application/json" \
+curl -G http://localhost:8000/api/v1/rag/simple \
   -H "X-API-Key: your-api-key" \
-  -d '{"query": "machine learning"}'
+  --data-urlencode "query=machine learning"
 
-# Complex search with quality pipeline
-curl -X POST http://localhost:8000/api/v1/rag/search/complex \
+# Unified search (hybrid)
+curl -X POST http://localhost:8000/api/v1/rag/search \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key" \
   -d '{
     "query": "deep learning vs machine learning",
-    "config": {
-      "pipeline": "quality",
-      "retrieval": {"top_k": 20},
-      "reranking": {"strategy": "cross_encoder", "top_k": 5}
-    }
+    "search_mode": "hybrid",
+    "top_k": 20,
+    "enable_reranking": true,
+    "reranking_strategy": "cross_encoder"
   }'
 
 # Health check
@@ -545,15 +486,12 @@ interface SearchRequest {
 }
 
 async function search(request: SearchRequest): Promise<any> {
-  const response = await fetch('http://localhost:8000/api/v1/rag/search/simple', {
-    method: 'POST',
+  const params = new URLSearchParams({ query: request.query, top_k: String(request.top_k ?? 10) });
+  const response = await fetch(`http://localhost:8000/api/v1/rag/simple?${params.toString()}`, {
     headers: {
-      'Content-Type': 'application/json',
       'X-API-Key': 'your-api-key'
-    },
-    body: JSON.stringify(request)
+    }
   });
-  
   return response.json();
 }
 
@@ -573,7 +511,7 @@ The v3 API uses a functional pipeline architecture. Key changes:
 
 1. **Endpoint Consolidation**
    - Old: `/api/v1/rag/v2/search`, `/api/v1/rag/v3/search`
-   - New: `/api/v1/rag/search/simple`, `/api/v1/rag/search/complex`
+   - New: `/api/v1/rag/simple`, `/api/v1/rag/advanced`
 
 2. **Configuration Structure**
    ```python

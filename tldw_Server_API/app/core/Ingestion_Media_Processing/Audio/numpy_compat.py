@@ -7,9 +7,9 @@
 ####################
 
 import numpy as np
-import logging
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 def patch_numpy_sctypes():
     """

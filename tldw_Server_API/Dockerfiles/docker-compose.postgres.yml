@@ -2,11 +2,9 @@
 # Standalone PostgreSQL service for tldw_server in production or development.
 # Runs Postgres in a separate container so the DB is cleanly separated from the app infra.
 
-version: '3.9'
-
 services:
   postgres:
-    image: postgres:15
+    image: postgres:18-bookworm
     container_name: tldw-postgres
     restart: unless-stopped
     environment:
@@ -16,7 +14,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -82,7 +82,7 @@ class TestModule(BaseModule):
             }
         ]
     
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         """Execute test tool"""
         if tool_name == "echo":
             return arguments.get("message", "")
@@ -367,6 +367,11 @@ class TestEndToEnd:
         # Create and initialize server
         server = MCPServer()
         await server.initialize()
+        # Provide user context and permissive RBAC for this unit test
+        class _AllowAll:
+            async def check_permission(self, *args, **kwargs):
+                return True
+        server.protocol.rbac_policy = _AllowAll()
         
         # Register test module
         registry = server.module_registry
@@ -386,7 +391,8 @@ class TestEndToEnd:
         # Process request
         response = await server.handle_http_request(
             request,
-            client_id="test_client"
+            client_id="test_client",
+            user_id="test_user"
         )
         
         assert response.error is None
@@ -400,6 +406,11 @@ class TestEndToEnd:
         """Test math tool execution"""
         server = MCPServer()
         await server.initialize()
+        # Provide user context and permissive RBAC for this unit test
+        class _AllowAll:
+            async def check_permission(self, *args, **kwargs):
+                return True
+        server.protocol.rbac_policy = _AllowAll()
         
         # Register test module
         registry = server.module_registry
@@ -416,7 +427,7 @@ class TestEndToEnd:
             id="test_add"
         )
         
-        response = await server.handle_http_request(request)
+        response = await server.handle_http_request(request, user_id="test_user")
         
         assert response.error is None
         assert response.result["content"][0]["text"] == "8"

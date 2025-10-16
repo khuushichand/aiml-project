@@ -6,7 +6,19 @@ providing a clean API interface with all features accessible.
 """
 
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    # Pydantic v2
+    from pydantic import model_validator, field_validator  # type: ignore
+except Exception:
+    model_validator = None  # type: ignore
+    from pydantic import validator as field_validator  # type: ignore
+try:
+    # Pydantic v2
+    from pydantic import model_validator  # type: ignore
+except Exception:
+    model_validator = None  # type: ignore
+from pydantic import ConfigDict
 
 # Load contextual retrieval defaults from settings (config.txt/env)
 try:
@@ -17,12 +29,17 @@ try:
     _DEF_PARENT_MAX_TOK = int(_ctx_defaults.get("parent_max_tokens", 1200))
     _DEF_INC_SIB = bool(_ctx_defaults.get("include_sibling_chunks", False))
     _DEF_ENH_CHUNK = bool(_ctx_defaults.get("enable_enhanced_chunking", False))
+    # Default FTS level for RAG: 'media' or 'chunk'
+    _DEF_FTS_LVL = str(_settings.get("RAG_DEFAULT_FTS_LEVEL", "media")).lower()
+    if _DEF_FTS_LVL not in ("media", "chunk"):
+        _DEF_FTS_LVL = "media"
 except Exception:
     _DEF_SIB_WIN = 1
     _DEF_INC_PARENT = False
     _DEF_PARENT_MAX_TOK = 1200
     _DEF_INC_SIB = False
     _DEF_ENH_CHUNK = False
+    _DEF_FTS_LVL = "media"
 
 
 class UnifiedRAGRequest(BaseModel):
@@ -47,7 +64,46 @@ class UnifiedRAGRequest(BaseModel):
         example=["media_db", "notes"]
     )
 
-    @validator("sources", pre=True, always=True)
+    # ========== STRATEGY SELECTION ==========
+    strategy: Literal["standard", "agentic"] = Field(
+        default="standard",
+        description="Pipeline strategy: standard (pre-chunked) or agentic (query-time synthetic chunk)",
+        example="agentic",
+    )
+
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _map_legacy_min_relevance(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                    values["min_score"] = values.get("min_relevance_score")
+            except Exception:
+                pass
+            return values
+    elif root_validator:
+        @root_validator(pre=True)
+        def _map_legacy_min_relevance_v1(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                    values["min_score"] = values.get("min_relevance_score")
+            except Exception:
+                pass
+            return values
+
+    # Optional corpus/namespace for per‑corpus indexing and synonyms
+    corpus: Optional[str] = Field(
+        default=None,
+        description="Alias for index_namespace used to select corpus‑specific synonyms",
+        example="my_corpus"
+    )
+    index_namespace: Optional[str] = Field(
+        default=None,
+        description="Corpus/namespace identifier (enables per‑corpus synonyms & indexing)",
+        example="my_corpus"
+    )
+
+    @field_validator("sources", mode="before")
+    @classmethod
     def _validate_sources(cls, v):
         allowed = {"media_db", "notes", "characters", "chats"}
         alias_map = {"media": "media_db", "character_cards": "characters"}
@@ -64,6 +120,20 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid source '{s}'. Allowed: {sorted(list(allowed))}")
             normalized.append(key)
         return normalized
+
+    # Map corpus -> index_namespace at model-level (before validation)
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _alias_corpus_namespace(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict):
+                    v = values.get("index_namespace")
+                    corpus = values.get("corpus")
+                    if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
+                        values["index_namespace"] = corpus.strip() or v
+            except Exception:
+                pass
+            return values
     
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = Field(
@@ -72,12 +142,25 @@ class UnifiedRAGRequest(BaseModel):
         example="hybrid"
     )
     
+    # FTS granularity: media-level (Media.title/content) or chunk-level (UnvectorizedMediaChunks)
+    fts_level: Literal["media", "chunk"] = Field(
+        default=_DEF_FTS_LVL,
+        description="FTS granularity: 'media' searches Media FTS; 'chunk' searches plaintext chunks",
+        example="chunk"
+    )
+    
     hybrid_alpha: float = Field(
         default=0.7,
         ge=0.0,
         le=1.0,
         description="Hybrid search weight (0=FTS only, 1=Vector only)",
         example=0.7
+    )
+
+    enable_intent_routing: bool = Field(
+        default=False,
+        description="Analyze query intent and adjust retrieval knobs (top_k, hybrid weighting) before retrieval",
+        example=False,
     )
     
     top_k: int = Field(
@@ -95,6 +178,20 @@ class UnifiedRAGRequest(BaseModel):
         description="Minimum relevance score",
         example=0.0
     )
+
+    @field_validator("min_score", mode="before")
+    @classmethod
+    def _alias_min_relevance_score(cls, v):
+        # Accept legacy field name 'min_relevance_score' as an alias
+        try:
+            if v is None:
+                # In Pydantic v1 pre-validator, original input present in values under '__fields_set__' isn't accessible.
+                # Use a best-effort approach: values may contain raw dict in context if model_dump_compat was used.
+                # Safer: map from a possible shadowed key placed by request parsing layer; fallback no-op.
+                pass
+        except Exception:
+            pass
+        return v
     
     # ========== QUERY EXPANSION ==========
     expand_query: bool = Field(
@@ -143,6 +240,18 @@ class UnifiedRAGRequest(BaseModel):
         example=["python", "api"]
     )
     
+    # Explicit selection of items per source
+    include_media_ids: Optional[List[int]] = Field(
+        default=None,
+        description="Restrict search to these Media DB item IDs",
+        example=[1, 2, 3]
+    )
+    include_note_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Restrict search to these Note IDs (ChaChaNotes UUIDs)",
+        example=["a1b2c3-uuid", "d4e5f6-uuid"]
+    )
+    
     # ========== SECURITY & PRIVACY ==========
     enable_security_filter: bool = Field(
         default=False,
@@ -185,6 +294,37 @@ class UnifiedRAGRequest(BaseModel):
         default="markdown",
         description="Table serialization method",
         example="markdown"
+    )
+
+    # ========== VLM LATE CHUNKING ==========
+    enable_vlm_late_chunking: bool = Field(
+        default=False,
+        description="Enable late VLM chunking on retrieved documents (media_db PDFs)",
+        example=False
+    )
+    vlm_backend: Optional[str] = Field(
+        default=None,
+        description="VLM backend name (e.g., 'hf_table_transformer', 'docling')",
+        example="hf_table_transformer"
+    )
+    vlm_detect_tables_only: bool = Field(
+        default=True,
+        description="When true, keep only table detections; otherwise include images/figures as 'vlm'",
+        example=True
+    )
+    vlm_max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Max pages per document to process with VLM",
+        example=3
+    )
+    vlm_late_chunk_top_k_docs: int = Field(
+        default=3,
+        ge=1,
+        le=50,
+        description="Number of top retrieved documents to apply VLM late-chunking to",
+        example=3
     )
     
     # ========== CHUNKING & CONTEXT ==========
@@ -236,13 +376,230 @@ class UnifiedRAGRequest(BaseModel):
         example=1200
     )
 
+    # ========== AGENTIC CHUNKING (OPTIONAL) ==========
+    agentic_top_k_docs: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Number of coarse documents to consider when building the synthetic chunk",
+        example=3,
+    )
+    agentic_window_chars: int = Field(
+        default=1200,
+        ge=200,
+        le=20000,
+        description="Window size around hits for span extraction (characters)",
+        example=1200,
+    )
+    agentic_max_tokens_read: int = Field(
+        default=6000,
+        ge=500,
+        le=20000,
+        description="Approximate token budget for assembling the synthetic chunk",
+        example=6000,
+    )
+    agentic_max_tool_calls: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="Reserved for future LLM-tool orchestration; ignored by baseline",
+        example=8,
+    )
+    agentic_extractive_only: bool = Field(
+        default=True,
+        description="If true, assembled chunk is purely extractive from sources",
+        example=True,
+    )
+    agentic_quote_spans: bool = Field(
+        default=True,
+        description="Include span quotes and offsets in provenance metadata",
+        example=True,
+    )
+    agentic_debug_trace: bool = Field(
+        default=False,
+        description="Emit extra debug logs for agentic execution",
+        example=False,
+    )
+    agentic_enable_tools: bool = Field(
+        default=False,
+        description="Enable bounded tool loop (search_within/open_section/expand_window/quote_spans)",
+        example=False,
+    )
+    agentic_use_llm_planner: bool = Field(
+        default=False,
+        description="Use an LLM to plan tool use (ReAct style); falls back to heuristics when unavailable",
+        example=False,
+    )
+    agentic_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.1,
+        le=30.0,
+        description="Wall-clock time budget for the agentic tool loop",
+        example=5.0,
+    )
+    agentic_cache_ttl_sec: int = Field(
+        default=600,
+        ge=1,
+        le=86400,
+        description="TTL for ephemeral chunk cache (seconds)",
+        example=600,
+    )
+    # Query decomposition (multi-hop)
+    agentic_enable_query_decomposition: bool = Field(
+        default=False,
+        description="Enable heuristic multi-hop decomposition; run tool loop for each sub-goal and merge spans",
+        example=False,
+    )
+    agentic_subgoal_max: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum number of sub-goals to consider when decomposing queries",
+        example=3,
+    )
+    # Intra-doc semantic search
+    agentic_enable_semantic_within: bool = Field(
+        default=True,
+        description="Use paragraph-level semantic search within documents (hashed embeddings)",
+        example=True,
+    )
+    # Section index and anchors
+    agentic_enable_section_index: bool = Field(
+        default=True,
+        description="Build simple heading→offset index and prefer structural anchors for open_section",
+        example=True,
+    )
+    agentic_prefer_structural_anchors: bool = Field(
+        default=True,
+        description="Prefer structural anchors when selecting spans near section boundaries",
+        example=True,
+    )
+    # Table/figure support (heuristic)
+    agentic_enable_table_support: bool = Field(
+        default=True,
+        description="Prefer table-like spans when queries mention tables/figures; integrates with VLM late chunks when available",
+        example=True,
+    )
+    # VLM late chunking (agentic path)
+    agentic_enable_vlm_late_chunking: bool = Field(
+        default=False,
+        description="Use VLM late chunking for top-k PDFs to add table/figure hints inside agentic pipeline",
+        example=False,
+    )
+    agentic_vlm_backend: Optional[str] = Field(
+        default=None,
+        description="VLM backend name (e.g., 'hf_table_transformer', 'docling'); auto-select when None",
+        example="hf_table_transformer",
+    )
+    agentic_vlm_detect_tables_only: bool = Field(
+        default=True,
+        description="Keep only table detections; set false to include other VLM hints",
+        example=True,
+    )
+    agentic_vlm_max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Max pages per document to scan with VLM during agentic execution",
+        example=3,
+    )
+    agentic_vlm_late_chunk_top_k_docs: int = Field(
+        default=2,
+        ge=1,
+        le=25,
+        description="Top-k PDFs from coarse retrieval to pass to VLM late chunking (agentic)",
+        example=2,
+    )
+    # Provider embeddings for intra-doc vectors
+    agentic_use_provider_embeddings_within: bool = Field(
+        default=False,
+        description="Use configured embeddings provider to embed paragraphs for intra-doc semantic search; falls back to hashed",
+        example=False,
+    )
+    agentic_provider_embedding_model_id: Optional[str] = Field(
+        default=None,
+        description="Optional embedding model ID to override default for intra-doc paragraph embeddings",
+        example="text-embedding-3-small",
+    )
+
+    # Agentic adaptive budgets & observability
+    agentic_adaptive_budgets: bool = Field(
+        default=True,
+        description="Adapt max tool calls and read budget based on early coverage/corroboration",
+        example=True,
+    )
+    agentic_coverage_target: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Target fraction of query term coverage before early stop",
+        example=0.8,
+    )
+    agentic_min_corroborating_docs: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Minimum distinct documents contributing spans before early stop",
+        example=2,
+    )
+    agentic_max_redundancy: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Max allowable redundancy (1 - merged/raw span length) before discouraging more spans",
+        example=0.9,
+    )
+    agentic_enable_metrics: bool = Field(
+        default=True,
+        description="Emit agentic metrics (tool calls, timings, span histograms)",
+        example=True,
+    )
+
+    # ========== ADVANCED RETRIEVAL ==========
+    enable_multi_vector_passages: bool = Field(
+        default=False,
+        description="Enable multi-vector passage selection (ColBERT-style approximation) before reranking",
+        example=False,
+    )
+    mv_span_chars: int = Field(
+        default=300,
+        ge=100,
+        le=2000,
+        description="Span window size in characters for multi-vector scoring",
+        example=300,
+    )
+    mv_stride: int = Field(
+        default=150,
+        ge=50,
+        le=1000,
+        description="Stride between spans in characters",
+        example=150,
+    )
+    mv_max_spans: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="Maximum spans per document to consider",
+        example=8,
+    )
+    mv_flatten_to_spans: bool = Field(
+        default=False,
+        description="Return best span per document as pseudo-documents instead of reordering parent docs",
+        example=False,
+    )
+    enable_numeric_table_boost: bool = Field(
+        default=False,
+        description="When query includes numbers/units, modestly boost table-like and number-dense chunks before reranking",
+        example=False,
+    )
+
     # ========== CLAIMS & FACTUALITY ==========
     enable_claims: bool = Field(
         default=False,
         description="Extract and verify factual claims from the generated answer",
         example=False,
     )
-    claim_extractor: Literal["aps", "claimify", "auto"] = Field(
+    claim_extractor: Literal["aps", "claimify", "ner", "auto"] = Field(
         default="auto",
         description="Claim extraction strategy",
         example="auto",
@@ -273,6 +630,13 @@ class UnifiedRAGRequest(BaseModel):
         description="Maximum number of claims to extract",
         example=25,
     )
+    claims_concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description="Maximum parallel claim verifications",
+        example=8,
+    )
     nli_model: Optional[str] = Field(
         default=None,
         description="Local HuggingFace model id or path for MNLI (e.g., roberta-large-mnli or /models/mnli)",
@@ -286,7 +650,7 @@ class UnifiedRAGRequest(BaseModel):
         example=True
     )
     
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "none"] = Field(
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = Field(
         default="flashrank",
         description="Reranking strategy",
         example="hybrid"
@@ -298,6 +662,27 @@ class UnifiedRAGRequest(BaseModel):
         le=100,
         description="Number of documents to rerank (defaults to top_k)",
         example=20
+    )
+    # Optional reranker model identifier/path (e.g., GGUF path for llama.cpp)
+    reranking_model: Optional[str] = Field(
+        default=None,
+        description="Optional reranker model identifier (e.g., GGUF path for llama.cpp)",
+        example="./models/Qwen3-Embedding-0.6B_f16.gguf"
+    )
+    # Two-tier strategy: request-level gating overrides (optional)
+    rerank_min_relevance_prob: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override minimum calibrated probability to allow generation (Two‑Tier)",
+        example=0.5,
+    )
+    rerank_sentinel_margin: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override required margin between top probability and sentinel (Two‑Tier)",
+        example=0.15,
     )
     
     # ========== CITATIONS ==========
@@ -350,6 +735,152 @@ class UnifiedRAGRequest(BaseModel):
         le=2000,
         description="Maximum tokens for generated answer",
         example=500
+    )
+    # Abstention & multi-turn synthesis
+    enable_abstention: bool = Field(
+        default=False,
+        description="Allow abstaining (or asking for clarification) when evidence is thin based on calibrated gating",
+        example=False,
+    )
+    abstention_behavior: Literal["continue", "ask", "decline"] = Field(
+        default="continue",
+        description="When abstaining: continue (no answer), ask a clarifying question, or decline",
+        example="ask",
+    )
+    enable_multi_turn_synthesis: bool = Field(
+        default=False,
+        description="Use draft → critique → refine generation under a strict time/token budget",
+        example=False,
+    )
+    synthesis_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Total time budget in seconds for multi-turn synthesis",
+        example=5.0,
+    )
+    synthesis_draft_tokens: Optional[int] = Field(
+        default=None,
+        ge=32,
+        le=4000,
+        description="Max tokens for the draft stage (defaults to min(max_generation_tokens, 400))",
+        example=300,
+    )
+    synthesis_refine_tokens: Optional[int] = Field(
+        default=None,
+        ge=32,
+        le=4000,
+        description="Max tokens for the refine stage (defaults to max_generation_tokens)",
+        example=500,
+    )
+
+    # ========== GENERATION GUARDRAILS ==========
+    enable_content_policy_filter: bool = Field(
+        default=False,
+        description="Apply PII/PHI content policy on retrieved chunks before generation",
+        example=False,
+    )
+    content_policy_types: Optional[List[str]] = Field(
+        default=None,
+        description="Policy types to enforce: ['pii', 'phi']",
+        example=["pii", "phi"],
+    )
+    content_policy_mode: Literal["redact", "drop", "annotate"] = Field(
+        default="redact",
+        description="Policy action: redact matches, drop offending chunks, or annotate only",
+        example="redact",
+    )
+    enable_html_sanitizer: bool = Field(
+        default=False,
+        description="Sanitize HTML with an allow-list of tags/attributes",
+        example=False,
+    )
+    html_allowed_tags: Optional[List[str]] = Field(
+        default=None,
+        description="Allowed HTML tags for sanitizer",
+        example=["p", "b", "i", "ul", "li", "code"],
+    )
+    html_allowed_attrs: Optional[List[str]] = Field(
+        default=None,
+        description="Allowed HTML attributes for sanitizer",
+        example=["href", "title"],
+    )
+    ocr_confidence_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Drop OCR-derived chunks whose metadata.ocr_confidence is below this threshold",
+        example=0.6,
+    )
+
+    # ========== POST-VERIFICATION (ADAPTIVE) ==========
+    enable_post_verification: bool = Field(
+        default=False,
+        description="Verify generated answer against evidence; optionally attempt a bounded repair",
+        example=False,
+    )
+    adaptive_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description="Maximum adaptive repair attempts when evidence is insufficient",
+        example=1,
+    )
+    adaptive_unsupported_threshold: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="If (refuted + NEI)/total_claims exceeds this, trigger repair",
+        example=0.15,
+    )
+    adaptive_max_claims: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum claims to analyze during post-verification",
+        example=20,
+    )
+    adaptive_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional hard cap on post-verification wall time",
+        example=10.0,
+    )
+    low_confidence_behavior: Literal["continue", "ask", "decline"] = Field(
+        default="continue",
+        description="Behavior when evidence remains insufficient after retries",
+        example="ask",
+    )
+    adaptive_advanced_rewrites: Optional[bool] = Field(
+        default=None,
+        description="Override env to enable/disable HyDE + multi-strategy rewrites in the adaptive pass",
+        example=True,
+    )
+    adaptive_rerun_on_low_confidence: bool = Field(
+        default=False,
+        description="If true, run a bounded full pipeline rerun on low confidence to seek a better answer",
+        example=True,
+    )
+    adaptive_rerun_include_generation: bool = Field(
+        default=True,
+        description="If true, the adaptive rerun may include answer generation; otherwise stops after retrieval/rerank",
+        example=True,
+    )
+    adaptive_rerun_bypass_cache: bool = Field(
+        default=False,
+        description="If true, the adaptive rerun forces enable_cache=false to avoid stale cache hits",
+        example=True,
+    )
+    adaptive_rerun_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional hard cap on adaptive rerun wall time; emits rag_phase_budget_exhausted_total on breach",
+        example=5.0,
+    )
+    adaptive_rerun_doc_budget: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional cap on documents passed to quick-verify during rerun adoption checks",
+        example=10,
     )
     
     # ========== FEEDBACK ==========
@@ -448,6 +979,42 @@ class UnifiedRAGRequest(BaseModel):
         description="Enable debug logging",
         example=False
     )
+
+    # ========== EXPLAIN / DRY-RUN ==========
+    explain_only: bool = Field(
+        default=False,
+        description="When strategy=agentic and enable_generation=false, return only plan + spans/provenance",
+        example=False,
+    )
+
+    # ========== GENERATION GUARDRAILS ==========
+    enable_injection_filter: bool = Field(
+        default=True,
+        description="Detect and down-weight chunks with instruction-injection risk before generation",
+        example=True,
+    )
+    injection_filter_strength: float = Field(
+        default=0.5,
+        ge=0.05,
+        le=1.0,
+        description="Multiplicative down-weight factor applied to risky chunks",
+        example=0.5,
+    )
+    require_hard_citations: bool = Field(
+        default=False,
+        description="Require a supporting span (doc_id + offsets) for each sentence in the answer; attaches hard_citations metadata and may apply low_confidence_behavior",
+        example=False,
+    )
+    enable_numeric_fidelity: bool = Field(
+        default=False,
+        description="Verify numeric values in the answer appear in sources; optionally retry retrieval or ask/decline",
+        example=False,
+    )
+    numeric_fidelity_behavior: Literal["continue", "ask", "decline", "retry"] = Field(
+        default="continue",
+        description="Behavior when numeric values are not found in sources",
+        example="ask",
+    )
     
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = Field(
@@ -504,21 +1071,21 @@ class UnifiedRAGRequest(BaseModel):
         example="session456"
     )
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "query": "What is machine learning?",
-                "sources": ["media_db", "notes"],
-                "expand_query": True,
-                "expansion_strategies": ["synonym", "acronym"],
-                "enable_citations": True,
-                "enable_generation": True,
-                "enable_reranking": True,
-                "reranking_strategy": "hybrid"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "What is machine learning?",
+            "sources": ["media_db", "notes"],
+            "expand_query": True,
+            "expansion_strategies": ["synonym", "acronym"],
+            "enable_citations": True,
+            "enable_generation": True,
+            "enable_reranking": True,
+            "reranking_strategy": "hybrid"
         }
+    })
     
-    @validator('sources')
+    @field_validator('sources')
+    @classmethod
     def validate_sources(cls, v):
         valid_sources = {"media_db", "media", "notes", "characters", "chats"}
         if v:
@@ -527,7 +1094,8 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid sources: {invalid}. Valid options: {valid_sources}")
         return v
     
-    @validator('expansion_strategies')
+    @field_validator('expansion_strategies')
+    @classmethod
     def validate_expansion_strategies(cls, v):
         if v:
             valid_strategies = {"acronym", "synonym", "semantic", "domain", "entity"}
@@ -536,7 +1104,8 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid strategies: {invalid}. Valid options: {valid_strategies}")
         return v
     
-    @validator('chunk_type_filter')
+    @field_validator('chunk_type_filter')
+    @classmethod
     def validate_chunk_types(cls, v):
         if v:
             valid_types = {"text", "code", "table", "list"}
@@ -627,44 +1196,43 @@ class UnifiedRAGResponse(BaseModel):
         description="Summary of factuality (supported/refuted/nei, precision, coverage)",
     )
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "documents": [
-                    {
-                        "id": "doc1",
-                        "content": "Machine learning is a subset of artificial intelligence...",
-                        "score": 0.95,
-                        "metadata": {"source": "media_db", "title": "ML Introduction"}
-                    }
-                ],
-                "query": "What is machine learning?",
-                "expanded_queries": ["machine learning definition", "ML explanation"],
-                "metadata": {
-                    "sources_searched": ["media_db", "notes"],
-                    "documents_retrieved": 10,
-                    "cache_hit": False
-                },
-                "timings": {
-                    "query_expansion": 0.05,
-                    "retrieval": 0.2,
-                    "reranking": 0.1,
-                    "total": 0.35
-                },
-                "citations": [
-                    {
-                        "text": "Machine learning is a subset of artificial intelligence",
-                        "source": "ML Introduction",
-                        "confidence": 0.95,
-                        "type": "exact"
-                    }
-                ],
-                "generated_answer": "Machine learning is a branch of AI that enables systems to learn from data...",
-                "cache_hit": False,
-                "errors": [],
-                "total_time": 0.35
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "documents": [
+                {
+                    "id": "doc1",
+                    "content": "Machine learning is a subset of artificial intelligence...",
+                    "score": 0.95,
+                    "metadata": {"source": "media_db", "title": "ML Introduction"}
+                }
+            ],
+            "query": "What is machine learning?",
+            "expanded_queries": ["machine learning definition", "ML explanation"],
+            "metadata": {
+                "sources_searched": ["media_db", "notes"],
+                "documents_retrieved": 10,
+                "cache_hit": False
+            },
+            "timings": {
+                "query_expansion": 0.05,
+                "retrieval": 0.2,
+                "reranking": 0.1,
+                "total": 0.35
+            },
+            "citations": [
+                {
+                    "text": "Machine learning is a subset of artificial intelligence",
+                    "source": "ML Introduction",
+                    "confidence": 0.95,
+                    "type": "exact"
+                }
+            ],
+            "generated_answer": "Machine learning is a branch of AI that enables systems to learn from data...",
+            "cache_hit": False,
+            "errors": [],
+            "total_time": 0.35
         }
+    })
 
 
 class UnifiedBatchRequest(BaseModel):
@@ -672,8 +1240,8 @@ class UnifiedBatchRequest(BaseModel):
     
     queries: List[str] = Field(
         ...,
-        min_items=1,
-        max_items=100,
+        min_length=1,
+        max_length=100,
         description="List of queries to process",
         example=["What is AI?", "Explain neural networks", "Define machine learning"]
     )
@@ -689,12 +1257,17 @@ class UnifiedBatchRequest(BaseModel):
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
     sources: Optional[List[str]] = Field(default=["media_db"], description="Databases to search")
+    # Indexing / Namespace
+    corpus: Optional[str] = Field(default=None, description="Alias for index_namespace")
+    index_namespace: Optional[str] = Field(default=None, description="Corpus/namespace identifier")
     
     # Search Configuration  
     search_mode: Literal["fts", "vector", "hybrid"] = Field(default="hybrid")
     hybrid_alpha: float = Field(default=0.7, ge=0.0, le=1.0)
+    enable_intent_routing: bool = Field(default=False)
     top_k: int = Field(default=10, ge=1, le=100)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    adaptive_advanced_rewrites: Optional[bool] = Field(default=None)
     
     # Query Expansion
     expand_query: bool = Field(default=False)
@@ -719,6 +1292,12 @@ class UnifiedBatchRequest(BaseModel):
     # Document Processing
     enable_table_processing: bool = Field(default=False)
     table_method: Literal["markdown", "html", "hybrid"] = Field(default="markdown")
+    # VLM late chunking
+    enable_vlm_late_chunking: bool = Field(default=False)
+    vlm_backend: Optional[str] = Field(default=None)
+    vlm_detect_tables_only: bool = Field(default=True)
+    vlm_max_pages: Optional[int] = Field(default=None, ge=1, le=1000)
+    vlm_late_chunk_top_k_docs: int = Field(default=3, ge=1, le=50)
     
     # Chunking & Context
     enable_enhanced_chunking: bool = Field(default=False)
@@ -729,11 +1308,22 @@ class UnifiedBatchRequest(BaseModel):
     sibling_window: int = Field(default=_DEF_SIB_WIN, ge=0, le=50)
     include_parent_document: bool = Field(default=_DEF_INC_PARENT)
     parent_max_tokens: Optional[int] = Field(default=_DEF_PARENT_MAX_TOK, ge=1)
+
+    # Advanced retrieval
+    enable_multi_vector_passages: bool = Field(default=False)
+    mv_span_chars: int = Field(default=300, ge=100, le=2000)
+    mv_stride: int = Field(default=150, ge=50, le=1000)
+    mv_max_spans: int = Field(default=8, ge=1, le=64)
+    mv_flatten_to_spans: bool = Field(default=False)
+    enable_numeric_table_boost: bool = Field(default=False)
     
     # Reranking
     enable_reranking: bool = Field(default=True)
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "none"] = Field(default="flashrank")
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = Field(default="flashrank")
     rerank_top_k: Optional[int] = Field(default=None, ge=1, le=100)
+    reranking_model: Optional[str] = Field(default=None)
+    rerank_min_relevance_prob: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    rerank_sentinel_margin: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     
     # Citations
     enable_citations: bool = Field(default=False)
@@ -745,6 +1335,34 @@ class UnifiedBatchRequest(BaseModel):
     generation_model: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
     max_generation_tokens: int = Field(default=500, ge=50, le=2000)
+    enable_abstention: bool = Field(default=False)
+    abstention_behavior: Literal["continue", "ask", "decline"] = Field(default="continue")
+    enable_multi_turn_synthesis: bool = Field(default=False)
+    synthesis_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    synthesis_draft_tokens: Optional[int] = Field(default=None, ge=32, le=4000)
+    synthesis_refine_tokens: Optional[int] = Field(default=None, ge=32, le=4000)
+    # Guardrails
+    enable_content_policy_filter: bool = Field(default=False)
+    content_policy_types: Optional[List[str]] = Field(default=None)
+    content_policy_mode: Literal["redact", "drop", "annotate"] = Field(default="redact")
+    enable_html_sanitizer: bool = Field(default=False)
+    html_allowed_tags: Optional[List[str]] = Field(default=None)
+    html_allowed_attrs: Optional[List[str]] = Field(default=None)
+    ocr_confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    
+    # Post-Verification (Adaptive)
+    enable_post_verification: bool = Field(default=False)
+    adaptive_max_retries: int = Field(default=1, ge=0, le=3)
+    adaptive_unsupported_threshold: float = Field(default=0.15, ge=0.0, le=1.0)
+    adaptive_max_claims: int = Field(default=20, ge=1, le=100)
+    adaptive_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    low_confidence_behavior: Literal["continue", "ask", "decline"] = Field(default="continue")
+    adaptive_advanced_rewrites: Optional[bool] = Field(default=None)
+    adaptive_rerun_on_low_confidence: bool = Field(default=False)
+    adaptive_rerun_include_generation: bool = Field(default=True)
+    adaptive_rerun_bypass_cache: bool = Field(default=False)
+    adaptive_rerun_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    adaptive_rerun_doc_budget: Optional[int] = Field(default=None, ge=1)
     
     # Feedback
     collect_feedback: bool = Field(default=False)
@@ -765,6 +1383,13 @@ class UnifiedBatchRequest(BaseModel):
     highlight_query_terms: bool = Field(default=False)
     track_cost: bool = Field(default=False)
     debug_mode: bool = Field(default=False)
+
+    # Generation Guardrails
+    enable_injection_filter: bool = Field(default=True)
+    injection_filter_strength: float = Field(default=0.5, ge=0.05, le=1.0)
+    require_hard_citations: bool = Field(default=False)
+    enable_numeric_fidelity: bool = Field(default=False)
+    numeric_fidelity_behavior: Literal["continue", "ask", "decline", "retry"] = Field(default="continue")
     
     # Batch Processing (excluding batch fields as this IS a batch request)
     # enable_batch, batch_queries, batch_concurrent are not included
@@ -777,17 +1402,39 @@ class UnifiedBatchRequest(BaseModel):
     # User Context
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
+
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                    values["min_score"] = values.get("min_relevance_score")
+            except Exception:
+                pass
+            return values
+    # Batch: Map corpus -> index_namespace at model-level
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _alias_corpus_namespace_batch(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict):
+                    v = values.get("index_namespace")
+                    corpus = values.get("corpus")
+                    if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
+                        values["index_namespace"] = corpus.strip() or v
+            except Exception:
+                pass
+            return values
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "queries": ["What is AI?", "Explain neural networks"],
-                "max_concurrent": 5,
-                "expand_query": True,
-                "enable_citations": True,
-                "enable_reranking": True
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "queries": ["What is AI?", "Explain neural networks"],
+            "max_concurrent": 5,
+            "expand_query": True,
+            "enable_citations": True,
+            "enable_reranking": True
         }
+    })
 
 
 class UnifiedBatchResponse(BaseModel):
@@ -813,13 +1460,25 @@ class UnifiedBatchResponse(BaseModel):
         description="Total batch processing time"
     )
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "results": [],  # List of UnifiedRAGResponse objects
-                "total_queries": 2,
-                "successful": 2,
-                "failed": 0,
-                "total_time": 0.75
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "results": [],  # List of UnifiedRAGResponse objects
+            "total_queries": 2,
+            "successful": 2,
+            "failed": 0,
+            "total_time": 0.75
         }
+    })
+
+
+class ImplicitFeedbackEvent(BaseModel):
+    """Schema for implicit feedback signals from WebUI (click/expand/copy)."""
+    event_type: Literal["click", "expand", "copy"] = Field(description="Type of implicit event")
+    query: Optional[str] = Field(default=None, description="Original query text")
+    feedback_id: Optional[str] = Field(default=None, description="Optional feedback correlation id")
+    doc_id: Optional[str] = Field(default=None, description="Document/chunk id involved")
+    rank: Optional[int] = Field(default=None, description="Rank position of the doc in the displayed list")
+    impression_list: Optional[List[str]] = Field(default=None, description="Ordered doc ids visible when the event happened")
+    corpus: Optional[str] = Field(default=None, description="Corpus/namespace if set in the request")
+    user_id: Optional[str] = Field(default=None, description="User id if available")
+    session_id: Optional[str] = Field(default=None, description="Browser session id if available")

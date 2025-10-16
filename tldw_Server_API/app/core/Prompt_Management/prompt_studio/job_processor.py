@@ -1,10 +1,9 @@
 # job_processor.py
 # Job processing handlers for Prompt Studio
 
-import json
 import asyncio
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 
 from .job_manager import JobManager, JobType, JobStatus
@@ -64,22 +63,19 @@ class JobProcessor:
         """
         if not prompt_id or not project_id:
             return
+
         try:
-            conn = self.db.get_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM prompt_studio_prompts WHERE id = ?", (prompt_id,))
-            if cur.fetchone() is None:
-                cur.execute(
-                    """
-                    INSERT OR IGNORE INTO prompt_studio_prompts (
-                        id, uuid, project_id, version_number, name, client_id
-                    ) VALUES (?, lower(hex(randomblob(16))), ?, 1, ?, ?)
-                    """,
-                    (prompt_id, project_id, f"Auto-Created Prompt {prompt_id}", self.db.client_id)
-                )
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"Failed to ensure prompt_studio_prompts(id={prompt_id}) exists: {e}")
+            self.db.ensure_prompt_stub(
+                prompt_id=prompt_id,
+                project_id=project_id,
+                name=f"Auto-Created Prompt {prompt_id}",
+            )
+        except Exception as exc:  # noqa: BLE001 - defensive guard for legacy sqlite paths
+            logger.warning(
+                "Failed to ensure prompt_studio_prompts(id={}) exists: {}",
+                prompt_id,
+                exc,
+            )
     
     ####################################################################################################################
     # Generation Jobs
@@ -199,51 +195,20 @@ class JobProcessor:
             
             logger.info(f"Processing evaluation job {evaluation_id}")
             
-            # Update evaluation status (but first ensure prompt exists for FKs)
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            try:
-                cursor.execute("PRAGMA defer_foreign_keys=ON")
-            except Exception:
-                pass
-
-            try:
-                cursor.execute(
-                    "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
-                    (evaluation_id,)
+            evaluation = self.db.get_evaluation(evaluation_id)
+            if evaluation:
+                self._ensure_ps_prompt_exists(
+                    evaluation.get("prompt_id"),
+                    evaluation.get("project_id"),
                 )
-                row = cursor.fetchone()
-                if row:
-                    self._ensure_ps_prompt_exists(row["prompt_id"], row["project_id"])
-            except Exception:
-                pass
-            
-            # Update evaluation status with FK-safe retry
-            try:
-                cursor.execute("""
-                    UPDATE prompt_studio_evaluations
-                    SET status = 'running', started_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (evaluation_id,))
-                conn.commit()
-            except Exception as e:
-                # Ensure prompt exists then retry once
-                try:
-                    cursor.execute(
-                        "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
-                        (evaluation_id,)
-                    )
-                    rowx = cursor.fetchone()
-                    if rowx:
-                        self._ensure_ps_prompt_exists(rowx["prompt_id"], rowx["project_id"])
-                except Exception:
-                    pass
-                cursor.execute("""
-                    UPDATE prompt_studio_evaluations
-                    SET status = 'running', started_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (evaluation_id,))
-                conn.commit()
+
+            self.db.update_evaluation(
+                evaluation_id,
+                {
+                    "status": "running",
+                    "started_at": datetime.now(timezone.utc),
+                },
+            )
             
             # Process test cases
             test_runs = []
@@ -266,66 +231,24 @@ class JobProcessor:
             # Calculate aggregate metrics
             aggregate_metrics = self._calculate_aggregate_metrics(test_runs)
             
-            # Ensure prompt still exists before final update (avoid FK issues on commit)
-            try:
-                cursor.execute(
-                    "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
-                    (evaluation_id,)
+            evaluation = self.db.get_evaluation(evaluation_id)
+            if evaluation:
+                self._ensure_ps_prompt_exists(
+                    evaluation.get("prompt_id"),
+                    evaluation.get("project_id"),
                 )
-                row2 = cursor.fetchone()
-                if row2:
-                    self._ensure_ps_prompt_exists(row2["prompt_id"], row2["project_id"])
-            except Exception:
-                pass
 
-            # Update evaluation with results
-            try:
-                cursor.execute("""
-                    UPDATE prompt_studio_evaluations
-                    SET status = 'completed',
-                        completed_at = CURRENT_TIMESTAMP,
-                        test_run_ids = ?,
-                        aggregate_metrics = ?,
-                        total_tokens = ?,
-                        total_cost = ?
-                    WHERE id = ?
-                """, (
-                    json.dumps([tr["id"] for tr in test_runs]),
-                    json.dumps(aggregate_metrics),
-                    total_tokens,
-                    total_cost,
-                    evaluation_id
-                ))
-                conn.commit()
-            except Exception:
-                # Re-ensure then retry once
-                try:
-                    cursor.execute(
-                        "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
-                        (evaluation_id,)
-                    )
-                    row3 = cursor.fetchone()
-                    if row3:
-                        self._ensure_ps_prompt_exists(row3["prompt_id"], row3["project_id"])
-                except Exception:
-                    pass
-                cursor.execute("""
-                    UPDATE prompt_studio_evaluations
-                    SET status = 'completed',
-                        completed_at = CURRENT_TIMESTAMP,
-                        test_run_ids = ?,
-                        aggregate_metrics = ?,
-                        total_tokens = ?,
-                        total_cost = ?
-                    WHERE id = ?
-                """, (
-                    json.dumps([tr["id"] for tr in test_runs]),
-                    json.dumps(aggregate_metrics),
-                    total_tokens,
-                    total_cost,
-                    evaluation_id
-                ))
-                conn.commit()
+            self.db.update_evaluation(
+                evaluation_id,
+                {
+                    "status": "completed",
+                    "completed_at": datetime.now(timezone.utc),
+                    "test_run_ids": [tr["id"] for tr in test_runs],
+                    "aggregate_metrics": aggregate_metrics,
+                    "total_tokens": total_tokens,
+                    "total_cost": total_cost,
+                },
+            )
             
             result = {
                 "evaluation_id": evaluation_id,
@@ -343,16 +266,14 @@ class JobProcessor:
             logger.error(f"Evaluation job failed: {e}")
             
             # Update evaluation status to failed
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE prompt_studio_evaluations
-                SET status = 'failed',
-                    error_message = ?,
-                    completed_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (str(e), entity_id))
-            conn.commit()
+            self.db.update_evaluation(
+                entity_id,
+                {
+                    "status": "failed",
+                    "error_message": str(e),
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
             
             raise
     
@@ -394,49 +315,28 @@ class JobProcessor:
         }
         
         # Store test run in database
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute("PRAGMA defer_foreign_keys=ON")
-        except Exception:
-            pass
+        tc_project_id = test_case.get("project_id")
+        self._ensure_ps_prompt_exists(prompt_id, tc_project_id)
 
-        # Safety: ensure referenced prompt exists to satisfy FK constraints
-        try:
-            cursor.execute("SELECT project_id FROM prompt_studio_test_cases WHERE id = ?", (test_case_id,))
-            tc_row = cursor.fetchone()
-            tc_project_id = tc_row["project_id"] if tc_row else None
-            self._ensure_ps_prompt_exists(prompt_id, tc_project_id)
-        except Exception:
-            pass
-        
-        cursor.execute("""
-            INSERT INTO prompt_studio_test_runs (
-                uuid, project_id, prompt_id, test_case_id,
-                model_name, model_params, inputs, outputs,
-                expected_outputs, scores, execution_time_ms,
-                tokens_used, cost_estimate, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            test_run["uuid"],
-            test_case["project_id"],
-            prompt_id,
-            test_case_id,
-            test_run["model_name"],
-            json.dumps(model_config),
-            json.dumps(test_run["inputs"]),
-            json.dumps(test_run["outputs"]),
-            json.dumps(test_run["expected_outputs"]),
-            json.dumps(test_run["scores"]),
-            test_run["execution_time_ms"],
-            test_run["tokens_used"],
-            test_run["cost_estimate"],
-            self.db.client_id
-        ))
-        
-        test_run["id"] = cursor.lastrowid
-        conn.commit()
-        
+        persisted = self.db.create_test_run(
+            project_id=tc_project_id,
+            prompt_id=prompt_id,
+            test_case_id=test_case_id,
+            model_name=test_run["model_name"],
+            model_params=model_config,
+            inputs=test_run["inputs"],
+            outputs=test_run["outputs"],
+            expected_outputs=test_run["expected_outputs"],
+            scores=test_run["scores"],
+            execution_time_ms=test_run["execution_time_ms"],
+            tokens_used=test_run["tokens_used"],
+            cost_estimate=test_run["cost_estimate"],
+            client_id=self.db.client_id,
+        )
+
+        test_run["id"] = persisted.get("id", test_run.get("id"))
+        test_run["uuid"] = persisted.get("uuid", test_run.get("uuid"))
+
         return test_run
     
     def _calculate_aggregate_metrics(self, test_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -465,220 +365,160 @@ class JobProcessor:
     async def process_optimization_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
         """
         Process an optimization job.
-        
+
         Args:
             payload: Job payload with optimization parameters
             entity_id: Optimization ID
-            
+
         Returns:
             Optimization results
         """
+        optimization_id = entity_id
         try:
-            optimization_id = entity_id
             initial_prompt_id = payload.get("initial_prompt_id")
             optimizer_type = payload.get("optimizer_type", "basic")
             max_iterations = payload.get("max_iterations", 20)
-            
-            logger.info(f"Processing optimization job {optimization_id}")
-            
-            # Update optimization status (but first ensure initial prompt exists for FKs)
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            try:
-                cursor.execute("PRAGMA defer_foreign_keys=ON")
-            except Exception:
-                pass
 
-            try:
-                cursor.execute(
-                    "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
-                    (optimization_id,)
-                )
-                row = cursor.fetchone()
-                project_id = row["project_id"] if row else None
-                self._ensure_ps_prompt_exists(initial_prompt_id, project_id)
-            except Exception:
-                pass
-            
-            try:
-                cursor.execute("""
-                    UPDATE prompt_studio_optimizations
-                    SET status = 'running', started_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (optimization_id,))
-                conn.commit()
-            except Exception:
-                try:
-                    cursor.execute(
-                        "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
-                        (optimization_id,)
-                    )
-                    rowx = cursor.fetchone()
-                    project_idx = rowx["project_id"] if rowx else None
-                    self._ensure_ps_prompt_exists(initial_prompt_id, project_idx)
-                except Exception:
-                    pass
-                cursor.execute("""
-                    UPDATE prompt_studio_optimizations
-                    SET status = 'running', started_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (optimization_id,))
-                conn.commit()
-            
-            # Simulate optimization iterations
+            logger.info(
+                "Processing optimization job %s with optimizer '%s' (max_iterations=%s)",
+                optimization_id,
+                optimizer_type,
+                max_iterations,
+            )
+
+            optimization = self.db.get_optimization(optimization_id, include_deleted=True)
+            if optimization is None:
+                raise ValueError(f"Optimization {optimization_id} not found")
+
+            project_id = optimization.get("project_id")
+            if initial_prompt_id is None:
+                initial_prompt_id = optimization.get("initial_prompt_id")
+
+            self._ensure_ps_prompt_exists(initial_prompt_id, project_id)
+
+            self.db.set_optimization_status(
+                optimization_id,
+                "running",
+                mark_started=True,
+            )
+
             best_prompt_id = initial_prompt_id
             best_metric = 0.5
-            iterations = []
-            
-            for i in range(min(max_iterations, 5)):  # Limit to 5 for simulation
-                # Simulate iteration
+            iterations: List[Dict[str, Any]] = []
+            total_tokens = 0
+            total_cost = 0.0
+            iteration_limit = max(1, min(max_iterations, 5))
+
+            for iteration_index in range(1, iteration_limit + 1):
                 iteration_result = await self._run_optimization_iteration(
-                    optimization_id, initial_prompt_id, i + 1
+                    optimization_id,
+                    initial_prompt_id,
+                    iteration_index,
                 )
                 iterations.append(iteration_result)
+                total_tokens += iteration_result.get("tokens_used", 0)
+                total_cost += iteration_result.get("cost", 0.0)
 
-                # Persist iteration to iterations table
                 try:
-                    cursor.execute(
-                        """
-                        INSERT INTO prompt_studio_optimization_iterations (
-                            optimization_id, iteration_number, prompt_variant, metrics, tokens_used, cost, note
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            optimization_id,
-                            iteration_result.get("iteration"),
-                            None,
-                            json.dumps({"metric": iteration_result.get("metric")}),
-                            iteration_result.get("tokens_used"),
-                            iteration_result.get("cost"),
-                            None,
-                        ),
+                    self.db.record_optimization_iteration(
+                        optimization_id,
+                        iteration_number=iteration_result.get("iteration", iteration_index),
+                        prompt_variant=None,
+                        metrics={"metric": iteration_result.get("metric")},
+                        tokens_used=iteration_result.get("tokens_used"),
+                        cost=iteration_result.get("cost"),
+                        note=None,
                     )
-                    conn.commit()
-                except Exception as _iter_err:
-                    logger.warning(f"Failed to persist optimization iteration: {_iter_err}")
-                
-                if iteration_result["metric"] > best_metric:
-                    best_metric = iteration_result["metric"]
+                except Exception as iteration_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to record optimization iteration %s: %s",
+                        iteration_index,
+                        iteration_exc,
+                    )
+
+                metric_value = iteration_result.get("metric", 0.0)
+                if metric_value > best_metric:
+                    best_metric = metric_value
                     best_prompt_id = iteration_result.get("prompt_id", initial_prompt_id)
-                
-                # Check for early stopping
+
                 if best_metric > 0.95:
-                    logger.info(f"Early stopping at iteration {i + 1} with metric {best_metric}")
+                    logger.info(
+                        "Early stopping optimization %s at iteration %s with metric %.3f",
+                        optimization_id,
+                        iteration_index,
+                        best_metric,
+                    )
                     break
-                
-                # Broadcast iteration to realtime clients
+
                 try:
                     if ws_connection_manager:
                         broadcaster = EventBroadcaster(ws_connection_manager, self.db)
                         await broadcaster.broadcast_optimization_iteration(
                             optimization_id=optimization_id,
-                            iteration=i + 1,
+                            iteration=iteration_index,
                             max_iterations=max_iterations,
-                            current_metric=iteration_result.get("metric", 0.0),
+                            current_metric=metric_value,
                             best_metric=best_metric,
                         )
-                except Exception as _bcast_err:
-                    logger.warning(f"Failed broadcasting optimization iteration: {_bcast_err}")
-
-                await asyncio.sleep(0.5)  # Simulate processing time
-            
-            # Calculate improvement
-            initial_metric = 0.5  # Simulated initial metric
-            improvement = ((best_metric - initial_metric) / initial_metric) * 100
-            
-            # Ensure prompt exists before final update
-            try:
-                cursor.execute(
-                    "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
-                    (optimization_id,)
-                )
-                row2 = cursor.fetchone()
-                project_id2 = row2["project_id"] if row2 else None
-                self._ensure_ps_prompt_exists(best_prompt_id, project_id2)
-            except Exception:
-                pass
-
-            # Update optimization with results
-            try:
-                cursor.execute("""
-                    UPDATE prompt_studio_optimizations
-                    SET status = 'completed',
-                        completed_at = CURRENT_TIMESTAMP,
-                        optimized_prompt_id = ?,
-                        iterations_completed = ?,
-                        initial_metrics = ?,
-                        final_metrics = ?,
-                        improvement_percentage = ?
-                    WHERE id = ?
-                """, (
-                    best_prompt_id,
-                    len(iterations),
-                    json.dumps({"accuracy": initial_metric}),
-                    json.dumps({"accuracy": best_metric}),
-                    improvement,
-                    optimization_id
-                ))
-                conn.commit()
-            except Exception:
-                try:
-                    cursor.execute(
-                        "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
-                        (optimization_id,)
+                except Exception as broadcast_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed broadcasting optimization iteration %s: %s",
+                        iteration_index,
+                        broadcast_exc,
                     )
-                    rowy = cursor.fetchone()
-                    project_idy = rowy["project_id"] if rowy else None
-                    self._ensure_ps_prompt_exists(best_prompt_id, project_idy)
-                except Exception:
-                    pass
-                cursor.execute("""
-                    UPDATE prompt_studio_optimizations
-                    SET status = 'completed',
-                        completed_at = CURRENT_TIMESTAMP,
-                        optimized_prompt_id = ?,
-                        iterations_completed = ?,
-                        initial_metrics = ?,
-                        final_metrics = ?,
-                        improvement_percentage = ?
-                    WHERE id = ?
-                """, (
-                    best_prompt_id,
-                    len(iterations),
-                    json.dumps({"accuracy": initial_metric}),
-                    json.dumps({"accuracy": best_metric}),
-                    improvement,
-                    optimization_id
-                ))
-                conn.commit()
-            
+
+                await asyncio.sleep(0.5)
+
+            initial_metric = 0.5
+            improvement = ((best_metric - initial_metric) / initial_metric) * 100
+
+            if best_prompt_id:
+                self._ensure_ps_prompt_exists(best_prompt_id, project_id)
+
+            self.db.complete_optimization(
+                optimization_id,
+                optimized_prompt_id=best_prompt_id,
+                iterations_completed=len(iterations),
+                initial_metrics={"accuracy": initial_metric},
+                final_metrics={"accuracy": best_metric},
+                improvement_percentage=improvement,
+                total_tokens=total_tokens,
+                total_cost=total_cost,
+            )
+
             result = {
                 "optimization_id": optimization_id,
                 "iterations_completed": len(iterations),
                 "best_prompt_id": best_prompt_id,
                 "best_metric": best_metric,
                 "improvement_percentage": improvement,
-                "status": "completed"
+                "status": "completed",
             }
-            
-            logger.info(f"Completed optimization {optimization_id} with {improvement:.1f}% improvement")
+
+            logger.info(
+                "Completed optimization %s with %.1f%% improvement",
+                optimization_id,
+                improvement,
+            )
             return result
-            
-        except Exception as e:
+
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Optimization job failed: {e}")
-            
-            # Update optimization status to failed
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE prompt_studio_optimizations
-                SET status = 'failed',
-                    error_message = ?,
-                    completed_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (str(e), entity_id))
-            conn.commit()
-            
+
+            try:
+                self.db.set_optimization_status(
+                    optimization_id,
+                    "failed",
+                    error_message=str(e),
+                    mark_completed=True,
+                )
+            except Exception as status_exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to mark optimization %s as failed: %s",
+                    optimization_id,
+                    status_exc,
+                )
+
             raise
     
     async def _run_optimization_iteration(self, optimization_id: int, 

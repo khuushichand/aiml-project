@@ -12,7 +12,6 @@ import time
 from typing import Dict, Optional, Any, Callable
 from contextlib import contextmanager
 from pathlib import Path
-import logging
 
 from loguru import logger
 

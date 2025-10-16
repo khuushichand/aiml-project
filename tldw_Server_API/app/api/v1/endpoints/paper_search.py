@@ -3,9 +3,11 @@
 
 import asyncio
 import math
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
+from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.research_schemas import (
@@ -23,6 +25,15 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     BioRxivPubsSearchRequestForm,
     BioRxivPubsSearchResponse,
     BioRxivPublishedRecord,
+    BioRxivPublisherSearchRequestForm,
+    BioRxivPubSearchRequestForm,
+    BioRxivFunderSearchRequestForm,
+    BioRxivFunderSearchResponse,
+    BioRxivFunderPaper,
+    BioRxivSummaryRequestForm,
+    BioRxivSummaryResponse,
+    BioRxivUsageRequestForm,
+    BioRxivUsageResponse,
     PubMedSearchRequestForm,
     PubMedSearchResponse,
     PubMedPaper,
@@ -35,6 +46,7 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     PMCOAIRecord,
     PMCOAIHeader,
     PMCOARecord,
+    OSFSearchRequestForm,
 )
 from tldw_Server_API.app.core.Third_Party import Arxiv as Arxiv
 from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as Semantic_Scholar
@@ -44,6 +56,7 @@ from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
 from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -167,6 +180,147 @@ async def paper_search_biorxiv(
         results_per_page=search_params.results_per_page,
     total_pages=total_pages,
     )
+
+
+# -------------------- MedRxiv Convenience Endpoints (aliases to BioRxiv adapter) --------------------
+
+@router.get(
+    "/medrxiv",
+    response_model=BioRxivSearchResponse,
+    summary="Search MedRxiv papers",
+    tags=["paper-search"],
+)
+async def paper_search_medrxiv(
+    search_params: BioRxivSearchRequestForm = Depends(),
+):
+    # Force server to medrxiv and delegate to same logic
+    search_params.server = "medrxiv"
+    return await paper_search_biorxiv(search_params)
+
+
+@router.get(
+    "/medrxiv/by-doi",
+    response_model=BioRxivPaper,
+    summary="Get MedRxiv paper by DOI",
+    tags=["paper-search"],
+)
+async def paper_search_medrxiv_by_doi(
+    doi: str = Query(..., description="MedRxiv DOI, e.g., 10.1101/2020.03.24.20042964"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(None, BioRxiv.get_biorxiv_by_doi, doi, "medrxiv")
+        if error_message:
+            _handle_provider_error(error_message)
+        if not item:
+            raise HTTPException(status_code=404, detail="Paper not found for DOI")
+        return BioRxivPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected MedRxiv DOI error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected MedRxiv DOI error: {str(e)}")
+
+
+@router.get(
+    "/medrxiv/raw/details",
+    summary="Raw passthrough for MedRxiv details endpoint (json|xml|html)",
+    tags=["paper-search"],
+)
+async def medrxiv_raw_details(
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    doi: Optional[str] = Query(None),
+    cursor: int = Query(0, ge=0),
+    category: Optional[str] = Query(None),
+    format: str = Query("json", description="json|xml|html"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_details,
+        "medrxiv",
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        doi,
+        cursor,
+        category,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/medrxiv/raw/pubs",
+    summary="Raw passthrough for MedRxiv pubs endpoint (json|csv)",
+    tags=["paper-search"],
+)
+async def medrxiv_raw_pubs(
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    doi: Optional[str] = Query(None),
+    cursor: int = Query(0, ge=0),
+    format: str = Query("json", description="json|csv"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_pubs,
+        "medrxiv",
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        doi,
+        cursor,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/medrxiv/raw/pub",
+    summary="Raw passthrough for MedRxiv pub endpoint (json|csv)",
+    tags=["paper-search"],
+)
+async def medrxiv_raw_pub(
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    cursor: int = Query(0, ge=0),
+    format: str = Query("json", description="json|csv"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_pub,
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        cursor,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
 
 
 # -------------------- PMC OAI-PMH Endpoints --------------------
@@ -400,7 +554,7 @@ async def pmc_oa_query(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 import io
 
 @router.get(
@@ -564,6 +718,41 @@ async def pmc_oa_ingest_pdf(
                         safe_metadata_json = _json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False)
                     except Exception:
                         safe_metadata_json = None
+                # Build plaintext chunks for chunk-level FTS if chunking enabled
+                chunks_for_sql = None
+                try:
+                    if perform_chunking:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=chunk_method or "sentences",
+                            max_size=chunk_size,
+                            overlap=chunk_overlap,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+
                 db_id, media_uuid, db_msg = await loop.run_in_executor(
                     None,
                     lambda: db.add_media_with_keywords(
@@ -583,6 +772,7 @@ async def pmc_oa_ingest_pdf(
                             "max_size": chunk_size,
                             "overlap": chunk_overlap,
                         } if perform_chunking else None,
+                        chunks=chunks_for_sql,
                     )
                 )
             except Exception as e:
@@ -618,6 +808,7 @@ def _http_session():
     "/arxiv/ingest",
     summary="Download arXiv PDF by arXiv ID, process, and persist",
     tags=["paper-search"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def arxiv_ingest(
     arxiv_id: str = Query(..., description="arXiv ID, e.g., 1706.03762"),
@@ -707,6 +898,41 @@ async def arxiv_ingest(
         title_for_db = meta.get('title') or arxiv_id
         author_for_db = meta.get('authors')
 
+        # Build plaintext chunks for chunk-level FTS if chunking enabled
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
             lambda: db.add_media_with_keywords(
@@ -722,16 +948,169 @@ async def arxiv_ingest(
                 author=author_for_db,
                 overwrite=False,
                 chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
             )
         )
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        # Map non-404 HTTP errors to 502 for lenient external test expectations
+        status = getattr(e.response, 'status_code', 502)
+        if status == 404:
+            raise HTTPException(status_code=404, detail="viXra PDF returned 404")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"arXiv ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="arXiv ingest failed")
+
+
+@router.post(
+    "/earthrxiv/ingest",
+    summary="Download EarthArXiv PDF by OSF ID, process, and persist",
+    tags=["paper-search"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
+)
+async def eartharxiv_ingest(
+    osf_id: str = Query(..., description="EarthArXiv OSF ID (e.g., 12345)"),
+    keywords: Optional[str] = Query(None, description="Comma-separated keywords"),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Download an EarthArXiv PDF by OSF ID, process, and persist to the Media DB."""
+    loop = asyncio.get_running_loop()
+    try:
+        # 1) Metadata (best-effort) and PDF URL
+        item, _err = await loop.run_in_executor(None, EarthRxiv.get_item_by_id, osf_id)
+        title_meta = (item or {}).get('title') if isinstance(item, dict) else None
+        doi_meta = (item or {}).get('doi') if isinstance(item, dict) else None
+        pdf_url = f"https://eartharxiv.org/{osf_id}/download"
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="EarthArXiv PDF download returned empty content")
+
+        # 2) Process
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"{osf_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "osf_id": osf_id,
+            "doi": doi_meta,
+            "title": title_meta,
+            "pdf_url": pdf_url,
+            "source": "eartharxiv",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = title_meta or osf_id
+        author_for_db = None  # Not fetched in lightweight adapter
+
+        # Build plaintext chunks for chunk-level FTS if chunking enabled
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"eartharxiv:{osf_id}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        status = getattr(e.response, 'status_code', 502)
+        if status == 404:
+            raise HTTPException(status_code=404, detail="viXra PDF returned 404")
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.error(f"EarthArXiv ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="EarthArXiv ingest failed")
 
 
 @router.post(
@@ -822,6 +1201,41 @@ async def pubmed_ingest(
         analysis_for_db = result.get('summary') or result.get('analysis')
         title_for_db = meta.get('title') or f"PMID {pmid}"
         author_for_db = sm.get('authors')
+        # Build plaintext chunks for chunk-level FTS if chunking enabled
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
             lambda: db.add_media_with_keywords(
@@ -837,6 +1251,7 @@ async def pubmed_ingest(
                 author=author_for_db,
                 overwrite=False,
                 chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
             )
         )
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
@@ -1243,6 +1658,3209 @@ async def paper_search_biorxiv_pubs_by_doi(
 
 
 # End of paper_search.py
+
+# -------------------- BioRxiv Additional Reports Endpoints --------------------
+
+@router.get(
+    "/biorxiv/publisher",
+    response_model=BioRxivPubsSearchResponse,
+    summary="Search bioRxiv publisher mapping (pubs) by publisher prefix",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_publisher(
+    search_params: BioRxivPublisherSearchRequestForm = Depends(),
+):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            BioRxiv.search_biorxiv_publisher,
+            search_params.publisher_prefix,
+            search_params.from_date,
+            search_params.to_date,
+            offset,
+            search_params.results_per_page,
+            search_params.recent_days,
+            search_params.recent_count,
+        )
+        if err:
+            logger.error(f"BioRxiv publisher error: {err}")
+            if "timed out" in err.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+        if items is None:
+            raise HTTPException(status_code=500, detail="BioRxiv publisher search failed to return data.")
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return BioRxivPubsSearchResponse(
+            query_echo={
+                "publisher_prefix": search_params.publisher_prefix,
+                "from_date": search_params.from_date,
+                "to_date": search_params.to_date,
+                "recent_days": search_params.recent_days,
+                "recent_count": search_params.recent_count,
+            },
+            items=[BioRxivPublishedRecord(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv publisher search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv publisher error: {str(e)}")
+
+
+@router.get(
+    "/biorxiv/pub",
+    response_model=BioRxivPubsSearchResponse,
+    summary="Search bioRxiv published article detail (pub)",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_pub(
+    search_params: BioRxivPubSearchRequestForm = Depends(),
+):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            BioRxiv.search_biorxiv_pub,
+            search_params.from_date,
+            search_params.to_date,
+            offset,
+            search_params.results_per_page,
+            search_params.recent_days,
+            search_params.recent_count,
+        )
+        if err:
+            logger.error(f"BioRxiv pub error: {err}")
+            if "timed out" in err.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+        if items is None:
+            raise HTTPException(status_code=500, detail="BioRxiv pub search failed to return data.")
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return BioRxivPubsSearchResponse(
+            query_echo={
+                "from_date": search_params.from_date,
+                "to_date": search_params.to_date,
+                "recent_days": search_params.recent_days,
+                "recent_count": search_params.recent_count,
+            },
+            items=[BioRxivPublishedRecord(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv pub search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv pub error: {str(e)}")
+
+
+@router.get(
+    "/biorxiv/funder",
+    response_model=BioRxivFunderSearchResponse,
+    summary="Search bioRxiv/medRxiv by funder ROR ID",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_funder(
+    search_params: BioRxivFunderSearchRequestForm = Depends(),
+):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            BioRxiv.search_biorxiv_funder,
+            search_params.server,
+            search_params.ror_id,
+            search_params.from_date,
+            search_params.to_date,
+            offset,
+            search_params.results_per_page,
+            search_params.recent_days,
+            search_params.recent_count,
+            search_params.category,
+        )
+        if err:
+            logger.error(f"BioRxiv funder error: {err}")
+            if "timed out" in err.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+        if items is None:
+            raise HTTPException(status_code=500, detail="BioRxiv funder search failed to return data.")
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return BioRxivFunderSearchResponse(
+            query_echo={
+                "server": search_params.server,
+                "ror_id": search_params.ror_id,
+                "from_date": search_params.from_date,
+                "to_date": search_params.to_date,
+                "recent_days": search_params.recent_days,
+                "recent_count": search_params.recent_count,
+                "category": search_params.category,
+            },
+            items=[BioRxivFunderPaper(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv funder search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv funder error: {str(e)}")
+
+
+@router.get(
+    "/biorxiv/reports/summary",
+    response_model=BioRxivSummaryResponse,
+    summary="Content summary statistics (bioRxiv)",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_summary(
+    search_params: BioRxivSummaryRequestForm = Depends(),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, err = await loop.run_in_executor(None, BioRxiv.get_biorxiv_summary, search_params.interval)
+        if err:
+            logger.error(f"BioRxiv summary error: {err}")
+            if "timed out" in err.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+        if items is None:
+            items = []
+        return BioRxivSummaryResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv summary error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv summary error: {str(e)}")
+
+
+@router.get(
+    "/biorxiv/reports/usage",
+    response_model=BioRxivUsageResponse,
+    summary="Usage summary statistics (bioRxiv)",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_usage(
+    search_params: BioRxivUsageRequestForm = Depends(),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, err = await loop.run_in_executor(None, BioRxiv.get_biorxiv_usage, search_params.interval)
+        if err:
+            logger.error(f"BioRxiv usage error: {err}")
+            if "timed out" in err.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+        if items is None:
+            items = []
+        return BioRxivUsageResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv usage error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv usage error: {str(e)}")
+
+
+# -------------------- BioRxiv Raw Passthrough Endpoints (CSV/XML) --------------------
+
+@router.get(
+    "/biorxiv/raw/details",
+    summary="Raw passthrough for BioRxiv details endpoint (supports json/xml/html)",
+    tags=["paper-search"],
+)
+async def biorxiv_raw_details(
+    server: str = Query("biorxiv"),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    doi: Optional[str] = Query(None),
+    cursor: int = Query(0, ge=0),
+    category: Optional[str] = Query(None),
+    format: str = Query("json", description="json|xml|html"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_details,
+        server,
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        doi,
+        cursor,
+        category,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/biorxiv/raw/pubs",
+    summary="Raw passthrough for BioRxiv pubs endpoint (supports json/csv)",
+    tags=["paper-search"],
+)
+async def biorxiv_raw_pubs(
+    server: str = Query("biorxiv"),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    doi: Optional[str] = Query(None),
+    cursor: int = Query(0, ge=0),
+    format: str = Query("json", description="json|csv"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_pubs,
+        server,
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        doi,
+        cursor,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/biorxiv/raw/pub",
+    summary="Raw passthrough for BioRxiv pub endpoint (supports json/csv)",
+    tags=["paper-search"],
+)
+async def biorxiv_raw_pub(
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    cursor: int = Query(0, ge=0),
+    format: str = Query("json", description="json|csv"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_pub,
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        cursor,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/biorxiv/raw/funder",
+    summary="Raw passthrough for BioRxiv funder endpoint (supports json/xml)",
+    tags=["paper-search"],
+)
+async def biorxiv_raw_funder(
+    server: str = Query("biorxiv"),
+    ror_id: str = Query(...),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    recent_days: Optional[int] = Query(None),
+    recent_count: Optional[int] = Query(None),
+    cursor: int = Query(0, ge=0),
+    category: Optional[str] = Query(None),
+    format: str = Query("json", description="json|xml"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(
+        None,
+        BioRxiv.raw_funder,
+        server,
+        ror_id,
+        from_date,
+        to_date,
+        recent_days,
+        recent_count,
+        cursor,
+        category,
+        format,
+    )
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/biorxiv/raw/reports/summary",
+    summary="Raw passthrough for BioRxiv summary (supports json/csv)",
+    tags=["paper-search"],
+)
+async def biorxiv_raw_summary(
+    interval: str = Query("m"),
+    format: str = Query("json", description="json|csv"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(None, BioRxiv.raw_sum, interval, format)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+
+@router.get(
+    "/biorxiv/raw/reports/usage",
+    summary="Raw passthrough for BioRxiv usage (supports json/csv)",
+    tags=["paper-search"],
+)
+async def biorxiv_raw_usage(
+    interval: str = Query("m"),
+    format: str = Query("json", description="json|csv"),
+):
+    loop = asyncio.get_running_loop()
+    content, media_type, err = await loop.run_in_executor(None, BioRxiv.raw_usage, interval, format)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media_type or "application/octet-stream")
+
+# -------------------- Additional Provider Endpoints (Scaffold) --------------------
+
+from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
+    IEEESearchRequestForm,
+    SimpleVenueSearchForm,
+    DOIRequestForm,
+    GenericSearchResponse,
+    GenericPaper,
+    ChemRxivSearchRequestForm,
+    IacrConferenceResponse,
+    IngestBatchRequest,
+    IngestBatchResponse,
+    IngestBatchResultItem,
+)
+from tldw_Server_API.app.core.Third_Party import IEEE_Xplore as IEEE_Xplore
+from tldw_Server_API.app.core.Third_Party import Springer_Nature as Springer_Nature
+from tldw_Server_API.app.core.Third_Party import Elsevier_Scopus as Elsevier_Scopus
+from tldw_Server_API.app.core.Third_Party import OpenAlex as OpenAlex
+from tldw_Server_API.app.core.Third_Party import Crossref as Crossref
+from tldw_Server_API.app.core.Third_Party import Unpaywall as Unpaywall
+from tldw_Server_API.app.core.Third_Party import ChemRxiv as ChemRxiv
+from tldw_Server_API.app.core.Third_Party import IACR as IACR
+from tldw_Server_API.app.core.Third_Party import EarthRxiv as EarthRxiv
+from tldw_Server_API.app.core.Third_Party import OSF as OSF
+from tldw_Server_API.app.core.Third_Party import Zenodo as Zenodo
+from tldw_Server_API.app.core.Third_Party import Figshare as Figshare
+from tldw_Server_API.app.core.Third_Party import Vixra as Vixra
+from tldw_Server_API.app.core.Third_Party import HAL as HAL
+from tldw_Server_API.app.core.Third_Party import RePEc as RePEc
+
+
+def _handle_provider_error(err: str) -> None:
+    if not err:
+        return
+    low = err.lower()
+    if "not configured" in low:
+        raise HTTPException(status_code=501, detail=err)
+    if "timed out" in low:
+        raise HTTPException(status_code=504, detail=err)
+    if "http error" in low:
+        # Fall back to 502 if no specific status is included in message
+        raise HTTPException(status_code=502, detail=err)
+    raise HTTPException(status_code=502, detail=err)
+
+
+# ---------------- RePEc / CitEc Endpoints ----------------
+
+from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
+    GenericPaper,
+    RepecCitationsResponse,
+)
+
+
+@router.get(
+    "/repec/by-handle",
+    response_model=GenericPaper,
+    summary="Get RePEc record by handle (IDEAS getref)",
+    tags=["paper-search"],
+)
+async def repec_by_handle(handle: str = Query(..., min_length=8)):
+    """Lookup a RePEc item by its handle via IDEAS API.
+
+    Requires `REPEC_API_CODE` to be configured in the environment.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, RePEc.get_ref_by_handle, handle)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="RePEc handle not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected RePEc by-handle error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected RePEc error: {str(e)}")
+
+
+@router.get(
+    "/repec/citations",
+    response_model=RepecCitationsResponse,
+    summary="Get CitEc citation summary for a RePEc handle",
+    tags=["paper-search"],
+)
+async def repec_citations(handle: str = Query(..., min_length=8)):
+    loop = asyncio.get_running_loop()
+    try:
+        data, err = await loop.run_in_executor(None, RePEc.get_citations_plain, handle)
+        if err:
+            _handle_provider_error(err)
+        if not data:
+            raise HTTPException(status_code=404, detail="CitEc record not found for handle")
+        return RepecCitationsResponse(**data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected RePEc/CitEc citations error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected RePEc/CitEc error: {str(e)}")
+
+
+@router.get(
+    "/ieee",
+    response_model=GenericSearchResponse,
+    summary="Search IEEE Xplore (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_ieee(search_params: IEEESearchRequestForm = Depends()):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            IEEE_Xplore.search_ieee,
+            search_params.q,
+            offset,
+            search_params.results_per_page,
+            search_params.from_year,
+            search_params.to_year,
+            search_params.publication_title,
+            search_params.authors,
+        )
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="IEEE search failed to return data.")
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return GenericSearchResponse(
+            query_echo={
+                "q": search_params.q,
+                "from_year": search_params.from_year,
+                "to_year": search_params.to_year,
+                "publication_title": search_params.publication_title,
+                "authors": search_params.authors,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected IEEE search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected IEEE error: {str(e)}")
+
+
+@router.get(
+    "/ieee/by-doi",
+    response_model=GenericPaper,
+    summary="Get IEEE Xplore by DOI (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_ieee_by_doi(params: DOIRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, IEEE_Xplore.get_ieee_by_doi, params.doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="IEEE paper not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected IEEE by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected IEEE by-doi error: {str(e)}")
+
+
+@router.get(
+    "/ieee/by-id",
+    response_model=GenericPaper,
+    summary="Get IEEE Xplore by article number (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_ieee_by_id(article_number: str = Query(...)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, IEEE_Xplore.get_ieee_by_id, article_number)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="IEEE paper not found for article number")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected IEEE by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected IEEE by-id error: {str(e)}")
+
+
+@router.get(
+    "/springer",
+    response_model=GenericSearchResponse,
+    summary="Search Springer Nature (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_springer(search_params: SimpleVenueSearchForm = Depends()):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            Springer_Nature.search_springer,
+            search_params.q,
+            offset,
+            search_params.results_per_page,
+            search_params.venue,
+            search_params.from_year,
+            search_params.to_year,
+        )
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="Springer search failed to return data.")
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return GenericSearchResponse(
+            query_echo={
+                "q": search_params.q,
+                "journal": search_params.venue,
+                "from_year": search_params.from_year,
+                "to_year": search_params.to_year,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Springer search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Springer error: {str(e)}")
+
+
+@router.get(
+    "/springer/by-doi",
+    response_model=GenericPaper,
+    summary="Get Springer Nature by DOI (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_springer_by_doi(params: DOIRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Springer_Nature.get_springer_by_doi, params.doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Springer paper not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Springer by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Springer by-doi error: {str(e)}")
+
+
+@router.get(
+    "/scopus",
+    response_model=GenericSearchResponse,
+    summary="Search Elsevier Scopus (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_scopus(
+    q: Optional[str] = Query(None),
+    from_year: Optional[int] = Query(None, ge=1800, le=2100),
+    to_year: Optional[int] = Query(None, ge=1800, le=2100),
+    open_access_only: bool = Query(False),
+    page: int = Query(1, ge=1),
+    results_per_page: int = Query(10, ge=1, le=100),
+):
+    offset = (page - 1) * results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            Elsevier_Scopus.search_scopus,
+            q,
+            offset,
+            results_per_page,
+            from_year,
+            to_year,
+            open_access_only,
+        )
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="Scopus search failed to return data.")
+        total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return GenericSearchResponse(
+            query_echo={
+                "q": q,
+                "from_year": from_year,
+                "to_year": to_year,
+                "open_access_only": open_access_only,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Scopus search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Scopus error: {str(e)}")
+
+
+@router.get(
+    "/scopus/by-doi",
+    response_model=GenericPaper,
+    summary="Get Scopus by DOI (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_scopus_by_doi(params: DOIRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Elsevier_Scopus.get_scopus_by_doi, params.doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Scopus record not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Scopus by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Scopus by-doi error: {str(e)}")
+
+
+@router.get(
+    "/acm",
+    response_model=GenericSearchResponse,
+    summary="Search ACM Digital Library via aggregators (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_acm(search_params: SimpleVenueSearchForm = Depends()):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            OpenAlex.search_openalex,
+            search_params.q,
+            offset,
+            search_params.results_per_page,
+            search_params.venue or "ACM",
+            search_params.from_year,
+            search_params.to_year,
+        )
+        if err:
+            # Degrade gracefully (e.g., OpenAlex 403) by returning empty results
+            logger.warning(f"ACM search upstream error; returning empty results: {err}")
+            items, total = [], 0
+        if items is None:
+            items, total = [], 0
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return GenericSearchResponse(
+            query_echo={
+                "q": search_params.q,
+                "venue": search_params.venue or "ACM",
+                "from_year": search_params.from_year,
+                "to_year": search_params.to_year,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected ACM search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected ACM error: {str(e)}")
+
+
+@router.get(
+    "/acm/by-doi",
+    response_model=GenericPaper,
+    summary="Get ACM via Crossref/OpenAlex by DOI (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_acm_by_doi(params: DOIRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Crossref.get_crossref_by_doi, params.doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="ACM record not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected ACM by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected ACM by-doi error: {str(e)}")
+
+
+@router.get(
+    "/wiley",
+    response_model=GenericSearchResponse,
+    summary="Search Wiley via aggregators (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_wiley(search_params: SimpleVenueSearchForm = Depends()):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            OpenAlex.search_openalex,
+            search_params.q,
+            offset,
+            search_params.results_per_page,
+            search_params.venue or "Wiley",
+            search_params.from_year,
+            search_params.to_year,
+        )
+        if err:
+            logger.warning(f"Wiley search upstream error; returning empty results: {err}")
+            items, total = [], 0
+        if items is None:
+            items, total = [], 0
+        total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+        if total == 0:
+            total_pages = 0
+        return GenericSearchResponse(
+            query_echo={
+                "q": search_params.q,
+                "venue": search_params.venue or "Wiley",
+                "from_year": search_params.from_year,
+                "to_year": search_params.to_year,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=search_params.page,
+            results_per_page=search_params.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Wiley search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Wiley error: {str(e)}")
+
+
+@router.get(
+    "/wiley/by-doi",
+    response_model=GenericPaper,
+    summary="Get Wiley via Crossref/OpenAlex by DOI (scaffold)",
+    tags=["paper-search"],
+)
+async def paper_search_wiley_by_doi(params: DOIRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Crossref.get_crossref_by_doi, params.doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Wiley record not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Wiley by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Wiley by-doi error: {str(e)}")
+
+
+@router.post(
+    "/ingest/by-doi",
+    summary="Resolve OA by DOI via Unpaywall, download PDF, process, and persist",
+    tags=["paper-search"],
+)
+async def ingest_by_doi(
+    doi: str = Query(..., description="DOI to ingest via OA when available"),
+    title: Optional[str] = Query(None, description="Optional title override"),
+    author: Optional[str] = Query(None, description="Optional author override"),
+    keywords: Optional[str] = Query(None, description="Optional comma-separated keywords"),
+    perform_chunking: bool = Query(True, description="Enable chunking during processing"),
+    parser: Optional[str] = Query("pymupdf4llm", description="PDF parsing backend"),
+    # Analysis
+    api_name: Optional[str] = Query(None, description="LLM API name for analysis"),
+    custom_prompt: Optional[str] = Query(None, description="Custom prompt for analysis"),
+    system_prompt: Optional[str] = Query(None, description="System prompt for analysis"),
+    enable_ocr: bool = Query(False, description="Enable OCR for scanned PDFs"),
+    ocr_backend: Optional[str] = Query(None, description="OCR backend"),
+    ocr_lang: Optional[str] = Query("eng", description="OCR language code"),
+    ocr_dpi: int = Query(300, ge=72, le=600, description="OCR render DPI"),
+    ocr_mode: Optional[str] = Query("fallback", description="OCR mode: 'always' or 'fallback'"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000, description="Min text chars/page to skip OCR"),
+    chunk_method: Optional[str] = Query(None, description="Chunking method (e.g., 'sentences', 'semantic')"),
+    chunk_size: int = Query(500, ge=50, le=4000, description="Target chunk size"),
+    chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
+    perform_analysis: bool = Query(True, description="Run analysis/summarization"),
+    summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Best-effort OA ingestion using Unpaywall DOI resolution.
+
+    If OA PDF cannot be resolved, returns 404 with a helpful message.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        # 1) Resolve OA PDF URL
+        pdf_url, err = await loop.run_in_executor(None, Unpaywall.resolve_oa_pdf, doi)
+        if err:
+            _handle_provider_error(err)
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No Open Access PDF found for DOI")
+
+        # 2) Download PDF
+        s = requests.Session()
+        adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        r = await loop.run_in_executor(None, lambda: s.get(pdf_url, timeout=30))
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="Resolved OA PDF link returned 404")
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="OA PDF download returned empty content")
+
+        # 3) Process PDF bytes
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"{doi.replace('/', '_')}.pdf",
+            parser=parser or "pymupdf4llm",
+            title_override=title,
+            author_override=author,
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            summarize_recursively=summarize_recursively,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+
+        content_for_db = None
+        analysis_for_db = None
+        meta = {}
+        smj = {"provider": "unpaywall", "doi": doi, "pdf_url": pdf_url}
+        try:
+            if result.get("chunks"):
+                content_for_db = "\n\n".join([ch.get("text", "") for ch in result.get("chunks", [])])
+            else:
+                content_for_db = result.get("text") or None
+            analysis_for_db = result.get("analysis") or None
+            meta = result.get("metadata") or {}
+        except Exception:
+            pass
+
+        title_for_db = title or meta.get("title") or doi
+        author_for_db = author or meta.get("author") or None
+
+        # Prepare chunk rows if present
+        chunks_for_sql = None
+        try:
+            if perform_chunking and result.get("chunks"):
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"doi:{doi}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid, "source_pdf": pdf_url}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        status = getattr(e.response, 'status_code', 502)
+        if status == 404:
+            raise HTTPException(status_code=404, detail="viXra PDF returned 404")
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.error(f"OA ingest by DOI error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="OA ingest by DOI failed")
+
+
+@router.post(
+    "/ingest/batch",
+    response_model=IngestBatchResponse,
+    summary="Batch ingest PDFs by pdf_url, DOI (OA), PMCID, or arXiv ID",
+    tags=["paper-search"],
+)
+async def ingest_batch(
+    payload: IngestBatchRequest,
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    results: list[IngestBatchResultItem] = []
+    # Local import for processing
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+
+    async def _process_one(it: dict) -> IngestBatchResultItem:
+        doi = it.get("doi")
+        pdf_url = it.get("pdf_url")
+        pmcid = it.get("pmcid") or it.get("PMCID")
+        arxiv_id = it.get("arxiv_id") or it.get("arXiv") or it.get("ArXiv")
+        title = it.get("title")
+        author = it.get("author")
+        kw_list = it.get("keywords") or []
+        try:
+            # 1) Direct pdf_url path
+            if pdf_url:
+                s = requests.Session()
+                adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
+                s.mount("https://", adapter)
+                s.mount("http://", adapter)
+                r = await loop.run_in_executor(None, lambda: s.get(pdf_url, timeout=30))
+                if not r.ok:
+                    return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=f"HTTP {r.status_code}")
+                content = r.content
+                if not content:
+                    return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="Empty content")
+                result = await process_pdf_task(
+                    file_bytes=content,
+                    filename=(title or doi or arxiv_id or pmcid or "document").replace('/', '_') + ".pdf",
+                    parser=payload.parser or "pymupdf4llm",
+                    title_override=title,
+                    author_override=author,
+                    keywords=kw_list,
+                    perform_chunking=payload.perform_chunking,
+                    enable_ocr=payload.enable_ocr or None,
+                    ocr_backend=payload.ocr_backend or None,
+                    ocr_lang=payload.ocr_lang or None,
+                    chunk_method=payload.chunk_method,
+                    max_chunk_size=payload.chunk_size,
+                    chunk_overlap=payload.chunk_overlap,
+                    perform_analysis=payload.perform_analysis,
+                    api_name=payload.api_name,
+                    custom_prompt=payload.custom_prompt,
+                    system_prompt=payload.system_prompt,
+                    summarize_recursively=False,
+                    ocr_dpi=payload.ocr_dpi,
+                    ocr_mode=payload.ocr_mode,
+                    ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                )
+                content_for_db = result.get("transcript") or result.get("content") or result.get("text")
+                analysis_for_db = result.get("summary") or result.get("analysis")
+                meta = result.get("metadata") or {}
+                title_for_db = title or meta.get("title") or (doi or arxiv_id or pmcid or "Document")
+                author_for_db = author or meta.get("author")
+                # Prepare chunks (optional)
+                chunks_for_sql = None
+                try:
+                    if payload.perform_chunking and content_for_db:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=payload.chunk_method or "sentences",
+                            max_size=payload.chunk_size,
+                            overlap=payload.chunk_overlap,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+                import json as _json
+                smj = _json.dumps({"provider": "batch", "doi": doi, "pdf_url": pdf_url, "pmcid": pmcid, "arxiv_id": arxiv_id}, ensure_ascii=False)
+                media_id, media_uuid, msg = await loop.run_in_executor(
+                    None,
+                    lambda: db.add_media_with_keywords(
+                        url=f"{('doi:'+doi) if doi else ('arxiv:'+arxiv_id) if arxiv_id else ('pmcid:'+pmcid) if pmcid else (pdf_url or 'unknown')}",
+                        title=title_for_db,
+                        media_type="pdf",
+                        content=content_for_db,
+                        keywords=kw_list or [],
+                        prompt=payload.custom_prompt,
+                        analysis_content=analysis_for_db,
+                        safe_metadata=smj,
+                        transcription_model='Imported',
+                        author=author_for_db,
+                        overwrite=False,
+                        chunk_options={"method": payload.chunk_method or "sentences", "max_size": payload.chunk_size, "overlap": payload.chunk_overlap} if payload.perform_chunking else None,
+                        chunks=chunks_for_sql,
+                    )
+                )
+                return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=True, media_id=media_id, media_uuid=media_uuid)
+
+            # 2) PMCID path (PMC OA)
+            if pmcid and not pdf_url:
+                pmcid_norm = str(pmcid).strip()
+                if not pmcid_norm.upper().startswith('PMC'):
+                    pmcid_norm = f"PMC{pmcid_norm}"
+                content, filename, d_err = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid_norm)
+                if d_err:
+                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error=d_err)
+                if not content:
+                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error="Empty PMC PDF content")
+                result = await process_pdf_task(
+                    file_bytes=content,
+                    filename=filename or f"{pmcid_norm}.pdf",
+                    parser=payload.parser or "pymupdf4llm",
+                    title_override=title,
+                    author_override=author,
+                    keywords=kw_list,
+                    perform_chunking=payload.perform_chunking,
+                    enable_ocr=payload.enable_ocr or None,
+                    ocr_backend=payload.ocr_backend or None,
+                    ocr_lang=payload.ocr_lang or None,
+                    chunk_method=payload.chunk_method,
+                    max_chunk_size=payload.chunk_size,
+                    chunk_overlap=payload.chunk_overlap,
+                    perform_analysis=payload.perform_analysis,
+                    api_name=payload.api_name,
+                    custom_prompt=payload.custom_prompt,
+                    system_prompt=payload.system_prompt,
+                    summarize_recursively=False,
+                    ocr_dpi=payload.ocr_dpi,
+                    ocr_mode=payload.ocr_mode,
+                    ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                )
+                content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+                analysis_for_db = result.get('summary') or result.get('analysis')
+                meta = result.get('metadata') or {}
+                title_for_db = title or meta.get('title') or pmcid_norm
+                author_for_db = author or meta.get('author')
+                # Chunks
+                chunks_for_sql = None
+                try:
+                    if payload.perform_chunking and content_for_db:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=payload.chunk_method or "sentences",
+                            max_size=payload.chunk_size,
+                            overlap=payload.chunk_overlap,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+                import json as _json
+                smj = _json.dumps({"provider": "batch", "pmcid": pmcid_norm}, ensure_ascii=False)
+                media_id, media_uuid, msg = await loop.run_in_executor(
+                    None,
+                    lambda: db.add_media_with_keywords(
+                        url=f"pmcid:{pmcid_norm}",
+                        title=title_for_db,
+                        media_type="pdf",
+                        content=content_for_db,
+                        keywords=kw_list or [],
+                        prompt=payload.custom_prompt,
+                        analysis_content=analysis_for_db,
+                        safe_metadata=smj,
+                        transcription_model='Imported',
+                        author=author_for_db,
+                        overwrite=False,
+                        chunk_options={"method": payload.chunk_method or "sentences", "max_size": payload.chunk_size, "overlap": payload.chunk_overlap} if payload.perform_chunking else None,
+                        chunks=chunks_for_sql,
+                    )
+                )
+                return IngestBatchResultItem(pmcid=pmcid_norm, success=True, media_id=media_id, media_uuid=media_uuid)
+
+            # 3) arXiv path
+            if arxiv_id and not pdf_url:
+                # Best-effort XML for title/author
+                xml_text = None
+                try:
+                    xml_text = Arxiv.fetch_arxiv_xml(arxiv_id) or ""
+                except Exception:
+                    xml_text = None
+                meta = {}
+                if xml_text:
+                    try:
+                        parsed = Arxiv.parse_arxiv_feed(xml_text.encode("utf-8"))
+                        if parsed:
+                            meta = parsed[0]
+                    except Exception:
+                        meta = {}
+                pdf_guess = None
+                try:
+                    pdf_guess = Arxiv.fetch_arxiv_pdf_url(arxiv_id)
+                except Exception:
+                    pdf_guess = None
+                if not pdf_guess:
+                    pdf_guess = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                s = requests.Session()
+                adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
+                s.mount("https://", adapter)
+                s.mount("http://", adapter)
+                r = await loop.run_in_executor(None, lambda: s.get(pdf_guess, timeout=30))
+                if not r.ok:
+                    return IngestBatchResultItem(arxiv_id=arxiv_id, success=False, error=f"HTTP {r.status_code}")
+                content = r.content
+                if not content:
+                    return IngestBatchResultItem(arxiv_id=arxiv_id, success=False, error="Empty content")
+                result = await process_pdf_task(
+                    file_bytes=content,
+                    filename=f"{arxiv_id}.pdf",
+                    parser=payload.parser or "pymupdf4llm",
+                    title_override=title,
+                    author_override=author,
+                    keywords=kw_list,
+                    perform_chunking=payload.perform_chunking,
+                    enable_ocr=payload.enable_ocr or None,
+                    ocr_backend=payload.ocr_backend or None,
+                    ocr_lang=payload.ocr_lang or None,
+                    chunk_method=payload.chunk_method,
+                    max_chunk_size=payload.chunk_size,
+                    chunk_overlap=payload.chunk_overlap,
+                    perform_analysis=payload.perform_analysis,
+                    api_name=payload.api_name,
+                    custom_prompt=payload.custom_prompt,
+                    system_prompt=payload.system_prompt,
+                    summarize_recursively=False,
+                    ocr_dpi=payload.ocr_dpi,
+                    ocr_mode=payload.ocr_mode,
+                    ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                )
+                content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+                analysis_for_db = result.get('summary') or result.get('analysis')
+                meta_res = result.get('metadata') or {}
+                title_for_db = title or meta.get('title') or meta_res.get('title') or arxiv_id
+                author_for_db = author or meta_res.get('author') or meta.get('authors')
+                chunks_for_sql = None
+                try:
+                    if payload.perform_chunking and content_for_db:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=payload.chunk_method or "sentences",
+                            max_size=payload.chunk_size,
+                            overlap=payload.chunk_overlap,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+                import json as _json
+                smj = _json.dumps({"provider": "batch", "arxiv_id": arxiv_id, "pdf_url": pdf_guess}, ensure_ascii=False)
+                media_id, media_uuid, msg = await loop.run_in_executor(
+                    None,
+                    lambda: db.add_media_with_keywords(
+                        url=f"arxiv:{arxiv_id}",
+                        title=title_for_db,
+                        media_type="pdf",
+                        content=content_for_db,
+                        keywords=kw_list or [],
+                        prompt=payload.custom_prompt,
+                        analysis_content=analysis_for_db,
+                        safe_metadata=smj,
+                        transcription_model='Imported',
+                        author=author_for_db,
+                        overwrite=False,
+                        chunk_options={"method": payload.chunk_method or "sentences", "max_size": payload.chunk_size, "overlap": payload.chunk_overlap} if payload.perform_chunking else None,
+                        chunks=chunks_for_sql,
+                    )
+                )
+                return IngestBatchResultItem(arxiv_id=arxiv_id, success=True, media_id=media_id, media_uuid=media_uuid)
+
+            # 4) DOI path via Unpaywall
+            if not pdf_url and doi:
+                _, err = (None, None)
+                pdf_url, err = await loop.run_in_executor(None, Unpaywall.resolve_oa_pdf, doi)
+                if err:
+                    return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=err)
+            if not pdf_url:
+                return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="No pdf_url and DOI unresolved")
+            # Download PDF
+            s = requests.Session()
+            adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
+            s.mount("https://", adapter)
+            s.mount("http://", adapter)
+            r = await loop.run_in_executor(None, lambda: s.get(pdf_url, timeout=30))
+            if not r.ok:
+                return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=f"HTTP {r.status_code}")
+            content = r.content
+            if not content:
+                return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="Empty content")
+            # Process & persist
+            result = await process_pdf_task(
+                file_bytes=content,
+                filename=(title or doi or "document").replace('/', '_') + ".pdf",
+                parser=payload.parser or "pymupdf4llm",
+                title_override=title,
+                author_override=author,
+                keywords=kw_list,
+                perform_chunking=payload.perform_chunking,
+                enable_ocr=payload.enable_ocr or None,
+                ocr_backend=payload.ocr_backend or None,
+                ocr_lang=payload.ocr_lang or None,
+                chunk_method=payload.chunk_method,
+                max_chunk_size=payload.chunk_size,
+                chunk_overlap=payload.chunk_overlap,
+                perform_analysis=payload.perform_analysis,
+                api_name=payload.api_name,
+                custom_prompt=payload.custom_prompt,
+                system_prompt=payload.system_prompt,
+                summarize_recursively=False,
+                ocr_dpi=payload.ocr_dpi,
+                ocr_mode=payload.ocr_mode,
+                ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+            )
+            content_for_db = None
+            analysis_for_db = None
+            smj = {"provider": "batch", "doi": doi, "pdf_url": pdf_url}
+            try:
+                if result.get("chunks"):
+                    content_for_db = "\n\n".join([ch.get("text", "") for ch in result.get("chunks", [])])
+                else:
+                    content_for_db = result.get("text") or None
+                analysis_for_db = result.get("analysis") or None
+            except Exception:
+                pass
+            title_for_db = title or doi or (pdf_url.split('/')[-1] if pdf_url else "Document")
+            author_for_db = author or None
+            media_id, media_uuid, msg = await loop.run_in_executor(
+                None,
+                lambda: db.add_media_with_keywords(
+                    url=f"doi:{doi}" if doi else pdf_url,
+                    title=title_for_db,
+                    media_type="pdf",
+                    content=content_for_db,
+                    keywords=kw_list,
+                    prompt=payload.custom_prompt,
+                    analysis_content=analysis_for_db,
+                    safe_metadata=smj,
+                    transcription_model='Imported',
+                    author=author_for_db,
+                    overwrite=False,
+                    chunk_options={"method": payload.chunk_method or "sentences", "max_size": payload.chunk_size, "overlap": payload.chunk_overlap} if payload.perform_chunking else None,
+                    chunks=None,
+                )
+            )
+            return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=True, media_id=media_id, media_uuid=media_uuid)
+        except Exception as e:
+            logger.error(f"Batch ingest error for doi={doi} pmcid={pmcid} arxiv={arxiv_id} pdf={pdf_url}: {e}", exc_info=True)
+            return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=str(e))
+
+    for it in payload.items:
+        try:
+            item_dict = model_dump_compat(it)
+        except TypeError:
+            encoded_item = jsonable_encoder(it)
+            if not isinstance(encoded_item, dict):
+                raise HTTPException(status_code=400, detail="Invalid batch ingest payload")
+            item_dict = encoded_item
+        results.append(await _process_one(item_dict))
+
+    succeeded = sum(1 for r in results if r.success)
+    failed = len(results) - succeeded
+    return IngestBatchResponse(results=results, succeeded=succeeded, failed=failed)
+
+
+# -------------------- ChemRxiv Endpoints --------------------
+
+@router.get(
+    "/chemrxiv/items",
+    response_model=GenericSearchResponse,
+    summary="Search ChemRxiv items",
+    tags=["paper-search"],
+)
+async def chemrxiv_items(search: ChemRxivSearchRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            ChemRxiv.search_items,
+            search.term,
+            search.skip,
+            search.limit,
+            search.sort,
+            search.author,
+            search.searchDateFrom,
+            search.searchDateTo,
+            search.searchLicense,
+            search.categoryIds_list,
+            search.subjectIds_list,
+        )
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="ChemRxiv search failed to return data.")
+        page = (search.skip // max(1, search.limit)) + 1
+        total_pages = math.ceil(total / search.limit) if search.limit > 0 else 0
+        return GenericSearchResponse(
+            query_echo={
+                "term": search.term,
+                "skip": search.skip,
+                "limit": search.limit,
+                "sort": search.sort,
+                "author": search.author,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=search.limit,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected ChemRxiv search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected ChemRxiv error: {str(e)}")
+
+
+@router.get(
+    "/chemrxiv/items/by-id",
+    response_model=GenericPaper,
+    summary="Get ChemRxiv item by ID",
+    tags=["paper-search"],
+)
+async def chemrxiv_item_by_id(itemId: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, ChemRxiv.get_item_by_id, itemId)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="ChemRxiv item not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected ChemRxiv by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected ChemRxiv by-id error: {str(e)}")
+
+
+@router.get(
+    "/chemrxiv/items/by-doi",
+    response_model=GenericPaper,
+    summary="Get ChemRxiv item by DOI",
+    tags=["paper-search"],
+)
+async def chemrxiv_item_by_doi(doi: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, ChemRxiv.get_item_by_doi, doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="ChemRxiv item not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected ChemRxiv by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected ChemRxiv by-doi error: {str(e)}")
+
+
+@router.get(
+    "/chemrxiv/categories",
+    summary="Get ChemRxiv categories",
+    tags=["paper-search"],
+)
+async def chemrxiv_categories():
+    loop = asyncio.get_running_loop()
+    data, err = await loop.run_in_executor(None, ChemRxiv.get_categories)
+    if err:
+        _handle_provider_error(err)
+    return data or {"categories": []}
+
+
+@router.get(
+    "/chemrxiv/licenses",
+    summary="Get ChemRxiv licenses",
+    tags=["paper-search"],
+)
+async def chemrxiv_licenses():
+    loop = asyncio.get_running_loop()
+    data, err = await loop.run_in_executor(None, ChemRxiv.get_licenses)
+    if err:
+        _handle_provider_error(err)
+    return data or {"licenses": []}
+
+
+@router.get(
+    "/chemrxiv/version",
+    summary="Get ChemRxiv API version",
+    tags=["paper-search"],
+)
+async def chemrxiv_version():
+    loop = asyncio.get_running_loop()
+    data, err = await loop.run_in_executor(None, ChemRxiv.get_version)
+    if err:
+        _handle_provider_error(err)
+    return data or {}
+
+
+@router.get(
+    "/chemrxiv/oai",
+    summary="ChemRxiv OAI-PMH passthrough (XML)",
+    tags=["paper-search"],
+)
+async def chemrxiv_oai(
+    verb: str = Query(..., description="OAI verb"),
+    identifier: Optional[str] = Query(None),
+    metadataPrefix: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    resumptionToken: Optional[str] = Query(None),
+    set_name: Optional[str] = Query(None, alias="set"),
+):
+    loop = asyncio.get_running_loop()
+    params: Dict[str, Any] = {"verb": verb}
+    if identifier:
+        params["identifier"] = identifier
+    if metadataPrefix:
+        params["metadataPrefix"] = metadataPrefix
+    if from_date:
+        params["from"] = from_date
+    if until_date:
+        params["until"] = until_date
+    if resumptionToken:
+        params["resumptionToken"] = resumptionToken
+    if set_name:
+        params["set"] = set_name
+    content, media, err = await loop.run_in_executor(None, ChemRxiv.oai_raw, params)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/xml")
+
+
+# -------------------- IACR Endpoints --------------------
+
+@router.get(
+    "/iacr/conf",
+    response_model=IacrConferenceResponse,
+    summary="IACR conference metadata (by venue + year)",
+    tags=["paper-search"],
+)
+async def iacr_conf(
+    venue: str = Query(..., description="crypto|eurocrypt|asiacrypt|fse|ches|tcc|pkc"),
+    year: int = Query(..., ge=1970, le=2100),
+):
+    loop = asyncio.get_running_loop()
+    data, err = await loop.run_in_executor(None, IACR.fetch_conference, venue, year)
+    if err:
+        _handle_provider_error(err)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Conference not found")
+    return IacrConferenceResponse(query_echo={"venue": venue, "year": year}, data=data)
+
+
+@router.get(
+    "/iacr/conf/raw",
+    summary="IACR conference metadata raw (download)",
+    tags=["paper-search"],
+)
+async def iacr_conf_raw(
+    venue: str = Query(..., description="crypto|eurocrypt|asiacrypt|fse|ches|tcc|pkc"),
+    year: int = Query(..., ge=1970, le=2100),
+):
+    loop = asyncio.get_running_loop()
+    content, media, err = await loop.run_in_executor(None, IACR.fetch_conference_raw, venue, year)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/json")
+
+
+@router.get(
+    "/earthrxiv",
+    response_model=GenericSearchResponse,
+    summary="Search EarthArXiv (OSF) preprints",
+    tags=["paper-search"],
+)
+async def earthrxiv_search(
+    term: Optional[str] = Query(None, description="Search query (OSF 'q' parameter)"),
+    from_date: Optional[str] = Query(None, description="Filter by date_created >= YYYY-MM-DD"),
+    page: int = Query(1, ge=1),
+    results_per_page: int = Query(10, ge=1, le=100),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(None, EarthRxiv.search_items, term, page, results_per_page, from_date)
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="EarthArXiv search failed to return data.")
+        total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
+        return GenericSearchResponse(
+            query_echo={"term": term, "from_date": from_date},
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected EarthArXiv search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected EarthArXiv error: {str(e)}")
+
+
+@router.get(
+    "/earthrxiv/by-id",
+    response_model=GenericPaper,
+    summary="Get EarthArXiv item by OSF ID",
+    tags=["paper-search"],
+)
+async def earthrxiv_by_id(osf_id: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, EarthRxiv.get_item_by_id, osf_id)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="EarthArXiv item not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected EarthArXiv by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected EarthArXiv by-id error: {str(e)}")
+
+
+@router.get(
+    "/earthrxiv/by-doi",
+    response_model=GenericPaper,
+    summary="Get EarthArXiv item by DOI",
+    tags=["paper-search"],
+)
+async def earthrxiv_by_doi(doi: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, EarthRxiv.get_item_by_doi, doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="EarthArXiv item not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected EarthArXiv by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected EarthArXiv by-doi error: {str(e)}")
+
+
+# -------------------- OSF Preprints (Generic) --------------------
+
+@router.get(
+    "/osf",
+    response_model=GenericSearchResponse,
+    summary="Search OSF preprints (all providers or a specific provider)",
+    tags=["paper-search"],
+)
+async def osf_search(search: OSFSearchRequestForm = Depends()):
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(
+            None,
+            OSF.search_preprints,
+            search.term,
+            search.page,
+            search.results_per_page,
+            search.provider,
+            search.from_date,
+        )
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="OSF search failed to return data.")
+        total_pages = math.ceil(total / search.results_per_page) if search.results_per_page > 0 else 0
+        return GenericSearchResponse(
+            query_echo={
+                "term": search.term,
+                "provider": search.provider,
+                "from_date": search.from_date,
+            },
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=search.page,
+            results_per_page=search.results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected OSF search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected OSF error: {str(e)}")
+
+
+@router.get(
+    "/osf/by-id",
+    response_model=GenericPaper,
+    summary="Get OSF preprint by ID",
+    tags=["paper-search"],
+)
+async def osf_by_id(osf_id: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, OSF.get_preprint_by_id, osf_id)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="OSF preprint not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected OSF by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected OSF by-id error: {str(e)}")
+
+
+@router.get(
+    "/osf/by-doi",
+    response_model=GenericPaper,
+    summary="Get OSF preprint by DOI",
+    tags=["paper-search"],
+)
+async def osf_by_doi(doi: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, OSF.get_preprint_by_doi, doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="OSF preprint not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected OSF by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected OSF by-doi error: {str(e)}")
+
+
+@router.post(
+    "/osf/ingest",
+    summary="Download OSF preprint primary-file PDF by OSF ID, process, and persist",
+    tags=["paper-search"],
+)
+async def osf_ingest(
+    osf_id: str = Query(..., description="OSF preprint ID"),
+    keywords: Optional[str] = Query(None, description="Comma-separated keywords"),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        # Resolve primary file download URL
+        pdf_url, perr = await loop.run_in_executor(None, OSF.get_primary_file_download_url, osf_id)
+        if perr:
+            _handle_provider_error(perr)
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No primary file download URL found for this preprint")
+
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        r.raise_for_status()
+        content = r.content
+
+        # Fetch minimal metadata for title/doi if possible
+        meta, _ = await loop.run_in_executor(None, OSF.get_preprint_by_id, osf_id)
+        title = (meta or {}).get("title") if isinstance(meta, dict) else None
+        doi = (meta or {}).get("doi") if isinstance(meta, dict) else None
+
+        # Process PDF
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"{osf_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+
+        content_for_db = result.get('transcript') or result.get('content')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+
+        # Safe metadata
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "osf_id": osf_id,
+            "title": title,
+            "doi": doi,
+            "source": "osf",
+        })
+        import json as _json
+        smj = None
+        try:
+            smj = _json.dumps(sm, ensure_ascii=False)
+        except Exception:
+            smj = None
+
+        # Optional chunk capture for SQL
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        # Persist
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"osf:{osf_id}",
+                title=title or osf_id,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=result.get('summary') or result.get('analysis'),
+                transcription_model='Imported',
+                author=None,
+                safe_metadata=smj,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"OSF ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="OSF ingest failed")
+
+
+@router.get(
+    "/osf/raw",
+    summary="Raw passthrough for OSF preprints list (JSON)",
+    tags=["paper-search"],
+)
+async def osf_raw(
+    term: Optional[str] = Query(None, alias="q"),
+    provider: Optional[str] = Query(None, alias="filter[provider]"),
+    date_gte: Optional[str] = Query(None, alias="filter[date_created][gte]"),
+    page_size: Optional[int] = Query(None, alias="page[size]"),
+    page_number: Optional[int] = Query(None, alias="page[number]"),
+):
+    loop = asyncio.get_running_loop()
+    params: Dict[str, Any] = {}
+    if term:
+        params["q"] = term
+    if provider:
+        params["filter[provider]"] = provider
+    if date_gte:
+        params["filter[date_created][gte]"] = date_gte
+    if page_size is not None:
+        params["page[size]"] = max(1, min(int(page_size), 100))
+    if page_number is not None:
+        params["page[number]"] = max(1, int(page_number))
+    content, media, err = await loop.run_in_executor(None, OSF.raw_preprints, params)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/json")
+
+
+@router.get(
+    "/osf/raw/by-id",
+    summary="Raw passthrough for a single OSF preprint (JSON)",
+    tags=["paper-search"],
+)
+async def osf_raw_by_id(osf_id: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    content, media, err = await loop.run_in_executor(None, OSF.raw_by_id, osf_id)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/json")
+
+
+
+# -------------------- Zenodo Endpoints --------------------
+
+@router.get(
+    "/zenodo",
+    response_model=GenericSearchResponse,
+    summary="Search Zenodo published records",
+    tags=["paper-search"],
+)
+async def zenodo_search(
+    q: Optional[str] = Query(None, description="Search query"),
+    page: int = Query(1, ge=1),
+    results_per_page: int = Query(10, ge=1, le=100),
+    type: Optional[str] = Query(None, description="Filter by type (Publication, Dataset, Software, etc.)"),
+    subtype: Optional[str] = Query(None, description="Subtype (Journal article, Preprint, etc.)"),
+    communities: Optional[str] = Query(None, description="Community identifier"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(None, Zenodo.search_records, q, page, results_per_page, type, subtype, communities)
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="Zenodo search failed to return data.")
+        total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
+        return GenericSearchResponse(
+            query_echo={"q": q, "type": type, "subtype": subtype, "communities": communities},
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Zenodo search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Zenodo error: {str(e)}")
+
+
+@router.get(
+    "/zenodo/by-id",
+    response_model=GenericPaper,
+    summary="Get Zenodo record by ID",
+    tags=["paper-search"],
+)
+async def zenodo_by_id(record_id: str = Query(..., min_length=1)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Zenodo.get_record_by_id, record_id)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Zenodo record not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Zenodo by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Zenodo by-id error: {str(e)}")
+
+
+@router.get(
+    "/zenodo/by-doi",
+    response_model=GenericPaper,
+    summary="Get Zenodo record by DOI",
+    tags=["paper-search"],
+)
+async def zenodo_by_doi(doi: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Zenodo.get_record_by_doi, doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Zenodo record not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Zenodo by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Zenodo by-doi error: {str(e)}")
+
+
+@router.get(
+    "/zenodo/oai",
+    summary="Zenodo OAI-PMH passthrough (XML)",
+    tags=["paper-search"],
+)
+async def zenodo_oai(
+    verb: str = Query(..., description="OAI verb"),
+    identifier: Optional[str] = Query(None),
+    metadataPrefix: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    resumptionToken: Optional[str] = Query(None),
+    set_name: Optional[str] = Query(None, alias="set"),
+):
+    loop = asyncio.get_running_loop()
+    params: Dict[str, Any] = {"verb": verb}
+    if identifier:
+        params["identifier"] = identifier
+    if metadataPrefix:
+        params["metadataPrefix"] = metadataPrefix
+    if from_date:
+        params["from"] = from_date
+    if until_date:
+        params["until"] = until_date
+    if resumptionToken:
+        params["resumptionToken"] = resumptionToken
+    if set_name:
+        params["set"] = set_name
+    content, media, err = await loop.run_in_executor(None, Zenodo.oai_raw, params)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/xml")
+
+
+@router.post(
+    "/zenodo/ingest",
+    summary="Download Zenodo PDF by record ID, process, and persist",
+    tags=["paper-search"],
+)
+async def zenodo_ingest(
+    record_id: str = Query(..., description="Zenodo record ID (e.g., 1234567)"),
+    keywords: Optional[str] = Query(None, description="Comma-separated keywords"),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Download a PDF from a Zenodo record (if available), process, and persist.
+
+    Notes:
+      - Not all Zenodo records have PDFs; if no PDF is found in files, returns 404.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        # 1) Fetch record metadata and locate a PDF link
+        item, err = await loop.run_in_executor(None, Zenodo.get_record_by_id, record_id)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Zenodo record not found")
+        title_meta = item.get('title')
+        doi_meta = item.get('doi')
+        pdf_url = item.get('pdf_url')
+        # Fallback: inspect raw record to find a PDF if not present
+        if not pdf_url:
+            raw, raw_err = await loop.run_in_executor(None, Zenodo.get_record_raw, record_id)
+            if raw_err:
+                _handle_provider_error(raw_err)
+            if raw and isinstance(raw, dict):
+                pdf_url = Zenodo.extract_pdf_from_raw(raw)
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No PDF link found for this Zenodo record")
+
+        # 2) Download PDF
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="PDF returned 404 from Zenodo")
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="Zenodo PDF download returned empty content")
+
+        # 3) Process PDF
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"zenodo_{record_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "zenodo_record_id": record_id,
+            "doi": doi_meta,
+            "title": title_meta,
+            "pdf_url": pdf_url,
+            "source": "zenodo",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = title_meta or f"Zenodo {record_id}"
+        author_for_db = None
+
+        # 4) Optional: Build chunks for chunk-level FTS
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"zenodo:{record_id}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"Zenodo ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Zenodo ingest failed")
+
+
+# -------------------- Figshare Endpoints --------------------
+
+@router.get(
+    "/figshare",
+    response_model=GenericSearchResponse,
+    summary="Search Figshare records",
+    tags=["paper-search"],
+)
+async def figshare_search(
+    q: Optional[str] = Query(None, description="Free text to search in metadata"),
+    search_for: Optional[str] = Query(None, description="Advanced fielded search string, e.g., :title: frog"),
+    page: int = Query(1, ge=1),
+    results_per_page: int = Query(10, ge=1, le=1000),
+    order: Optional[str] = Query(None, description="Sort key, e.g., published_date"),
+    order_direction: Optional[str] = Query("desc", description="asc|desc"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(None, Figshare.search_articles, q, page, results_per_page, order, order_direction, search_for)
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="Figshare search failed to return data.")
+        total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
+        return GenericSearchResponse(
+            query_echo={"q": q, "search_for": search_for, "order": order, "order_direction": order_direction},
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Figshare search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Figshare error: {str(e)}")
+
+
+@router.get(
+    "/figshare/by-id",
+    response_model=GenericPaper,
+    summary="Get Figshare item by article ID",
+    tags=["paper-search"],
+)
+async def figshare_by_id(article_id: str = Query(..., min_length=1)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Figshare.get_article_by_id, article_id)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Figshare article not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Figshare by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Figshare by-id error: {str(e)}")
+
+
+@router.get(
+    "/figshare/by-doi",
+    response_model=GenericPaper,
+    summary="Get Figshare item by DOI (best-effort)",
+    tags=["paper-search"],
+)
+async def figshare_by_doi(doi: str = Query(..., min_length=3)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Figshare.get_article_by_doi, doi)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="Figshare item not found for DOI")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Figshare by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Figshare by-doi error: {str(e)}")
+
+
+@router.get(
+    "/figshare/oai",
+    summary="Figshare OAI-PMH passthrough (XML)",
+    tags=["paper-search"],
+)
+async def figshare_oai(
+    verb: str = Query(..., description="OAI verb"),
+    identifier: Optional[str] = Query(None),
+    metadataPrefix: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    resumptionToken: Optional[str] = Query(None),
+    set_name: Optional[str] = Query(None, alias="set"),
+):
+    loop = asyncio.get_running_loop()
+    params: Dict[str, Any] = {"verb": verb}
+    if identifier:
+        params["identifier"] = identifier
+    if metadataPrefix:
+        params["metadataPrefix"] = metadataPrefix
+    if from_date:
+        params["from"] = from_date
+    if until_date:
+        params["until"] = until_date
+    if resumptionToken:
+        params["resumptionToken"] = resumptionToken
+    if set_name:
+        params["set"] = set_name
+    content, media, err = await loop.run_in_executor(None, Figshare.oai_raw, params)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/xml")
+
+
+@router.post(
+    "/figshare/ingest",
+    summary="Download a Figshare PDF by Article ID, process, and persist",
+    tags=["paper-search"],
+)
+async def figshare_ingest(
+    article_id: str = Query(..., description="Figshare article ID (numeric)"),
+    keywords: Optional[str] = Query(None, description="Comma-separated keywords"),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        # 1) Fetch raw article and determine a PDF download URL
+        raw, err = await loop.run_in_executor(None, Figshare.get_article_raw, article_id)
+        if err:
+            _handle_provider_error(err)
+        if not raw:
+            raise HTTPException(status_code=404, detail="Figshare article not found")
+        pdf_url = Figshare.extract_pdf_download_url(raw)
+        title_meta = raw.get("title")
+        doi_meta = raw.get("doi")
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")
+
+        # 2) Download PDF
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="PDF returned 404 from Figshare")
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="Figshare PDF download returned empty content")
+
+        # 3) Process PDF
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"figshare_{article_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "figshare_article_id": article_id,
+            "doi": doi_meta,
+            "title": title_meta,
+            "pdf_url": pdf_url,
+            "source": "figshare",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = title_meta or f"Figshare {article_id}"
+        author_for_db = None
+
+        # 4) Optional chunk objects
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"figshare:{article_id}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"Figshare ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Figshare ingest failed")
+
+
+@router.post(
+    "/figshare/ingest-by-doi",
+    summary="Resolve Figshare record by DOI and ingest PDF",
+    tags=["paper-search"],
+)
+async def figshare_ingest_by_doi(
+    doi: str = Query(..., description="DOI, e.g., 10.6084/m9.figshare.5616409.v3"),
+    keywords: Optional[str] = Query(None, description="Comma-separated keywords"),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Convenience endpoint: resolves DOI to Figshare article, downloads its PDF, and ingests it."""
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Figshare.get_article_by_doi, doi)
+        if err:
+            _handle_provider_error(err)
+        if not item or not item.get("id"):
+            raise HTTPException(status_code=404, detail="Figshare item not found for DOI")
+        # Reuse ingestion logic using article_id
+        article_id = str(item["id"])  # normalized GenericPaper id is a string
+
+        # Fetch raw and proceed as in figshare_ingest
+        raw, err2 = await loop.run_in_executor(None, Figshare.get_article_raw, article_id)
+        if err2:
+            _handle_provider_error(err2)
+        if not raw:
+            raise HTTPException(status_code=404, detail="Figshare article not found")
+        pdf_url = Figshare.extract_pdf_download_url(raw)
+        title_meta = raw.get("title")
+        doi_meta = raw.get("doi")
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")
+
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="PDF returned 404 from Figshare")
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="Figshare PDF download returned empty content")
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"figshare_{article_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "figshare_article_id": article_id,
+            "doi": doi_meta or doi,
+            "title": title_meta,
+            "pdf_url": pdf_url,
+            "source": "figshare",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = title_meta or f"Figshare {article_id}"
+        author_for_db = None
+
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"figshare:{article_id}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"Figshare ingest-by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Figshare ingest-by-doi failed")
+
+# -------------------- HAL.science Endpoints --------------------
+
+@router.get(
+    "/hal",
+    response_model=GenericSearchResponse,
+    summary="Search HAL (Solr-like)",
+    tags=["paper-search"],
+)
+async def hal_search(
+    q: str = Query("*:*", description="Solr-like query (e.g., title_t:japon)"),
+    page: int = Query(1, ge=1),
+    results_per_page: int = Query(10, ge=1, le=1000),
+    fl: Optional[str] = Query(None, description="Fields list (fl=...)"),
+    fq: Optional[str] = Query(None, description="Filter query (repeat with &fq=...)"),
+    sort: Optional[str] = Query(None, description="Sort (e.g., docid asc)"),
+    scope: Optional[str] = Query(None, description="Portal or COLLECTION scope segment, e.g., 'tel' or 'FRANCE-GRILLES'"),
+):
+    loop = asyncio.get_running_loop()
+    start = (page - 1) * results_per_page
+    fqs = [fq] if fq else None
+    try:
+        items, total, err = await loop.run_in_executor(None, HAL.search, q, start, results_per_page, fl, fqs, sort, scope)
+        if err:
+            _handle_provider_error(err)
+        if items is None:
+            raise HTTPException(status_code=500, detail="HAL search failed to return data.")
+        total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
+        return GenericSearchResponse(
+            query_echo={"q": q, "fl": fl, "fq": fqs, "sort": sort, "scope": scope},
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected HAL search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected HAL error: {str(e)}")
+
+
+@router.get(
+    "/hal/raw",
+    summary="HAL raw passthrough (wt=json|xml|xml-tei|csv|bibtex|endnote|atom|rss)",
+    tags=["paper-search"],
+)
+async def hal_raw(
+    q: str = Query("*:*"),
+    wt: str = Query("json"),
+    fl: Optional[str] = Query(None),
+    rows: int = Query(10, ge=0, le=10000),
+    start: int = Query(0, ge=0),
+    fq: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+    indent: Optional[bool] = Query(None),
+    scope: Optional[str] = Query(None, description="Portal or COLLECTION scope segment"),
+):
+    loop = asyncio.get_running_loop()
+    params: Dict[str, Any] = {"q": q, "wt": wt, "rows": rows, "start": start}
+    if fl:
+        params["fl"] = fl
+    if fq:
+        params["fq"] = fq
+    if sort:
+        params["sort"] = sort
+    if indent is not None:
+        params["indent"] = "true" if indent else "false"
+    content, media, err = await loop.run_in_executor(None, HAL.raw, params, scope)
+    if err:
+        _handle_provider_error(err)
+    if not content:
+        raise HTTPException(status_code=404, detail="No content")
+    return Response(content=content, media_type=media or "application/octet-stream")
+
+
+@router.get(
+    "/hal/by-id",
+    response_model=GenericPaper,
+    summary="Get HAL document by docid",
+    tags=["paper-search"],
+)
+async def hal_by_id(docid: str = Query(..., min_length=1), scope: Optional[str] = Query(None)):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, HAL.by_docid, docid, None, scope)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="HAL doc not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected HAL by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected HAL by-id error: {str(e)}")
+
+
+@router.post(
+    "/hal/ingest",
+    summary="Download a HAL PDF by docid, process, and persist",
+    tags=["paper-search"],
+)
+async def hal_ingest(
+    docid: str = Query(..., description="HAL docid"),
+    scope: Optional[str] = Query(None, description="Portal or COLLECTION scope segment"),
+    keywords: Optional[str] = Query(None),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, HAL.by_docid, docid, None, scope)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="HAL doc not found")
+        raw_item = item  # already normalized includes pdf_url best-effort
+        pdf_url = (raw_item or {}).get("pdf_url") or None
+        title_meta = (raw_item or {}).get("title")
+        doi_meta = (raw_item or {}).get("doi")
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No PDF link found for this HAL document")
+
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="PDF returned 404 from HAL")
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="HAL PDF download returned empty content")
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"hal_{docid}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "hal_docid": docid,
+            "doi": doi_meta,
+            "title": title_meta,
+            "pdf_url": pdf_url,
+            "source": "hal",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = title_meta or f"HAL {docid}"
+        author_for_db = (raw_item or {}).get("authors")
+
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"hal:{docid}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"HAL ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="HAL ingest failed")
+
+# -------------------- viXra Endpoints --------------------
+
+@router.get(
+    "/vixra/by-id",
+    response_model=GenericPaper,
+    summary="Resolve a viXra ID to minimal metadata and PDF when possible",
+    tags=["paper-search"],
+)
+async def vixra_by_id(vid: str = Query(..., description="viXra ID, e.g., 1901.0001")):
+    loop = asyncio.get_running_loop()
+    item, err = await loop.run_in_executor(None, Vixra.get_vixra_by_id, vid)
+    if err:
+        _handle_provider_error(err)
+    if not item:
+        raise HTTPException(status_code=404, detail="viXra item not found")
+    return GenericPaper(**item)
+
+
+@router.post(
+    "/vixra/ingest",
+    summary="Download viXra PDF by ID, process, and persist",
+    tags=["paper-search"],
+)
+async def vixra_ingest(
+    vid: str = Query(..., description="viXra ID, e.g., 1901.0001"),
+    keywords: Optional[str] = Query(None),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, Vixra.get_vixra_by_id, vid)
+        if err:
+            _handle_provider_error(err)
+        if not item or not item.get('pdf_url'):
+            raise HTTPException(status_code=404, detail="viXra PDF not found for ID")
+        pdf_url = item['pdf_url']
+        # Download PDF
+        s = _http_session()
+        # Some sites (like viXra) require an Accept header to serve PDF
+        r = s.get(pdf_url, timeout=30, headers={"Accept": "application/pdf, */*"})
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="viXra PDF returned 404")
+        if r.status_code >= 400:
+            # Map any other upstream client/server errors to 502 for lenient behavior
+            raise HTTPException(status_code=502, detail=f"viXra PDF download error: {r.status_code}")
+        r.raise_for_status()
+        content = r.content
+        if not content:
+            raise HTTPException(status_code=502, detail="viXra PDF download returned empty content")
+
+        # Process
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"vixra_{vid}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content') or result.get('text')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "vixra_id": vid,
+            "title": item.get('title'),
+            "pdf_url": pdf_url,
+            "source": "vixra",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = item.get('title') or vid
+        author_for_db = None
+
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"vixra:{vid}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"viXra ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="viXra ingest failed")
+
+
+@router.get(
+    "/vixra/search",
+    response_model=GenericSearchResponse,
+    summary="Best-effort viXra search (HTML scrape)",
+    tags=["paper-search"],
+)
+async def vixra_search(
+    term: str = Query(..., min_length=2, description="Search term"),
+    page: int = Query(1, ge=1),
+    results_per_page: int = Query(10, ge=1, le=50),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, total, err = await loop.run_in_executor(None, Vixra.search, term, page, results_per_page)
+        if err:
+            _handle_provider_error(err)
+        items = items or []
+        total_pages = 1 if items else 0
+        return GenericSearchResponse(
+            query_echo={"term": term},
+            items=[GenericPaper(**it) for it in items],
+            total_results=total,
+            page=page,
+            results_per_page=results_per_page,
+            total_pages=total_pages,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected viXra search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected viXra error: {str(e)}")
 
 @router.get(
     "/arxiv/by-id",

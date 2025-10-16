@@ -22,7 +22,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, rbac_rate_limit
 
 # Unified Pipeline
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
@@ -31,6 +31,10 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
     simple_search,
     advanced_search,
     UnifiedSearchResult
+)
+from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+    agentic_rag_pipeline,
+    AgenticConfig,
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MultiDatabaseRetriever, RetrievalConfig
@@ -41,10 +45,13 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
     UnifiedRAGRequest,
     UnifiedRAGResponse,
     UnifiedBatchRequest,
-    UnifiedBatchResponse
+    UnifiedBatchResponse,
+    ImplicitFeedbackEvent,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 
-router = APIRouter(prefix="/api/v1/rag", tags=["RAG - Unified"])
+router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
 # Basic rate limiting using SlowAPI (consistent with other endpoints)
 try:
@@ -145,6 +152,142 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
     )
 
 
+# =============== Ablation helper ===============
+try:
+    from pydantic import BaseModel, Field
+except Exception:
+    BaseModel = object  # type: ignore
+    def Field(*a, **k):  # type: ignore
+        return None
+
+
+class AblationRequest(BaseModel):  # type: ignore[misc]
+    query: str = Field(..., description="Query to ablate")
+    top_k: int = Field(10, ge=1, le=50, description="Retrieval top_k")
+    search_mode: str = Field("hybrid", description="fts|vector|hybrid")
+    with_answer: bool = Field(False, description="Generate answer in each condition")
+    agentic_top_k_docs: int = Field(3, ge=1, le=20)
+    agentic_window_chars: int = Field(1200, ge=200, le=20000)
+    agentic_max_tokens_read: int = Field(6000, ge=500, le=20000)
+    reranking_strategy: str = Field("flashrank", description="flashrank|cross_encoder|hybrid|llama_cpp|none")
+
+
+@router.post(
+    "/ablate",
+    summary="Run RAG ablations (baseline, +rerank, +agentic, +agentic strict)",
+    description="Compare retrieval/generation across baseline vs reranked vs agentic vs agentic(stricter extractive).",
+    dependencies=[Depends(check_rate_limit)]
+)
+async def rag_ablate(
+    request: AblationRequest,
+    current_user: User = Depends(get_request_user),
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    db_paths = {
+        "media_db_path": media_db.db_path if media_db else None,
+        "notes_db_path": chacha_db.db_path if chacha_db else None,
+        "character_db_path": chacha_db.db_path if chacha_db else None,
+    }
+
+    common = dict(
+        query=request.query,
+        sources=["media_db"],
+        media_db_path=db_paths["media_db_path"],
+        notes_db_path=db_paths["notes_db_path"],
+        character_db_path=db_paths["character_db_path"],
+        media_db=media_db,
+        chacha_db=chacha_db,
+        search_mode=request.search_mode,
+        top_k=request.top_k,
+        min_score=0.0,
+        enable_generation=bool(request.with_answer),
+        generation_model=None,
+        max_generation_tokens=300,
+    )
+
+    runs = []
+
+    # 1) Baseline (no reranking)
+    r1 = await unified_rag_pipeline(
+        **common,
+        enable_reranking=False,
+    )
+    runs.append({
+        "label": "baseline",
+        "result": convert_result_to_response(r1)
+    })
+
+    # 2) +rerank
+    r2 = await unified_rag_pipeline(
+        **common,
+        enable_reranking=True,
+        reranking_strategy=request.reranking_strategy,
+    )
+    runs.append({
+        "label": "+rerank",
+        "result": convert_result_to_response(r2)
+    })
+
+    # 3) agentic
+    a_cfg = AgenticConfig(
+        top_k_docs=request.agentic_top_k_docs,
+        window_chars=request.agentic_window_chars,
+        max_tokens_read=request.agentic_max_tokens_read,
+        max_tool_calls=6,
+        extractive_only=True,
+        quote_spans=True,
+        enable_tools=False,
+        debug_trace=False,
+    )
+    r3 = await agentic_rag_pipeline(
+        **common,
+        agentic=a_cfg,
+        enable_citations=False,
+    )
+    runs.append({
+        "label": "agentic",
+        "result": convert_result_to_response(r3)
+    })
+
+    # 4) agentic (strict): tools on, extractive only, small budget
+    a_cfg_strict = AgenticConfig(
+        top_k_docs=max(1, request.agentic_top_k_docs),
+        window_chars=max(600, int(request.agentic_window_chars / 2)),
+        max_tokens_read=max(1000, int(request.agentic_max_tokens_read / 2)),
+        max_tool_calls=4,
+        extractive_only=True,
+        quote_spans=True,
+        enable_tools=True,
+        time_budget_sec=5.0,
+        debug_trace=False,
+    )
+    r4 = await agentic_rag_pipeline(
+        **common,
+        agentic=a_cfg_strict,
+        enable_citations=False,
+    )
+    runs.append({
+        "label": "agentic_strict",
+        "result": convert_result_to_response(r4)
+    })
+
+    # Compact output for quick comparison
+    out = []
+    for item in runs:
+        res = item["result"]
+        first = (res.documents[0] if res.documents else None)
+        out.append({
+            "label": item["label"],
+            "total_time": res.total_time,
+            "cache_hit": res.cache_hit,
+            "doc_count": len(res.documents or []),
+            "first_doc_id": (first.get("id") if isinstance(first, dict) else getattr(first, 'id', None)) if first else None,
+        })
+
+    return {"summary": out, "runs": runs}
+
+
 @router.get(
     "/capabilities",
     summary="Capabilities",
@@ -162,7 +305,80 @@ async def get_capabilities(request: Request):
     settings = get_settings()
 
     # High-level features supported by the pipeline
+    import os as _os
+    # Resolve environment-defaults for VLM
+    vlm_defaults = {
+        "VLM_TABLE_MODEL_NAME": _os.getenv("VLM_TABLE_MODEL_NAME", "microsoft/table-transformer-detection"),
+        "VLM_TABLE_REVISION": _os.getenv("VLM_TABLE_REVISION", None),
+        "VLM_TABLE_THRESHOLD": _os.getenv("VLM_TABLE_THRESHOLD", "0.9"),
+    }
+
     features = {
+        "agentic_chunking": {
+            "supported": True,
+            "strategies": ["standard", "agentic"],
+            "parameters": [
+                "strategy",
+                "agentic_top_k_docs",
+                "agentic_window_chars",
+                "agentic_max_tokens_read",
+                "agentic_max_tool_calls",
+                "agentic_enable_tools",
+                "agentic_use_llm_planner",
+                "agentic_time_budget_sec",
+                "agentic_cache_ttl_sec",
+                "agentic_enable_query_decomposition",
+                "agentic_subgoal_max",
+                "agentic_enable_semantic_within",
+                "agentic_enable_section_index",
+                "agentic_prefer_structural_anchors",
+                "agentic_enable_table_support",
+                "agentic_enable_vlm_late_chunking",
+                "agentic_vlm_backend",
+                "agentic_vlm_detect_tables_only",
+                "agentic_vlm_max_pages",
+                "agentic_vlm_late_chunk_top_k_docs",
+                "agentic_use_provider_embeddings_within",
+                "agentic_provider_embedding_model_id",
+                "agentic_extractive_only",
+                "agentic_quote_spans",
+                "agentic_debug_trace",
+                "agentic_adaptive_budgets",
+                "agentic_coverage_target",
+                "agentic_min_corroborating_docs",
+                "agentic_max_redundancy",
+                "agentic_enable_metrics",
+                "explain_only",
+            ],
+            "defaults": {
+                "strategy": "standard",
+                "agentic_top_k_docs": 3,
+                "agentic_window_chars": 1200,
+                "agentic_max_tokens_read": 6000,
+                "agentic_max_tool_calls": 8,
+                "agentic_enable_tools": False,
+                "agentic_use_llm_planner": False,
+                "agentic_cache_ttl_sec": 600,
+                "agentic_enable_query_decomposition": False,
+                "agentic_subgoal_max": 3,
+                "agentic_enable_semantic_within": True,
+                "agentic_enable_section_index": True,
+                "agentic_prefer_structural_anchors": True,
+                "agentic_enable_table_support": True,
+                "agentic_enable_vlm_late_chunking": False,
+                "agentic_vlm_backend": None,
+                "agentic_vlm_detect_tables_only": True,
+                "agentic_vlm_max_pages": None,
+                "agentic_vlm_late_chunk_top_k_docs": 2,
+                "agentic_use_provider_embeddings_within": False,
+                "agentic_provider_embedding_model_id": None,
+                "agentic_adaptive_budgets": True,
+                "agentic_coverage_target": 0.8,
+                "agentic_min_corroborating_docs": 2,
+                "agentic_max_redundancy": 0.9,
+                "agentic_enable_metrics": True,
+            },
+        },
         "query_expansion": {
             "supported": True,
             "methods": ["acronym", "synonym", "domain", "entity"],
@@ -199,21 +415,45 @@ async def get_capabilities(request: Request):
             "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
             "include_page_numbers": True
         },
+        "guardrails": {
+            "supported": True,
+            "require_hard_citations": True,
+            "notes": "When require_hard_citations=true and coverage<1.0, agentic path abstains with a succinct message"
+        },
         "answer_generation": {
             "supported": True,
             "configurable_model": True
         },
         "reranking": {
             "supported": True,
-            "strategies": ["flashrank", "cross_encoder", "hybrid"],
+            "strategies": ["flashrank", "cross_encoder", "hybrid", "llama_cpp"],
             "models": [
                 "flashrank", 
-                "cross-encoder/ms-marco-MiniLM-L-12-v2"
+                "cross-encoder (e.g., BAAI/bge-reranker-v2-m3, Jina reranker)",
+                "GGUF via llama.cpp (e.g., Qwen3-Embedding-0.6B_f16.gguf, BGE/Jina GGUF)"
             ]
         },
         "table_processing": {
             "supported": True,
             "methods": ["markdown", "html", "hybrid"]
+        },
+        "vlm_late_chunking": {
+            "supported": True,
+            "backends": ["docling", "hf_table_transformer"],
+            "parameters": [
+                "enable_vlm_late_chunking",
+                "vlm_backend",
+                "vlm_detect_tables_only",
+                "vlm_max_pages",
+                "vlm_late_chunk_top_k_docs"
+            ],
+            "env": [
+                "VLM_TABLE_MODEL_NAME",
+                "VLM_TABLE_REVISION",
+                "VLM_TABLE_THRESHOLD"
+            ],
+            "defaults": vlm_defaults,
+            "note": "Env defaults reflect current process environment; Table Transformer threshold is 0.9 by default."
         },
         "enhanced_chunking": {
             "supported": True,
@@ -264,6 +504,24 @@ async def get_capabilities(request: Request):
         "user_context": {
             "supported": True,
             "fields": ["user_id", "session_id"]
+        },
+        "webui": {
+            "supported": True,
+            "controls": [
+                "strategy",
+                "agentic_enable_tools",
+                "agentic_max_tool_calls",
+                "agentic_max_tokens_read",
+                "agentic_adaptive_budgets",
+                "agentic_time_budget_sec",
+                "require_hard_citations",
+                "enable_numeric_fidelity",
+                "agentic_enable_query_decomposition",
+                "agentic_enable_vlm_late_chunking"
+            ],
+            "explain_panel": True,
+            "highlight_spans": True,
+            "section_anchors": True
         }
     }
 
@@ -309,6 +567,75 @@ async def get_capabilities(request: Request):
         "user_scoped": True
     }
 
+    quick_start = {
+        "agentic_search": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "Summarize key findings of ResNet",
+                "strategy": "agentic",
+                "search_mode": "hybrid",
+                "top_k": 8,
+                "enable_generation": False,
+                "agentic_enable_tools": True,
+                "agentic_max_tool_calls": 6
+            }
+        },
+        "agentic_verify": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "How many experiments were run and what supported the conclusion?",
+                "strategy": "agentic",
+                "enable_generation": True,
+                "require_hard_citations": True,
+                "enable_numeric_fidelity": True,
+                "numeric_fidelity_behavior": "continue"
+            }
+        },
+        "agentic_explain": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "Explain residual connections and dropout",
+                "strategy": "agentic",
+                "enable_generation": False,
+                "explain_only": True,
+                "agentic_enable_tools": True,
+                "agentic_enable_query_decomposition": True
+            }
+        },
+        "agentic_multihop_vlm": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "Compare accuracy tables for ResNet vs EfficientNet across datasets",
+                "strategy": "agentic",
+                "search_mode": "hybrid",
+                "top_k": 8,
+                "enable_generation": False,
+                "agentic_enable_tools": True,
+                "agentic_enable_query_decomposition": True,
+                "agentic_subgoal_max": 3,
+                "agentic_enable_vlm_late_chunking": True,
+                "agentic_vlm_backend": "hf_table_transformer",
+                "agentic_vlm_detect_tables_only": True,
+                "agentic_vlm_late_chunk_top_k_docs": 2
+            }
+        },
+        "ablate": {
+            "endpoint": "/api/v1/rag/ablate",
+            "method": "POST",
+            "body": {
+                "query": "How does dropout prevent overfitting?",
+                "top_k": 10,
+                "search_mode": "hybrid",
+                "with_answer": False,
+                "reranking_strategy": "none"
+            }
+        }
+    }
+
     return {
         "pipeline": "unified",
         "version": "1.0.0",
@@ -316,7 +643,8 @@ async def get_capabilities(request: Request):
         "search": search,
         "defaults": defaults,
         "limits": limits,
-        "auth": auth
+        "auth": auth,
+        "quick_start": quick_start,
     }
 
 
@@ -352,7 +680,7 @@ async def get_capabilities(request: Request):
     except the query itself.
     """,
     response_description="Search results with all requested features applied",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[Depends(check_rate_limit), Depends(rbac_rate_limit("rag.search"))]
 )
 async def unified_search_endpoint(
     request_raw: Request,
@@ -371,6 +699,31 @@ async def unified_search_endpoint(
     """
     try:
         logger.info(f"Unified RAG search: query='{request.query}', user={current_user.username if current_user else 'anonymous'}")
+        # Topic monitoring (non-blocking) for query text
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            uid = (current_user.username if current_user else request.user_id) or None
+            team_ids = None
+            org_ids = None
+            try:
+                if hasattr(request_raw, 'state'):
+                    team_ids = getattr(request_raw.state, 'team_ids', None)
+                    org_ids = getattr(request_raw.state, 'org_ids', None)
+            except Exception:
+                pass
+            if request.query:
+                mon.evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=request.query,
+                    source="rag.search",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                    team_ids=team_ids,
+                    org_ids=org_ids,
+                )
+        except Exception:
+            pass
         
         # Set up database paths
         db_paths = {
@@ -380,22 +733,97 @@ async def unified_search_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
         
-        # Execute unified pipeline with all parameters from request
-        result = await unified_rag_pipeline(
-            # Core parameters
-            query=request.query,
-            sources=request.sources,
-            
-            # Database paths
-            media_db_path=db_paths.get("media_db_path"),
-            notes_db_path=db_paths.get("notes_db_path"),
-            character_db_path=db_paths.get("character_db_path"),
-            
-            # Search configuration
-            search_mode=request.search_mode,
-            hybrid_alpha=request.hybrid_alpha,
-            top_k=request.top_k,
-            min_score=request.min_score,
+        # Branch: agentic strategy builds a synthetic chunk at query time
+        if getattr(request, 'strategy', 'standard') == 'agentic':
+            agentic_cfg = AgenticConfig(
+                top_k_docs=int(getattr(request, 'agentic_top_k_docs', 3) or 3),
+                window_chars=int(getattr(request, 'agentic_window_chars', 1200) or 1200),
+                max_tokens_read=int(getattr(request, 'agentic_max_tokens_read', 6000) or 6000),
+                max_tool_calls=int(getattr(request, 'agentic_max_tool_calls', 8) or 8),
+                extractive_only=bool(getattr(request, 'agentic_extractive_only', True)),
+                quote_spans=bool(getattr(request, 'agentic_quote_spans', True)),
+                enable_tools=bool(getattr(request, 'agentic_enable_tools', False)),
+                use_llm_planner=bool(getattr(request, 'agentic_use_llm_planner', False)),
+                time_budget_sec=(getattr(request, 'agentic_time_budget_sec', None)),
+                cache_ttl_sec=int(getattr(request, 'agentic_cache_ttl_sec', 600) or 600),
+                debug_trace=bool(getattr(request, 'agentic_debug_trace', False) or request.debug_mode),
+                enable_query_decomposition=bool(getattr(request, 'agentic_enable_query_decomposition', False)),
+                subgoal_max=int(getattr(request, 'agentic_subgoal_max', 3) or 3),
+                enable_semantic_within=bool(getattr(request, 'agentic_enable_semantic_within', True)),
+                enable_section_index=bool(getattr(request, 'agentic_enable_section_index', True)),
+                prefer_structural_anchors=bool(getattr(request, 'agentic_prefer_structural_anchors', True)),
+                enable_table_support=bool(getattr(request, 'agentic_enable_table_support', True)),
+                agentic_enable_vlm_late_chunking=bool(getattr(request, 'agentic_enable_vlm_late_chunking', False)),
+                agentic_vlm_backend=getattr(request, 'agentic_vlm_backend', None),
+                agentic_vlm_detect_tables_only=bool(getattr(request, 'agentic_vlm_detect_tables_only', True)),
+                agentic_vlm_max_pages=getattr(request, 'agentic_vlm_max_pages', None),
+                agentic_vlm_late_chunk_top_k_docs=int(getattr(request, 'agentic_vlm_late_chunk_top_k_docs', 2) or 2),
+                agentic_use_provider_embeddings_within=bool(getattr(request, 'agentic_use_provider_embeddings_within', False)),
+                agentic_provider_embedding_model_id=getattr(request, 'agentic_provider_embedding_model_id', None),
+                # new adaptive/metrics knobs
+                adaptive_budgets=bool(getattr(request, 'agentic_adaptive_budgets', True)),
+                coverage_target=float(getattr(request, 'agentic_coverage_target', 0.8) or 0.8),
+                min_corroborating_docs=int(getattr(request, 'agentic_min_corroborating_docs', 2) or 2),
+                max_redundancy=float(getattr(request, 'agentic_max_redundancy', 0.9) or 0.9),
+                enable_metrics=bool(getattr(request, 'agentic_enable_metrics', True)),
+            )
+
+            result = await agentic_rag_pipeline(
+                query=request.query,
+                sources=request.sources,
+                media_db=media_db,
+                chacha_db=chacha_db,
+                media_db_path=db_paths.get("media_db_path"),
+                notes_db_path=db_paths.get("notes_db_path"),
+                character_db_path=db_paths.get("character_db_path"),
+                search_mode=request.search_mode,
+                fts_level=request.fts_level,
+                hybrid_alpha=request.hybrid_alpha,
+                top_k=request.top_k,
+                min_score=request.min_score,
+                index_namespace=(request.index_namespace or request.corpus),
+                agentic=agentic_cfg,
+                enable_generation=request.enable_generation,
+                generation_model=request.generation_model,
+                generation_prompt=request.generation_prompt,
+                max_generation_tokens=request.max_generation_tokens,
+                enable_citations=request.enable_citations,
+                include_chunk_citations=request.enable_chunk_citations,
+                debug_mode=request.debug_mode,
+                # expose verification flags on agentic path
+                require_hard_citations=bool(getattr(request, 'require_hard_citations', False)),
+                enable_numeric_fidelity=bool(getattr(request, 'enable_numeric_fidelity', False)),
+                numeric_fidelity_behavior=str(getattr(request, 'numeric_fidelity_behavior', 'continue')),
+                enable_claims=bool(getattr(request, 'enable_claims', False)),
+                claim_verifier=str(getattr(request, 'claim_verifier', 'hybrid')),
+                claims_top_k=int(getattr(request, 'claims_top_k', 5) or 5),
+                claims_conf_threshold=float(getattr(request, 'claims_conf_threshold', 0.7) or 0.7),
+                claims_max=int(getattr(request, 'claims_max', 25) or 25),
+                nli_model=getattr(request, 'nli_model', None),
+                claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
+            )
+        else:
+            # Execute unified pipeline with all parameters from request
+            result = await unified_rag_pipeline(
+                # Core parameters
+                query=request.query,
+                sources=request.sources,
+                
+                # Database paths
+                media_db_path=db_paths.get("media_db_path"),
+                notes_db_path=db_paths.get("notes_db_path"),
+                character_db_path=db_paths.get("character_db_path"),
+                # Database adapters (prefer adapters over raw SQL fallbacks)
+                media_db=media_db,
+                chacha_db=chacha_db,
+                
+                # Search configuration
+                search_mode=request.search_mode,
+                fts_level=request.fts_level,
+                hybrid_alpha=request.hybrid_alpha,
+                enable_intent_routing=request.enable_intent_routing,
+                top_k=request.top_k,
+                min_score=request.min_score,
             
             # Query expansion
             expand_query=request.expand_query,
@@ -409,6 +837,8 @@ async def unified_search_endpoint(
             
             # Filtering
             keyword_filter=request.keyword_filter,
+            include_media_ids=request.include_media_ids,
+            include_note_ids=request.include_note_ids,
             
             # Security
             enable_security_filter=request.enable_security_filter,
@@ -420,6 +850,12 @@ async def unified_search_endpoint(
             # Document processing
             enable_table_processing=request.enable_table_processing,
             table_method=request.table_method,
+            # VLM late chunking
+            enable_vlm_late_chunking=request.enable_vlm_late_chunking,
+            vlm_backend=request.vlm_backend,
+            vlm_detect_tables_only=request.vlm_detect_tables_only,
+            vlm_max_pages=request.vlm_max_pages,
+            vlm_late_chunk_top_k_docs=request.vlm_late_chunk_top_k_docs,
             
             # Chunking
             chunk_type_filter=request.chunk_type_filter,
@@ -429,11 +865,20 @@ async def unified_search_endpoint(
             sibling_window=request.sibling_window,
             include_parent_document=request.include_parent_document,
             parent_max_tokens=request.parent_max_tokens,
+
+            # Advanced retrieval
+            enable_multi_vector_passages=request.enable_multi_vector_passages,
+            mv_span_chars=request.mv_span_chars,
+            mv_stride=request.mv_stride,
+            mv_max_spans=request.mv_max_spans,
+            mv_flatten_to_spans=request.mv_flatten_to_spans,
+            enable_numeric_table_boost=getattr(request, 'enable_numeric_table_boost', False),
             
             # Reranking
             enable_reranking=request.enable_reranking,
             reranking_strategy=request.reranking_strategy,
             rerank_top_k=request.rerank_top_k,
+            reranking_model=request.reranking_model,
             
             # Citations
             enable_citations=request.enable_citations,
@@ -446,6 +891,26 @@ async def unified_search_endpoint(
             generation_model=request.generation_model,
             generation_prompt=request.generation_prompt,
             max_generation_tokens=request.max_generation_tokens,
+            enable_abstention=getattr(request, 'enable_abstention', False),
+            abstention_behavior=getattr(request, 'abstention_behavior', 'continue'),
+            enable_multi_turn_synthesis=getattr(request, 'enable_multi_turn_synthesis', False),
+            synthesis_time_budget_sec=getattr(request, 'synthesis_time_budget_sec', None),
+            synthesis_draft_tokens=getattr(request, 'synthesis_draft_tokens', None),
+            synthesis_refine_tokens=getattr(request, 'synthesis_refine_tokens', None),
+
+            # Post-verification (adaptive)
+            enable_post_verification=request.enable_post_verification,
+            adaptive_max_retries=request.adaptive_max_retries,
+            adaptive_unsupported_threshold=request.adaptive_unsupported_threshold,
+            adaptive_max_claims=request.adaptive_max_claims,
+            adaptive_time_budget_sec=request.adaptive_time_budget_sec,
+            low_confidence_behavior=request.low_confidence_behavior,
+            adaptive_advanced_rewrites=getattr(request, 'adaptive_advanced_rewrites', None),
+            adaptive_rerun_on_low_confidence=getattr(request, 'adaptive_rerun_on_low_confidence', False),
+            adaptive_rerun_include_generation=getattr(request, 'adaptive_rerun_include_generation', True),
+            adaptive_rerun_bypass_cache=getattr(request, 'adaptive_rerun_bypass_cache', False),
+            adaptive_rerun_time_budget_sec=getattr(request, 'adaptive_rerun_time_budget_sec', None),
+            adaptive_rerun_doc_budget=getattr(request, 'adaptive_rerun_doc_budget', None),
 
             # Claims & factuality
             enable_claims=request.enable_claims,
@@ -454,6 +919,7 @@ async def unified_search_endpoint(
             claims_top_k=request.claims_top_k,
             claims_conf_threshold=request.claims_conf_threshold,
             claims_max=request.claims_max,
+            claims_concurrency=request.claims_concurrency,
             nli_model=request.nli_model,
             
             # Feedback
@@ -518,6 +984,33 @@ async def unified_search_endpoint(
 
 
 @router.post(
+    "/feedback/implicit",
+    summary="Record implicit RAG feedback",
+    description="Capture click/expand/copy signals from the WebUI for learning-to-rank and personalization.",
+    dependencies=[Depends(check_rate_limit)]
+)
+async def rag_implicit_feedback(
+    request: ImplicitFeedbackEvent,
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        user_id = request.user_id or (current_user.username if current_user else None)
+        collector = UnifiedFeedbackSystem()
+        await collector.record_implicit_interaction(
+            user_id=user_id,
+            query=request.query,
+            doc_id=request.doc_id,
+            event_type=request.event_type,
+            impression=request.impression_list or [],
+            corpus=request.corpus,
+        )
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"Failed to record implicit feedback: {e}")
+        raise HTTPException(status_code=400, detail="Could not record feedback")
+
+
+@router.post(
     "/batch",
     response_model=UnifiedBatchResponse,
     summary="Batch RAG Search",
@@ -555,15 +1048,17 @@ async def unified_batch_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
         
-        # Convert request to kwargs, excluding queries
-        kwargs = request.dict(exclude={"queries", "max_concurrent"})
+        # Convert request to kwargs, excluding queries (Pydantic compat)
+        kwargs = model_dump_compat(request, exclude={"queries", "max_concurrent"})
         kwargs.update(db_paths)
         kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
-        
+
         # Process batch
         results = await unified_batch_pipeline(
             queries=request.queries,
             max_concurrent=request.max_concurrent,
+            media_db=media_db,
+            chacha_db=chacha_db,
             **kwargs
         )
         
@@ -618,6 +1113,14 @@ async def simple_search_endpoint(
     """
     try:
         logger.info(f"Simple search: query='{query}'")
+        # Topic monitoring (non-blocking)
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            # simple endpoint has no user dependency; best-effort from query param user_id if any later
+            mon.evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
+        except Exception:
+            pass
         
         # Use the simple_search wrapper
         documents = await simple_search(query, top_k)
@@ -674,15 +1177,25 @@ async def unified_search_stream_endpoint(
             try:
                 if db_paths:
                     try:
-                        retriever = MultiDatabaseRetriever(db_paths, user_id=current_user.username if current_user else "0")
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=current_user.username if current_user else "0",
+                            media_db=media_db,
+                            chacha_db=chacha_db,
+                        )
                     except TypeError:
-                        retriever = MultiDatabaseRetriever(db_paths)
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=current_user.username if current_user else "0",
+                            media_db=media_db,
+                        )
                     config = RetrievalConfig(
                         max_results=request.top_k,
                         min_score=request.min_score,
                         use_fts=(request.search_mode in ["fts", "hybrid"]),
                         use_vector=(request.search_mode in ["vector", "hybrid"]),
                         include_metadata=True,
+                        fts_level=request.fts_level,
                     )
                     # Determine sources
                     src_map = {"media_db": DataSource.MEDIA_DB, "notes": DataSource.NOTES, "characters": DataSource.CHARACTER_CARDS, "chats": DataSource.CHARACTER_CARDS}
@@ -697,6 +1210,108 @@ async def unified_search_stream_endpoint(
             except Exception:
                 docs = []
 
+            # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
+            if getattr(request, 'strategy', 'standard') == 'agentic':
+                try:
+                    # Run agentic assembly without generation
+                    a_cfg = AgenticConfig(
+                        top_k_docs=int(getattr(request, 'agentic_top_k_docs', 3) or 3),
+                        window_chars=int(getattr(request, 'agentic_window_chars', 1200) or 1200),
+                        max_tokens_read=int(getattr(request, 'agentic_max_tokens_read', 6000) or 6000),
+                        max_tool_calls=int(getattr(request, 'agentic_max_tool_calls', 8) or 8),
+                        extractive_only=True,
+                        quote_spans=True,
+                        enable_tools=bool(getattr(request, 'agentic_enable_tools', False)),
+                        use_llm_planner=bool(getattr(request, 'agentic_use_llm_planner', False)),
+                        time_budget_sec=(getattr(request, 'agentic_time_budget_sec', None)),
+                        cache_ttl_sec=int(getattr(request, 'agentic_cache_ttl_sec', 600) or 600),
+                        debug_trace=bool(getattr(request, 'agentic_debug_trace', False) or request.debug_mode),
+                        enable_query_decomposition=bool(getattr(request, 'agentic_enable_query_decomposition', False)),
+                        subgoal_max=int(getattr(request, 'agentic_subgoal_max', 3) or 3),
+                        enable_semantic_within=bool(getattr(request, 'agentic_enable_semantic_within', True)),
+                        enable_section_index=bool(getattr(request, 'agentic_enable_section_index', True)),
+                        prefer_structural_anchors=bool(getattr(request, 'agentic_prefer_structural_anchors', True)),
+                        enable_table_support=bool(getattr(request, 'agentic_enable_table_support', True)),
+                        agentic_enable_vlm_late_chunking=bool(getattr(request, 'agentic_enable_vlm_late_chunking', False)),
+                        agentic_vlm_backend=getattr(request, 'agentic_vlm_backend', None),
+                        agentic_vlm_detect_tables_only=bool(getattr(request, 'agentic_vlm_detect_tables_only', True)),
+                        agentic_vlm_max_pages=getattr(request, 'agentic_vlm_max_pages', None),
+                        agentic_vlm_late_chunk_top_k_docs=int(getattr(request, 'agentic_vlm_late_chunk_top_k_docs', 2) or 2),
+                        agentic_use_provider_embeddings_within=bool(getattr(request, 'agentic_use_provider_embeddings_within', False)),
+                        agentic_provider_embedding_model_id=getattr(request, 'agentic_provider_embedding_model_id', None),
+                    )
+                    ares = await agentic_rag_pipeline(
+                        query=request.query,
+                        sources=request.sources,
+                        media_db=media_db,
+                        chacha_db=chacha_db,
+                        media_db_path=(media_db.db_path if media_db else None),
+                        notes_db_path=(chacha_db.db_path if chacha_db else None),
+                        character_db_path=(chacha_db.db_path if chacha_db else None),
+                        search_mode=request.search_mode,
+                        fts_level=request.fts_level,
+                        top_k=request.top_k,
+                        min_score=request.min_score,
+                        agentic=a_cfg,
+                        enable_generation=False,
+                        enable_citations=False,
+                        include_chunk_citations=False,
+                debug_mode=request.debug_mode,
+                explain_only=bool(getattr(request, 'explain_only', False)),
+            )
+                    # Emit plan + spans
+                    plan = ares.metadata.get('agentic_metrics', {}) if isinstance(ares.metadata, dict) else {}
+                    yield json.dumps({"type": "plan", "plan": plan}) + "\n"
+                    prov = ares.metadata.get('provenance') if isinstance(ares.metadata, dict) else None
+                    if prov:
+                        yield json.dumps({"type": "spans", "count": len(prov), "provenance": prov[:50]}) + "\n"
+                    # Use synthetic chunk as the sole document for streaming generation
+                    docs = ares.documents
+                except Exception:
+                    pass
+
+            # Emit initial contexts (top-k with minimal fields) + a safe rationale plan (standard path)
+            try:
+                top_contexts = []
+                for doc in (docs or [])[: min(10, (request.top_k or 10))]:
+                    md = getattr(doc, 'metadata', None) or (doc.get('metadata') if isinstance(doc, dict) else {}) or {}
+                    top_contexts.append({
+                        "id": getattr(doc, 'id', doc.get('id') if isinstance(doc, dict) else None),
+                        "title": (md.get('title') if isinstance(md, dict) else None),
+                        "score": float(getattr(doc, 'score', md.get('score', 0.0) if isinstance(md, dict) else 0.0) or 0.0),
+                        "url": md.get('url') if isinstance(md, dict) else None,
+                        "source": md.get('source') if isinstance(md, dict) else None,
+                    })
+                # Lightweight "why these sources" summary
+                def _safe_float(x):
+                    try:
+                        return float(x)
+                    except Exception:
+                        return 0.0
+                scores = [_safe_float(getattr(d, 'score', (getattr(d, 'metadata', {}) or {}).get('score', 0.0))) for d in (docs or [])]
+                topicality = 0.0
+                if scores:
+                    smin, smax = min(scores), max(scores)
+                    topicality = (sum((s - smin) / (smax - smin) if smax > smin else 1.0 for s in scores) / len(scores)) if scores else 0.0
+                why = {
+                    "topicality": round(float(topicality), 4),
+                    "diversity": None,  # full computation available in non-streaming pipeline metadata
+                    "freshness": None,
+                }
+                yield json.dumps({"type": "contexts", "contexts": top_contexts, "why": why}) + "\n"
+                # Safe partial rationale (no chain leakage)
+                rationale = {
+                    "plan": [
+                        "Gather top-k contexts",
+                        f"Rerank using strategy={getattr(request, 'reranking_strategy', 'flashrank')}",
+                        "Ground claims from sources",
+                        "Synthesize final answer",
+                    ]
+                }
+                yield json.dumps({"type": "reasoning", **rationale}) + "\n"
+            except Exception:
+                pass
+
             # Minimal context for generation
             context = types.SimpleNamespace()
             context.documents = docs
@@ -710,6 +1325,7 @@ async def unified_search_stream_endpoint(
                 enable_claims=request.enable_claims,
                 claims_top_k=request.claims_top_k,
                 claims_max=request.claims_max,
+                claims_concurrency=request.claims_concurrency,
             )
 
             last_overlay = None
@@ -762,6 +1378,13 @@ async def advanced_search_endpoint(
     """
     try:
         logger.info(f"Advanced search: query='{query}'")
+        # Topic monitoring (non-blocking)
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            mon.evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
+        except Exception:
+            pass
         
         # Set up database paths
         db_paths = {
@@ -774,6 +1397,8 @@ async def advanced_search_endpoint(
             query=query,
             with_citations=with_citations,
             with_answer=with_answer,
+            media_db=media_db,
+            chacha_db=chacha_db,
             **db_paths
         )
         
@@ -797,59 +1422,75 @@ async def list_features():
     """
     List all available features in the unified pipeline.
     """
-    return {
-        "features": {
-            "query_expansion": {
+    features_out = {
+        "query_expansion": {
                 "description": "Expand queries with synonyms, acronyms, domain terms, and entities",
                 "parameters": ["expand_query", "expansion_strategies", "spell_check"]
-            },
-            "caching": {
+        },
+        "caching": {
                 "description": "Semantic caching with adaptive thresholds",
                 "parameters": ["enable_cache", "cache_threshold", "adaptive_cache"]
-            },
-            "security": {
+        },
+        "security": {
                 "description": "PII detection, content filtering, and access control",
                 "parameters": ["enable_security_filter", "detect_pii", "redact_pii", "sensitivity_level"]
-            },
-            "citations": {
+        },
+        "citations": {
                 "description": "Generate citations in various formats",
                 "parameters": ["enable_citations", "citation_style", "include_page_numbers"]
-            },
-            "generation": {
+        },
+        "generation": {
                 "description": "Generate answers from retrieved context",
                 "parameters": ["enable_generation", "generation_model", "generation_prompt"]
-            },
-            "reranking": {
+        },
+        "reranking": {
                 "description": "Rerank documents for better relevance",
                 "parameters": ["enable_reranking", "reranking_strategy", "rerank_top_k"]
-            },
-            "feedback": {
+        },
+        "feedback": {
                 "description": "Collect and apply user feedback",
                 "parameters": ["collect_feedback", "feedback_user_id", "apply_feedback_boost"]
-            },
-            "monitoring": {
+        },
+        "monitoring": {
                 "description": "Performance monitoring and observability",
                 "parameters": ["enable_monitoring", "enable_observability", "trace_id"]
-            },
-            "table_processing": {
+        },
+        "table_processing": {
                 "description": "Extract and process tables from documents",
                 "parameters": ["enable_table_processing", "table_method"]
-            },
-            "enhanced_chunking": {
+        },
+        "vlm_late_chunking": {
+                "description": "Add VLM-derived hints (tables/images) as late chunks from PDFs",
+                "parameters": [
+                    "enable_vlm_late_chunking",
+                    "vlm_backend",
+                    "vlm_detect_tables_only",
+                    "vlm_max_pages",
+                    "vlm_late_chunk_top_k_docs"
+                ]
+        },
+        "enhanced_chunking": {
                 "description": "Advanced document chunking with parent context",
                 "parameters": ["enable_enhanced_chunking", "chunk_type_filter", "enable_parent_expansion"]
-            },
-            "batch_processing": {
+        },
+        "batch_processing": {
                 "description": "Process multiple queries concurrently",
                 "parameters": ["enable_batch", "batch_queries", "batch_concurrent"]
-            },
-            "resilience": {
+        },
+        "resilience": {
                 "description": "Fault tolerance with retries and circuit breakers",
                 "parameters": ["enable_resilience", "retry_attempts", "circuit_breaker"]
-            }
-        },
-        "total_features": 12,
-        "total_parameters": 50
+        }
+    }
+
+    # Compute totals dynamically
+    total_features = len(features_out)
+    total_parameters = sum(len(v.get("parameters", [])) for v in features_out.values())
+
+    return {
+        "features": features_out,
+        "total_features": total_features,
+        "total_parameters": total_parameters
     }
 
 

@@ -124,7 +124,8 @@ def test_client(test_db):
             # Cleanup - don't clear, let the autouse fixture handle it
 
 
-@pytest.fixture
+import pytest_asyncio
+@pytest_asyncio.fixture
 async def async_test_client():
     """Create async test client for the actual FastAPI app."""
     async with AsyncClient(app=app, base_url="http://test") as client:
@@ -153,7 +154,7 @@ def auth_headers(test_client):
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     # Use X-API-KEY header as expected by the endpoint in single-user mode
-    api_key = settings.SINGLE_USER_API_KEY or "default-secret-key-for-single-user"
+    api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
     return {
         "X-API-KEY": api_key,
         "X-CSRF-Token": getattr(test_client, 'csrf_token', '')

@@ -334,36 +334,26 @@ class TestCaseIO:
         
         # Default fields
         fieldnames = ["name", "description"]
-        
+
         if signature_id:
             # Get signature to determine fields
-            conn = self.manager.db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT input_schema, output_schema
-                FROM prompt_studio_signatures
-                WHERE id = ? AND deleted = 0
-            """, (signature_id,))
-            
-            row = cursor.fetchone()
-            if row:
-                try:
-                    input_schema = json.loads(row[0]) if row[0] else []
-                    output_schema = json.loads(row[1]) if row[1] else []
-                    
-                    # Add input fields
-                    for field in input_schema:
-                        if isinstance(field, dict) and "name" in field:
-                            fieldnames.append(f"input.{field['name']}")
-                    
-                    # Add output fields
-                    for field in output_schema:
-                        if isinstance(field, dict) and "name" in field:
-                            fieldnames.append(f"expected.{field['name']}")
-                except:
-                    # Fall back to generic template
-                    fieldnames.extend(["input.text", "expected.result"])
+            signature = self.manager.db.get_signature(signature_id)
+            if signature:
+                input_schema = signature.get("input_schema") or []
+                output_schema = signature.get("output_schema") or []
+
+                if not isinstance(input_schema, list):
+                    input_schema = []
+                if not isinstance(output_schema, list):
+                    output_schema = []
+
+                for field in input_schema:
+                    if isinstance(field, dict) and "name" in field:
+                        fieldnames.append(f"input.{field['name']}")
+
+                for field in output_schema:
+                    if isinstance(field, dict) and "name" in field:
+                        fieldnames.append(f"expected.{field['name']}")
         else:
             # Generic template
             fieldnames.extend(["input.text", "expected.result"])
@@ -393,47 +383,36 @@ class TestCaseIO:
         return output.getvalue()
     
     def generate_json_template(self, signature_id: Optional[int] = None) -> str:
-        """
-        Generate a JSON template for test case import.
-        
-        Args:
-            signature_id: Optional signature ID to base template on
-            
-        Returns:
-            JSON template string
-        """
-        template = {
-            "version": "1.0",
-            "test_cases": []
-        }
-        
+        """Generate a JSON template for test case import."""
+
+        template = {"version": "1.0", "test_cases": []}
         example_case = {
             "name": "Example Test 1",
             "description": "This is an example test case",
             "inputs": {},
             "expected_outputs": {},
             "tags": ["example", "template"],
-            "is_golden": False
+            "is_golden": False,
         }
-        
+
+        def _load_schema(raw):
+            if raw is None:
+                return []
+            if isinstance(raw, (dict, list)):
+                return raw
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Invalid signature schema; using default template values")
+                return []
+
         if signature_id:
-            # Get signature to determine fields
-            conn = self.manager.db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT input_schema, output_schema
-                FROM prompt_studio_signatures
-                WHERE id = ? AND deleted = 0
-            """, (signature_id,))
-            
-            row = cursor.fetchone()
-            if row:
-                try:
-                    input_schema = json.loads(row[0]) if row[0] else []
-                    output_schema = json.loads(row[1]) if row[1] else []
-                    
-                    # Add input fields
+            signature = self.manager.db.get_signature(signature_id)
+            if signature:
+                input_schema = _load_schema(signature.get("input_schema"))
+                output_schema = _load_schema(signature.get("output_schema"))
+
+                if isinstance(input_schema, list):
                     for field in input_schema:
                         if isinstance(field, dict) and "name" in field:
                             field_type = field.get("type", "string")
@@ -447,8 +426,8 @@ class TestCaseIO:
                                 example_case["inputs"][field["name"]] = {}
                             else:
                                 example_case["inputs"][field["name"]] = "Sample value"
-                    
-                    # Add output fields
+
+                if isinstance(output_schema, list):
                     for field in output_schema:
                         if isinstance(field, dict) and "name" in field:
                             field_type = field.get("type", "string")
@@ -462,15 +441,11 @@ class TestCaseIO:
                                 example_case["expected_outputs"][field["name"]] = {}
                             else:
                                 example_case["expected_outputs"][field["name"]] = "Expected value"
-                except:
-                    # Fall back to generic template
-                    example_case["inputs"] = {"text": "Sample input"}
-                    example_case["expected_outputs"] = {"result": "Expected output"}
-        else:
-            # Generic template
+
+        if not example_case["inputs"]:
             example_case["inputs"] = {"text": "Sample input"}
+        if not example_case["expected_outputs"]:
             example_case["expected_outputs"] = {"result": "Expected output"}
-        
+
         template["test_cases"].append(example_case)
-        
         return json.dumps(template, indent=2)

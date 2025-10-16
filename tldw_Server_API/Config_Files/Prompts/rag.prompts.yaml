@@ -6,6 +6,15 @@ reranking_instruction: |
   Rerank the following candidates by how well they answer the query. Penalize verbose
   or off-topic matches. Promote entries that contain precise, verifiable statements.
 
+# Qwen3 reranker specific instruction used in the <Instruct>: ... block
+# Editable; default mirrors the official example.
+qwen3_reranker_instruction: |
+  Given a web search query, retrieve relevant passages that answer the query
+
+# Qwen3 reranker system message (ChatML system block). Editable.
+qwen3_reranker_system: |
+  Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".
+
 default_system: |
   You are a helpful AI assistant that provides accurate, well-reasoned answers based on the provided context.
 
@@ -24,4 +33,3 @@ with_citations: |
   4. Clearly indicate if information is not available in the sources
 
   Answer with citations:
-

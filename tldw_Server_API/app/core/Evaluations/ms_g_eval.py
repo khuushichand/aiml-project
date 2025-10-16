@@ -9,7 +9,7 @@
 import configparser
 import inspect
 import json
-import logging
+from loguru import logger
 import os
 import re
 from typing import Dict, Callable, List, Any
@@ -23,7 +23,7 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 #from tldw_Server_API.app.core.Chat.Chat_Functions import (
@@ -34,7 +34,7 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 #
 # Start of G-Eval.py
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 # Use the centralized config loading instead of hardcoded path
 config = load_comprehensive_config()

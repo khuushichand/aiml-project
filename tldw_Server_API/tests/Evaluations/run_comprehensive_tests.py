@@ -27,7 +27,7 @@ def run_tests_with_coverage():
         "test_evaluation_integration.py",
         "test_error_scenarios.py",
         "test_circuit_breaker.py",
-        "test_evals_openai.py",  # Existing test file
+        # legacy test_evals_openai removed; unified endpoints cover functionality
     ]
     
     # Build pytest command
@@ -36,7 +36,7 @@ def run_tests_with_coverage():
         "-v",  # Verbose
         "--tb=short",  # Short traceback
         "--cov=tldw_Server_API.app.core.Evaluations",  # Coverage for evaluations module
-        "--cov=tldw_Server_API.app.api.v1.endpoints.evals_openai",  # Coverage for API
+        # unified router is covered under tldw_Server_API.app.api.v1.endpoints.evaluations_unified
         "--cov-report=term-missing",  # Show missing lines
         "--cov-report=html",  # Generate HTML report
         "--cov-report=xml",  # Generate XML report for CI

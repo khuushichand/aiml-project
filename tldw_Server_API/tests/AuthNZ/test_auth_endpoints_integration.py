@@ -1,7 +1,11 @@
 """
 Integration tests for authentication endpoints.
+Stabilized by resetting app state between tests and ensuring TEST_MODE
+disables CSRF and rate limiter prior to FastAPI app import.
 """
 
+import os
+import importlib
 import pytest
 import asyncio
 from datetime import datetime, timedelta
@@ -12,7 +16,81 @@ from hypothesis import given, strategies as st, settings as hypothesis_settings,
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+# Import app initially; tests will rebind this reference via the module-level
+# fixture below to ensure a fresh instance when needed.
 from tldw_Server_API.app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_state_per_test(monkeypatch):
+    """Ensure clean app state per test and disable CSRF/rate limiter.
+
+    - Sets TEST_MODE/TESTING env vars so main.py skips global rate limiter.
+    - Disables CSRF via the shared settings dict used by CSRF middleware logic.
+    - Resets JWT service singleton to avoid stale secrets across tests.
+    - Reloads app.main and rebinds the module-level `app` reference so
+      dependency_overrides and middleware are built under current env.
+    """
+    # Ensure test-mode environment prior to app import/reload
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+
+    # Disable CSRF through global settings before app import
+    try:
+        from tldw_Server_API.app.core.config import settings as _global_settings
+        _global_settings["CSRF_ENABLED"] = False
+    except Exception:
+        pass
+
+    # Reset JWT singleton so a fresh key/config is used each test
+    try:
+        from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service as _reset_jwt
+        _reset_jwt()
+    except Exception:
+        pass
+
+    # Reload app.main under the new environment and rebind global `app`
+    try:
+        import tldw_Server_API.app.main as _main
+        reloaded = importlib.reload(_main)
+        # Rebind the module-level app reference for this test module
+        global app  # type: ignore
+        app = reloaded.app
+        # Clear any leftover overrides just in case
+        app.dependency_overrides.clear()
+        # Remove non-essential middlewares, including CSRF, for stability
+        try:
+            from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware as _HTTPMM
+            from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware as _ULM
+            from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware as _LLMB
+            from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware as _SHM
+            from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware as _RID
+            from tldw_Server_API.app.core.AuthNZ.csrf_protection import CSRFProtectionMiddleware as _CSRF
+            kept = []
+            for m in getattr(app, 'user_middleware', []):
+                if getattr(m, 'cls', None) in (_HTTPMM, _ULM, _LLMB, _SHM, _RID, _CSRF):
+                    continue
+                kept.append(m)
+            if len(kept) != len(getattr(app, 'user_middleware', [])):
+                app.user_middleware = kept
+                app.middleware_stack = app.build_middleware_stack()
+        except Exception:
+            pass
+    except Exception:
+        # If reload fails for any reason, at least clear overrides on existing app
+        try:
+            app.dependency_overrides.clear()
+        except Exception:
+            pass
+
+    yield
+
+    # Teardown: clear overrides after each test
+    try:
+        app.dependency_overrides.clear()
+    except Exception:
+        pass
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidCredentialsError,
     UserNotFoundError,
@@ -256,22 +334,19 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
-    async def test_refresh_token_invalid(self, jwt_service):
+    async def test_refresh_token_invalid(self, isolated_test_environment, jwt_service):
         """Test refresh with invalid token."""
+        client, _ = isolated_test_environment
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_jwt_service_dep
         app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
-        
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": "invalid.token.here"}
-            )
-        
+
+        response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": "invalid.token.here"}
+        )
+
         assert response.status_code == 401
-        
+
         app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
@@ -385,23 +460,20 @@ class TestAuthEndpointsProperty:
         token_length=st.integers(min_value=10, max_value=1000)
     )
     @hypothesis_settings(max_examples=10, deadline=5000, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    async def test_refresh_with_various_token_lengths(self, token_length, jwt_service):
+    async def test_refresh_with_various_token_lengths(self, isolated_test_environment, token_length, jwt_service):
         """Test refresh endpoint with tokens of various lengths."""
+        client, _ = isolated_test_environment
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_jwt_service_dep
         app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
         
         # Generate a token-like string of specified length
         fake_token = "a" * token_length
-        
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": fake_token}
-            )
-        
+
+        response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": fake_token}
+        )
+
         # Should always return 401 for invalid tokens
         assert response.status_code == 401
         

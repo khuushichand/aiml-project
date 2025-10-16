@@ -69,7 +69,7 @@ def _simple_tokens(text: str) -> List[str]:
 class RAGEvaluator:
     """Evaluator for RAG system performance"""
     
-    def __init__(self, embedding_provider: str = "openai", embedding_model: str = "text-embedding-3-small", api_key: Optional[str] = None):
+    def __init__(self, embedding_provider: Optional[str] = "openai", embedding_model: Optional[str] = "text-embedding-3-small", api_key: Optional[str] = None):
         """
         Initialize RAG evaluator with production embeddings.
         
@@ -81,13 +81,21 @@ class RAGEvaluator:
         self.embedding_provider = embedding_provider
         self.embedding_model = embedding_model
         self.api_key = api_key
-        
-        # Get embedding configuration
-        self.embedding_config = self._setup_embedding_config()
-        
-        # Lazy check - don't test embeddings on init, only when first used
-        self._embedding_available = None  # Will be set on first use
-        logger.info(f"RAG evaluator initialized with {embedding_provider}/{embedding_model} configuration")
+
+        # If either provider or model is not specified (None/empty), treat embeddings as disabled.
+        if not self.embedding_provider or not self.embedding_model:
+            # Minimal config stub to avoid downstream KeyErrors when referenced
+            self.embedding_config = {"embedding_config": {"default_model_id": ""}}
+            # Explicitly mark as unavailable so property does not probe backends
+            self._embedding_available = False
+            logger.info("RAG evaluator initialized without embeddings (disabled by configuration)")
+        else:
+            # Get embedding configuration
+            self.embedding_config = self._setup_embedding_config()
+
+            # Lazy check - don't test embeddings on init, only when first used
+            self._embedding_available = None  # Will be set on first use
+            logger.info(f"RAG evaluator initialized with {embedding_provider}/{embedding_model} configuration")
     
     def _setup_embedding_config(self) -> Dict[str, Any]:
         """Setup embedding configuration."""
@@ -426,7 +434,8 @@ class RAGEvaluator:
             if resp_tokens:
                 coverage = len(resp_tokens & ctx_tokens) / len(resp_tokens)
 
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -596,22 +605,23 @@ class RAGEvaluator:
                 })
 
         try:
+            # Use thread offload for deterministic unit-test mocking
             score_str = await asyncio.to_thread(
                 analyze,
                 "openai",  # api_name - first param
-                response,  # input_data
-                prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                response,   # input_data
+                prompt,     # custom_prompt_arg
+                None,       # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                0.1        # temp
+                0.1         # temp
             )
 
-            score = float(score_str.strip()) / 5.0
+            score = float((score_str or "").strip()) / 5.0
 
             return ("answer_similarity", {
                 "name": "answer_similarity",
                 "score": score,
-                "raw_score": float(score_str.strip()),
+                "raw_score": float((score_str or "").strip() or 0.0),
                 "explanation": "LLM-based semantic similarity to ground truth answer",
                 "method": "llm"
             })
@@ -683,19 +693,20 @@ class RAGEvaluator:
             """
             
             try:
+                # Use thread offload for deterministic unit-test mocking
                 score_str = await asyncio.to_thread(
                     analyze,
-                    api_name,  
-                    context,   
-                    prompt,    
-                    None,      
-                    "You are an evaluation expert. Provide only numeric scores.",  
-                    0.1        
+                    api_name,  # First param
+                    context,   # input_data
+                    prompt,    # custom_prompt_arg
+                    None,      # api_key (None to load from config)
+                    "You are an evaluation expert. Provide only numeric scores.",  # system_message
+                    0.1        # temp
                 )
                 
                 # Parse score and handle invalid responses
                 try:
-                    score = float(score_str.strip())
+                    score = float((score_str or "").strip())
                     relevance_scores.append(score / 5.0)
                 except (ValueError, AttributeError):
                     # Invalid response format - treat as 0.0
@@ -741,7 +752,8 @@ class RAGEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 combined_context,  # input_data

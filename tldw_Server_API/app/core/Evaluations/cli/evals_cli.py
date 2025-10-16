@@ -29,7 +29,7 @@ from tldw_Server_API.app.core.Evaluations.cli.api_utils import (
     get_default_api,
     format_api_info
 )
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
 DEPRECATION_MSG = (

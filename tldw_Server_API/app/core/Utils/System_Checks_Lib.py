@@ -27,6 +27,9 @@ import subprocess
 import zipfile
 
 from tldw_Server_API.app.core.Utils.Utils import logging
+
+userOS: str = "Unknown"
+processing_choice: str = "cpu"
 # Import Local Libraries
 #from App_Function_Libraries import
 #
@@ -44,7 +47,9 @@ def platform_check():
         userOS = "Windows"
     else:
         print("Other OS detected \n Maybe try running things manually?")
-        exit()
+        userOS = platform.system() or "Unknown"
+        return False
+    return True
 
 
 # Check for NVIDIA GPU and CUDA availability
@@ -86,7 +91,15 @@ def cuda_check():
 # Ask user if they would like to use either their GPU or their CPU for transcription
 def decide_cpugpu():
     global processing_choice
-    processing_input = input("Would you like to use your GPU or CPU for transcription? (1/cuda)GPU/(2/cpu)CPU): ")
+    try:
+        processing_input = input("Would you like to use your GPU or CPU for transcription? (1/cuda)GPU/(2/cpu)CPU): ")
+    except EOFError:
+        logging.debug("No interactive input available; defaulting to %s", processing_choice)
+        processing_input = processing_choice
+
+    if processing_input is None:
+        return processing_choice
+
     if processing_choice == "cuda" and (processing_input.lower() == "cuda" or processing_input == "1"):
         print("You've chosen to use the GPU.")
         logging.debug("GPU is being used for processing")
@@ -97,6 +110,7 @@ def decide_cpugpu():
         processing_choice = "cpu"
     else:
         print("Invalid choice. Please select either GPU or CPU.")
+    return processing_choice
 
 
 # check for existence of ffmpeg
@@ -112,13 +126,18 @@ def check_ffmpeg():
         print(
             "ffmpeg is not installed.\n\n You can either install it manually, or through your package manager of "
             "choice.\n Windows users, builds are here: https://www.gyan.dev/ffmpeg/builds/")
-        if userOS == "Windows":
+        if userOS == "Unknown":
+            userOS_guess = platform.system()
+        else:
+            userOS_guess = userOS
+
+        if userOS_guess == "Windows":
             if download_ffmpeg(): # call and check the return
                 return True
             else:
                 return False
-            
-        elif userOS == "Linux":
+
+        elif userOS_guess == "Linux":
             print(
                 "You should install ffmpeg using your platform's appropriate package manager, 'apt install ffmpeg',"
                 "'dnf install ffmpeg' or 'pacman', etc."
@@ -127,7 +146,11 @@ def check_ffmpeg():
         else:
             logging.debug("running an unsupported OS")
             print("You're running an unsupported/Un-tested OS")
-            exit_script = input("Let's exit the script, unless you're feeling lucky? (y/n)")
+            try:
+                exit_script = input("Let's exit the script, unless you're feeling lucky? (y/n)")
+            except EOFError:
+                logging.debug("No interactive input available; defaulting to continue without ffmpeg auto-installation")
+                return False
             if exit_script.lower() in ["y", "yes", "1"]:  # Handles 'Y' or 'y'
                 return False
             return False 
@@ -136,7 +159,11 @@ def check_ffmpeg():
 # Download ffmpeg
 def download_ffmpeg():
     FFMPEG_DOWNLOAD_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-    user_choice = input("Do you want to download ffmpeg? (y/N): ")
+    try:
+        user_choice = input("Do you want to download ffmpeg? (y/N): ")
+    except EOFError:
+        logging.debug("No interactive input available; skipping ffmpeg download prompt")
+        return False
     if user_choice.lower() not in ['y', 'yes', '1']:  # Simplified input check
         print("ffmpeg will not be downloaded.")
         return False

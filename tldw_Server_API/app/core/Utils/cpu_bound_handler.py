@@ -299,14 +299,24 @@ class CPUBoundBatcher:
         
         # If batch is full, process immediately
         if len(self.pending_operations) >= self.batch_size:
-            await self._process_batch()
+            if self._batch_task and not self._batch_task.done():
+                self._batch_task.cancel()
+                try:
+                    await self._batch_task
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    self._batch_task = None
+            await self._process_batch(delay=False)
+            self._batch_task = None
         
         return await future
     
-    async def _process_batch(self):
+    async def _process_batch(self, *, delay: bool = True):
         """Process the current batch of operations."""
         # Wait for timeout or batch to fill
-        await asyncio.sleep(self.timeout)
+        if delay:
+            await asyncio.sleep(self.timeout)
         
         if not self.pending_operations:
             return
@@ -330,6 +340,7 @@ class CPUBoundBatcher:
                 future.set_result(result)
             except Exception as e:
                 future.set_exception(e)
+        self._batch_task = None
 
 
 # Global batcher instance

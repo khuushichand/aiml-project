@@ -1,203 +1,319 @@
 # Embeddings Scale-Out Architecture Design
 
+Status: WIP (design aligned with implemented orchestrator/workers)
+Last Updated: 2025-10-14
+
 ## Overview
 
-This document outlines the design for scaling the embeddings creation system from a synchronous, single-threaded architecture to a distributed, queue-based system capable of handling multiple concurrent users with different service tiers.
+This document specifies the production-scale, queue-based embeddings pipeline used to process large and concurrent workloads. It evolves the single-request path into a horizontally scalable topology using Redis Streams, worker pools, and an orchestrator. The design preserves provider flexibility, per-user isolation, and batch efficiency while adding fairness, quotas, and observability.
 
-## Current System Analysis
+Scope and audience
+- Scope: Embeddings pipeline (chunk → embed → store) and its orchestration.
+- Audience: Backend engineers, SREs, maintainers. Related API docs live separately.
 
-### Limitations
-1. **Synchronous Processing**: Embeddings are created inline with API requests
-2. **Resource Contention**: Multiple users compete for the same GPU/model resources
-3. **No Horizontal Scaling**: Cannot distribute load across multiple machines
-4. **Memory Pressure**: Large models loaded/unloaded frequently
-5. **Limited Fault Tolerance**: Failures block entire processing pipeline
+## Current System Snapshot
 
-### Strengths to Preserve
-1. **Model Flexibility**: Support for multiple embedding providers (HF, ONNX, OpenAI, Local API)
-2. **User Isolation**: Per-user ChromaDB collections
-3. **Batch Processing**: Existing batch embedding capabilities
-4. **Resource Management**: Model caching and automatic unloading
+Active components (implemented in code):
+- Orchestrator: `tldw_Server_API/app/core/Embeddings/worker_orchestrator.py`
+- Job Manager (Redis Streams): `tldw_Server_API/app/core/Embeddings/job_manager.py`
+- Workers: `tldw_Server_API/app/core/Embeddings/workers/{chunking_worker,embedding_worker,storage_worker}.py`
+- Queue Schemas: `tldw_Server_API/app/core/Embeddings/queue_schemas.py`
+- Config: `tldw_Server_API/app/core/Embeddings/worker_config.py`, `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml`
+- Vector store helpers: `tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`
 
-## Proposed Architecture
+Notes:
+- Redis Streams with consumer groups is the standard queue backend. RabbitMQ is not required.
+- The public REST endpoint (`/api/v1/embeddings`) remains single-request; the orchestrator/queues are used for media batch embeddings and enterprise deployments.
+- Production API path and engine details: `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py` and `Embeddings_Server/Embeddings_Create.py`.
 
-### High-Level Design
+## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│   API Layer │────▶│ Job Manager  │────▶│  Message Broker │
-└─────────────┘     └──────────────┘     │  (Redis/RMQ)    │
-                                          └────────┬────────┘
-                                                   │
-                    ┌──────────────────────────────┼──────────────────────────────┐
-                    │                              │                              │
-             ┌──────▼────────┐            ┌───────▼────────┐            ┌────────▼───────┐
-             │ Chunking Queue│            │Embedding Queue │            │ Storage Queue  │
-             └──────┬────────┘            └───────┬────────┘            └────────┬───────┘
-                    │                              │                              │
-             ┌──────▼────────┐            ┌───────▼────────┐            ┌────────▼───────┐
-             │Chunking Workers│           │Embedding Workers│           │Storage Workers │
-             └───────────────┘            └────────────────┘            └────────────────┘
+┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐
+│   API Layer │────▶│ Embedding Jobs   │────▶│ Redis Streams     │
+└─────────────┘     │  (Job Manager)   │     │  + Consumer Groups│
+                    └─────────┬────────┘     └──────────┬────────┘
+                              │                          │
+              ┌───────────────┼──────────────────────────┼─────────────────┐
+              │               │                          │                 │
+        ┌─────▼─────┐   ┌─────▼─────┐              ┌─────▼─────┐    ┌─────▼─────┐
+        │ Chunking   │   │ Embedding │              │  Storage  │    │ Monitoring│
+        │  Queue     │   │  Queue    │              │  Queue    │    │  + Autoscale
+        └─────┬──────┘   └─────┬─────┘              └─────┬─────┘    └───────────┘
+              │                │                           │
+        ┌─────▼──────┐   ┌─────▼────────┐            ┌─────▼──────┐
+        │ Chunking    │   │ Embedding    │            │  Storage   │
+        │  Workers    │   │  Workers     │            │  Workers   │
+        └─────────────┘   └──────────────┘            └────────────┘
 ```
 
-### Component Design
+Queue names and consumer groups (defaults)
+- Chunking: `embeddings:chunking` / group `chunking-workers`
+- Embedding: `embeddings:embedding` / group `embedding-workers`
+- Storage: `embeddings:storage` / group `storage-workers`
 
-#### 1. Job Manager
-- **Responsibilities**:
-  - Accept embedding requests from API layer
-  - Create job records with unique IDs
-  - Route jobs to appropriate queues based on user tier
-  - Track job status and provide updates
-  - Handle job cancellation and cleanup
+## Component Design
 
-- **Implementation**:
-  ```python
-  class EmbeddingJobManager:
-      def create_job(self, media_id: int, user_id: str, priority: str) -> str
-      def get_job_status(self, job_id: str) -> JobStatus
-      def cancel_job(self, job_id: str) -> bool
-      def get_user_jobs(self, user_id: str) -> List[JobInfo]
-  ```
+### 1) Job Manager (Redis Streams)
+Responsibilities
+- Accept embedding jobs (per media, per user) and emit `ChunkingMessage` to `embeddings:chunking`.
+- Track job status in Redis Hash `job:{job_id}`; expose status/lookup and cancellation.
+- Enforce per-tier limits and quotas; compute effective priority with aging and usage penalties.
 
-#### 2. Message Broker Layer
+Implementation entry: `tldw_Server_API/app/core/Embeddings/job_manager.py`
 
-**Option 1: Redis Streams** (Recommended)
-- Already in use for rate limiting
-- Supports consumer groups for scaling
-- Built-in persistence and replication
-- Lower operational overhead
+### 2) Worker Types
 
-**Option 2: RabbitMQ**
-- More advanced routing capabilities
-- Better for complex workflows
-- Higher operational complexity
+Chunking Workers
+- Purpose: Split content into embedding-ready chunks; preserve metadata and order.
+- Scaling: CPU-bound; horizontally scalable.
+- Config: `ChunkingWorkerPoolConfig` (default chunk size/overlap) in `worker_config.py`.
 
-#### 3. Worker Types
+Embedding Workers
+- Purpose: Generate embeddings from chunks; provider-aware and batch-optimized.
+- Scaling: CPU/GPU depending on provider/model; GPU assignment via `gpu_allocation`.
+- Features (implemented in `embedding_worker.py`):
+  - Model selection per chunk (category-based) with fallbacks.
+  - LRU+TTL embedding cache (optional) and batch-size adaptation on OOM.
+  - HF `trust_remote_code` allowlist; OpenAI and ONNX supported via `Embeddings_Create`.
 
-##### Chunking Workers
-- **Purpose**: Split content into embedding-ready chunks
-- **Scaling**: CPU-bound, easily scalable
-- **Features**:
-  - Configurable chunk sizes and overlap
-  - Context window awareness
-  - Metadata preservation
+Storage Workers
+- Purpose: Persist embeddings to ChromaDB and update SQL metadata/indices.
+- Scaling: I/O-bound; batching and transactional writes.
 
-##### Embedding Workers
-- **Purpose**: Generate embeddings from chunks
-- **Scaling**: GPU/CPU hybrid based on model
-- **Features**:
-  - Model pooling with LRU eviction
-  - Batch processing for efficiency
-  - Provider-specific optimizations
-  - Circuit breaker for API calls
+### 3) Orchestrator
+- Starts/stops/scales worker pools; exposes Prometheus metrics and queue depth gauges.
+- Optional autoscaling loop driven by queue depths and configured thresholds.
+- File: `tldw_Server_API/app/core/Embeddings/worker_orchestrator.py`.
 
-##### Storage Workers
-- **Purpose**: Store embeddings in ChromaDB and update SQL
-- **Scaling**: I/O bound, moderate scaling needs
-- **Features**:
-  - Transactional updates
-  - Retry logic for failures
-  - Batch insertion support
+## Message Schemas (authoritative)
 
-### Queue Schema Design
+Defined in `tldw_Server_API/app/core/Embeddings/queue_schemas.py`.
 
 ```python
-# Base message schema
 class EmbeddingJobMessage(BaseModel):
     job_id: str
     user_id: str
     media_id: int
-    priority: int  # 0-100, higher = more priority
-    created_at: float
+    priority: int  # 0-100
+    user_tier: UserTier = UserTier.FREE
+    created_at: datetime
+    updated_at: datetime
     retry_count: int = 0
     max_retries: int = 3
+    trace_id: Optional[str] = None
 
-# Chunking queue message
 class ChunkingMessage(EmbeddingJobMessage):
     content: str
     content_type: str  # "text", "document", etc.
     chunking_config: ChunkingConfig
+    source_metadata: Dict[str, Any] = {}
 
-# Embedding queue message
 class EmbeddingMessage(EmbeddingJobMessage):
     chunks: List[ChunkData]
-    model_config: Union[HFModelCfg, ONNXModelCfg, OpenAIModelCfg, LocalAPICfg]
-    
-# Storage queue message
+    embedding_model_config: Dict[str, Any]
+    model_provider: str  # e.g., "huggingface", "openai"
+    batch_size: Optional[int] = None
+
 class StorageMessage(EmbeddingJobMessage):
     embeddings: List[EmbeddingData]
     collection_name: str
-    metadata: Dict[str, Any]
+    total_chunks: int
+    processing_time_ms: int
+    metadata: Dict[str, Any] = {}
 ```
 
-### Priority Queue System
+## Scheduling & Priority
 
-```python
-class UserPriorityManager:
-    """Manages user priorities and fair scheduling"""
-    
-    def calculate_priority(self, user_id: str, base_priority: int) -> int:
-        """Calculate effective priority based on:
-        - User tier (free, premium, enterprise)
-        - Recent usage (prevent monopolization)
-        - Job age (prevent starvation)
-        """
-        tier_multiplier = self.get_tier_multiplier(user_id)
-        usage_penalty = self.get_usage_penalty(user_id)
-        age_bonus = self.get_age_bonus(job_created_at)
-        
-        return base_priority * tier_multiplier - usage_penalty + age_bonus
-```
+Effective priority = f(tier multiplier, recent usage penalty, age bonus). Implemented in `PriorityCalculator` with:
+- Tiers: free=1.0, premium=2.0, enterprise=3.0
+- Usage penalty: recent jobs in last hour (capped)
+- Age bonus: grows with wait time (capped)
 
-### Resource Management
+Fairness guidance
+- Prefer earliest-available within priority cohort; use consumer group distribution to shard load across workers.
+- Prevent monopolization via recent-usage penalties and per-user concurrency limits.
 
-#### Model Pool Design
-```python
-class EmbeddingModelPool:
-    """Manages a pool of embedding models with smart eviction"""
-    
-    def __init__(self, max_models: int = 5, max_memory_gb: float = 24.0):
-        self.models: Dict[str, ModelWrapper] = {}
-        self.usage_stats: Dict[str, ModelUsageStats] = {}
-        self.lock = threading.Lock()
-        
-    def get_model(self, config: BaseModelCfg) -> ModelWrapper:
-        """Get or load a model, evicting if necessary"""
-        
-    def release_model(self, model_id: str):
-        """Mark model as available, start unload timer"""
-```
+## Resource Management
 
-#### GPU Allocation Strategy
-```python
-class GPUAllocator:
-    """Intelligent GPU allocation for embedding workers"""
-    
-    def allocate_gpu(self, model_size: float, priority: int) -> Optional[int]:
-        """Allocate GPU based on availability and priority"""
-        
-    def get_optimal_batch_size(self, model_id: str, gpu_id: int) -> int:
-        """Calculate optimal batch size for GPU memory"""
-```
+Model lifecycle
+- EmbeddingWorker caches/warms models; selects per-chunk provider/model; supports HF/OpenAI/ONNX/Local.
+- Batch size adapts on MemoryError; fallback model path on repeated provider error.
 
-## Implementation Phases
+GPU allocation
+- Per-worker static GPU mapping via `EmbeddingWorkerPoolConfig.gpu_allocation`.
+- Worker sets `CUDA_VISIBLE_DEVICES` to the assigned GPU; optional GPU utilization metrics via NVML.
 
-### Phase 1: Foundation (Week 1-2)
-- [ ] Create base worker classes and interfaces
-- [ ] Implement job manager with in-memory tracking
-- [ ] Set up Redis Streams for message passing
-- [ ] Create basic monitoring and logging
+## Reliability & Failure Handling
 
-### Phase 2: Core Workers (Week 3-4)
-- [ ] Implement chunking workers with existing logic
-- [ ] Create embedding workers with model pooling
-- [ ] Build storage workers with transaction support
-- [ ] Add comprehensive error handling
+Processing semantics
+- Redis Streams + consumer groups; at-least-once delivery with idempotent storage expected.
+- Workers acknowledge (`XACK`) upon successful stage completion; retries with exponential backoff on failure.
 
-### Phase 3: User Awareness (Week 5-6)
-- [ ] Implement priority queue system
-- [ ] Add per-user resource quotas
-- [ ] Create fair scheduling algorithm
+Retries and DLQ
+- Exponential backoff per message; `max_retries` default 3. After exhaustion, job marked `failed`.
+- Scheduled retries are implemented via a per-queue delayed ZSET (`<queue>:delayed`) with jitter; the orchestrator drains due items into the live stream (avoids sleeping workers).
+- DLQ implemented: workers publish failures to `embeddings:chunking:dlq`, `embeddings:embedding:dlq`, or `embeddings:storage:dlq` with original payload and error context for operator action.
+
+Idempotency
+- Storage should be idempotent per `(job_id, chunk_id)` to tolerate replays. Recommend unique constraints or dedupe keys in vector store metadata.
+
+Message schema & validation
+- All messages include `msg_version` and `schema` (default `tldw.embeddings.v1`).
+- A validator normalizes and validates stage messages before processing; future versions may evolve with migration shims.
+
+Dedupe window
+- Workers suppress accidental replays within a configurable window using Redis `SET NX` keyed by a stage-specific dedupe key (or explicit `dedupe_key`).
+
+Progress & TTL
+- Job status stored at `job:{job_id}`; progress fields updated by workers; TTL applied to completed/failed jobs (24h default).
+
+Poison-pill handling
+- Repeated serializer/schema errors should short-circuit to DLQ; worker should guard against infinite retry loops.
+
+## Idempotent Upsert Spec (Storage Worker)
+
+Goals
+- Guarantee safe replays and prevent duplicate vectors for the same logical chunk.
+
+Keys and identity
+- Primary key: `chunk_id` (string) must be globally unique within a collection for a media item.
+- Job independence: The same `chunk_id` must be reused on retries or replays; avoid embedding job-specific suffixes.
+
+Operation
+- Use vector-store upsert when available (Chroma: `collection.upsert`).
+- Fallback path order: `upsert → add → update` (handling older adapters). On duplicate-ID errors, retry with `update`.
+
+Metadata requirements
+- Minimal metadata persisted with each item:
+  - `media_id` (string)
+  - `model_used` (string)
+  - `dimensions` (string or int)
+  - Optional: `chunk_index`, `total_chunks`, `file_name`, `contextualized`, `context_header`, `contextual_summary_ref`
+- Recommend adding `embedding_version` when re-embedding logic changes.
+
+Dimension changes
+- If new embedding dimension != collection’s dimension, recreate or route to a new collection (as implemented in `ChromaDB_Library.store_in_chroma`).
+
+Idempotency invariants
+- Replaying the same `(collection_name, chunk_id)` must overwrite the vector and metadata but must not create duplicates.
+- Storage must be safe under at-least-once delivery and partial batch failures.
+
+## Security & Multi‑Tenancy
+
+- Enforce user isolation in collection naming and SQL writes; ensure no cross-tenant leakage via message payloads.
+- Quotas and per-tier concurrency limits enforced by Job Manager.
+- Never include secrets in logs; sanitize message payloads before logging.
+- Validate and bound `chunking_config` to avoid resource abuse.
+
+## Observability
+
+Metrics
+- Orchestrator exposes Prometheus gauges/counters: worker counts, queue depths, total jobs by status.
+- Queue age histogram: `embedding_queue_age_seconds{queue_name}` (age of oldest message observed over time).
+- Stage processing latency histogram: `embedding_stage_processing_latency_seconds{stage}` (observed from worker snapshots).
+- Workers publish heartbeats and metrics in Redis (`worker:heartbeat:*`, `worker:metrics:*`).
+- API exposes endpoint-level metrics and circuit breaker status for provider calls.
+- DLQ metrics (orchestrator): `embedding_dlq_queue_depth{queue}` and `embedding_dlq_ingest_rate{queue}` (approximate rate via depth derivative).
+
+Alerts (suggested)
+- Queue depth > threshold per stage; worker heartbeat missing; error rate spikes; GPU memory > 90%; P95/P99 latency breaches.
+
+SSE live updates
+- Admin API exposes `/api/v1/embeddings/orchestrator/events` (SSE) for low-latency dashboard updates; WebUI toggles between polling and SSE.
+
+Stage controls
+- Admin API supports per-stage `pause`, `resume`, and `drain` flags. `drain` pauses new reads while allowing in-flight batches to finish.
+
+## Operator Runbook
+
+Common alerts → actions
+- High queue depth (sustained):
+  - Action: Increase workers in the orchestrator, enable autoscaling, or reduce producer rate. Check provider throughput and GPU utilization.
+- Worker heartbeat missing:
+  - Action: Restart affected worker pool; inspect logs for exceptions; verify Redis connectivity.
+- Provider error rate spike (OpenAI/HF):
+  - Action: Inspect circuit breaker status; throttle or failover to fallback models; verify API keys/quotas.
+- GPU memory > 90% or OOM during embedding:
+  - Action: Reduce batch size; switch to smaller model; redistribute GPU allocation.
+- Storage errors or dimension mismatches:
+  - Action: Verify `embedding_dimension` metadata; if mismatch, allow the library to recreate collection or route to a new collection.
+- DLQ growth rate rising:
+  - Action: Inspect `embeddings:*:dlq`; fix root cause; bulk requeue selected messages; trim DLQ.
+
+Operational commands (examples)
+- Inspect queue depth: `redis-cli XLEN embeddings:embedding`
+- List DLQ tail: `redis-cli XREVRANGE embeddings:embedding:dlq + - COUNT 10`
+- Requeue DLQ item: `redis-cli XADD embeddings:embedding '*' job_id <JOB_ID> payload '<JSON>'`
+
+## Configuration & Ops
+
+Primary knobs
+- `REDIS_URL` for all workers and Job Manager.
+- Orchestrator YAML: pool sizes, GPU allocation, autoscaling thresholds.
+- Embeddings engine config (`embeddings_config.yaml`): provider defaults and storage paths.
+
+References
+- Deployment guide: `Docs/Published/Deployment/Embeddings-Deployment-Guide.md`
+- Embeddings README: `tldw_Server_API/app/core/Embeddings/README.md`
+
+## Implementation Phases (with status)
+
+Phase 1: Foundation
+- [x] Base worker classes and interfaces
+- [x] Job Manager with Redis Streams
+- [x] Monitoring and basic metrics
+
+Phase 2: Core Workers
+- [x] Chunking workers using existing logic
+- [x] Embedding workers with model selection/cache/batching
+- [x] Storage workers with transactional writes
+- [x] Error handling and retries
+
+Phase 3: User Awareness
+- [x] Priority calculation (tier/usage/age)
+- [x] Per-user quotas and concurrent job limits
+- [ ] Fair scheduling refinements (aging within queues)
+- [ ] Admin APIs for quota/priority inspection
+
+Phase 4: Advanced Features
+- [ ] Streaming partial results for very large media
+- [ ] Intelligent global batching across jobs for GPU efficiency
+- [ ] Auto-scaling policies based on queue depths and saturation (initial loop exists)
+- [ ] DLQ and reprocessing tools
+
+## Migration & Rollback
+
+Parallel run
+1) Run API-only path for standard requests; run orchestrator for media batch embeddings.
+2) Gradually shift larger/longer media jobs to queue path.
+3) Observe metrics and error profiles; compare P95/P99.
+
+Rollback
+- Kill orchestrator workers; drain queues; route back to API path. Keep feature flags/toggles at the routing layer.
+
+Data consistency
+- Enforce idempotent writes in storage; validate collection counts vs. expected chunk totals. Provide verification tools for reindex.
+
+## Testing Strategy
+
+- Unit tests for Job Manager priority/quotas and schema validation.
+- Integration tests per worker stage; end-to-end with Redis Streams (ephemeral container in CI).
+- Property tests for dedupe/idempotency on replay and for backoff behavior.
+- Load tests: synthetic large media to validate GPU/CPU saturation and autoscaling.
+
+## Risks & Mitigations
+
+- Stream backlog growth → autoscale and alerts, shed load by tier.
+- Provider failures → circuit breaker, fallback models, cached embeddings.
+- Memory pressure → dynamic batch size, model unload timers, GPU pinning.
+- Multi-tenant contention → quotas, per-user concurrency caps, priority aging.
+
+## Open Questions / Next Steps
+
+- Align with generic Jobs module (`Docs/Design/Jobs-Module-1.md`): reuse leases/DB persistence where appropriate or keep Redis Streams for this pipeline and bridge via adapters.
+- Define DLQ schema and operator workflows.
+- Formalize idempotency keys/constraints at storage layer.
 - [ ] Build user dashboard for job tracking
 
 ### Phase 4: Advanced Features (Week 7-8)

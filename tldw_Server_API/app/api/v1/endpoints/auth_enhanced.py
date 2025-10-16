@@ -17,7 +17,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_password_service_dep,
     get_jwt_service_dep,
     get_current_user,
-    get_current_active_user
+    get_current_active_user,
+    get_session_manager_dep
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
@@ -26,6 +27,7 @@ from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
 from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 #######################################################################################################################
 #
@@ -109,7 +111,8 @@ async def forgot_password(
             return {"message": "If the email exists, a reset link has been sent"}
         
         # Check if user exists
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             user = await db.fetchrow(
                 "SELECT id, username, email, is_active FROM users WHERE lower(email) = $1",
@@ -140,7 +143,8 @@ async def forgot_password(
             )
             
             # Store token in database for validation
-            if hasattr(db, 'execute'):
+            is_pg_store = await is_postgres_backend()
+            if is_pg_store:
                 # PostgreSQL
                 await db.execute("""
                     INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
@@ -201,7 +205,8 @@ async def reset_password(
         token_hash = jwt_service.hash_token(data.token)
         
         # Check if token was already used
-        if hasattr(db, 'fetchval'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             was_used = await db.fetchval(
                 "SELECT used_at FROM password_reset_tokens WHERE token_hash = $1 AND user_id = $2",
@@ -234,7 +239,7 @@ async def reset_password(
         new_password_hash = password_service.hash_password(data.new_password)
         
         # Update password
-        if hasattr(db, 'execute'):
+        if is_pg:
             # PostgreSQL
             await db.execute(
                 "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
@@ -303,7 +308,8 @@ async def verify_email(
         email = payload["email"]
         
         # Update user's verification status
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             await db.execute(
                 "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2 AND email = $3",
@@ -342,7 +348,8 @@ async def resend_verification(
     """
     try:
         # Check if user exists and needs verification
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             user = await db.fetchrow(
                 "SELECT id, username, email, is_verified FROM users WHERE lower(email) = $1",
@@ -562,6 +569,7 @@ async def logout(
     data: LogoutRequest,
     request: Request,
     current_user=Depends(get_current_active_user),
+    session_manager=Depends(get_session_manager_dep)
 ) -> Dict[str, str]:
     """
     Logout current session or all sessions
@@ -579,11 +587,17 @@ async def logout(
             blacklist = get_token_blacklist()
             
             if data.all_devices:
-                # Revoke all tokens
+                # Revoke all tokens and sessions
                 count = await blacklist.revoke_all_user_tokens(
                     user_id=current_user.id,
                     reason="User requested logout from all devices"
                 )
+                try:
+                    await session_manager.revoke_all_user_sessions(
+                        user_id=current_user.id
+                    )
+                except Exception as cleanup_exc:
+                    logger.error(f"Failed to revoke user sessions during logout-all: {cleanup_exc}")
                 logger.info(f"User {current_user.id} logged out from {count} devices")
                 return {"message": f"Logged out from {count} device(s)"}
             else:
@@ -600,6 +614,16 @@ async def logout(
                         token_type="access",
                         reason="User logout"
                     )
+                    session_id = payload.get("session_id")
+                    if session_id is not None:
+                        try:
+                            await session_manager.revoke_session(
+                                session_id=session_id,
+                                revoked_by=current_user.id,
+                                reason="User logout"
+                            )
+                        except Exception as cleanup_exc:
+                            logger.error(f"Failed to revoke session {session_id} during logout: {cleanup_exc}")
                 
                 logger.info(f"User {current_user.id} logged out")
                 return {"message": "Logged out successfully"}

@@ -8,7 +8,14 @@ def test_tab_navigation_and_search(page, server_url):
     page.get_by_role("tab", name="Media Management").click()
     page.wait_for_selector("#tabMediaManagement")
 
-    # Use search box to filter endpoints
+    # Show search UI and filter endpoints
+    # Ensure the search UI is visible (keyboard shortcut or force-visible)
+    try:
+        page.keyboard.press("Control+K")
+    except Exception:
+        pass
+    # Force show regardless of shortcut handling timing
+    page.evaluate("document.querySelector('.search-container')?.classList.add('visible')")
     page.locator("#endpoint-search").fill("health")
     page.wait_for_timeout(300)  # debounce wait
     # At least ensure search box exists and UI remains responsive
@@ -37,4 +44,3 @@ def test_theme_persistence(page, server_url):
     page.reload()
     theme = page.locator("html").get_attribute("data-theme")
     assert theme in ("dark", "light")
-

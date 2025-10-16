@@ -126,7 +126,7 @@ dependencies = [
   "openai>=1.0.0",
   "optimum>=1.13.0",
   "torch>=2.0.0",
-  "transformers>=4.35.0",
+  "transformers>=4.51.0",
   "sentence-transformers>=2.2.0",
   
   # Research/Web
@@ -170,6 +170,18 @@ dev = [
   "mypy>=1.5.0",
   "ruff>=0.1.0",
   "pre-commit>=3.3.0"
+]
+
+# OpenTelemetry (optional, for metrics/tracing export)
+otel = [
+  "opentelemetry-distro>=0.48b0",
+  "opentelemetry-exporter-otlp>=1.24.0",
+  "opentelemetry-exporter-prometheus>=0.49b0",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "opentelemetry-instrumentation-httpx>=0.48b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
+  "opentelemetry-instrumentation-psycopg2>=0.48b0",
+  "opentelemetry-instrumentation-aiohttp-client>=0.48b0",
 ]
 
 # Evaluation and metrics (optional)
@@ -277,7 +289,7 @@ TTS_sovits = [
 TTS_higgs = [
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
-  "transformers>=4.30.0",
+  "transformers>=4.51.0",
   "accelerate>=0.20.0",
   # Note: higgs-audio must be installed from source:
   # git clone https://github.com/boson-ai/higgs-audio.git && cd higgs-audio && pip install -e .
@@ -286,19 +298,54 @@ TTS_higgs = [
 TTS_vibevoice = [
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
-  "transformers>=4.30.0",
+  "transformers>=4.51.0",
   "accelerate>=0.20.0",
   "librosa>=0.10.0",
-  # Note: VibeVoice must be installed from source:
-  # git clone https://github.com/microsoft/VibeVoice.git && cd VibeVoice && pip install -e .
+  # Note: VibeVoice must be installed from source (community reference):
+  # git clone https://github.com/vibevoice-community/VibeVoice.git && cd VibeVoice && pip install -e .
 ]
 
 TTS_chatterbox = [
+  # Core compute
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
-  "chatterbox-tts>=0.1.0",  # If available via pip
-  # Or install from source:
-  # git clone https://github.com/resemble-ai/chatterbox.git && cd chatterbox && pip install -e .
+  "numpy>=1.24.0",
+  "scipy>=1.10.0",
+  # HF stack
+  "transformers>=4.51.0",
+  "tokenizers>=0.13.0",
+  "huggingface_hub>=0.21.0",
+  "safetensors>=0.4.2",
+  # Audio / DSP
+  "librosa>=0.10.0",
+  # Diffusion / attention utils used in matcha blocks
+  "diffusers>=0.29.0",
+  "einops>=0.7.0",
+  # Conformer block dependency (for matcha decoder)
+  "conformer>=0.3.2",
+  # S3 tokenizer backend
+  "s3tokenizer>=0.1.6",
+]
+
+# Optional language preprocessing extras for multilingual text tokenization
+TTS_chatterbox_lang = [
+  "pykakasi>=2.2.1",          # Japanese romanization -> hiragana
+  "dicta-onnx>=0.2.0",        # Hebrew diacritics
+  "spacy-pkuseg>=0.0.33",     # Chinese segmentation
+  "russian_text_stresser>=1.0.5",  # Russian stress marks
+]
+
+# NeuTTS Air (Neuphonic)
+TTS_neutts = [
+  "librosa>=0.10.0",
+  "phonemizer>=3.2.1",
+  "transformers>=4.51.0",
+  "torch>=2.0.0",
+  "neucodec>=0.0.4",
+  "resemble-perth>=1.0.0",
+  # Optional backends:
+  "onnxruntime>=1.16.0",
+  "llama-cpp-python>=0.2.0"
 ]
 
 # Backend options
@@ -316,8 +363,8 @@ backend_vllm = [
 
 # Database backends
 db_postgres = [
-  "psycopg2-binary>=2.9.0",
-  "psycopg2>=2.9.0"
+  "psycopg[binary]>=3.1",
+  "psycopg-pool>=3.1"
 ]
 
 db_opensearch = [
@@ -379,7 +426,8 @@ filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources:",
     "ignore::DeprecationWarning:speechbrain.pretrained:",
     "ignore::DeprecationWarning:transformers:",
-    "ignore::DeprecationWarning:torch:"
+    "ignore::DeprecationWarning:torch:",
+    "ignore:.*swigvarlink.*:DeprecationWarning"
 ]
 markers = [
     "asyncio: mark test as async",
@@ -396,7 +444,8 @@ markers = [
     "load: marks load testing tests",
     "property: marks property-based testing tests",
     "embeddings_abtest: marks embeddings A/B evaluation tests",
-    "requires_rag: marks tests that require RAG functionality"
+    "requires_rag: marks tests that require RAG functionality",
+    "monitoring: marks monitoring/metrics tests"
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -416,6 +465,8 @@ addopts = [
     "--disable-warnings",
     "-p pytest_asyncio"
 ]
+timeout = 300
+timeout_method = "thread"
 import_mode = "importlib"
 
 ###########################

@@ -5,6 +5,7 @@ with the existing tldw_server API structure.
 """
 
 import asyncio
+import time
 import uuid
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 from loguru import logger
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 # Import the enhanced scraper
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
@@ -25,6 +27,7 @@ from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
     is_content_page, ContentMetadataHandler
@@ -428,6 +431,13 @@ class WebScrapingService:
         db = MediaDatabase(db_path=db_path, client_id=f"webscraping_service_{effective_user_id}")
         
         try:
+            # Metrics
+            try:
+                reg = get_metrics_registry()
+                reg.set_gauge("webscraping.persist.last_batch_articles", float(len(result.get("articles", []))), {"method": str(result.get("method", "unknown"))})
+            except Exception:
+                reg = None
+            _batch_t0 = time.perf_counter()
             for article in result.get("articles", []):
                 logger.debug(f"Processing article: url={article.get('url')}, "
                             f"extraction_successful={article.get('extraction_successful')}")
@@ -475,7 +485,44 @@ class WebScrapingService:
                     }
                     safe_metadata_json = json.dumps({k: v for k, v in safe_meta.items() if v is not None}, ensure_ascii=False)
 
-                    media_id, media_uuid, message = db.add_media_with_keywords(
+                    # Build plaintext chunks for chunk-level FTS
+                    try:
+                        # Chunk in a worker thread to avoid blocking the event loop for long documents
+                        flat = await asyncio.to_thread(
+                            lambda: Chunker().chunk_text_hierarchical_flat(content_with_metadata, method='sentences')
+                        )
+                        kind_map = {
+                            'paragraph': 'text',
+                            'list_unordered': 'list',
+                            'list_ordered': 'list',
+                            'code_fence': 'code',
+                            'table_md': 'table',
+                            'header_line': 'heading',
+                            'header_atx': 'heading',
+                        }
+                        chunks_for_sql = []
+                        for it in flat:
+                            md = it.get('metadata') or {}
+                            ctype = kind_map.get(str(md.get('paragraph_kind') or '').lower(), 'text')
+                            small = {}
+                            if md.get('ancestry_titles'):
+                                small['ancestry_titles'] = md.get('ancestry_titles')
+                            if md.get('section_path'):
+                                small['section_path'] = md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': it.get('text',''),
+                                'start_char': md.get('start_offset'),
+                                'end_char': md.get('end_offset'),
+                                'chunk_type': ctype,
+                                'metadata': small,
+                            })
+                    except Exception:
+                        chunks_for_sql = []
+
+                    # Run blocking DB write off the event loop and observe latency
+                    _t0 = time.perf_counter()
+                    media_id, media_uuid, message = await asyncio.to_thread(
+                        db.add_media_with_keywords,
                         url=article.get("url", ""),
                         title=article.get("title", "Untitled"),
                         media_type="web_document",
@@ -487,19 +534,47 @@ class WebScrapingService:
                         transcription_model="web-scraping-import",
                         author=article.get("author", None),
                         ingestion_date=None,  # Will use current time
-                        overwrite=False
+                        overwrite=False,
+                        chunks=chunks_for_sql
                     )
+                    _dt = max(0.0, time.perf_counter() - _t0)
+                    try:
+                        if reg:
+                            reg.observe("webscraping.persist.article_duration_seconds", _dt, {"method": str(result.get("method", "unknown"))})
+                    except Exception:
+                        pass
                     
                     if media_id:
                         media_ids.append(media_id)
                         logger.info(f"Stored article with media_id: {media_id}, uuid: {media_uuid}")
+                        try:
+                            if reg:
+                                reg.increment("webscraping.persist.stored_total", 1, {"method": str(result.get("method", "unknown"))})
+                        except Exception:
+                            pass
                     else:
                         logger.warning(f"Failed to get media_id for article: {article.get('url')}")
+                        try:
+                            if reg:
+                                reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
+                        except Exception:
+                            pass
                     
                 except Exception as e:
                     logger.error(f"Failed to store article: {e}")
                     errors.append(f"Storage failed for {article.get('url')}: {str(e)}")
-        
+                    try:
+                        if reg:
+                            reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
+                    except Exception:
+                        pass
+
+            try:
+                if reg:
+                    _batch_dt = max(0.0, time.perf_counter() - _batch_t0)
+                    reg.observe("webscraping.persist.batch_duration_seconds", _batch_dt, {"method": str(result.get("method", "unknown"))})
+            except Exception:
+                pass
         finally:
             # Close database connection
             db.close_connection()

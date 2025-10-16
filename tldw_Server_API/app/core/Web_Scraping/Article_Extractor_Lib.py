@@ -34,6 +34,7 @@ import xml.etree.ElementTree as xET
 #
 # External Libraries
 from bs4 import BeautifulSoup
+import aiohttp
 import pandas as pd
 from playwright.async_api import (
     TimeoutError,
@@ -51,6 +52,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_histogram, log_counter
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimiter
 
 #
 #######################################################################################################################
@@ -199,10 +201,16 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         retries = int(scrape_retry_count) if isinstance(scrape_retry_count, str) else scrape_retry_count
         # Load retry timeout value from config
         web_scraper_retry_timeout = loaded_config['web_scraper'].get('web_scraper_retry_timeout', 60)
-        timeout_ms = int(web_scraper_retry_timeout) if isinstance(web_scraper_retry_timeout, str) else web_scraper_retry_timeout
+        # Interpret config as seconds; Playwright expects milliseconds
+        timeout_sec = int(web_scraper_retry_timeout) if isinstance(web_scraper_retry_timeout, str) else web_scraper_retry_timeout
+        timeout_ms = max(0, int(timeout_sec) * 1000)
 
         # Whether stealth mode is enabled
-        stealth_enabled = loaded_config['web_scraper'].get('web_scraper_stealth_playwright', False)
+        stealth_raw = loaded_config['web_scraper'].get('web_scraper_stealth_playwright', False)
+        if isinstance(stealth_raw, str):
+            stealth_enabled = stealth_raw.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            stealth_enabled = bool(stealth_raw)
 
         for attempt in range(retries):  # Introduced a retry loop to attempt fetching HTML multiple times
             browser = None
@@ -283,6 +291,35 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         logging.info(f"Article content length: {len(article_data['content'])}")
         log_histogram("article_content_length", len(article_data['content']), labels={"url": url})
     return article_data
+
+
+def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Blocking scraper for synchronous code paths.
+
+    Fetches HTML with requests using a desktop-like user agent and optional cookies,
+    then extracts article content via trafilatura and converts to display text.
+    """
+    try:
+        headers = {"User-Agent": web_scraping_user_agent}
+        session = requests.Session()
+        session.headers.update(headers)
+        # If cookies are provided in Playwright-style dicts, reduce to name->value
+        if custom_cookies:
+            for c in custom_cookies:
+                if isinstance(c, dict) and "name" in c and "value" in c:
+                    session.cookies.set(c["name"], c["value"])
+        resp = session.get(url, timeout=30)
+        if resp.status_code != 200:
+            logging.error(f"Failed to fetch {url}, status: {resp.status_code}")
+            return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
+
+        article_data = extract_article_data_from_html(resp.text, url)
+        if article_data.get("extraction_successful"):
+            article_data["content"] = convert_html_to_markdown(article_data["content"])
+        return article_data
+    except Exception as e:
+        logging.error(f"Blocking scrape failed for {url}: {e}")
+        return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
 
 
 # FIXME - Add keyword integration/tagging
@@ -375,11 +412,10 @@ async def scrape_and_summarize_multiple(
     return results
 
 
-def scrape_and_no_summarize_then_ingest(url, keywords, custom_article_title):
+async def async_scrape_and_no_summarize_then_ingest(url, keywords, custom_article_title):
     try:
         # Step 1: Scrape the article
-        article_data = asyncio.run(scrape_article(url))
-        print(f"Scraped Article Data: {article_data}")  # Debugging statement
+        article_data = await scrape_article(url)
         if not article_data:
             log_counter("article_scrape_failed", labels={"url": url})
             return "Failed to scrape the article."
@@ -389,8 +425,6 @@ def scrape_and_no_summarize_then_ingest(url, keywords, custom_article_title):
         author = article_data.get('author', 'Unknown')
         content = article_data.get('content', '')
         ingestion_date = datetime.now().strftime('%Y-%m-%d')
-
-        print(f"Title: {title}, Author: {author}, Content Length: {len(content)}")  # Debugging statement
 
         # Step 2: Ingest the article into the database
         ingestion_result = ingest_article_to_db(url, title, author, content, keywords, ingestion_date, None, None)
@@ -403,6 +437,17 @@ def scrape_and_no_summarize_then_ingest(url, keywords, custom_article_title):
         log_counter("article_processing_error", labels={"url": url})
         logging.error(f"Error processing URL {url}: {str(e)}")
         return f"Failed to process URL {url}: {str(e)}"
+
+def scrape_and_no_summarize_then_ingest(url, keywords, custom_article_title):
+    """Synchronous wrapper for CLI usage.
+
+    In async contexts, prefer calling async_scrape_and_no_summarize_then_ingest.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(async_scrape_and_no_summarize_then_ingest(url, keywords, custom_article_title))
+    raise RuntimeError("Call async_scrape_and_no_summarize_then_ingest() within async contexts")
 
 
 def scrape_from_filtered_sitemap(sitemap_file: str, filter_function) -> list:
@@ -420,7 +465,7 @@ def scrape_from_filtered_sitemap(sitemap_file: str, filter_function) -> list:
         articles = []
         for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
             if filter_function(url.text):
-                article_data = scrape_article(url.text)
+                article_data = scrape_article_blocking(url.text)
                 if article_data:
                     articles.append(article_data)
 
@@ -485,8 +530,12 @@ async def scrape_entire_site(base_url: str) -> List[Dict]:
     :param base_url: The base URL of the site to scrape
     :return: A list of dictionaries containing scraped article data
     """
-    # Step 1: Collect internal links from the site
-    links = collect_internal_links(base_url)
+    # Step 1: Collect internal links from the site (async, with rate limiting)
+    try:
+        rate = RateLimiter(max_requests_per_second=1.5, max_requests_per_minute=60, max_requests_per_hour=1000)
+    except Exception:
+        rate = None
+    links = await async_collect_internal_links(base_url, rate_limiter=rate)
     log_histogram("internal_links_collected", len(links), labels={"base_url": base_url})
     logging.info(f"Collected {len(links)} internal links.")
 
@@ -532,7 +581,12 @@ def scrape_by_url_level(base_url: str, level: int) -> list:
     links = collect_internal_links(base_url)
     filtered_links = [link for link in links if get_url_level(link) <= level]
 
-    return [article for link in filtered_links if (article := scrape_article(link))]
+    results = []
+    for link in filtered_links:
+        article = scrape_article_blocking(link)
+        if article:
+            results.append(article)
+    return results
 
 
 def scrape_from_sitemap(sitemap_url: str) -> list:
@@ -542,8 +596,12 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
         response.raise_for_status()
         root = xET.fromstring(response.content)
 
-        return [article for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
-                if (article := scrape_article(url.text))]
+        results = []
+        for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
+            article = scrape_article_blocking(url.text)
+            if article:
+                results.append(article)
+        return results
     except requests.RequestException as e:
         logging.error(f"Error fetching sitemap: {e}")
         return []
@@ -584,6 +642,45 @@ def collect_internal_links(base_url: str) -> set:
 
     return visited
 
+
+async def async_collect_internal_links(base_url: str,
+                                       max_pages: int = 500,
+                                       rate_limiter: Optional[RateLimiter] = None,
+                                       request_timeout: int = 20) -> set:
+    """Async internal link collector using aiohttp and optional rate limiter."""
+    visited: set = set()
+    to_visit: set = {base_url}
+
+    headers = {"User-Agent": web_scraping_user_agent}
+    timeout = aiohttp.ClientTimeout(total=request_timeout)
+
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        while to_visit and len(visited) < max_pages:
+            current_url = to_visit.pop()
+            if current_url in visited:
+                continue
+            try:
+                if rate_limiter:
+                    await rate_limiter.acquire()
+                async with session.get(current_url) as resp:
+                    if resp.status != 200:
+                        continue
+                    text = await resp.text()
+            except Exception:
+                continue
+
+            visited.add(current_url)
+            try:
+                soup = BeautifulSoup(text, 'html.parser')
+                for link in soup.find_all('a', href=True):
+                    full_url = urljoin(base_url, link['href'])
+                    if urlparse(full_url).netloc == urlparse(base_url).netloc:
+                        if full_url not in visited:
+                            to_visit.add(full_url)
+            except Exception:
+                continue
+
+    return visited
 
 def generate_temp_sitemap_from_links(links: set) -> str:
     """

@@ -24,8 +24,9 @@ The tldw_server supports two authentication modes:
 
 ### Single-User Mode (Default for Development)
 ```bash
-# Use the default development key
-export API_KEY="default-secret-key-for-single-user"
+# Generate a strong key once and set SINGLE_USER_API_KEY
+export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+export API_KEY="${SINGLE_USER_API_KEY}"
 ```
 
 ### Multi-User Mode (Production)
@@ -46,7 +47,7 @@ Test simple string matching without needing any LLM API keys:
 import requests
 import json
 
-API_KEY = "default-secret-key-for-single-user"
+API_KEY = "YOUR_API_KEY"
 BASE_URL = "http://localhost:8000"
 
 # Create an exact match evaluation
@@ -500,7 +501,7 @@ openai_api_key = sk-your-api-key-here
 **Solution**: Check your API key:
 ```python
 # For development/single-user mode:
-headers = {"Authorization": "Bearer default-secret-key-for-single-user"}
+headers = {"Authorization": "Bearer YOUR_API_KEY"}
 
 # For production/multi-user mode:
 headers = {"Authorization": "Bearer your-actual-api-key"}
@@ -579,7 +580,7 @@ import json
 import time
 
 # Configuration
-API_KEY = "default-secret-key-for-single-user"
+API_KEY = "YOUR_API_KEY"
 BASE_URL = "http://localhost:8000"
 headers = {"Authorization": f"Bearer {API_KEY}"}
 

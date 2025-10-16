@@ -136,10 +136,22 @@ def ensure_nltk_data():
     and joining with a timeout. If it times out or fails, we proceed with
     fallbacks (later code already handles missing punkt).
     """
+    # Honor test/offline environments to avoid downloads
+    _TEST_MODE = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    _DISABLE_NLTK_DOWNLOADS = os.getenv("DISABLE_NLTK_DOWNLOADS", "").lower() in ("1", "true", "yes")
+    _RUNNING_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
+    _FORCE_ALLOW_NLTK = os.getenv("ALLOW_NLTK_DOWNLOADS", "").lower() in ("1", "true", "yes")
+    _ALLOW_NLTK_DOWNLOADS = _FORCE_ALLOW_NLTK or not (_TEST_MODE or _DISABLE_NLTK_DOWNLOADS or _RUNNING_PYTEST)
+
     try:
         nltk.data.find('tokenizers/punkt')
         return True
     except Exception as e:
+        if not _ALLOW_NLTK_DOWNLOADS:
+            logging.info(
+                f"Skipping NLTK 'punkt' download (TEST_MODE={_TEST_MODE}, DISABLE_NLTK_DOWNLOADS={_DISABLE_NLTK_DOWNLOADS}, PYTEST={_RUNNING_PYTEST}); set ALLOW_NLTK_DOWNLOADS=1 to override. Proceeding with fallbacks."
+            )
+            return False
         logging.warning(f"NLTK 'punkt' not available ({e}). Attempting timed download...")
         import threading, queue
 

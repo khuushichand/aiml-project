@@ -16,11 +16,11 @@ import json
 import re
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
-import logging
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import BaseEvaluation
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class SimpleQAEvaluation(BaseEvaluation):

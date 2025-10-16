@@ -35,48 +35,62 @@ def test_media_add_db_and_list(page, server_url):
     # Send request scoped to Add Media section
     page.locator("#addMedia").get_by_text("Send Request").click()
 
-    # Wait for response; allow generous timeout
+    # Wait for response content to render
     page.wait_for_selector("#addMedia_response", timeout=30000)
+    try:
+        page.wait_for_function("() => (document.querySelector('#addMedia_response')?.innerText || '').length > 0", timeout=30000)
+    except Exception:
+        pass
     resp_text = page.locator("#addMedia_response").inner_text()
-    assert resp_text != ""
+    assert resp_text.strip() != ""
     # Should contain results and DB hints
     assert "results" in resp_text
-
-    # Now verify via Media Management → List All Media
-    page.get_by_role("tab", name="Media").click()
+    # Verify newly added item appears in list and search (strict checks)
+    # Navigate to Media Management for list/search endpoints
     page.get_by_role("tab", name="Media Management").click()
 
-    # Trigger list call with brief retries to absorb DB latency
-    found_in_list = False
+    # List All Media (GET /api/v1/media/)
+    page.get_by_text("GET /api/v1/media/ - List All Media Items").scroll_into_view_if_needed()
+    # Increase page size to ensure the newly added item appears
+    page.fill("#listAllMedia_results_per_page", "100")
+    page.locator("#listAllMedia").get_by_text("Send Request").click()
+    page.wait_for_selector("#listAllMedia_response", timeout=30000)
+    try:
+        page.wait_for_function("() => (document.querySelector('#listAllMedia_response')?.innerText || '').length > 0", timeout=30000)
+    except Exception:
+        pass
+    # Expand JSON nodes to reveal nested item fields
     for _ in range(5):
-        page.locator("#listAllMedia").get_by_text("Send Request").click()
-        page.wait_for_selector("#listAllMedia_response")
-        list_text = page.locator("#listAllMedia_response").inner_text()
-        if title in list_text or "e2e_sample.txt" in list_text:
-            found_in_list = True
+        collapsed = page.locator("#listAllMedia_response .json-toggle.collapsed")
+        if collapsed.count() == 0:
             break
-        page.wait_for_timeout(500)
-    assert found_in_list, "Media item not found in list after retries"
+        try:
+            collapsed.first.click()
+        except Exception:
+            break
+    list_text = page.locator("#listAllMedia_response").inner_text()
+    assert "items" in list_text, "Expected items array in list response"
+    assert title in list_text, "Newly added title not found in list response"
 
-    # Also verify via Search endpoint using the title as query
-    page.locator("#searchMediaItems").scroll_into_view_if_needed()
-    # Overwrite payload with a focused title search
-    search_payload = {
-        "query": title,
-        "fields": ["title", "content"],
-        "sort_by": "relevance"
-    }
-    # Fill textarea with JSON
-    page.fill("#searchMediaItems_payload", __import__("json").dumps(search_payload, indent=2))
-    # Trigger search in the scoped section
-    found = False
+    # Search Media Items (POST /api/v1/media/search) using our title
+    page.get_by_text("POST /api/v1/media/search - Search Media Items").scroll_into_view_if_needed()
+    # Replace payload with our query to reduce noise
+    page.fill("#searchMediaItems_payload", '{\n  "query": "' + title + '",\n  "fields": ["title"]\n}')
+    page.locator("#searchMediaItems").get_by_text("Send Request").click()
+    page.wait_for_selector("#searchMediaItems_response", timeout=30000)
+    try:
+        page.wait_for_function("() => (document.querySelector('#searchMediaItems_response')?.innerText || '').length > 0", timeout=30000)
+    except Exception:
+        pass
+    # Expand nested JSON nodes before asserting
     for _ in range(5):
-        page.locator("#searchMediaItems").get_by_text("Send Request").click()
-        page.wait_for_selector("#searchMediaItems_response")
-        search_text = page.locator("#searchMediaItems_response").inner_text()
-        if title in search_text or "e2e_sample.txt" in search_text:
-            found = True
+        collapsed = page.locator("#searchMediaItems_response .json-toggle.collapsed")
+        if collapsed.count() == 0:
             break
-        # brief wait before retrying
-        page.wait_for_timeout(500)
-    assert found, "Media item not found via search after retries"
+        try:
+            collapsed.first.click()
+        except Exception:
+            break
+    search_text = page.locator("#searchMediaItems_response").inner_text()
+    assert "items" in search_text, "Expected items array in search response"
+    assert title in search_text, "Newly added title not found in search response"

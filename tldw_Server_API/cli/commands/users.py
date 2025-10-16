@@ -29,7 +29,7 @@ def list_users(ctx, output_format):
     try:
         cli_context.load_config()
         
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
         
         # Get user list (simplified - would need proper user management)
         users_data = []  # This would come from actual user database
@@ -59,9 +59,9 @@ def show_user_limits(ctx, user_id, output_format):
     try:
         cli_context.load_config()
         
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
-        
-        stats = user_rate_limiter.get_user_stats(user_id)
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
+        limiter = get_user_rate_limiter_for_user(int(user_id))
+        stats = limiter.get_user_stats(user_id)
         
         if output_format == 'json':
             print_json(stats, f"User Limits: {user_id}")
@@ -89,10 +89,11 @@ def set_user_tier(ctx, user_id, tier):
     try:
         cli_context.load_config()
         
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter, UserTier
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user, UserTier
         
         tier_enum = UserTier(tier)
-        success = user_rate_limiter.set_user_tier(user_id, tier_enum)
+        limiter = get_user_rate_limiter_for_user(int(user_id))
+        success = limiter.set_user_tier(user_id, tier_enum)
         
         if success:
             print_success(f"User {user_id} tier set to {tier}")
@@ -116,9 +117,9 @@ def reset_user_limits(ctx, user_id):
     try:
         cli_context.load_config()
         
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
-        
-        success = user_rate_limiter.reset_user_limits(user_id)
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
+        limiter = get_user_rate_limiter_for_user(int(user_id))
+        success = limiter.reset_user_limits(user_id)
         
         if success:
             print_success(f"Rate limits reset for user {user_id}")

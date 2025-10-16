@@ -4,7 +4,7 @@ Defines the complete lifecycle and metadata for tasks.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 import uuid
@@ -66,7 +66,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     result: Optional[Any] = None
     error: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -143,6 +143,9 @@ class Task:
                 elif isinstance(value, datetime):
                     setattr(task, field_name, value)
         
+        if task.metadata is None:
+            task.metadata = {}
+        
         return task
     
     def is_ready(self) -> bool:
@@ -153,13 +156,13 @@ class Task:
         """Check if task has expired"""
         if not self.expires_at:
             return False
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc).replace(tzinfo=None) > self.expires_at
     
     def is_scheduled(self) -> bool:
         """Check if task is scheduled for future execution"""
         if not self.scheduled_at:
             return False
-        return datetime.utcnow() < self.scheduled_at
+        return datetime.now(timezone.utc).replace(tzinfo=None) < self.scheduled_at
     
     def should_retry(self) -> bool:
         """Check if task should be retried after failure"""
