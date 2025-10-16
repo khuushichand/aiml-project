@@ -59,6 +59,39 @@ def test_delay_step_then_log_succeeds(client_with_wf: TestClient):
     assert "Alice" in (data.get("outputs") or {}).get("message", "")
 
 
+def test_wait_for_approval_then_resume(client_with_wf: TestClient):
+    client = client_with_wf
+    # Flow: log -> wait_for_approval -> log
+    definition = {
+        "name": "approval-flow",
+        "version": 1,
+        "steps": [
+            {"id": "l1", "type": "log", "config": {"message": "Start", "level": "info"}},
+            {"id": "w1", "type": "wait_for_approval", "config": {"instructions": "Approve to continue"}},
+            {"id": "l2", "type": "log", "config": {"message": "Approved by {{ inputs.name }}", "level": "info"}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {"name": "Nina"}}).json()["run_id"]
+    # Wait until the run enters waiting state
+    import time as _time
+    deadline = _time.time() + 5.0
+    waiting = False
+    while _time.time() < deadline:
+        rd = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if rd.get("status") in ("waiting_human", "waiting_approval"):
+            waiting = True
+            break
+        _time.sleep(0.05)
+    assert waiting
+    # Approve step w1 and resume (use Approvals endpoint)
+    r = client.post(f"/api/v1/workflows/runs/{run_id}/steps/w1/approve", json={"comment": "ok"})
+    assert r.status_code == 200
+    data = _wait_for_terminal(client, run_id)
+    assert data["status"] == "succeeded"
+    assert "Nina" in (data.get("outputs") or {}).get("message", "")
+
+
 def test_log_only_outputs_shape(client_with_wf: TestClient):
     client = client_with_wf
     definition = {

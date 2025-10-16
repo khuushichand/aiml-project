@@ -48,8 +48,13 @@ def test_templates_list_and_get(client: TestClient):
 
 def test_templates_invalid_and_missing(client: TestClient):
     # Invalid name rejected
+    # Non-encoded traversal may be normalized by the router; accept 400 or 404
     bad = client.get("/api/v1/workflows/templates/../../etc/passwd")
-    assert bad.status_code == 400
+    assert bad.status_code in (400, 404)
+
+    # URL-encoded traversal should be rejected with 400 (guarded before resolution)
+    bad_enc = client.get("/api/v1/workflows/templates/%2E%2E/%2E%2E/etc/passwd")
+    assert bad_enc.status_code == 400
 
     # Missing name 404
     miss = client.get("/api/v1/workflows/templates/not_a_template")
@@ -79,3 +84,13 @@ def test_template_create_and_run_flow(client: TestClient):
     ev = client.get(f"/api/v1/workflows/runs/{run_id}/events")
     assert ev.status_code == 200, ev.text
     assert isinstance(ev.json(), list)
+
+
+def test_templates_tags_endpoint(client: TestClient):
+    r = client.get("/api/v1/workflows/templates/tags")
+    assert r.status_code == 200, r.text
+    tags = r.json()
+    assert isinstance(tags, list)
+    # Should include a few known tags from bundled templates
+    expected = {"tts", "pdf", "research", "rag", "policy"}
+    assert expected.issubset(set(tags)), f"Missing tags: {expected - set(tags)} in {tags}"

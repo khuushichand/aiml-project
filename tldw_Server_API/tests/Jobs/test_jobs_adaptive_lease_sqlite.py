@@ -4,7 +4,7 @@ from datetime import datetime
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
-def test_adaptive_lease_fallback_sqlite(monkeypatch):
+def test_adaptive_lease_fallback_sqlite(monkeypatch, tmp_path):
     # Enable adaptive lease; with no history, fallback should be max(min_s, 30) => default 30s
     monkeypatch.setenv("JOBS_ADAPTIVE_LEASE_ENABLE", "true")
     # Ensure min is default (15) and cap large enough
@@ -15,6 +15,9 @@ def test_adaptive_lease_fallback_sqlite(monkeypatch):
     monkeypatch.setenv("JOBS_ALLOWED_JOB_TYPES_CHATBOOKS", "sample")
     monkeypatch.setenv("JOBS_ALLOWED_QUEUES", "default,high,low")
 
+    # Isolate DB to avoid state bleed
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
     jm = JobManager()
 
     j = jm.create_job(

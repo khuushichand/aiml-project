@@ -91,7 +91,12 @@ except Exception as _ps_import_err:  # noqa: BLE001 - log and continue, not crit
 # RAG Endpoints
 from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router  # RAG health/caching/metrics endpoints
 from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router  # Unified RAG API with all features as parameters
-from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_router
+try:
+    from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_router
+    _HAS_WORKFLOWS = True
+except Exception as _wf_import_err:  # noqa: BLE001
+    logger.warning(f"Workflows endpoints unavailable; skipping import: {_wf_import_err}")
+    _HAS_WORKFLOWS = False
 # Legacy RAG Endpoint (Deprecated)
 # from tldw_Server_API.app.api.v1.endpoints.rag import router as retrieval_agent_router
 #
@@ -161,6 +166,16 @@ from tldw_Server_API.app.core.Metrics import (
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
 from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
+# MCP Unified config validation (fail-fast hardening)
+try:
+    from tldw_Server_API.app.core.MCP_unified.config import (
+        validate_config as validate_mcp_config,
+        get_config as get_mcp_config,
+    )
+except Exception:
+    # MCP module may be optional in some minimal deployments; guard import
+    validate_mcp_config = None  # type: ignore[assignment]
+    get_mcp_config = None  # type: ignore[assignment]
 #
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 #
@@ -254,10 +269,17 @@ def _safe_log_format(record: dict) -> str:
     span_id = extra.get("span_id", "")
     request_id = extra.get("request_id", "")
     session_id = extra.get("session_id", "")
-    name = record.get("name", "")
-    function = record.get("function", "")
+    def _san(v: object) -> str:
+        try:
+            s = str(v)
+            # Remove angle brackets to avoid Loguru tag parser interpreting them
+            return s.replace("<", "").replace(">", "")
+        except Exception:
+            return ""
+    name = _san(record.get("name", ""))
+    function = _san(record.get("function", ""))
     line = record.get("line", "")
-    message = record.get("message", "")
+    message = _san(record.get("message", ""))
     return f"{ts_str} | {level:<8} | trace={trace_id} span={span_id} req={request_id} ses={session_id} | {name}:{function}:{line} - {message}"
 
 logger.add(
@@ -314,10 +336,29 @@ READINESS_STATE = {"ready": True}
 async def lifespan(app: FastAPI):
     # Test-aware flag to optionally skip heavy startup subsystems in tests
     import os as _startup_os
-    _is_test_mode = _startup_os.getenv("TEST_MODE", "").lower() == "true"
+    _is_test_mode = (
+        _startup_os.getenv("PYTEST_CURRENT_TEST", "") != "" or
+        _startup_os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or
+        _startup_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+    )
     _disable_heavy_startup = _startup_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}
     _skip_heavy = _is_test_mode or _disable_heavy_startup
     chat_config = {}
+    # Startup: Validate MCP configuration in production (fail fast)
+    try:
+        if get_mcp_config and validate_mcp_config:
+            mcp_cfg = get_mcp_config()
+            if not (mcp_cfg.debug_mode or _is_test_mode):
+                ok = validate_mcp_config()
+                if not ok:
+                    raise RuntimeError(
+                        "MCP configuration validation failed; refusing to start in production"
+                    )
+    except Exception as _mcp_val_err:
+        # Abort startup on validation errors
+        logger.error(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
+        raise
+
     # Startup: Initialize telemetry and metrics
     logger.info("App Startup: Initializing telemetry and metrics...")
     try:
@@ -919,6 +960,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start LLM usage aggregator: {e}")
 
+    # Start personalization consolidation service if enabled
+    try:
+        _personalization_enabled = bool(_app_settings.get("PERSONALIZATION_ENABLED", True))
+        _skip_consolidation = _env_os.getenv("DISABLE_PERSONALIZATION_CONSOLIDATION", "").lower() in {"1", "true", "yes", "on"}
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping personalization consolidation service")
+        elif not _personalization_enabled or _skip_consolidation:
+            logger.info("Personalization consolidation disabled (flag or env)")
+        else:
+            from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
+            _consol = get_consolidation_service()
+            await _consol.start()
+            logger.info("Personalization consolidation service started")
+    except Exception as e:
+        logger.warning(f"Failed to start personalization consolidation: {e}")
+
     # Ensure PG RLS policies (optional, guarded by env)
     try:
         _ensure_rls = _env_os.getenv("RAG_ENSURE_PG_RLS", "").lower() in {"1", "true", "yes", "on"}
@@ -1190,6 +1247,15 @@ async def lifespan(app: FastAPI):
                     jobs_metrics_task.cancel()
                 except Exception:
                     pass
+
+        # Personalization consolidation service shutdown
+        try:
+            from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
+            _consol = get_consolidation_service()
+            await _consol.stop()
+            logger.info("Personalization consolidation service stopped")
+        except Exception:
+            pass
 
         # Jobs crypto rotate worker shutdown
         if 'jobs_crypto_rotate_task' in locals() and jobs_crypto_rotate_task:
@@ -1474,6 +1540,10 @@ OPENAPI_TAGS = [
     {"name": "chat-dictionaries", "description": "Per-user/domain dictionaries for chat preprocessing and postprocessing.",
      "externalDocs": {"description": "Character Chat API", "url": _ext_url("/docs-static/CHARACTER_CHAT_API_DOCUMENTATION.md")}},
     {"name": "chat-documents", "description": "Generate documents from conversations and templates."},
+    {"name": "personalization", "description": "Opt-in user profiles, memories, and RAG biasing.",
+     "externalDocs": {"description": "Personalization design", "url": _ext_url("/docs-static/Design/Personalization_Design.md")}},
+    {"name": "persona", "description": "Persona agent (voice, tools, MCP).",
+     "externalDocs": {"description": "Persona design", "url": _ext_url("/docs-static/Design/Persona_Agent_Design.md")}},
 ]
 
 import os as _env_os
@@ -1545,6 +1615,25 @@ app = FastAPI(
     openapi_url=_openapi_url,
     lifespan=lifespan,
 )
+
+# Early middleware to guard workflow templates path traversal attempts
+from starlette.responses import JSONResponse  # noqa: E402
+
+@app.middleware("http")
+async def _guard_workflow_templates_traversal(request, call_next):
+    try:
+        p = request.url.path or ""
+        # Only inspect under the workflows templates prefix
+        prefix = "/api/v1/workflows/templates/"
+        if p.startswith(prefix):
+            tail = p[len(prefix):]
+            # If any traversal segments are found in the raw path, reject early with 400
+            # This runs before route resolution so it also handles router-level 404 shortcuts.
+            if ".." in tail.split("/"):
+                return JSONResponse({"detail": "Invalid template name"}, status_code=400)
+    except Exception:
+        pass
+    return await call_next(request)
 
 # Add global security schemes, servers, and branding to the generated OpenAPI schema
 def custom_openapi():
@@ -1619,6 +1708,7 @@ def custom_openapi():
                 "characters",
                 "character-chat-sessions",
                 "character-messages",
+                "persona",
             ],
         },
         {
@@ -1631,7 +1721,7 @@ def custom_openapi():
         },
         {
             "name": "Studio & Knowledge",
-            "tags": ["prompt-studio", "prompts", "notes", "chatbooks", "tools"],
+            "tags": ["prompt-studio", "prompts", "notes", "personalization", "chatbooks", "tools"],
         },
         {
             "name": "Infra",
@@ -1978,12 +2068,18 @@ async def api_metrics():
     return registry.get_all_metrics()
 
 # Router for health monitoring endpoints (NEW)
-from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+try:
+    from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+    _HAS_HEALTH = True
+except Exception as _health_import_err:  # noqa: BLE001
+    logger.warning(f"Health endpoints unavailable; skipping import: {_health_import_err}")
+    _HAS_HEALTH = False
 from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
 from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring_router
-app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
-# Also expose liveness/readiness at root per ops conventions
-app.include_router(health_router, prefix="", tags=["health"])  # /healthz, /readyz
+if _HAS_HEALTH:
+    app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
+    # Also expose liveness/readiness at root per ops conventions
+    app.include_router(health_router, prefix="", tags=["health"])  # /healthz, /readyz
 app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
 app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
 from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
@@ -2067,18 +2163,25 @@ if _HAS_PROMPT_STUDIO:
 
 
 # Router for RAG endpoints
-# Register health router first to serve /api/v1/rag/health* shape expected by tests
+# Register RAG health router unconditionally; independent of general health import
 app.include_router(rag_health_router, tags=["rag-health"])
 # RAG API - Production API using unified pipeline
 app.include_router(rag_unified_router, tags=["rag-unified"])
 
 
 # Workflows API (v0.1 scaffolding)
-app.include_router(workflows_router, tags=["workflows"])
+if _HAS_WORKFLOWS:
+    app.include_router(workflows_router, tags=["workflows"])
 
 # Workflows Scheduler (CRUD for schedules)
-from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
-app.include_router(scheduler_workflows_router, tags=["scheduler"])
+try:
+    from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
+    _HAS_SCHEDULER_WF = True
+except Exception as _sch_import_err:  # noqa: BLE001
+    logger.warning(f"Scheduler Workflows endpoints unavailable; skipping import: {_sch_import_err}")
+    _HAS_SCHEDULER_WF = False
+if _HAS_SCHEDULER_WF:
+    app.include_router(scheduler_workflows_router, tags=["scheduler"])
 
 
 # Router for Research endpoint
@@ -2126,6 +2229,24 @@ app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"]
 # Router for Flashcards
 app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
 
+# Routers for Personalization and Persona (new features; scaffold)
+from tldw_Server_API.app.api.v1.endpoints.personalization import (
+    router as personalization_router,
+)
+from tldw_Server_API.app.api.v1.endpoints.persona import (
+    router as persona_router,
+)
+app.include_router(
+    personalization_router,
+    prefix=f"{API_V1_PREFIX}/personalization",
+    tags=["personalization"],
+)
+app.include_router(
+    persona_router,
+    prefix=f"{API_V1_PREFIX}/persona",
+    tags=["persona"],
+)
+
 
 # Router for MCP Unified (Secure, production-ready implementation)
 app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
@@ -2166,10 +2287,38 @@ async def readiness_check():
         # Early flip: when shutting down, report not ready immediately
         if not READINESS_STATE.get("ready", True):
             return {"status": "not_ready", "reason": "shutdown_in_progress"}
-        # DB health
+        # Engine stats
+        try:
+            from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler as _WS
+            engine_stats = _WS.instance().stats()
+        except Exception:
+            engine_stats = {"queue_depth": None, "active_tenants": None, "active_workflows": None}
+
+        # DB health (AuthNZ pool basic health for API; Workflows DB schema check below)
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         db_pool = await get_db_pool()
         db_health = await db_pool.health_check()
+
+        # Workflows backend schema check
+        try:
+            from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
+            from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase as _WDB
+            backend = get_content_backend_instance()
+            wdb: _WDB = create_workflows_database(backend=backend)
+            if wdb._using_backend():
+                with wdb.backend.transaction() as conn:  # type: ignore[union-attr]
+                    try:
+                        wf_schema_version = int(wdb._get_backend_schema_version(conn))  # type: ignore[attr-defined]
+                        wf_expected_version = int(wdb._CURRENT_SCHEMA_VERSION)  # type: ignore[attr-defined]
+                    except Exception:
+                        wf_schema_version = None
+                        wf_expected_version = None
+            else:
+                wf_schema_version = None
+                wf_expected_version = None
+        except Exception:
+            wf_schema_version = None
+            wf_expected_version = None
 
         # Provider manager health (if initialized)
         try:
@@ -2185,14 +2334,23 @@ async def readiness_check():
         from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE
 
         ready = (db_health.get("status") == "healthy")
-        status = "ready" if ready else "not_ready"
-        return {
-            "status": status,
+        # If workflows backend reports schema version, ensure it matches expected
+        if wf_schema_version is not None and wf_expected_version is not None:
+            ready = ready and (wf_schema_version == wf_expected_version)
+        body = {
+            "status": "ready" if ready else "not_ready",
             "database": db_health,
+            "workflows_db": {
+                "schema_version": wf_schema_version,
+                "expected_version": wf_expected_version,
+            },
+            "engine": engine_stats,
             "providers_initialized": providers_ok,
             "provider_health": provider_health,
             "otel_available": bool(OTEL_AVAILABLE),
         }
+        from fastapi.responses import JSONResponse as _JR
+        return _JR(body, status_code=(200 if ready else 503))
     except Exception as e:
         return {"status": "not_ready", "error": str(e)}
 

@@ -94,6 +94,19 @@ MCP_unified/
 - Fine-grained RBAC with permission inheritance
 - API key management with PBKDF2 hashing
 
+### WebSocket Hardening
+- Require WS authentication in production (`MCP_WS_AUTH_REQUIRED=true`)
+- Explicitly set allowed origins (`MCP_WS_ALLOWED_ORIGINS=http://your-ui:port`)
+
+### Client Certificate (mTLS) via Reverse Proxy
+- Enforce client certs by enabling `MCP_CLIENT_CERT_REQUIRED=true`
+- Configure the header asserted by your proxy (default `x-ssl-client-verify`)
+- Set `MCP_CLIENT_CERT_HEADER_VALUE` to the exact success sentinel (e.g., `SUCCESS`)
+- Only trusted proxies may assert this header — set `MCP_TRUSTED_PROXY_IPS` to your proxy CIDRs
+- X-Forwarded-For is honored only from trusted proxies (`MCP_TRUST_X_FORWARDED=true` if desired)
+
+Note: In test mode (`TEST_MODE=true`) the harness peer is treated as trusted for convenience.
+
 ### Rate Limiting
 - Multiple algorithms (Token Bucket, Sliding Window)
 - Per-user and per-endpoint limits
@@ -105,6 +118,15 @@ MCP_unified/
 - SQL injection prevention
 - XSS protection
 - Request size limits
+
+### SSRF Protection (Media Ingestion)
+- Media module only accepts `http/https` URLs
+- Rejects `.local` and hosts resolving to loopback/private/link-local/reserved/multicast IPs
+- Enforce allowed ports (`80,443` by default)
+- Optional allowlist per deployment via module settings:
+  - `allowed_domains`: ["example.com", "cdn.example.com"]
+  - `allowed_ports`: [80, 443]
+  - `blocked_domains`: ["unwanted.tld"]
 
 ## 🎯 Key Improvements Over Original
 
@@ -146,6 +168,15 @@ ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
 - `GET /api/v1/mcp/tools` - List available tools
 - `POST /api/v1/mcp/tools/execute` - Execute tool (auth required)
 - `GET /api/v1/mcp/health` - Health check
+
+## 🛡️ Production Checklist
+
+- Set secure secrets: `MCP_JWT_SECRET`, `MCP_API_KEY_SALT`
+- Enforce WS auth: `MCP_WS_AUTH_REQUIRED=true`
+- Configure `MCP_WS_ALLOWED_ORIGINS`
+- If using mTLS via proxy: set `MCP_CLIENT_CERT_REQUIRED=true`, `MCP_CLIENT_CERT_HEADER_VALUE`, and `MCP_TRUSTED_PROXY_IPS`
+- Keep rate limiting enabled; configure Redis for multi-instance
+- Do not use wildcard CORS in production
 
 ## 🧪 Testing
 
@@ -199,6 +230,14 @@ modules:
     name: Media
     settings:
       db_path: ./Databases/Media_DB_v2.db
+    # Optional runtime controls
+    # Limit concurrent operations per module instance
+    max_concurrent: 16
+    # Circuit breaker tuning
+    circuit_breaker_threshold: 3
+    circuit_breaker_timeout: 30
+    circuit_breaker_backoff_factor: 2.0
+    circuit_breaker_max_timeout: 180
 ```
 
 - Environment variable (comma-separated list):
@@ -258,8 +297,44 @@ Recommended hardening steps for Internet-exposed deployments:
   - The server falls back to an in-memory token bucket if Redis is unavailable.
 - Restrict module autoloads
   - Only classes under `tldw_Server_API.app.core.MCP_unified.modules.implementations` are allowed when auto-loading.
+- Write tools safety & validation (Security knobs)
+  - `MCP_DISABLE_WRITE_TOOLS=0|1` — If set to `1`, the protocol blocks all write-capable tools (category `ingestion`/`management`).
+  - `MCP_VALIDATE_INPUT_SCHEMA=0|1` — Validate tool `inputSchema` at the protocol layer (required fields, primitive types, unknown fields).
+  - `MCP_IDEMPOTENCY_TTL_SECONDS` — TTL for protocol-level idempotency cache for write tools (default: 300s).
+  - `MCP_IDEMPOTENCY_CACHE_SIZE` — Max entries for idempotency cache (LRU, default: 512).
+  - Client hint: pass `idempotencyKey` in JSON-RPC `tools/call` params to dedupe writes.
 - Demo auth (dev only)
   - `MCP_ENABLE_DEMO_AUTH` is for development/testing. If enabled in non-debug environments, the server logs a loud warning.
+  - `MCP_DEMO_AUTH_SECRET` must be set to a strong value; the token endpoint also requires loopback/private clients and debug/test mode.
+
+### Security Knobs (Quick Reference)
+
+| Knob | Env/Config | Default | Purpose |
+|---|---|---|---|
+| WebSocket auth required | `MCP_WS_AUTH_REQUIRED` | `1` | Enforce `Authorization`/`X-API-KEY` headers for WS clients |
+| WebSocket allowed origins | `MCP_WS_ALLOWED_ORIGINS` | *(empty)* | Comma-separated Origin allowlist to prevent UI spoofing |
+| WebSocket query auth | `MCP_WS_ALLOW_QUERY_AUTH` | `0` | Reject `?token=`/`?api_key=` query parameters (set `1` only for legacy clients) |
+| WebSocket idle timeout | `MCP_WS_IDLE_TIMEOUT_SECONDS` | `300` | Close idle WS sessions after N seconds |
+| WebSocket session rate cap | `MCP_WS_SESSION_RATE_COUNT` / `MCP_WS_SESSION_RATE_WINDOW_SECONDS` | `120 / 60` | Sliding-window JSON-RPC rate limits per session |
+| Disable write tools | `MCP_DISABLE_WRITE_TOOLS` | `0` | Hard block write-capable tools (ingestion/management categories) |
+| Input schema validation | `MCP_VALIDATE_INPUT_SCHEMA` | `1` | Enforce required fields, primitive types, unknown-field rejection |
+| Request size guard | `MCP_HTTP_MAX_BODY_BYTES` | `524288` | Reject oversized HTTP payloads (bytes) |
+| IP allow/deny lists | `MCP_ALLOWED_IPS` / `MCP_BLOCKED_IPS` / `MCP_TRUSTED_PROXY_IPS` | *(empty)* | Defense-in-depth for client networks and the proxies whose X-Forwarded-For headers are trusted |
+| Client certificates | `MCP_CLIENT_CERT_REQUIRED`, `MCP_CLIENT_CERT_HEADER`, `MCP_CLIENT_CERT_HEADER_VALUE` | `0`, `x-ssl-client-verify`, *(empty)* | Require mTLS headers from reverse proxy (e.g., NGINX, ALB) |
+| Idempotency cache TTL | `MCP_IDEMPOTENCY_TTL_SECONDS` | `300` | Time window for write-tool dedupe |
+| Idempotency cache size | `MCP_IDEMPOTENCY_CACHE_SIZE` | `512` | LRU size for idempotency cache entries |
+
+### WebSocket Session Policy Knobs
+
+Configure WS behavior to protect the server from idle and bursty sessions:
+
+- `MCP_WS_IDLE_TIMEOUT_SECONDS` (default: 300) — If no activity for this many seconds, the server closes the WS with code 1001 (Idle timeout).
+- `MCP_WS_SESSION_RATE_COUNT` (default: 120) — Max JSON-RPC requests allowed per session over the configured window.
+- `MCP_WS_SESSION_RATE_WINDOW_SECONDS` (default: 60) — Sliding window in seconds used for per-session rate counting.
+
+Notes
+- When the session rate is exceeded, the server sends a JSON-RPC error (-32002) and closes the connection with code 1013 (session rate limit exceeded).
+- The server emits Prometheus counters for WS session closures by reason (idle/session_rate): `mcp_ws_session_closures_total{reason="..."}`.
 
 ## 🔧 Rate Limits
 
@@ -325,12 +400,35 @@ Scrape MCP metrics at `GET /api/v1/mcp/metrics/prometheus` (text exposition form
 - Rate limit hits
 - Cache hit/miss rates
 - System resource usage
+ - Validation metrics:
+   - `mcp_tool_invalid_params_total{module,tool}` — schema/validator failures
+   - `mcp_tool_validator_missing_total{module,tool}` — write tools missing custom validators
+ - Idempotency metrics:
+   - `mcp_idempotency_hits_total{module,tool}` — protocol-level idempotency cache hits
+   - `mcp_idempotency_misses_total{module,tool}` — protocol-level idempotency cache misses
 
 Security: The Prometheus endpoint is gated by default (admin required). Only set `MCP_PROMETHEUS_PUBLIC=1` behind an internal network or ingress with auth.
 
 ### Health Checks
 - `/api/v1/mcp/health` - Overall health
 - `/api/v1/mcp/modules/health` - Module-specific health
+
+## ⚙️ Module Runtime Controls
+
+Tune module behavior and resilience without changing code.
+
+- Concurrency guard (per module)
+  - `ModuleConfig.max_concurrent` — Maximum concurrent operations per module (default: 20). Set to 0 to disable the guard.
+- Circuit breaker backoff (per module)
+  - `ModuleConfig.circuit_breaker_threshold` — Failures before opening (default: 5)
+  - `ModuleConfig.circuit_breaker_timeout` — Initial open window in seconds (default: 60)
+  - `ModuleConfig.circuit_breaker_backoff_factor` — Multiplier applied when re‑opening after half‑open failure (default: 2.0)
+  - `ModuleConfig.circuit_breaker_max_timeout` — Cap for backoff window (default: 300)
+
+How it works
+- When the breaker opens and the timeout elapses, the next call enters half‑open state (one probe).
+- If the probe succeeds, the breaker heals and the timeout resets to baseline.
+- If the probe fails, the breaker re‑opens with an exponentially increased timeout (capped).
 
 ## 🛡️ Security Checklist
 

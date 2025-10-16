@@ -39,6 +39,9 @@ class WebUI {
         // Start DLQ badge updates
         this.startDlqBadgeUpdates();
 
+        // Apply capability-based visibility (hide experimental tabs dynamically)
+        this.applyFeatureVisibilityFromServer();
+
         // If opened via file://, show guidance banner
         if (window.location.protocol === 'file:') {
             try {
@@ -51,6 +54,37 @@ class WebUI {
         }
 
         console.log('WebUI initialized successfully');
+    }
+
+    async applyFeatureVisibilityFromServer() {
+        try {
+            const base = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+            const res = await fetch(`${base}/api/v1/config/docs-info`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const caps = (data && (data.capabilities || data.supported_features)) || {};
+
+            // Map capabilities to DOM selectors to hide when disabled
+            const capabilityToSelectors = {
+                persona: [
+                    '.top-tab-button[data-toptab="persona"]',
+                    '#persona-subtabs'
+                ],
+                personalization: [
+                    '.top-tab-button[data-toptab="personalization"]',
+                    '#personalization-subtabs'
+                ],
+            };
+
+            const hide = (selector) => { const el = document.querySelector(selector); if (el) el.style.display = 'none'; };
+            Object.entries(capabilityToSelectors).forEach(([cap, selectors]) => {
+                const enabled = !!caps[cap];
+                if (!enabled) selectors.forEach(hide);
+            });
+        } catch (e) {
+            // Non-fatal
+            console.debug('Capability visibility fetch failed:', e);
+        }
     }
 
     loadTheme() {

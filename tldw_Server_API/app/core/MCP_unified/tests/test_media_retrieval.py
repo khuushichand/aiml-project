@@ -1,15 +1,7 @@
-"""
-Unit tests for media.get chunk_with_siblings budgeting (prechunked path).
-Tests are skipped by default; enable with RUN_MCP_TESTS=1.
-"""
+"""Unit tests for media.get chunk_with_siblings budgeting (prechunked path)."""
 
-import os
 import pytest
 from typing import Any, Dict, List
-
-os.environ.setdefault("RUN_MCP_TESTS", "0")
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module import MediaModule
 from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
@@ -88,4 +80,3 @@ async def test_media_get_chunk_with_siblings_budget():
     assert body in ("B" * 10 + "\n\n" + "A" * 10, "A" * 10 + "\n\n" + "B" * 10)
     # Ensure total chars <= 25
     assert len(body.replace("\n", "")) <= 25
-

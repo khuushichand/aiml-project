@@ -1,14 +1,7 @@
-"""
-Category-specific rate limit tests for MCP Unified.
+"""Category-specific rate limit tests for MCP Unified."""
 
-Enable with RUN_MCP_TESTS=1.
-"""
-
-import os
 import pytest
 from typing import Dict, Any, List
-
-os.environ.setdefault("RUN_MCP_TESTS", "0")
 
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
@@ -17,8 +10,6 @@ from tldw_Server_API.app.core.MCP_unified.protocol import MCPRequest
 from tldw_Server_API.app.core.MCP_unified.config import get_config
 from fastapi import HTTPException
 
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 
 
 class StubCategoryModule(BaseModule):
@@ -28,11 +19,24 @@ class StubCategoryModule(BaseModule):
         return {"ok": True}
     async def get_tools(self) -> List[Dict[str, Any]]:
         return [
-            {"name": "mock_ingest", "description": "", "inputSchema": {"type": "object"}},
-            {"name": "mock_read", "description": "", "inputSchema": {"type": "object"}},
+            {
+                "name": "mock_ingest",
+                "description": "",
+                "inputSchema": {"type": "object"},
+                "metadata": {"category": "ingestion"},
+            },
+            {
+                "name": "mock_read",
+                "description": "",
+                "inputSchema": {"type": "object"},
+                "metadata": {"category": "read"},
+            },
         ]
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         return f"ok:{tool_name}"
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]) -> None:
+        # Tests only need the validator hook to exist; no real validation required.
+        return None
 
 
 @pytest.mark.asyncio
@@ -41,6 +45,7 @@ async def test_category_limits_ingestion_vs_read(monkeypatch):
     monkeypatch.setenv("MCP_TOOL_CATEGORY_MAP", '{"mock_ingest":"ingestion","mock_read":"read"}')
     monkeypatch.setenv("MCP_RATE_LIMIT_RPM_INGESTION", "1")
     monkeypatch.setenv("MCP_RATE_LIMIT_RPM_READ", "999")
+    monkeypatch.setenv("MCP_RATE_LIMIT_BURST_INGESTION", "1")
     # Reset config cache to pick up env
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
@@ -67,7 +72,9 @@ async def test_category_limits_ingestion_vs_read(monkeypatch):
     # First ingest call should pass
     r1 = await call_tool("mock_ingest")
     assert r1.error is None
-    # Second ingest call within the same minute should rate limit
+    # Token-bucket priming allows one additional burst request; third should rate limit
+    r2 = await call_tool("mock_ingest")
+    assert r2.error is None
     with pytest.raises(HTTPException) as ei:
         await call_tool("mock_ingest")
     assert ei.value.status_code == 429
@@ -79,4 +86,3 @@ async def test_category_limits_ingestion_vs_read(monkeypatch):
     assert r3.error is None
 
     await server.shutdown()
-

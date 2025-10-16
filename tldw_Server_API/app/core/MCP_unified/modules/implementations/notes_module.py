@@ -135,6 +135,10 @@ class NotesModule(BaseModule):
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
+        try:
+            self.validate_tool_arguments(tool_name, args)
+        except Exception as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "notes.search":
             return await self._search_notes(args, context)
         if tool_name == "notes.get":
@@ -206,6 +210,31 @@ class NotesModule(BaseModule):
             "next_offset": (offset + len(rows)) if len(raw) > (offset + len(rows)) else None,
             "total_estimated": len(raw),
         }
+
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+        if tool_name == "notes.search":
+            q = arguments.get("query")
+            if not isinstance(q, str) or not (1 <= len(q) <= 1000):
+                raise ValueError("query must be 1..1000 chars")
+            limit = int(arguments.get("limit", 10))
+            offset = int(arguments.get("offset", 0))
+            snip = int(arguments.get("snippet_length", 300))
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be 1..100")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if snip < 50 or snip > 2000:
+                raise ValueError("snippet_length must be 50..2000")
+        elif tool_name == "notes.get":
+            note_id = arguments.get("note_id")
+            if not isinstance(note_id, str) or not note_id:
+                raise ValueError("note_id must be a non-empty string")
+            retrieval = arguments.get("retrieval") or {}
+            if not isinstance(retrieval, dict):
+                raise ValueError("retrieval must be an object")
+            snip = int(retrieval.get("snippet_length", 300))
+            if snip < 50 or snip > 2000:
+                raise ValueError("retrieval.snippet_length must be 50..2000")
 
     async def _get_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
         note_id: str = args.get("note_id")

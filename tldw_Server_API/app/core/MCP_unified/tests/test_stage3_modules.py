@@ -1,21 +1,12 @@
-"""
-Stage 3 module tests (unit-level, stubbed): knowledge.search aggregation with stub sources.
-Tests are skipped by default; enable with RUN_MCP_TESTS=1.
-"""
+"""Stage 3 module tests (unit-level, stubbed): knowledge.search aggregation with stub sources."""
 
-import os
 import pytest
 from typing import Dict, Any, List
-
-os.environ.setdefault("RUN_MCP_TESTS", "0")
 
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.knowledge_module import KnowledgeModule
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
-
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 
 
 class StubNotesModule(BaseModule):

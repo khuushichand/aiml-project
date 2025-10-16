@@ -1129,7 +1129,7 @@ class JobManager:
     ) -> Optional[Dict[str, Any]]:
         """Atomically acquire the next eligible job and start a lease.
 
-        Selection order: priority ASC, available_at/created_at ASC.
+        Selection order: priority DESC, available_at/created_at ASC.
         Reclaims expired processing jobs by allowing acquisition when
         `leased_until` is NULL or in the past.
         """
@@ -1192,7 +1192,7 @@ class JobManager:
                                     "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
                                     "  )"
                                     + (" AND owner_user_id = %s" if owner_user_id else "") +
-                                    "  ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                                    "  ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                                     ")"
                                     "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
                                     "WHERE id IN (SELECT id FROM picked) RETURNING *"
@@ -1227,7 +1227,7 @@ class JobManager:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
                             # Stable ordering: priority ASC (lower number is higher priority), then available/created asc, then id asc
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1320,7 +1320,7 @@ class JobManager:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
                         # Stable ordering mirrors Postgres path
-                        sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1390,7 +1390,7 @@ class JobManager:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
                         # Stable ordering mirrors Postgres path
-                        base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         row = conn.execute(base, params).fetchone()
                         if not row:
                             return None

@@ -1,15 +1,7 @@
-"""
-Unit tests for chats.get window selection around an anchor message.
-Tests are skipped by default; enable with RUN_MCP_TESTS=1.
-"""
+"""Unit tests for chats.get window selection around an anchor message."""
 
-import os
 import pytest
 from typing import Any, Dict, List
-
-os.environ.setdefault("RUN_MCP_TESTS", "0")
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.chats_module import ChatsModule
 from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
@@ -66,4 +58,3 @@ async def test_chats_get_window_selection_budget():
     # Combined token length <= 25
     total_chars = sum(len(m.get("content") or "") for m in attachments)
     assert total_chars <= 25
-

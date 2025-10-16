@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException
 from loguru import logger
 
-from .config import get_config
+from .config import get_config, validate_config
 from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
 from .modules.registry import get_module_registry
 from .auth.jwt_manager import get_jwt_manager
@@ -22,6 +22,8 @@ from .auth.authnz_rbac import get_rbac_policy
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
 from .monitoring.metrics import get_metrics_collector
+from .security.ip_filter import get_ip_access_controller
+from .security.request_guards import enforce_client_certificate_headers
 import ipaddress
 
 
@@ -141,6 +143,26 @@ class MCPServer:
         self.background_tasks: Set[asyncio.Task] = set()
         
         logger.info("MCP Server created")
+
+    @staticmethod
+    def _mask_secrets(text: str) -> str:
+        """Best-effort masking of bearer/API keys in strings."""
+        try:
+            if not text:
+                return text
+            import re as _re
+            text = _re.sub(r"(Bearer)\s+[A-Za-z0-9._\-~+/=]+", r"\1 ****", text, flags=_re.IGNORECASE)
+            patterns = [
+                r"(api[_-]?key)\s*[:=]\s*([^\s,;]+)",
+                r"(token)\s*[:=]\s*([^\s,;]+)",
+                r"(access[_-]?token)\s*[:=]\s*([^\s,;]+)",
+                r"(refresh[_-]?token)\s*[:=]\s*([^\s,;]+)",
+            ]
+            for p in patterns:
+                text = _re.sub(p, lambda m: f"{m.group(1)}=****", text, flags=_re.IGNORECASE)
+            return text
+        except Exception:
+            return text
     
     async def initialize(self):
         """Initialize the server and all modules"""
@@ -151,6 +173,17 @@ class MCPServer:
         logger.info("Initializing MCP Server")
 
         try:
+            # Fail fast on insecure production configurations
+            try:
+                import os as _os
+                _test_mode = _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+                if not self.config.debug_mode and not _test_mode:
+                    ok = validate_config()
+                    if not ok:
+                        raise RuntimeError("MCP configuration validation failed; refusing to start in production")
+            except Exception as _ve:
+                # If validation fails, propagate to abort startup
+                raise
             # Warn if demo auth is enabled in a non-debug environment
             try:
                 import os as _os
@@ -165,7 +198,7 @@ class MCPServer:
             try:
                 await get_metrics_collector().start_collection()
             except Exception as e:
-                logger.warning(f"MCP metrics collector start failed: {e}")
+                logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
             
             # Register default modules (will be implemented when migrating modules)
             await self._register_default_modules()
@@ -180,7 +213,7 @@ class MCPServer:
             logger.info("MCP Server initialized successfully")
             
         except Exception as e:
-            logger.error(f"Server initialization failed: {e}")
+            logger.error(f"Server initialization failed: {self._mask_secrets(str(e))}")
             raise
 
     async def _ensure_default_tool_permissions(self):
@@ -202,7 +235,7 @@ class MCPServer:
                         name, desc, 'tools'
                     )
         except Exception as e:
-            logger.debug(f"Seed wildcard tool permission failed: {e}")
+            logger.debug(f"Seed wildcard tool permission failed: {self._mask_secrets(str(e))}")
     
     async def shutdown(self):
         """Gracefully shutdown the server"""
@@ -328,15 +361,18 @@ class MCPServer:
                         max_retries=m.get("max_retries", self.config.module_max_retries),
                         circuit_breaker_threshold=m.get("circuit_breaker_threshold", 5),
                         circuit_breaker_timeout=m.get("circuit_breaker_timeout", 60),
+                        max_concurrent=m.get("max_concurrent", 20),
+                        circuit_breaker_backoff_factor=m.get("circuit_breaker_backoff_factor", 2.0),
+                        circuit_breaker_max_timeout=m.get("circuit_breaker_max_timeout", 300),
                         settings=m.get("settings", {}),
                     )
                     await self.module_registry.register_module(module_id, cls, mc)
                     logger.info(f"Registered MCP module: {module_id} ({class_ref})")
                 except Exception as e:
-                    logger.error(f"Failed to register module {m}: {e}")
+                    logger.error(f"Failed to register module {m}: {self._mask_secrets(str(e))}")
 
         except Exception as e:
-            logger.error(f"Default modules registration failed: {e}")
+            logger.error(f"Default modules registration failed: {self._mask_secrets(str(e))}")
     
     def _start_background_tasks(self):
         """Start background maintenance tasks"""
@@ -484,14 +520,38 @@ class MCPServer:
         """
         connection_id = f"ws_{client_id or 'anonymous'}_{datetime.now().timestamp()}"
         user_id = None
-        # Determine client IP
+
+        controller = get_ip_access_controller()
+        metadata: Dict[str, Any] = {}
+        forwarded_for = websocket.headers.get("x-forwarded-for") or websocket.headers.get("X-Forwarded-For")
+        real_ip = websocket.headers.get("x-real-ip") or websocket.headers.get("X-Real-IP")
+        raw_remote_ip = None
         try:
-            client_ip = getattr(websocket.client, "host", None) or (
+            raw_remote_ip = getattr(websocket.client, "host", None) or (
                 websocket.client[0] if isinstance(websocket.client, (list, tuple)) else None
             )
-            client_ip = client_ip or "unknown"
         except Exception:
-            client_ip = "unknown"
+            raw_remote_ip = None
+
+        resolved_ip = controller.resolve_client_ip(raw_remote_ip, forwarded_for, real_ip)
+        if not controller.is_allowed(resolved_ip):
+            try:
+                logger.warning(
+                    "Rejecting MCP WebSocket connection from disallowed IP",
+                    extra={"audit": True, "ip": resolved_ip or "unknown", "client_id": client_id},
+                )
+            except Exception:
+                pass
+            await websocket.close(code=1008, reason="IP not allowed")
+            return
+
+        client_ip = resolved_ip or "unknown"
+
+        try:
+            enforce_client_certificate_headers(websocket.headers, remote_addr=raw_remote_ip)
+        except HTTPException:
+            await websocket.close(code=1008, reason="Client certificate required")
+            return
         
         # Origin validation (enforce when ws_allowed_origins configured)
         try:
@@ -555,22 +615,37 @@ class MCPServer:
                 ok = bool(user_id)
                 if ok:
                     logger.info(f"WebSocket authenticated for user (AuthNZ JWT): {user_id}")
+                    try:
+                        if payload:
+                            roles = payload.get("roles")
+                            permissions = payload.get("permissions") or payload.get("scopes")
+                            if isinstance(roles, list):
+                                metadata["roles"] = roles
+                            if isinstance(permissions, list):
+                                metadata["permissions"] = permissions
+                            elif isinstance(permissions, str):
+                                metadata["permissions"] = [permissions]
+                    except Exception:
+                        pass
             except Exception as e:
-                logger.debug(f"AuthNZ JWT auth failed: {e}")
+                logger.debug(f"AuthNZ JWT auth failed: {self._mask_secrets(str(e))}")
                 # Try MCP JWT
                 try:
                     token_data = self.jwt_manager.verify_token(auth_token)
                     user_id = token_data.sub
                     ok = True
                     logger.info(f"WebSocket authenticated for user (MCP JWT): {user_id}")
+                    if token_data.roles:
+                        metadata["roles"] = token_data.roles
+                    if token_data.permissions:
+                        metadata["permissions"] = token_data.permissions
                 except Exception as _e:
-                    logger.debug(f"MCP JWT auth failed: {_e}")
+                    logger.debug(f"MCP JWT auth failed: {self._mask_secrets(str(_e))}")
             if auth_token and not ok:
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
 
         # API key auth (optional)
-        metadata: Dict[str, Any] = {}
         if api_key and not user_id:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -583,12 +658,28 @@ class MCPServer:
                         metadata['org_id'] = info.get('org_id')
                     if info.get('team_id') is not None:
                         metadata['team_id'] = info.get('team_id')
+                    roles = metadata.setdefault('roles', [])
+                    if 'api_client' not in roles:
+                        roles.append('api_client')
+                    try:
+                        scopes = info.get('scopes')
+                        if isinstance(scopes, list):
+                            perms = metadata.setdefault('permissions', [])
+                            for scope in scopes:
+                                if isinstance(scope, str) and scope not in perms:
+                                    perms.append(scope)
+                        elif isinstance(scopes, str):
+                            perms = metadata.setdefault('permissions', [])
+                            if scopes not in perms:
+                                perms.append(scopes)
+                    except Exception:
+                        pass
                     logger.info(f"WebSocket authenticated via API key for user: {user_id}")
                 else:
                     await websocket.close(code=1008, reason="Authentication failed")
                     return
             except Exception as e:
-                logger.warning(f"WebSocket API key authentication failed: {e}")
+                logger.warning(f"WebSocket API key authentication failed: {self._mask_secrets(str(e))}")
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
         
@@ -835,12 +926,15 @@ class MCPServer:
                     "jsonrpc": "2.0",
                     "error": {
                         "code": -32002,
-                        "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds"
+                        "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
+                        "data": {
+                            "hint": "Reduce request frequency or wait before retrying."
+                        }
                     },
                     "id": data.get("id") if isinstance(data, dict) else None
                 })
             except Exception as e:
-                logger.error(f"Error processing WebSocket message: {e}")
+                logger.error(f"Error processing WebSocket message: {self._mask_secrets(str(e))}")
                 await connection.send_json({
                     "jsonrpc": "2.0",
                     "error": {
@@ -930,10 +1024,13 @@ class MCPServer:
         except RateLimitExceeded as e:
             raise HTTPException(
                 status_code=429,
-                detail=f"Rate limit exceeded. Retry after {e.retry_after} seconds"
+                detail={
+                    "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
+                    "hint": "Throttle tool calls or wait for the cooldown before retrying."
+                }
             )
         except Exception as e:
-            logger.error(f"Error processing HTTP request: {e}")
+            logger.error(f"Error processing HTTP request: {self._mask_secrets(str(e))}")
             raise HTTPException(status_code=500, detail="Internal server error")
     
     async def _close_all_connections(self):

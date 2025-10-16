@@ -81,6 +81,10 @@ class PromptsModule(BaseModule):
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
+        try:
+            self.validate_tool_arguments(tool_name, args)
+        except Exception as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "prompts.search":
             return await self._search(args, context)
         if tool_name == "prompts.get":
@@ -154,3 +158,25 @@ class PromptsModule(BaseModule):
             for k in ("name", "author", "details", "system_prompt", "user_prompt")
         }
         return {"meta": meta, "content": content, "attachments": None}
+
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+        if tool_name == "prompts.search":
+            q = arguments.get("query")
+            if not isinstance(q, str) or not (1 <= len(q) <= 1000):
+                raise ValueError("query must be 1..1000 chars")
+            fields = arguments.get("fields")
+            if fields is not None and (not isinstance(fields, list) or any(not isinstance(f, str) for f in fields)):
+                raise ValueError("fields must be list[str] if provided")
+            limit = int(arguments.get("limit", 10))
+            offset = int(arguments.get("offset", 0))
+            snip = int(arguments.get("snippet_length", 300))
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be 1..100")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if snip < 50 or snip > 2000:
+                raise ValueError("snippet_length must be 50..2000")
+        elif tool_name == "prompts.get":
+            pid = arguments.get("prompt_id_or_name")
+            if not isinstance(pid, str) or not pid:
+                raise ValueError("prompt_id_or_name must be a non-empty string")

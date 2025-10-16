@@ -9,10 +9,21 @@ import json
 from typing import Dict, Any, Optional, List, Union, Callable, Literal, Tuple
 from datetime import datetime, timezone
 from enum import IntEnum
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    from pydantic import field_validator, model_validator  # v2
+except Exception:  # Fallback for v1
+    from pydantic import validator as field_validator  # type: ignore
+    try:
+        from pydantic import root_validator as model_validator  # type: ignore
+    except Exception:
+        model_validator = None  # type: ignore
 from loguru import logger
+from collections import OrderedDict
 
 from .modules.registry import get_module_registry
+from .modules.base import BaseModule
+from .config import get_config
 import inspect
 from .auth.authnz_rbac import get_rbac_policy, Resource, Action
 from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
@@ -39,6 +50,11 @@ class ErrorCode(IntEnum):
     TIMEOUT_ERROR = -32004
 
 
+class InvalidParamsException(Exception):
+    """Raised when tool parameters fail validation or validators are missing for write tools."""
+    pass
+
+
 class MCPRequest(BaseModel):
     """MCP request following JSON-RPC 2.0 specification"""
     jsonrpc: Literal["2.0"] = Field(default="2.0")
@@ -46,7 +62,8 @@ class MCPRequest(BaseModel):
     params: Optional[Dict[str, Any]] = None
     id: Optional[Union[str, int]] = None
     
-    @validator("method")
+    @field_validator("method")
+    @classmethod
     def validate_method(cls, v):
         """Validate method name"""
         # Prevent potential injection attacks
@@ -54,7 +71,8 @@ class MCPRequest(BaseModel):
             raise ValueError("Invalid characters in method name")
         return v
     
-    @validator("params")
+    @field_validator("params")
+    @classmethod
     def validate_params(cls, v):
         """Validate and sanitize parameters"""
         if v is not None and not isinstance(v, dict):
@@ -76,12 +94,13 @@ class MCPResponse(BaseModel):
     error: Optional[MCPError] = None
     id: Optional[Union[str, int]] = None
     
-    @validator("error")
-    def validate_error_result(cls, v, values):
-        """Ensure either result or error is set, not both"""
-        if v is not None and values.get("result") is not None:
-            raise ValueError("Response cannot have both result and error")
-        return v
+    if model_validator is not None:
+        @model_validator(mode="after")
+        def _validate_error_result(self):
+            """Ensure either result or error is set, not both"""
+            if self.error is not None and self.result is not None:
+                raise ValueError("Response cannot have both result and error")
+            return self
 
 
 class RequestContext:
@@ -145,7 +164,9 @@ class MCPProtocol:
         self.telemetry = get_telemetry_manager()
         # Strict tool name validation regex
         self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
-        
+        # Small LRU with TTL for idempotency of write tools
+        self._idempotency_cache: "OrderedDict[str, Tuple[float, Dict[str, Any]] ]" = OrderedDict()
+
         # Method handlers
         self.handlers: Dict[str, Callable] = {
             "initialize": self._handle_initialize,
@@ -159,8 +180,124 @@ class MCPProtocol:
             "modules/list": self._handle_modules_list,
             "modules/health": self._handle_modules_health,
         }
-        
+
         logger.info("MCP Protocol handler initialized")
+
+    async def _rbac_check(self, user_id: Optional[str], resource: Resource, action: Action, resource_id: Optional[str] = None) -> bool:
+        if not user_id:
+            return False
+        fn = getattr(self.rbac_policy, "check_permission", None)
+        if not fn:
+            return False
+        try:
+            if inspect.iscoroutinefunction(fn):
+                return await fn(user_id, resource, action, resource_id)
+            return fn(user_id, resource, action, resource_id)
+        except Exception:
+            return False
+
+    def _scoped_permissions(self, context: RequestContext) -> List[str]:
+        metadata = getattr(context, "metadata", {})
+        if not isinstance(metadata, dict):
+            return []
+        raw = metadata.get("permissions") or []
+        if isinstance(raw, str):
+            return [raw]
+        if isinstance(raw, list):
+            return [str(item) for item in raw if isinstance(item, str)]
+        return []
+
+    def _scope_matches(self, scope: str, resource_kind: str, identifier: Optional[str]) -> bool:
+        scope = scope.strip().lower()
+        if not scope.startswith("mcp:"):
+            return False
+        parts = scope.split(":")
+        if len(parts) == 2 and parts[1] == "*":
+            return True
+        if len(parts) < 3:
+            return False
+        kind = parts[1]
+        value = ":".join(parts[2:])
+        if kind == "*":
+            return True
+        if kind != resource_kind:
+            return False
+        if value in {"*", ""}:
+            return True
+        if identifier is None:
+            return False
+        return value == identifier.lower()
+
+    def _scope_allows(self, context: RequestContext, resource_kind: str, identifier: Optional[str]) -> bool:
+        identifier_norm = identifier.lower() if isinstance(identifier, str) else None
+        for scope in self._scoped_permissions(context):
+            if self._scope_matches(scope, resource_kind, identifier_norm):
+                return True
+        return False
+
+    async def _has_module_permission(self, context: RequestContext, module_id: Optional[str]) -> bool:
+        module_id_norm = module_id or ""
+        if await self._rbac_check(context.user_id, Resource.MODULE, Action.READ, module_id_norm):
+            return True
+        return self._scope_allows(context, "module", module_id_norm)
+
+    async def _has_tool_permission(self, context: RequestContext, tool_name: str) -> bool:
+        if await self._rbac_check(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name):
+            return True
+        return self._scope_allows(context, "tool", tool_name)
+
+    async def _has_resource_permission(self, context: RequestContext, resource_uri: str, module_id: Optional[str]) -> bool:
+        if await self._rbac_check(context.user_id, Resource.RESOURCE, Action.READ, resource_uri):
+            return True
+        if await self._has_module_permission(context, module_id):
+            return True
+        return self._scope_allows(context, "resource", resource_uri)
+
+    async def _has_prompt_permission(self, context: RequestContext, prompt_name: str, module_id: Optional[str]) -> bool:
+        if await self._rbac_check(context.user_id, Resource.PROMPT, Action.READ, prompt_name):
+            return True
+        if await self._has_module_permission(context, module_id):
+            return True
+        return self._scope_allows(context, "prompt", prompt_name)
+
+    @staticmethod
+    def _hash_arguments(arguments: Dict[str, Any]) -> Optional[str]:
+        try:
+            payload = json.dumps(arguments or {}, sort_keys=True, default=str).encode("utf-8")
+            import hashlib
+            return hashlib.sha256(payload).hexdigest()
+        except Exception:
+            return None
+
+    def _audit_tool_event(
+        self,
+        context: RequestContext,
+        tool_name: str,
+        module_id: Optional[str],
+        status: str,
+        duration_ms: float,
+        arguments_hash: Optional[str],
+        error: Optional[Exception] = None,
+    ) -> None:
+        try:
+            log = logger.bind(
+                audit=True,
+                request_id=context.request_id,
+                user_id=context.user_id,
+                client_id=context.client_id,
+                session_id=context.session_id,
+                tool=tool_name,
+                module=module_id or "unknown",
+                duration_ms=round(duration_ms, 2),
+                arguments_hash=arguments_hash,
+                status=status,
+            )
+            if error:
+                log.error(f"MCP tool execution failed", error_type=error.__class__.__name__, error_message=str(error)[:200])
+            else:
+                log.info("MCP tool executed")
+        except Exception:
+            pass
     
     async def process_request(
         self,
@@ -217,7 +354,7 @@ class MCPProtocol:
         
         # Bound logger for this request
         log = context.logger
-        # Log request
+        # Log request (without params) and ensure secrets get redacted in any error paths
         log.info(
             f"MCP request: method={request.method}, user={context.user_id}, client={context.client_id}",
             extra={"audit": True}
@@ -335,10 +472,22 @@ class MCPProtocol:
             except Exception:
                 pass
             raise
+        except InvalidParamsException as ive:
+            # Notification: do not return a response
+            if isinstance(request, MCPRequest) and request.id is None:
+                return None
+            return self._error_response(ErrorCode.INVALID_PARAMS, str(ive), request.id if isinstance(request, MCPRequest) else None)
+        except PermissionError as perr:
+            # Map policy/permission errors to AUTHORIZATION_ERROR
+            if isinstance(request, MCPRequest) and request.id is None:
+                return None
+            # Redact any secrets in message (defensive)
+            msg = self._mask_secrets(str(perr))
+            return self._error_response(ErrorCode.AUTHORIZATION_ERROR, msg, request.id if isinstance(request, MCPRequest) else None)
         except Exception as e:
             # Log error
             log.error(
-                f"MCP request failed: method={request.method}, error={str(e)}",
+                f"MCP request failed: method={request.method}, error={self._mask_secrets(str(e))}",
                 extra={"audit": True}
             )
             try:
@@ -350,8 +499,38 @@ class MCPProtocol:
             # Notification: do not return a response
             if isinstance(request, MCPRequest) and request.id is None:
                 return None
-            # Return error response
-            return self._error_response(ErrorCode.INTERNAL_ERROR, str(e), request.id if isinstance(request, MCPRequest) else None)
+            # Return error response with reduced leakage when not in debug mode
+            try:
+                cfg = get_config()
+                msg = self._mask_secrets(str(e)) if getattr(cfg, "debug_mode", False) else "Internal error"
+            except Exception:
+                msg = "Internal error"
+            return self._error_response(
+                ErrorCode.INTERNAL_ERROR,
+                msg,
+                request.id if isinstance(request, MCPRequest) else None,
+            )
+
+    def _mask_secrets(self, text: str) -> str:
+        """Best-effort masking of bearer/API keys in strings."""
+        try:
+            if not text:
+                return text
+            import re as _re
+            # Mask Bearer tokens
+            text = _re.sub(r"(Bearer)\s+[A-Za-z0-9._\-~+/=]+", r"\1 ****", text, flags=_re.IGNORECASE)
+            # Mask common token fields
+            patterns = [
+                r"(api[_-]?key)\s*[:=]\s*([^\s,;]+)",
+                r"(token)\s*[:=]\s*([^\s,;]+)",
+                r"(access[_-]?token)\s*[:=]\s*([^\s,;]+)",
+                r"(refresh[_-]?token)\s*[:=]\s*([^\s,;]+)",
+            ]
+            for p in patterns:
+                text = _re.sub(p, lambda m: f"{m.group(1)}=****", text, flags=_re.IGNORECASE)
+            return text
+        except Exception:
+            return text
     
     def _error_response(
         self,
@@ -361,6 +540,7 @@ class MCPProtocol:
         data: Optional[Any] = None
     ) -> MCPResponse:
         """Create an error response"""
+        data = self._attach_error_hint(code, message, data)
         return MCPResponse(
             error=MCPError(
                 code=code,
@@ -369,6 +549,38 @@ class MCPProtocol:
             ),
             id=request_id
         )
+    
+    def _attach_error_hint(
+        self,
+        code: ErrorCode,
+        message: str,
+        data: Optional[Any]
+    ) -> Optional[Any]:
+        """Attach a structured hint for common error scenarios."""
+        if data is not None:
+            return data
+        
+        hint: Optional[str] = None
+        lowered = message.lower()
+        
+        if code == ErrorCode.INVALID_PARAMS:
+            prefix = "missing required parameter:"
+            if lowered.startswith(prefix):
+                # Extract the parameter name from original message
+                try:
+                    missing = message.split(":", 1)[1].strip().strip("'\"")
+                except Exception:
+                    missing = None
+                if missing:
+                    hint = f"Add '{missing}' to the tool arguments payload before retrying."
+            elif "invalid parameters for tool" in lowered:
+                hint = "Verify the tool arguments match the schema published by /mcp/tools."
+        elif code == ErrorCode.AUTHORIZATION_ERROR and "write tools are disabled" in lowered:
+            hint = "Enable write tools (set MCP_DISABLE_WRITE_TOOLS=0) or switch to a read-only operation."
+        
+        if hint:
+            return {"hint": hint}
+        return None
     
     async def _check_authorization(
         self,
@@ -480,27 +692,17 @@ class MCPProtocol:
         
         for module_id, module in modules.items():
             try:
+                if not await self._has_module_permission(context, module_id):
+                    continue
                 module_tools = await module.get_tools()
                 
-                # Add module context to each tool
                 for tool in module_tools:
                     tool_copy = tool.copy()
                     tool_copy["module"] = module_id
-                    
-                    # Check if user can execute this tool
-                    if context.user_id:
-                        fn = getattr(self.rbac_policy, 'check_permission', None)
-                        if fn:
-                            if inspect.iscoroutinefunction(fn):
-                                can_execute = await fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool["name"])  # type: ignore
-                            else:
-                                can_execute = fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool["name"])  # type: ignore
-                        else:
-                            can_execute = False
-                        tool_copy["canExecute"] = can_execute
-                    
+                    name = tool_copy.get("name")
+                    can_execute = await self._has_tool_permission(context, name) if name else False
+                    tool_copy["canExecute"] = can_execute
                     tools.append(tool_copy)
-                    
             except Exception as e:
                 context.logger.error(f"Error getting tools from module {module_id}: {e}")
         
@@ -514,6 +716,8 @@ class MCPProtocol:
         """Execute a tool"""
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
+        # Accept both camelCase and snake_case for idempotency
+        idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
         
         if not tool_name:
             raise ValueError("Tool name is required")
@@ -526,14 +730,14 @@ class MCPProtocol:
         module = await self.module_registry.find_module_for_tool(tool_name)
         if not module:
             raise ValueError(f"Tool not found: {tool_name}")
-        
-        # Check specific tool permission
-        if context.user_id:
-            fn = getattr(self.rbac_policy, 'check_permission', None)
-            if fn:
-                permitted = await fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name) if inspect.iscoroutinefunction(fn) else fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name)
-                if not permitted:
-                    raise PermissionError(f"Permission denied for tool: {tool_name}")
+
+        module_id = self.module_registry.get_module_id_for_tool(tool_name) or getattr(module, "name", None)
+
+        if not await self._has_module_permission(context, module_id):
+            raise PermissionError(f"Permission denied for module: {module_id}")
+
+        if not await self._has_tool_permission(context, tool_name):
+            raise PermissionError(f"Permission denied for tool: {tool_name}")
         
         # Harden arguments against cross-user/db overrides
         try:
@@ -545,21 +749,126 @@ class MCPProtocol:
         except Exception:
             pass
 
+        # Central argument sanitization for all tools (deep)
+        try:
+            if isinstance(tool_args, dict):
+                tool_args = module.sanitize_input(tool_args)
+        except Exception as _san_e:
+            raise InvalidParamsException(f"Invalid arguments: {str(_san_e)}")
+
+        # Protocol-level pre-execution validation for write-capable tools
+        # Ensures that modules validate arguments even if they forgot to call
+        # validate_tool_arguments inside execute_tool.
+        # Look up tool definition from module cache where possible
+        tool_def = None
+        try:
+            # Prefer a dedicated lookup if module implements it
+            get_def = getattr(module, "get_tool_def", None)
+            if callable(get_def):
+                tool_def = await get_def(tool_name)  # type: ignore
+            if tool_def is None:
+                tool_defs = await module.get_tools()
+                for _t in tool_defs:
+                    if isinstance(_t, dict) and _t.get("name") == tool_name:
+                        tool_def = _t
+                        break
+        except Exception:
+            tool_def = None
+
+        try:
+            # Lightweight inputSchema validation (config-gated)
+            cfg = get_config()
+            if cfg.validate_input_schema and isinstance(tool_def, dict):
+                schema = tool_def.get("inputSchema") or {}
+                try:
+                    self._validate_input_schema(schema, tool_args)
+                except InvalidParamsException:
+                    try:
+                        self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
+                    except Exception:
+                        pass
+                    raise
+
+            # Determine write-capable status
+            is_write = False
+            try:
+                if tool_def is not None:
+                    is_write = module.is_write_tool_def(tool_def)
+                else:
+                    # Fallback heuristic based on name
+                    import re as _re
+                    is_write = bool(_re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
+            except Exception:
+                is_write = False
+
+            # Optional policy: disable write-capable tools entirely
+            if is_write:
+                if get_config().disable_write_tools:
+                    raise PermissionError("Write tools are disabled by server policy")
+                # Check module overrides validator
+                if module.__class__.validate_tool_arguments is BaseModule.validate_tool_arguments:
+                    try:
+                        self.metrics.record_tool_validator_missing(getattr(module, "name", "unknown"), str(tool_name))
+                    except Exception:
+                        pass
+                    raise ValueError(
+                        "Write-capable tool requires module.validate_tool_arguments override"
+                    )
+                # Run validator
+                try:
+                    module.validate_tool_arguments(tool_name, tool_args)
+                except Exception as ve:
+                    try:
+                        self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
+                    except Exception:
+                        pass
+                    raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}")
+
+                # Idempotency dedupe for write-capable tools (optional)
+                if isinstance(idempotency_key, str) and idempotency_key:
+                    cache_key = self._make_idempotency_cache_key(
+                        context, module_id or getattr(module, "name", "unknown"), tool_name, idempotency_key
+                    )
+                    cached = self._idemp_cache_get(cache_key)
+                    if cached is not None:
+                        try:
+                            self.metrics.record_idempotency_hit(module_id or getattr(module, "name", "unknown"), str(tool_name))
+                        except Exception:
+                            pass
+                        return cached
+                    else:
+                        try:
+                            self.metrics.record_idempotency_miss(module_id or getattr(module, "name", "unknown"), str(tool_name))
+                        except Exception:
+                            pass
+        except ValueError as ve:
+            # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
+            # by raising a sentinel exception handled by process_request
+            raise InvalidParamsException(str(ve))
+
         # Optional per-tool/category rate limits (ingestion vs read)
         try:
-            # Heuristic categorization
+            # Categorization for per-category rate limiting
             cfg = get_config()
             category = None
+            # 1) Prefer tool metadata.category if available
             try:
-                # Prefer config-driven mapping; fallback to heuristic
-                if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
-                    category = str(cfg.tool_category_map.get(tool_name))
+                meta = (tool_def or {}).get("metadata") or {}
+                cat = str(meta.get("category") or "").lower()
+                if cat in {"ingestion", "management", "read"}:
+                    category = cat
             except Exception:
                 category = None
+            # 2) Config-driven mapping
             if not category:
-                ingestion_tools = {
-                    'ingest_media', 'update_media', 'delete_media'
-                }
+                try:
+                    if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
+                        category = str(cfg.tool_category_map.get(tool_name))
+                except Exception:
+                    category = None
+            # 3) Heuristic fallback
+            if not category:
+                ingestion_tools = {'ingest_media', 'update_media', 'delete_media'}
                 category = 'ingestion' if tool_name in ingestion_tools else 'read'
             key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
             rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
@@ -572,6 +881,8 @@ class MCPProtocol:
 
         # Execute tool with circuit breaker (pass context through)
         t0 = time.time()
+        args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
+
         try:
             # Trace the tool call with OTEL
             with self.telemetry.trace_context(
@@ -607,14 +918,34 @@ class MCPProtocol:
             else:
                 content = [{"type": "text", "text": str(result)}]
             
-            module_name = getattr(module, "name", None)
+            module_name = module_id or getattr(module, "name", None)
             # Record module operation metrics
             try:
                 duration = max(0.0, time.time() - t0)
                 self.metrics.record_module_operation(module=module_name or "unknown", operation="tools_call", duration=duration, success=True)
             except Exception:
                 pass
-            return {"content": content, "module": module_name, "tool": tool_name}
+            self._audit_tool_event(
+                context,
+                tool_name,
+                module_name,
+                status="success",
+                duration_ms=max(0.0, (time.time() - t0) * 1000.0),
+                arguments_hash=args_hash,
+            )
+            response_payload = {"content": content, "module": module_name, "tool": tool_name}
+
+            # Store idempotent result for write-capable tools
+            try:
+                if isinstance(idempotency_key, str) and idempotency_key and 'is_write' in locals() and is_write:
+                    cache_key = self._make_idempotency_cache_key(
+                        context, module_name or getattr(module, "name", "unknown"), tool_name, idempotency_key
+                    )
+                    self._idemp_cache_put(cache_key, response_payload)
+            except Exception:
+                pass
+
+            return response_payload
             
         except Exception as e:
             context.logger.error(f"Tool execution failed: {tool_name} - {e}")
@@ -623,7 +954,124 @@ class MCPProtocol:
                 self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
             except Exception:
                 pass
+            self._audit_tool_event(
+                context,
+                tool_name,
+                module_id or getattr(module, "name", None),
+                status="failure",
+                duration_ms=max(0.0, (time.time() - t0) * 1000.0),
+                arguments_hash=args_hash,
+                error=e,
+            )
             raise
+
+    # -------------------------
+    # Idempotency cache helpers
+    # -------------------------
+    def _make_idempotency_cache_key(self, context: RequestContext, module_name: str, tool_name: str, idempotency_key: str) -> str:
+        owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
+        return f"{owner}|module:{module_name}|tool:{tool_name}|key:{idempotency_key}"
+
+    def _idemp_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        try:
+            now = time.time()
+            cfg = get_config()
+            ttl = max(1, int(getattr(cfg, 'idempotency_ttl_seconds', 300)))
+            item = self._idempotency_cache.get(cache_key)
+            if not item:
+                return None
+            ts, payload = item
+            if now - ts > ttl:
+                # Expired; remove
+                try:
+                    del self._idempotency_cache[cache_key]
+                except Exception:
+                    pass
+                return None
+            # Touch LRU order
+            try:
+                self._idempotency_cache.move_to_end(cache_key)
+            except Exception:
+                pass
+            return payload
+        except Exception:
+            return None
+
+    def _idemp_cache_put(self, cache_key: str, payload: Dict[str, Any]) -> None:
+        try:
+            now = time.time()
+            cfg = get_config()
+            max_size = max(1, int(getattr(cfg, 'idempotency_cache_size', 512)))
+            self._idempotency_cache[cache_key] = (now, payload)
+            # Move to end to mark recent
+            try:
+                self._idempotency_cache.move_to_end(cache_key)
+            except Exception:
+                pass
+            # Evict if over size
+            while len(self._idempotency_cache) > max_size:
+                try:
+                    self._idempotency_cache.popitem(last=False)
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+    def _validate_input_schema(self, schema: Dict[str, Any], args: Dict[str, Any]) -> None:
+        """Quick JSON Schema checks: required keys, primitive types, unknown fields.
+        Only applies when schema.type == object.
+        """
+        try:
+            if not isinstance(schema, dict):
+                return
+            if schema.get("type") != "object":
+                return
+            if not isinstance(args, dict):
+                raise InvalidParamsException("Arguments must be an object")
+            props = schema.get("properties") or {}
+            required = schema.get("required") or []
+            addl = schema.get("additionalProperties", True)
+
+            # Required
+            for key in required:
+                if key not in args or args.get(key) is None:
+                    raise InvalidParamsException(f"Missing required parameter: {key}")
+
+            # Unknown fields
+            if addl is False:
+                unknown = [k for k in args.keys() if k not in props]
+                if unknown:
+                    raise InvalidParamsException(f"Unknown parameters: {', '.join(unknown)}")
+
+            # Primitive type checks
+            def _type_ok(expected: str, value: Any) -> bool:
+                mapping = {
+                    "string": str,
+                    "number": (int, float),
+                    "integer": int,
+                    "boolean": bool,
+                    "object": dict,
+                    "array": list,
+                }
+                py = mapping.get(expected)
+                if py is None:
+                    return True
+                # number should not reject ints; python isinstance(True, int) caveat
+                if expected in {"number", "integer"} and isinstance(value, bool):
+                    return False
+                return isinstance(value, py)
+
+            for k, v in args.items():
+                if k in props:
+                    p = props.get(k) or {}
+                    t = p.get("type")
+                    if isinstance(t, str) and not _type_ok(t, v):
+                        raise InvalidParamsException(f"Invalid type for '{k}': expected {t}")
+        except InvalidParamsException:
+            raise
+        except Exception:
+            # Be forgiving on schema format errors
+            return
     
     async def _handle_resources_list(
         self,
@@ -636,12 +1084,17 @@ class MCPProtocol:
         
         for module_id, module in modules.items():
             try:
+                if not await self._has_module_permission(context, module_id):
+                    continue
                 module_resources = await module.get_resources()
                 
-                # Add module context
                 for resource in module_resources:
-                    resource_copy = resource.copy()
-                    resource_copy["module"] = module_id
+                    uri = resource.get("uri") if isinstance(resource, dict) else None
+                    if uri and not await self._has_resource_permission(context, uri, module_id):
+                        continue
+                    resource_copy = resource.copy() if isinstance(resource, dict) else resource
+                    if isinstance(resource_copy, dict):
+                        resource_copy["module"] = module_id
                     resources.append(resource_copy)
                     
             except Exception as e:
@@ -663,6 +1116,10 @@ class MCPProtocol:
         module = await self.module_registry.find_module_for_resource(uri)
         if not module:
             raise ValueError(f"Resource not found: {uri}")
+        module_id = self.module_registry.get_module_id_for_resource(uri) or getattr(module, "name", None)
+
+        if not await self._has_resource_permission(context, uri, module_id):
+            raise PermissionError(f"Permission denied for resource: {uri}")
         
         # Read resource
         content = await module.read_resource(uri)
@@ -680,12 +1137,17 @@ class MCPProtocol:
         
         for module_id, module in modules.items():
             try:
+                if not await self._has_module_permission(context, module_id):
+                    continue
                 module_prompts = await module.get_prompts()
                 
-                # Add module context
                 for prompt in module_prompts:
-                    prompt_copy = prompt.copy()
-                    prompt_copy["module"] = module_id
+                    name = prompt.get("name") if isinstance(prompt, dict) else None
+                    if name and not await self._has_prompt_permission(context, name, module_id):
+                        continue
+                    prompt_copy = prompt.copy() if isinstance(prompt, dict) else prompt
+                    if isinstance(prompt_copy, dict):
+                        prompt_copy["module"] = module_id
                     prompts.append(prompt_copy)
                     
             except Exception as e:
@@ -709,6 +1171,10 @@ class MCPProtocol:
         module = await self.module_registry.find_module_for_prompt(name)
         if not module:
             raise ValueError(f"Prompt not found: {name}")
+        module_id = self.module_registry.get_module_id_for_prompt(name) or getattr(module, "name", None)
+
+        if not await self._has_prompt_permission(context, name, module_id):
+            raise PermissionError(f"Permission denied for prompt: {name}")
         
         # Get prompt
         prompt = await module.get_prompt(name, arguments)
@@ -722,7 +1188,15 @@ class MCPProtocol:
     ) -> Dict[str, Any]:
         """List registered modules"""
         registrations = await self.module_registry.list_registrations()
-        return {"modules": registrations}
+        filtered: List[Dict[str, Any]] = []
+        for entry in registrations:
+            module_id = entry.get("module_id") if isinstance(entry, dict) else None
+            try:
+                if await self._has_module_permission(context, module_id):
+                    filtered.append(entry)
+            except Exception:
+                continue
+        return {"modules": filtered}
     
     async def _handle_modules_health(
         self,
@@ -735,11 +1209,17 @@ class MCPProtocol:
         # Convert to serializable format
         health_data = {}
         for module_id, health in health_results.items():
+            last_check_iso = None
+            try:
+                if getattr(health, "last_check", None):
+                    last_check_iso = health.last_check.isoformat()
+            except Exception:
+                last_check_iso = None
             health_data[module_id] = {
-                "status": health.status.value,
-                "message": health.message,
-                "checks": health.checks,
-                "last_check": health.last_check.isoformat()
+                "status": health.status.value if getattr(health, "status", None) else "unknown",
+                "message": getattr(health, "message", ""),
+                "checks": getattr(health, "checks", {}),
+                "last_check": last_check_iso,
             }
         
         return {"health": health_data}

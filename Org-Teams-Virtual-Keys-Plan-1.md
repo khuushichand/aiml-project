@@ -9,8 +9,8 @@
 
 ## Non‑Goals (v1)
 
-- Full org/Team‑scoped RBAC inheritance and per‑resource ACLs (future).
-- Org‑level membership APIs (v1 focuses on team membership; org_members table exists but is not exposed via admin APIs).
+- Full org/team‑scoped RBAC inheritance and per‑resource ACLs (future).
+- Cascading side effects across org/team membership changes. Adds/removes are explicit and localized; no implicit cascades in v1.
 
 ## User Stories
 
@@ -41,8 +41,20 @@
   - Post‑request logging remains unchanged (existing `log_llm_usage`). This combination blocks subsequent requests once limits are reached.
 
 - Admin APIs (v1):
-  - CRUD: organizations, teams, membership (simple create/list/delete).
-  - Virtual key creation endpoint (admin creates a virtual key for a user with limits and endpoint scope); list/search.
+  - CRUD: organizations, teams, membership (create/list/delete; idempotent add semantics).
+  - Organization membership endpoints (admin):
+    - POST /api/v1/admin/orgs/{org_id}/members — add member (idempotent; returns existing membership when present)
+    - GET  /api/v1/admin/orgs/{org_id}/members — list with pagination (limit/offset) and filters (role, status)
+    - PATCH /api/v1/admin/orgs/{org_id}/members/{user_id} — update role (optional in v1; implemented)
+    - DELETE /api/v1/admin/orgs/{org_id}/members/{user_id} — remove member (idempotent)
+    - GET  /api/v1/admin/users/{user_id}/org-memberships — user‑centric listing for UI convenience
+  - Team membership endpoints (admin):
+    - POST /api/v1/admin/teams/{team_id}/members — add member (idempotent)
+    - GET  /api/v1/admin/teams/{team_id}/members — list members
+    - DELETE /api/v1/admin/teams/{team_id}/members/{user_id} — remove member (idempotent)
+  - Virtual key endpoints (admin):
+    - POST /api/v1/admin/users/{user_id}/virtual-keys — create virtual key with limits and allowlists
+    - GET  /api/v1/admin/users/{user_id}/virtual-keys — list/search
 
 ## Data Model
 
@@ -75,6 +87,10 @@ Indexes: org/team membership by foreign keys; helpful composite indexes for list
   - GET  /api/v1/admin/orgs/{org_id}/teams — list teams
   - POST /api/v1/admin/teams/{team_id}/members — add member
   - DELETE /api/v1/admin/teams/{team_id}/members/{user_id} — remove member
+  - POST /api/v1/admin/orgs/{org_id}/members — add org member (idempotent)
+  - GET  /api/v1/admin/orgs/{org_id}/members — list org members (limit/offset, role, status)
+  - PATCH /api/v1/admin/orgs/{org_id}/members/{user_id} — update role
+  - DELETE /api/v1/admin/orgs/{org_id}/members/{user_id} — remove org member (idempotent)
   - POST /api/v1/admin/users/{user_id}/virtual-keys — create virtual key
   - GET  /api/v1/admin/users/{user_id}/virtual-keys — list virtual keys
   - GET  /api/v1/admin/users/{user_id}/org-memberships — list org memberships
@@ -111,6 +127,8 @@ Notes:
 - We use logging data as source of truth for spend/token usage; aggregation to daily table can be leveraged for monthly sums in future.
 - Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked.
  - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
+ - Membership operations are idempotent. No cascading deletes or implicit role propagation in v1.
+ - Audit logging is best‑effort on membership changes (add/remove/update). Uses get_audit_service_for_user when a real user context exists; failures never block.
 
 ## Settings (new)
 
@@ -126,12 +144,23 @@ Notes:
   - virtual_keys.is_key_over_budget: simulate llm_usage_log rows and verify threshold checks.
 
 - Integration:
-  - Admin endpoints for org/team CRUD, add/list/remove team member, and virtual key creation/list.
-  - Middleware blocks disallowed providers/models when allowlists are set (403).
-  - Middleware returns 402 after budgets are exceeded for virtual keys.
+  - Admin endpoints for org/team CRUD; org membership (POST/GET/PATCH/DELETE + user‑centric listing); team membership (POST/GET/DELETE); virtual key creation/list.
+  - Middleware blocks disallowed providers/models when allowlists are set (403). Edge cases covered:
+    - Missing X‑LLM‑Provider header with a provider allowlist (allowed unless header present and disallowed).
+    - Non‑JSON bodies or invalid JSON (skip model enforcement; should not trigger 403/402).
+  - Middleware returns 402 after budgets are exceeded for virtual keys (SQLite + Postgres).
+  - Real audit tests via reusable real_audit_service fixture and @pytest.mark.real_audit for team/org membership add/remove/role update across SQLite and Postgres.
+  - Postgres test suite uses a dedicated fixture (test_db_pool) so app endpoints and services share the same DSN and clean schema per test.
 
 ## Rollout
 
 1) Ship migrations + services + middleware (guarded by settings).
-2) Add admin endpoints and minimal UI later; ensure docs describe usage and env vars.
+2) Admin endpoints delivered in v1 (including org membership routes and DELETE team member); UI can follow; docs updated here and in README quick references.
 3) Backward compatible: non‑virtual keys unaffected; JWT flows unchanged.
+
+## Status
+
+- v1 implementation complete. Follow‑ups:
+  - Expand middleware tests to additional negative/edge paths as noted.
+  - Add large‑set pagination/filter coverage for org member listings.
+  - Explore org/team RBAC propagation strategies in v2.

@@ -9,7 +9,11 @@ import os
 import secrets
 from typing import Optional, Dict, Any, List
 from functools import lru_cache
-from pydantic import Field, validator, SecretStr
+from pydantic import Field, SecretStr
+try:
+    from pydantic import field_validator  # v2
+except Exception:  # v1 fallback
+    from pydantic import validator as field_validator  # type: ignore
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
 
@@ -31,6 +35,13 @@ class MCPConfig(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", env="MCP_JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=30, env="MCP_JWT_ACCESS_EXPIRE")
     jwt_refresh_token_expire_days: int = Field(default=7, env="MCP_JWT_REFRESH_EXPIRE")
+
+    # Protocol validation & policy
+    validate_input_schema: bool = Field(default=True, env="MCP_VALIDATE_INPUT_SCHEMA")
+    disable_write_tools: bool = Field(default=False, env="MCP_DISABLE_WRITE_TOOLS")
+    # Idempotency (protocol-level) for write tools
+    idempotency_ttl_seconds: int = Field(default=300, env="MCP_IDEMPOTENCY_TTL_SECONDS")
+    idempotency_cache_size: int = Field(default=512, env="MCP_IDEMPOTENCY_CACHE_SIZE")
     
     # API Key Configuration
     api_key_salt: Optional[SecretStr] = Field(default=None, env="MCP_API_KEY_SALT")
@@ -65,7 +76,7 @@ class MCPConfig(BaseSettings):
     ws_ping_interval: int = Field(default=30, env="MCP_WS_PING_INTERVAL")
     ws_ping_timeout: int = Field(default=60, env="MCP_WS_PING_TIMEOUT")
     ws_close_timeout: int = Field(default=10, env="MCP_WS_CLOSE_TIMEOUT")
-    ws_auth_required: bool = Field(default=False, env="MCP_WS_AUTH_REQUIRED")
+    ws_auth_required: bool = Field(default=True, env="MCP_WS_AUTH_REQUIRED")
     # WS security
     ws_allowed_origins: List[str] = Field(default_factory=list, env="MCP_WS_ALLOWED_ORIGINS")
     ws_allow_query_auth: bool = Field(default=False, env="MCP_WS_ALLOW_QUERY_AUTH")
@@ -73,6 +84,22 @@ class MCPConfig(BaseSettings):
     ws_idle_timeout_seconds: int = Field(default=300, env="MCP_WS_IDLE_TIMEOUT_SECONDS")
     ws_session_rate_limit_count: int = Field(default=120, env="MCP_WS_SESSION_RATE_COUNT")
     ws_session_rate_limit_window_seconds: int = Field(default=60, env="MCP_WS_SESSION_RATE_WINDOW_SECONDS")
+    
+    # Network access controls
+    allowed_client_ips: List[str] = Field(default_factory=list, env="MCP_ALLOWED_IPS")
+    blocked_client_ips: List[str] = Field(default_factory=list, env="MCP_BLOCKED_IPS")
+    trust_x_forwarded_for: bool = Field(default=False, env="MCP_TRUST_X_FORWARDED")
+    trusted_proxy_depth: int = Field(default=1, ge=0, env="MCP_TRUSTED_PROXY_DEPTH")
+    trusted_proxy_ips: List[str] = Field(default_factory=list, env="MCP_TRUSTED_PROXY_IPS")
+    
+    # HTTP request limits
+    http_max_body_bytes: int = Field(default=524288, env="MCP_HTTP_MAX_BODY_BYTES")  # 512 KiB default
+    
+    # Client certificate / mTLS hooks
+    client_cert_required: bool = Field(default=False, env="MCP_CLIENT_CERT_REQUIRED")
+    client_cert_header: Optional[str] = Field(default=None, env="MCP_CLIENT_CERT_HEADER")
+    client_cert_header_value: Optional[str] = Field(default=None, env="MCP_CLIENT_CERT_HEADER_VALUE")
+    client_cert_ca_bundle: Optional[str] = Field(default=None, env="MCP_CLIENT_CA_BUNDLE")
 
     # CORS Configuration
     cors_enabled: bool = Field(default=True, env="MCP_CORS_ENABLED")
@@ -139,7 +166,8 @@ class MCPConfig(BaseSettings):
         extra="ignore",
     )
     
-    @validator("jwt_secret_key", pre=True)
+    @field_validator("jwt_secret_key", mode="before")
+    @classmethod
     def validate_jwt_secret(cls, v):
         """Ensure JWT secret is set and strong enough"""
         if not v:
@@ -158,7 +186,8 @@ class MCPConfig(BaseSettings):
         
         return v
     
-    @validator("api_key_salt", pre=True)
+    @field_validator("api_key_salt", mode="before")
+    @classmethod
     def validate_api_key_salt(cls, v):
         """Ensure API key salt is set and secure"""
         if not v:
@@ -173,21 +202,32 @@ class MCPConfig(BaseSettings):
         
         return v
     
-    @validator("cors_origins", pre=True)
+    @field_validator("cors_origins", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         """Parse CORS origins from comma-separated string"""
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
 
-    @validator("ws_allowed_origins", pre=True)
+    @field_validator("ws_allowed_origins", mode="before")
+    @classmethod
     def parse_ws_allowed_origins(cls, v):
         """Parse WS allowed origins from comma-separated string."""
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
     
-    @validator("database_url")
+    @field_validator("allowed_client_ips", "blocked_client_ips", "trusted_proxy_ips", mode="before")
+    @classmethod
+    def parse_ip_lists(cls, v):
+        """Parse comma-separated IP/CIDR lists."""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+    
+    @field_validator("database_url")
+    @classmethod
     def validate_database_url(cls, v):
         """Validate and potentially modify database URL"""
         if "sqlite" in v and not v.startswith("sqlite+aiosqlite"):
@@ -195,7 +235,8 @@ class MCPConfig(BaseSettings):
             v = v.replace("sqlite://", "sqlite+aiosqlite://")
         return v
 
-    @validator("tool_category_map", pre=True)
+    @field_validator("tool_category_map", mode="before")
+    @classmethod
     def parse_tool_category_map(cls, v):
         """Allow JSON string in env for tool→category map."""
         if not v:
@@ -242,29 +283,63 @@ class MCPConfig(BaseSettings):
         }
     
     def configure_logging(self):
-        """Configure logging based on settings"""
-        logger.remove()  # Remove default handler
-        
-        # Console logging
+        """Configure logging using a safe, non-colorized formatter.
+
+        Avoids angle-bracket color tags to prevent Colorizer errors when fields
+        such as function may contain characters like '<module>'.
+        """
+        try:
+            # Optional opt-out to inherit global logger configuration
+            import os as _os
+            if _os.getenv("MCP_INHERIT_GLOBAL_LOGGER", "").lower() in {"1","true","yes","on"}:
+                return
+        except Exception:
+            pass
+
+        def _safe_fmt(record: dict) -> str:
+            try:
+                ts = record.get("time")
+                ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
+            except Exception:
+                ts_str = ""
+            level = record.get("level").name if record.get("level") else "INFO"
+            def _san(v: object) -> str:
+                try:
+                    s = str(v)
+                    return s.replace("<", "").replace(">", "")
+                except Exception:
+                    return ""
+            name = _san(record.get("name", ""))
+            function = _san(record.get("function", ""))
+            line = record.get("line", "")
+            msg = _san(record.get("message", ""))
+            return f"{ts_str} | {level:<8} | {name}:{function}:{line} - {msg}"
+
+        try:
+            logger.remove()  # Reset to avoid duplicate/default handlers
+        except Exception:
+            pass
+
+        # Console logging (safe format, no color)
         logger.add(
             sink=os.sys.stderr,
-            format=self.log_format,
+            format=_safe_fmt,
             level=self.log_level,
-            colorize=True
+            colorize=False,
         )
-        
-        # File logging if configured
+
+        # File logging if configured (safe format)
         if self.log_file:
             logger.add(
                 sink=self.log_file,
-                format=self.log_format,
+                format=_safe_fmt,
                 level=self.log_level,
                 rotation=self.log_rotation,
                 retention=self.log_retention,
-                compression="zip"
+                compression="zip",
             )
-        
-        # Audit logging if enabled
+
+        # Audit logging if enabled (plain format)
         if self.audit_enabled:
             logger.add(
                 sink=self.audit_log_file,
@@ -273,7 +348,7 @@ class MCPConfig(BaseSettings):
                 filter=lambda record: "audit" in record["extra"],
                 rotation="1 day",
                 retention="90 days",
-                compression="zip"
+                compression="zip",
             )
 
 
@@ -323,11 +398,24 @@ def validate_config() -> bool:
             logger.error("Database URL not configured!")
             return False
         
-        # Warn about development settings in production
+        # Harden WebSocket + mTLS settings for production
         if not config.debug_mode:
+            # WS must require auth
+            if not config.ws_auth_required:
+                logger.error("In production, MCP WebSocket authentication must be enabled (MCP_WS_AUTH_REQUIRED=true)")
+                return False
+            # WS must define allowed origins
+            if not config.ws_allowed_origins:
+                logger.error("In production, MCP WebSocket allowed origins must be configured (MCP_WS_ALLOWED_ORIGINS)")
+                return False
+            # If client certs are required, an explicit expected value must be set
+            if config.client_cert_required and not (config.client_cert_header_value and config.client_cert_header_value.strip()):
+                logger.error("Client certificate required but MCP_CLIENT_CERT_HEADER_VALUE not set")
+                return False
+
+            # Warn about other dev-leaning settings
             if "localhost" in config.cors_origins or "*" in config.cors_origins:
                 logger.warning("Localhost or wildcard in CORS origins - not recommended for production")
-            
             if config.database_echo:
                 logger.warning("Database echo enabled - not recommended for production")
         

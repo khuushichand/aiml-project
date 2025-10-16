@@ -5,7 +5,8 @@ import pytest
 def test_chat_ui_add_and_clear_local(page, server_url):
     page.goto(f"{server_url}/webui/")
     page.get_by_role("tab", name="Chat").click()
-    page.get_by_role("tab", name="Interactive Chat Interface").click()
+    # The chat UI lives within the Chat Completions tab
+    page.get_by_role("tab", name="Chat Completions").click()
 
     # Ensure chat area present
     page.wait_for_selector("#chat-messages")
@@ -22,4 +23,3 @@ def test_chat_ui_add_and_clear_local(page, server_url):
     # Wait a bit for DOM updates
     page.wait_for_timeout(200)
     assert page.locator("#chat-messages").is_visible()
-

@@ -35,6 +35,3 @@ async def test_batch_of_notifications_returns_none():
     resp = await protocol.process_request(batch, RequestContext(request_id="n-2", client_id="notif"))
     assert resp is None
 
-
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")

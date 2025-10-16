@@ -32,6 +32,10 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
     advanced_search,
     UnifiedSearchResult
 )
+from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+    agentic_rag_pipeline,
+    AgenticConfig,
+)
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MultiDatabaseRetriever, RetrievalConfig
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
@@ -148,6 +152,142 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
     )
 
 
+# =============== Ablation helper ===============
+try:
+    from pydantic import BaseModel, Field
+except Exception:
+    BaseModel = object  # type: ignore
+    def Field(*a, **k):  # type: ignore
+        return None
+
+
+class AblationRequest(BaseModel):  # type: ignore[misc]
+    query: str = Field(..., description="Query to ablate")
+    top_k: int = Field(10, ge=1, le=50, description="Retrieval top_k")
+    search_mode: str = Field("hybrid", description="fts|vector|hybrid")
+    with_answer: bool = Field(False, description="Generate answer in each condition")
+    agentic_top_k_docs: int = Field(3, ge=1, le=20)
+    agentic_window_chars: int = Field(1200, ge=200, le=20000)
+    agentic_max_tokens_read: int = Field(6000, ge=500, le=20000)
+    reranking_strategy: str = Field("flashrank", description="flashrank|cross_encoder|hybrid|llama_cpp|none")
+
+
+@router.post(
+    "/ablate",
+    summary="Run RAG ablations (baseline, +rerank, +agentic, +agentic strict)",
+    description="Compare retrieval/generation across baseline vs reranked vs agentic vs agentic(stricter extractive).",
+    dependencies=[Depends(check_rate_limit)]
+)
+async def rag_ablate(
+    request: AblationRequest,
+    current_user: User = Depends(get_request_user),
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    db_paths = {
+        "media_db_path": media_db.db_path if media_db else None,
+        "notes_db_path": chacha_db.db_path if chacha_db else None,
+        "character_db_path": chacha_db.db_path if chacha_db else None,
+    }
+
+    common = dict(
+        query=request.query,
+        sources=["media_db"],
+        media_db_path=db_paths["media_db_path"],
+        notes_db_path=db_paths["notes_db_path"],
+        character_db_path=db_paths["character_db_path"],
+        media_db=media_db,
+        chacha_db=chacha_db,
+        search_mode=request.search_mode,
+        top_k=request.top_k,
+        min_score=0.0,
+        enable_generation=bool(request.with_answer),
+        generation_model=None,
+        max_generation_tokens=300,
+    )
+
+    runs = []
+
+    # 1) Baseline (no reranking)
+    r1 = await unified_rag_pipeline(
+        **common,
+        enable_reranking=False,
+    )
+    runs.append({
+        "label": "baseline",
+        "result": convert_result_to_response(r1)
+    })
+
+    # 2) +rerank
+    r2 = await unified_rag_pipeline(
+        **common,
+        enable_reranking=True,
+        reranking_strategy=request.reranking_strategy,
+    )
+    runs.append({
+        "label": "+rerank",
+        "result": convert_result_to_response(r2)
+    })
+
+    # 3) agentic
+    a_cfg = AgenticConfig(
+        top_k_docs=request.agentic_top_k_docs,
+        window_chars=request.agentic_window_chars,
+        max_tokens_read=request.agentic_max_tokens_read,
+        max_tool_calls=6,
+        extractive_only=True,
+        quote_spans=True,
+        enable_tools=False,
+        debug_trace=False,
+    )
+    r3 = await agentic_rag_pipeline(
+        **common,
+        agentic=a_cfg,
+        enable_citations=False,
+    )
+    runs.append({
+        "label": "agentic",
+        "result": convert_result_to_response(r3)
+    })
+
+    # 4) agentic (strict): tools on, extractive only, small budget
+    a_cfg_strict = AgenticConfig(
+        top_k_docs=max(1, request.agentic_top_k_docs),
+        window_chars=max(600, int(request.agentic_window_chars / 2)),
+        max_tokens_read=max(1000, int(request.agentic_max_tokens_read / 2)),
+        max_tool_calls=4,
+        extractive_only=True,
+        quote_spans=True,
+        enable_tools=True,
+        time_budget_sec=5.0,
+        debug_trace=False,
+    )
+    r4 = await agentic_rag_pipeline(
+        **common,
+        agentic=a_cfg_strict,
+        enable_citations=False,
+    )
+    runs.append({
+        "label": "agentic_strict",
+        "result": convert_result_to_response(r4)
+    })
+
+    # Compact output for quick comparison
+    out = []
+    for item in runs:
+        res = item["result"]
+        first = (res.documents[0] if res.documents else None)
+        out.append({
+            "label": item["label"],
+            "total_time": res.total_time,
+            "cache_hit": res.cache_hit,
+            "doc_count": len(res.documents or []),
+            "first_doc_id": (first.get("id") if isinstance(first, dict) else getattr(first, 'id', None)) if first else None,
+        })
+
+    return {"summary": out, "runs": runs}
+
+
 @router.get(
     "/capabilities",
     summary="Capabilities",
@@ -174,6 +314,34 @@ async def get_capabilities(request: Request):
     }
 
     features = {
+        "agentic_chunking": {
+            "supported": True,
+            "strategies": ["standard", "agentic"],
+            "parameters": [
+                "strategy",
+                "agentic_top_k_docs",
+                "agentic_window_chars",
+                "agentic_max_tokens_read",
+                "agentic_max_tool_calls",
+                "agentic_enable_tools",
+                "agentic_use_llm_planner",
+                "agentic_time_budget_sec",
+                "agentic_cache_ttl_sec",
+                "agentic_extractive_only",
+                "agentic_quote_spans",
+                "agentic_debug_trace",
+            ],
+            "defaults": {
+                "strategy": "standard",
+                "agentic_top_k_docs": 3,
+                "agentic_window_chars": 1200,
+                "agentic_max_tokens_read": 6000,
+                "agentic_max_tool_calls": 8,
+                "agentic_enable_tools": False,
+                "agentic_use_llm_planner": False,
+                "agentic_cache_ttl_sec": 600,
+            },
+        },
         "query_expansion": {
             "supported": True,
             "methods": ["acronym", "synonym", "domain", "entity"],
@@ -339,6 +507,33 @@ async def get_capabilities(request: Request):
         "user_scoped": True
     }
 
+    quick_start = {
+        "agentic_search": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "Summarize key findings of ResNet",
+                "strategy": "agentic",
+                "search_mode": "hybrid",
+                "top_k": 8,
+                "enable_generation": False,
+                "agentic_enable_tools": True,
+                "agentic_max_tool_calls": 6
+            }
+        },
+        "ablate": {
+            "endpoint": "/api/v1/rag/ablate",
+            "method": "POST",
+            "body": {
+                "query": "How does dropout prevent overfitting?",
+                "top_k": 10,
+                "search_mode": "hybrid",
+                "with_answer": False,
+                "reranking_strategy": "none"
+            }
+        }
+    }
+
     return {
         "pipeline": "unified",
         "version": "1.0.0",
@@ -346,7 +541,8 @@ async def get_capabilities(request: Request):
         "search": search,
         "defaults": defaults,
         "limits": limits,
-        "auth": auth
+        "auth": auth,
+        "quick_start": quick_start,
     }
 
 
@@ -435,27 +631,67 @@ async def unified_search_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
         
-        # Execute unified pipeline with all parameters from request
-        result = await unified_rag_pipeline(
-            # Core parameters
-            query=request.query,
-            sources=request.sources,
-            
-            # Database paths
-            media_db_path=db_paths.get("media_db_path"),
-            notes_db_path=db_paths.get("notes_db_path"),
-            character_db_path=db_paths.get("character_db_path"),
-            # Database adapters (prefer adapters over raw SQL fallbacks)
-            media_db=media_db,
-            chacha_db=chacha_db,
-            
-            # Search configuration
-            search_mode=request.search_mode,
-            fts_level=request.fts_level,
-            hybrid_alpha=request.hybrid_alpha,
-            enable_intent_routing=request.enable_intent_routing,
-            top_k=request.top_k,
-            min_score=request.min_score,
+        # Branch: agentic strategy builds a synthetic chunk at query time
+        if getattr(request, 'strategy', 'standard') == 'agentic':
+            agentic_cfg = AgenticConfig(
+                top_k_docs=int(getattr(request, 'agentic_top_k_docs', 3) or 3),
+                window_chars=int(getattr(request, 'agentic_window_chars', 1200) or 1200),
+                max_tokens_read=int(getattr(request, 'agentic_max_tokens_read', 6000) or 6000),
+                max_tool_calls=int(getattr(request, 'agentic_max_tool_calls', 8) or 8),
+                extractive_only=bool(getattr(request, 'agentic_extractive_only', True)),
+                quote_spans=bool(getattr(request, 'agentic_quote_spans', True)),
+                enable_tools=bool(getattr(request, 'agentic_enable_tools', False)),
+                use_llm_planner=bool(getattr(request, 'agentic_use_llm_planner', False)),
+                time_budget_sec=(getattr(request, 'agentic_time_budget_sec', None)),
+                cache_ttl_sec=int(getattr(request, 'agentic_cache_ttl_sec', 600) or 600),
+                debug_trace=bool(getattr(request, 'agentic_debug_trace', False) or request.debug_mode),
+            )
+
+            result = await agentic_rag_pipeline(
+                query=request.query,
+                sources=request.sources,
+                media_db=media_db,
+                chacha_db=chacha_db,
+                media_db_path=db_paths.get("media_db_path"),
+                notes_db_path=db_paths.get("notes_db_path"),
+                character_db_path=db_paths.get("character_db_path"),
+                search_mode=request.search_mode,
+                fts_level=request.fts_level,
+                hybrid_alpha=request.hybrid_alpha,
+                top_k=request.top_k,
+                min_score=request.min_score,
+                index_namespace=(request.index_namespace or request.corpus),
+                agentic=agentic_cfg,
+                enable_generation=request.enable_generation,
+                generation_model=request.generation_model,
+                generation_prompt=request.generation_prompt,
+                max_generation_tokens=request.max_generation_tokens,
+                enable_citations=request.enable_citations,
+                include_chunk_citations=request.enable_chunk_citations,
+                debug_mode=request.debug_mode,
+            )
+        else:
+            # Execute unified pipeline with all parameters from request
+            result = await unified_rag_pipeline(
+                # Core parameters
+                query=request.query,
+                sources=request.sources,
+                
+                # Database paths
+                media_db_path=db_paths.get("media_db_path"),
+                notes_db_path=db_paths.get("notes_db_path"),
+                character_db_path=db_paths.get("character_db_path"),
+                # Database adapters (prefer adapters over raw SQL fallbacks)
+                media_db=media_db,
+                chacha_db=chacha_db,
+                
+                # Search configuration
+                search_mode=request.search_mode,
+                fts_level=request.fts_level,
+                hybrid_alpha=request.hybrid_alpha,
+                enable_intent_routing=request.enable_intent_routing,
+                top_k=request.top_k,
+                min_score=request.min_score,
             
             # Query expansion
             expand_query=request.expand_query,

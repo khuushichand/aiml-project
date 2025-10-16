@@ -86,10 +86,11 @@ nav:
       - Embeddings Module: API-related/Embeddings_Module_Documentation.md
       - Embeddings API Guide: API-related/Embeddings-API-Guide.md
       - Evaluations API Reference: API-related/Evaluations_API_Reference.md
-      - Evaluations API (tldw legacy): API-related/tldw_Evaluations_API_Reference.md
       - Evaluations API (Unified): API-related/Evaluations_API_Unified_Reference.md
       - OCR API: API-related/OCR_API_Documentation.md
-      - Old API Map: API-related/Old_API_Map.md
+      - Legacy:
+          - Old API Map: API-related/Old_API_Map.md
+          - Evaluations API (tldw legacy): API-related/tldw_Evaluations_API_Reference.md
       - Prompt Studio API: API-related/Prompt_Studio_API.md
       - Providers API: API-related/Providers_API_Documentation.md
       - RAG API: API-related/RAG_API_Documentation.md
@@ -128,6 +129,7 @@ nav:
       - PostgreSQL Migration Guide: Deployment/Postgres_Migration_Guide.md
       - Embeddings Deployment Guide: Deployment/Embeddings-Deployment-Guide.md
       - Reverse Proxy Examples: Deployment/Reverse_Proxy_Examples.md
+      - Proxy Overlays (Compose): Deployment/Proxy_Overlays.md
   - Environment Variables: Env_Vars.md
   - Evaluations:
       - Overview: Evaluations/index.md

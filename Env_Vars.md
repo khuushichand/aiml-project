@@ -194,6 +194,23 @@ Runtime overrides (non‑persistent) are available via API:
 - `EMBEDDINGS_PRIORITY_ENABLED`: Enable per‑stage priority sub‑queues with weighted fair consumption (`true|false`). Default: `false`.
 - `EMBEDDINGS_PRIORITY_WEIGHTS`: Comma‑separated weights for `high`, `normal`, `low` priority buckets used by workers when `EMBEDDINGS_PRIORITY_ENABLED=true`. Example: `high:5,normal:3,low:1` (default).
 
+### Vector Store: pgvector
+- `RAG.vector_store_type`: Set to `pgvector` to activate the pgvector adapter (default `chromadb`). This key is typically set in config; env may override via a JSON snippet if used with a config loader.
+- `PGVECTOR_HOST`: Postgres host (default `localhost`).
+- `PGVECTOR_PORT`: Postgres port (default `5432`).
+- `PGVECTOR_DATABASE`: Database name (default `postgres`).
+- `PGVECTOR_USER`: Username (default `postgres`).
+- `PGVECTOR_PASSWORD`: Password (no default).
+- `PGVECTOR_SSLMODE`: SSL mode (default `prefer`).
+- `PGVECTOR_DSN`: Optional DSN string that overrides discrete params.
+- `PGVECTOR_POOL_SIZE`: Optional connection pool size (default `5`).
+- `PGVECTOR_HNSW_EF_SEARCH`: Optional session `ef_search` for HNSW queries (default `64`).
+
+Quick start (local dev):
+- `docker-compose -f docker-compose.pg.yml up -d` to start Postgres with pgvector.
+- Set `RAG.vector_store_type=pgvector` and either `PGVECTOR_DSN` or the discrete `PGVECTOR_*` vars.
+- Vector Store API (`/api/v1/vector_stores`) and the embeddings storage worker will use pgvector when configured.
+
 ## LLM Provider Keys
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `QWEN_API_KEY`
 - Additional provider‑specific variables as required by their APIs.

@@ -4,8 +4,11 @@ Unified MCP API Endpoints
 Production-ready endpoints for the unified MCP module with enhanced security and monitoring.
 """
 
+import ipaddress
+import os
+import secrets
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, WebSocket, HTTPException, Depends, Query, Header, Security, status
+from fastapi import APIRouter, WebSocket, HTTPException, Depends, Query, Header, Security, status, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -29,6 +32,7 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -237,6 +241,7 @@ async def mcp_request(
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Process an MCP request via HTTP.
@@ -298,6 +303,18 @@ async def mcp_request(
     except Exception:
         pass
 
+    if user:
+        if user.roles:
+            metadata.setdefault("roles", user.roles)
+        if user.permissions:
+            metadata.setdefault("permissions", user.permissions)
+    elif derived_user_id is not None:
+        try:
+            if is_single_user_mode():
+                metadata.setdefault("roles", [UserRole.ADMIN.value])
+        except Exception:
+            pass
+
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:
@@ -336,6 +353,7 @@ async def mcp_request_batch(
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Process a batch of MCP requests via HTTP.
@@ -384,6 +402,18 @@ async def mcp_request_batch(
             logger.debug(f"Batch failed to parse safe config: {e}")
 
     # Build context and process via protocol directly to leverage batch support
+    if user:
+        if user.roles:
+            metadata.setdefault("roles", user.roles)
+        if user.permissions:
+            metadata.setdefault("permissions", user.permissions)
+    elif derived_user_id is not None:
+        try:
+            if is_single_user_mode():
+                metadata.setdefault("roles", [UserRole.ADMIN.value])
+        except Exception:
+            pass
+
     ctx = RequestContext(
         request_id="http_batch",
         user_id=derived_user_id,
@@ -400,7 +430,9 @@ async def mcp_request_batch(
 
 
 @router.get("/status", response_model=ServerStatusResponse)
-async def get_server_status():
+async def get_server_status(
+    _guard: None = Depends(enforce_http_security),
+):
     """
     Get MCP server status.
     
@@ -422,7 +454,8 @@ async def get_server_status():
 
 @router.get("/metrics", response_model=ServerMetricsResponse)
 async def get_server_metrics(
-    _: TokenData = Depends(require_admin)
+    _: TokenData = Depends(require_admin),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Get detailed server metrics (requires admin).
@@ -446,6 +479,7 @@ async def get_server_metrics(
 async def get_prometheus_metrics(
     credentials: HTTPAuthorizationCredentials = Security(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Prometheus scrape endpoint for MCP metrics.
@@ -483,6 +517,7 @@ async def list_tools(
     module: Optional[str] = Query(None, description="Filter by module"),
     user: Optional[TokenData] = Depends(get_current_user),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     List available MCP tools.
@@ -511,9 +546,23 @@ async def list_tools(
         except Exception:
             pass
 
+    metadata: Dict[str, Any] = {}
+    if user:
+        if user.roles:
+            metadata["roles"] = user.roles
+        if user.permissions:
+            metadata["permissions"] = user.permissions
+    elif derived_user_id is not None:
+        try:
+            if is_single_user_mode():
+                metadata["roles"] = [UserRole.ADMIN.value]
+        except Exception:
+            pass
+
     response = await server.handle_http_request(
         request,
         user_id=derived_user_id,
+        metadata=metadata or None
     )
     
     if response.error:
@@ -530,7 +579,8 @@ async def list_tools(
 @router.post("/tools/execute", response_model=ToolExecutionResponse)
 async def execute_tool(
     request: ToolExecutionRequest,
-    user: TokenData = Depends(require_user)
+    user: TokenData = Depends(require_user),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Execute a specific tool (requires authentication).
@@ -552,9 +602,16 @@ async def execute_tool(
     if not server.initialized:
         await server.initialize()
     
+    metadata: Dict[str, Any] = {}
+    if user.roles:
+        metadata["roles"] = user.roles
+    if user.permissions:
+        metadata["permissions"] = user.permissions
+
     response = await server.handle_http_request(
         mcp_request,
-        user_id=user.sub
+        user_id=user.sub,
+        metadata=metadata or None
     )
     
     if response.error:
@@ -605,7 +662,8 @@ async def execute_tool(
 
 @router.get("/modules")
 async def list_modules(
-    user: Optional[TokenData] = Depends(get_current_user)
+    user: Optional[TokenData] = Depends(get_current_user),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     List registered MCP modules.
@@ -618,9 +676,23 @@ async def list_modules(
     if not server.initialized:
         await server.initialize()
     
+    metadata: Dict[str, Any] = {}
+    if user:
+        if user.roles:
+            metadata["roles"] = user.roles
+        if user.permissions:
+            metadata["permissions"] = user.permissions
+    else:
+        try:
+            if is_single_user_mode():
+                metadata["roles"] = [UserRole.ADMIN.value]
+        except Exception:
+            pass
+
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None
+        user_id=user.sub if user else None,
+        metadata=metadata or None
     )
     
     if response.error:
@@ -636,7 +708,8 @@ async def list_modules(
 
 @router.get("/modules/health")
 async def get_modules_health(
-    user: TokenData = Depends(require_admin)
+    user: TokenData = Depends(require_admin),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Get detailed health status of all modules (requires admin).
@@ -649,7 +722,13 @@ async def get_modules_health(
     if not server.initialized:
         await server.initialize()
     
-    response = await server.handle_http_request(request, user_id=user.sub, metadata={"admin_override": True})
+    meta: Dict[str, Any] = {"admin_override": True}
+    if user.roles:
+        meta["roles"] = user.roles
+    if user.permissions:
+        meta["permissions"] = user.permissions
+
+    response = await server.handle_http_request(request, user_id=user.sub, metadata=meta)
     
     if response.error:
         if response.error.code == -32001:
@@ -664,7 +743,8 @@ async def get_modules_health(
 
 @router.get("/resources")
 async def list_resources(
-    user: Optional[TokenData] = Depends(get_current_user)
+    user: Optional[TokenData] = Depends(get_current_user),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     List available MCP resources.
@@ -677,9 +757,23 @@ async def list_resources(
     if not server.initialized:
         await server.initialize()
     
+    metadata: Dict[str, Any] = {}
+    if user:
+        if user.roles:
+            metadata["roles"] = user.roles
+        if user.permissions:
+            metadata["permissions"] = user.permissions
+    else:
+        try:
+            if is_single_user_mode():
+                metadata["roles"] = [UserRole.ADMIN.value]
+        except Exception:
+            pass
+
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None
+        user_id=user.sub if user else None,
+        metadata=metadata or None
     )
     
     if response.error:
@@ -695,7 +789,8 @@ async def list_resources(
 
 @router.get("/prompts")
 async def list_prompts(
-    user: Optional[TokenData] = Depends(get_current_user)
+    user: Optional[TokenData] = Depends(get_current_user),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     List available MCP prompts.
@@ -708,9 +803,23 @@ async def list_prompts(
     if not server.initialized:
         await server.initialize()
     
+    metadata: Dict[str, Any] = {}
+    if user:
+        if user.roles:
+            metadata["roles"] = user.roles
+        if user.permissions:
+            metadata["permissions"] = user.permissions
+    else:
+        try:
+            if is_single_user_mode():
+                metadata["roles"] = [UserRole.ADMIN.value]
+        except Exception:
+            pass
+
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None
+        user_id=user.sub if user else None,
+        metadata=metadata or None
     )
     
     if response.error:
@@ -728,7 +837,9 @@ async def list_prompts(
 
 @router.post("/auth/token", response_model=AuthTokenResponse)
 async def create_token(
-    auth_request: AuthTokenRequest
+    auth_request: AuthTokenRequest,
+    request: Request,
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Issue an MCP access token.
@@ -737,36 +848,80 @@ async def create_token(
     Use the primary AuthNZ login flow to obtain a JWT, or enable this endpoint
     explicitly via MCP_ENABLE_DEMO_AUTH=1 for development/testing only.
     """
-    import os
     if os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() not in {"1", "true", "yes"}:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Direct MCP auth is disabled. Use AuthNZ bearer tokens."
+            detail="Direct MCP auth is disabled. Use AuthNZ bearer tokens.",
         )
 
-    # Demo-only behavior (opt-in)
+    cfg = get_config()
+    test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+    if not cfg.debug_mode and not test_mode:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo auth is restricted to debug/test environments.",
+        )
+
+    demo_secret = os.getenv("MCP_DEMO_AUTH_SECRET", "")
+    if len(demo_secret) < 16:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Demo auth secret not configured; set MCP_DEMO_AUTH_SECRET to enable.",
+        )
+
+    client_host = getattr(request.client, "host", None)
+    try:
+        peer_ip = ipaddress.ip_address(client_host) if client_host else None
+    except ValueError:
+        peer_ip = None
+    if not peer_ip or (not peer_ip.is_loopback and not peer_ip.is_private):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo auth is only available from loopback/private addresses.",
+        )
+
+    provided_secret = auth_request.api_key or auth_request.password or ""
+    if not provided_secret or not secrets.compare_digest(provided_secret, demo_secret):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid demo auth secret.",
+        )
+
+    allowed_user = os.getenv("MCP_DEMO_AUTH_USER", "admin")
+    username = auth_request.username or allowed_user
+    if username != allowed_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid demo auth username.",
+        )
+
+    subject = os.getenv("MCP_DEMO_AUTH_SUBJECT", "admin_user")
     jwt_manager = get_jwt_manager()
-    if auth_request.username == "admin" and auth_request.password == "admin":
-        access_token = jwt_manager.create_access_token(
-            subject="admin_user",
-            username="admin",
-            roles=[UserRole.ADMIN.value],
-            permissions=["*"]
-        )
-        refresh_token, _ = jwt_manager.create_refresh_token("admin_user")
-        return AuthTokenResponse(
-            access_token=access_token,
-            expires_in=1800,
-            refresh_token=refresh_token
-        )
+    access_token = jwt_manager.create_access_token(
+        subject=subject,
+        username=username,
+        roles=[UserRole.ADMIN.value],
+        permissions=["*"],
+    )
+    refresh_token, _ = jwt_manager.create_refresh_token(subject)
 
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    logger.warning(
+        "Issued demo MCP token for development/testing use only.",
+        extra={"audit": True, "client_ip": str(peer_ip)},
+    )
+
+    return AuthTokenResponse(
+        access_token=access_token,
+        expires_in=jwt_manager.config.jwt_access_token_expire_minutes * 60,
+        refresh_token=refresh_token,
+    )
 
 
 @router.post("/auth/refresh", response_model=AuthTokenResponse)
 async def refresh_token(
     refresh_token: str = Query(..., description="Refresh token"),
-    token_id: Optional[str] = Query(None, description="Refresh token id (if available)")
+    token_id: Optional[str] = Query(None, description="Refresh token id (if available)"),
+    _guard: None = Depends(enforce_http_security),
 ):
     """
     Refresh authentication token.
@@ -809,7 +964,9 @@ async def refresh_token(
 # Health check endpoint
 
 @router.get("/health")
-async def health_check():
+async def health_check(
+    _guard: None = Depends(enforce_http_security),
+):
     """
     Health check endpoint for load balancers.
     

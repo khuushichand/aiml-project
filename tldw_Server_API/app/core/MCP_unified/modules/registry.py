@@ -262,6 +262,10 @@ class ModuleRegistry:
                 return module
         
         return None
+
+    def get_module_id_for_tool(self, tool_name: str) -> Optional[str]:
+        """Return module id mapped to a tool, if known."""
+        return self._tool_registry.get(tool_name)
     
     async def find_module_for_resource(self, uri: str) -> Optional[BaseModule]:
         """Find module that provides a specific resource"""
@@ -276,6 +280,10 @@ class ModuleRegistry:
                 return module
         
         return None
+
+    def get_module_id_for_resource(self, uri: str) -> Optional[str]:
+        """Return module id for a resource uri, if cached."""
+        return self._resource_registry.get(uri)
     
     async def find_module_for_prompt(self, name: str) -> Optional[BaseModule]:
         """Find module that provides a specific prompt"""
@@ -290,6 +298,10 @@ class ModuleRegistry:
                 return module
         
         return None
+
+    def get_module_id_for_prompt(self, name: str) -> Optional[str]:
+        """Return module id for a prompt name, if cached."""
+        return self._prompt_registry.get(name)
     
     async def check_all_health(self) -> Dict[str, ModuleHealth]:
         """Check health of all modules"""

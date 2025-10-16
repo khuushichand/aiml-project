@@ -21,6 +21,8 @@ Recommended PromQL (examples)
 - HTTP 5xx ratio (5m): `sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))`
 - HTTP p95 per endpoint: `histogram_quantile(0.95, sum by (le,endpoint) (rate(http_request_duration_seconds_bucket[5m])))`
 - MCP p95 per method: `histogram_quantile(0.95, sum(rate(mcp_request_duration_seconds_bucket[5m])) by (le, method))`
+- MCP invalid params (schema/validator failures): `sum(rate(mcp_tool_invalid_params_total[5m])) by (module, tool)`
+- MCP validator missing (write tools): `sum(rate(mcp_tool_validator_missing_total[5m])) by (module, tool)`
 - RAG cache hit rate: `sum(rate(rag_cache_hits_total[5m])) / (sum(rate(rag_cache_hits_total[5m])) + sum(rate(rag_cache_misses_total[5m])))`
 - RAG reranker timeouts: `sum(rate(rag_reranker_llm_timeouts_total[5m]))`
 - RAG reranker budget exhaustions: `sum(rate(rag_reranker_llm_budget_exhausted_total[5m]))`
@@ -92,3 +94,95 @@ When RAG reranker alerts fire, use this quick triage:
 
 Dashboards
 - Import `Docs/Deployment/Monitoring/rag-reranker-dashboard.json` for quick visibility into reranker behavior.
+## MCP Validation Alerts (examples)
+
+These sample rules help catch noisy clients or missing validator implementations in write tools.
+
+Add to `mcp-alerts.yml`:
+```yaml
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: mcp-validation
+    folder: MCP Unified
+    interval: 1m
+    rules:
+      - uid: mcp_invalid_params_rate
+        title: MCP – Invalid Params (Schema/Validator)
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              expr: sum(rate(mcp_tool_invalid_params_total[5m])) by (module, tool)
+              interval: 1m
+              legendFormat: "{{module}}/{{tool}}"
+              format: time_series
+        for: 5m
+        annotations:
+          severity: warning
+        labels:
+          service: mcp
+          category: validation
+        noDataState: NoData
+        execErrState: Error
+        conditions:
+          - evaluator:
+              params:
+                - 0.2
+              type: gt
+            operator:
+              type: and
+            query:
+              params:
+                - A
+            reducer:
+              type: last
+            type: query
+
+      - uid: mcp_validator_missing
+        title: MCP – Missing Validator Override (Write Tools)
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              expr: sum(rate(mcp_tool_validator_missing_total[5m])) by (module, tool)
+              interval: 1m
+              legendFormat: "{{module}}/{{tool}}"
+              format: time_series
+        for: 10m
+        annotations:
+          severity: critical
+        labels:
+          service: mcp
+          category: validation
+        noDataState: NoData
+        execErrState: Error
+        conditions:
+          - evaluator:
+              params:
+                - 0
+              type: gt
+            operator:
+              type: and
+            query:
+              params:
+                - A
+            reducer:
+              type: last
+            type: query
+```
+
+Operational guidance
+- A sustained non-zero `mcp_tool_invalid_params_total` rate usually indicates:
+  - Clients sending wrong argument shapes (fix SDKs/clients),
+  - Mismatched inputSchema vs. server expectations (update schema), or
+  - Legitimate rejections by module validators (tighten docs/tooling).
+- Any non-zero `mcp_tool_validator_missing_total` suggests a write-capable tool was registered without a strict validator—treat as a release-blocking quality issue.

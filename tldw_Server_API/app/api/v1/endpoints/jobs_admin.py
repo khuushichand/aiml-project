@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import List, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ConfigDict
+try:
+    from pydantic import field_validator  # Pydantic v2
+except Exception:  # Fallback to v1 naming
+    from pydantic import validator as field_validator  # type: ignore
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
@@ -69,21 +73,30 @@ class PruneRequest(BaseModel):
     dry_run: bool = Field(default=False, description="When true, return count only without deleting")
     detail_top_k: int = Field(default=0, ge=0, le=100, description="When dry_run is true, optionally compute top-K groups by count")
 
-    @validator("statuses", each_item=True)
-    def _norm_status(cls, v: str) -> str:
-        v = str(v or "").strip().lower()
+    @field_validator("statuses", mode="before")
+    @classmethod
+    def _norm_statuses(cls, v):
+        # Expect list; normalize each item to allowed set
         allowed = {"queued", "processing", "completed", "failed", "cancelled"}
-        if v not in allowed:
-            raise ValueError(f"Unsupported status: {v}")
-        return v
+        try:
+            items = list(v) if isinstance(v, (list, tuple)) else [v]
+        except Exception:
+            raise ValueError("statuses must be a list of strings")
+        out = []
+        for item in items:
+            s = str(item or "").strip().lower()
+            if s not in allowed:
+                raise ValueError(f"Unsupported status: {s}")
+            out.append(s)
+        return out
 
-    @validator("domain", "queue", "job_type", pre=True, always=True)
+    @field_validator("domain", "queue", "job_type", mode="before")
+    @classmethod
     def _trim_optional(cls, v: Optional[str]) -> Optional[str]:
         s = str(v or "").strip()
         return s or None
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "statuses": ["completed", "failed"],
                 "older_than_days": 30,
@@ -92,7 +105,7 @@ class PruneRequest(BaseModel):
                 "job_type": "export",
                 "dry_run": True,
             }
-        }
+        })
 
 
 class PruneResponse(BaseModel):
@@ -601,8 +614,7 @@ async def stream_job_events(after_id: int = 0, _=Depends(require_admin)):
     queue: Optional[str] = Field(default=None)
     job_type: Optional[str] = Field(default=None)
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "age_seconds": 86400,
                 "runtime_seconds": 7200,
@@ -611,7 +623,7 @@ async def stream_job_events(after_id: int = 0, _=Depends(require_admin)):
                 "queue": "default",
                 "job_type": None,
             }
-        }
+        })
 
 
 class TTLSweepResponse(BaseModel):
@@ -696,15 +708,14 @@ class IntegritySweepRequest(BaseModel):
     queue: Optional[str] = Field(default=None)
     job_type: Optional[str] = Field(default=None)
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "fix": False,
                 "domain": "chatbooks",
                 "queue": "default",
                 "job_type": None,
             }
-        }
+        })
 
 
 class IntegritySweepResponse(BaseModel):
@@ -712,14 +723,13 @@ class IntegritySweepResponse(BaseModel):
     processing_expired: int
     fixed: int
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "non_processing_with_lease": 3,
                 "processing_expired": 1,
                 "fixed": 2,
             }
-        }
+        })
 
 
 @router.post(
@@ -779,8 +789,7 @@ class QueueStatsResponse(BaseModel):
     processing: int
     quarantined: int
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "domain": "chatbooks",
                 "queue": "default",
@@ -789,8 +798,8 @@ class QueueStatsResponse(BaseModel):
                 "scheduled": 2,
                 "processing": 1,
                 "quarantined": 0,
-        }
-    }
+            }
+        })
 
 
 @router.get("/jobs/stats", response_model=list[QueueStatsResponse])
@@ -1169,22 +1178,20 @@ class BatchRequeueQuarantinedRequest(BaseModel):
     job_type: Optional[str] = None
     dry_run: bool = False
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "domain": "chatbooks",
                 "queue": "default",
                 "job_type": "export",
                 "dry_run": True
             }
-        }
+        })
 
 
 class BatchRequeueQuarantinedResponse(BaseModel):
     affected: int
 
-    class Config:
-        schema_extra = {"example": {"affected": 5}}
+    model_config = ConfigDict(json_schema_extra={"example": {"affected": 5}})
 
 
 @router.post(

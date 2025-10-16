@@ -62,6 +62,7 @@ class AdhocRunRequest(BaseModel):
 
 
 class WorkflowRunResponse(BaseModel):
+    id: Optional[str] = None
     run_id: str
     workflow_id: Optional[int] = None
     user_id: Optional[str] = None
@@ -97,3 +98,4 @@ class WorkflowRunListItem(BaseModel):
 class WorkflowRunListResponse(BaseModel):
     runs: List[WorkflowRunListItem]
     next_offset: Optional[int] = None
+    next_cursor: Optional[str] = None

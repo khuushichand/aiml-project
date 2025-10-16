@@ -32,9 +32,9 @@ Base prefix: `/api/v1/workflows`
 - Runs
   - `POST /{workflow_id}/run?mode=async|sync` → Run saved definition (idempotency supported)
   - `POST /run?mode=async|sync` → Run ad‑hoc definition (configurable rate‑limited)
-  - `GET /runs?status=&owner=&workflow_id=&limit=&offset=` → List runs (owner by default; admin may filter by `owner`), returns `runs` and optional `next_offset` for pagination
+  - `GET /runs?status=&owner=&workflow_id=&created_after=&created_before=&last_n_hours=&order_by=&order=&limit=&offset=&cursor=` → List runs with filters. Owner by default; admin may filter by `owner`. Returns `runs`, `next_offset` (legacy) and `next_cursor` (opaque continuation token). When `cursor` is present, `offset` is ignored.
   - `GET /runs/{run_id}` → Run status and final outputs
-  - `GET /runs/{run_id}/events?since=` → Ordered event stream (HTTP polling)
+  - `GET /runs/{run_id}/events?since=&types=&limit=&cursor=` → Ordered event stream (HTTP polling). Supports server‑side filtering by `types` (comma‑separated). Returns `Next-Cursor` header when a full page is returned. When `cursor` is present, `since` is ignored.
   - `WS /ws?run_id=...&token=...` → Live event stream (JWT required; run owner only)
   - `POST /runs/{run_id}/pause|resume|cancel|retry` → Control actions
 - Human in the loop
@@ -47,6 +47,11 @@ Base prefix: `/api/v1/workflows`
 - Options discovery
   - `GET /options/chunkers` → Chunker methods, defaults, and basic param schema
   - `GET /step-types` → List available step types for UI builders
+  
+- Templates
+  - `GET /templates` → List available workflow templates (with `tags` and titles)
+  - `GET /templates/{name}` → Fetch a specific template by name
+  - `GET /templates/tags` → List aggregated tags across templates
 
 ## Definition Schema (v0.1)
 
@@ -83,12 +88,26 @@ Registered under `StepTypeRegistry`:
 - `mcp_tool`: Execute MCP tools through the unified server registry. Test‑friendly fallback for `tool_name=echo`.
 - `webhook`: Send events to a URL (HMAC signing and SSRF/egress controls) or dispatch to registered webhooks.
 - `wait_for_human`: Pause run with status `waiting_human` until `approve`/`reject`.
+- `wait_for_approval`: Pause run with status `waiting_approval` until `approve`/`reject`. Semantically identical wait state, surfaced distinctly for UI/ops.
 - `delay`: Pause the workflow for a fixed time (milliseconds). Useful for demos, backoffs or pacing.
 - `log`: Log a templated message at the chosen level (`debug|info|warning|error`). Helps with debugging and audit trails.
 - `branch`: Evaluate a boolean condition and optionally jump to a target step id (`true_next` / `false_next`).
 - `map`: Fan‑out over a list and apply a nested step with optional concurrency; returns a list of `results`.
 
 See `adapters.py` for configuration keys and behavior of each step.
+
+### Additional Step Types
+
+The following additional step types are available and surfaced via `/step-types` for schema discovery:
+
+- `tts`: Text‑to‑speech with optional transcript artifact save and download link attachment. Advanced options include `lang_code`, `normalization_options`, and provider‑specific passthrough.
+- `process_media`: Ephemeral fetch/process of web media (internal provider). No DB persistence.
+- `rss_fetch` / `atom_fetch`: Fetch and parse RSS/Atom feeds; returns `results[]` and concatenated `text` for downstream summarization.
+- `embed`: Create vector embeddings for provided text and upsert to a per‑user Chroma collection.
+- `translate`: Provider‑agnostic translation returning translated text and metadata (source/target languages).
+- `stt_transcribe`: First‑class speech‑to‑text step (local faster‑whisper path supported), optional diarization/word timestamps.
+- `notify`: Minimal notifier (Slack/webhook) respecting SSRF/egress policy.
+- `diff_change_detector`: Compare previous vs current text and mark `changed` with diff metrics.
 
 ## Engine Behavior
 
@@ -143,6 +162,11 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - Global: `WORKFLOWS_WEBHOOK_ALLOWLIST`, `WORKFLOWS_WEBHOOK_DENYLIST`
   - Tenant overrides: `WORKFLOWS_WEBHOOK_ALLOWLIST_<TENANT>`, `WORKFLOWS_WEBHOOK_DENYLIST_<TENANT>` (tenant upper‑cased, `-` → `_`)
   - Private IP blocking follows `WORKFLOWS_EGRESS_BLOCK_PRIVATE` (defaults true).
+- General egress policy with per‑tenant overrides:
+  - Global: `WORKFLOWS_EGRESS_ALLOWLIST`, `WORKFLOWS_EGRESS_DENYLIST`
+  - Tenant overrides: `WORKFLOWS_EGRESS_ALLOWLIST_<TENANT>`, `WORKFLOWS_EGRESS_DENYLIST_<TENANT>` (tenant upper‑cased, `-` → `_`)
+  - Profile: `WORKFLOWS_EGRESS_PROFILE=strict|permissive|custom` (default strict in prod)
+  - Precedence: Any deny (global or tenant) blocks; allowlists are unioned (host allowed if present in either global or tenant allowlist). When allowlists are empty, permissive profile allows public hosts; strict requires an allowlist match.
 - DB URI (SQLite): `DATABASE_URL_WORKFLOWS=sqlite:///path/to/workflows.db`
 - Webhook global disable: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` disables completion hooks globally
 - Artifact scope validation: `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` (default true). When false, validation failures log a warning but do not block download.
@@ -180,19 +204,46 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - Field‑level encryption for artifact metadata: enable with `WORKFLOWS_ARTIFACT_ENCRYPTION=true` and provide `WORKFLOWS_ARTIFACT_ENC_KEY` (base64 16/24/32 bytes for AES‑GCM). Encrypted metadata is transparently decrypted on read when the key is present; otherwise a placeholder is returned.
   - Scoped secrets injection: run requests accept `secrets` (map of strings). These are injected into the execution context as `context.secrets` and never persisted. Secrets are cleared from memory when the run reaches a terminal state.
 
+### Webhooks: Delivery History, Replay, and Replay Protection
+
+- Engine attaches headers on delivery:
+  - `X-Webhook-ID`: unique ID per delivery
+  - `X-Signature-Timestamp`: unix seconds
+  - `X-Workflows-Signature`: HMAC-SHA256 of `"<timestamp>.<body>"` using `WORKFLOWS_WEBHOOK_SECRET`
+  - Compatibility header: `X-Hub-Signature-256: sha256=<sig>`
+  - Receivers can enforce a replay window by rejecting timestamps older than a configured threshold.
+
+- Delivery history:
+  - `GET /api/v1/workflows/runs/{run_id}/webhooks/deliveries` returns the sequence of webhook delivery events recorded for a run (status, HTTP code, timestamp).
+
+- Dead-letter queue (DLQ):
+  - Failures enqueue into `workflow_webhook_dlq`. The DLQ worker retries with exponential backoff.
+  - Admin endpoints:
+    - `GET /api/v1/workflows/webhooks/dlq?limit=&offset=`: list entries with payload excerpt.
+    - `POST /api/v1/workflows/webhooks/dlq/{id}/replay`: attempt immediate replay (enforces egress policy and signing). In test mode (`TEST_MODE=true` and `WORKFLOWS_TEST_REPLAY_SUCCESS=true`) the replay is simulated.
+
+### Artifacts: Range Requests and Batch Verification
+
+- Single artifact downloads support HTTP Range requests (single range):
+  - `206 Partial Content` with `Content-Range` and `Accept-Ranges: bytes`.
+  - Full downloads include `Accept-Ranges: bytes` and `Content-Disposition` filename.
+
+- Batch checksum verification:
+  - `POST /api/v1/workflows/runs/{run_id}/artifacts/verify-batch` with `{items:[{artifact_id, expected_sha256?}]}` returns calculated hashes and mismatch status. If `expected_sha256` is not provided, the recorded checksum is used when present.
+
 - Quotas and rate limits:
   - Endpoint rate‑limits (slowapi) remain as before and are disabled in tests.
   - Per‑user quotas at run start (saved and ad‑hoc):
     - Burst: `WORKFLOWS_QUOTA_BURST_PER_MIN` (default 60/min).
     - Daily: `WORKFLOWS_QUOTA_DAILY_PER_USER` (default 1000/day).
-    - On exceed: returns `429 Too Many Requests` with headers `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`.
+    - On exceed: returns `429 Too Many Requests` with legacy headers `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and RFC headers `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` plus `Retry-After`.
     - Disable (e.g., tests): `WORKFLOWS_DISABLE_QUOTAS=true`.
 
 ### Observability
 
 - Metrics (Prometheus-compatible):
   - Counters: `workflows_runs_started{tenant,mode}`, `workflows_runs_completed{tenant}`, `workflows_runs_failed{tenant}`.
-  - Histograms: `workflows_run_duration_ms{tenant}`, `workflows_step_duration_ms{type}`.
+  - Histograms: `workflows_run_duration_ms{tenant}`, `workflows_step_duration_ms{tenant,type}`.
   - Step counters: `workflows_steps_started{type}`, `workflows_steps_succeeded{type}`, `workflows_steps_failed{type}`.
   - Webhooks: `workflows_webhook_deliveries_total{status,host}` with status in `delivered|failed|blocked`.
   - Engine gauges: `workflows_engine_queue_depth`.
@@ -207,6 +258,13 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - Readiness: `GET /readyz` returns `{ready, engine, db, time}` with DB connectivity and backend schema version (when using PostgreSQL) checked against the expected version.
  
 In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
+
+### Pagination
+
+- Runs listing supports offset and cursor pagination. Cursor is an opaque base64url token that encodes stable seek positions (timestamp and `run_id` tie‑breaker). When a `cursor` is provided, `offset` is ignored. Responses include `next_cursor` when there is a subsequent page.
+- Events listing supports `cursor` similarly and sets a `Next-Cursor` response header. When a `cursor` is provided, `since` is ignored.
+
+Ordering is stable with a tie‑breaker (`run_id` for runs; `event_id` for events) to avoid duplicates or gaps.
 
 ## Validation Modes
 
@@ -254,6 +312,10 @@ In production, when the content backend is configured for PostgreSQL (recommende
 
 - Engine concurrency
   - `WORKFLOWS_TENANT_CONCURRENCY` (default 2), `WORKFLOWS_WORKFLOW_CONCURRENCY` (default 1).
+  
+- Secrets lifecycle
+  - In‑memory per‑run secrets are stored with a TTL and purged automatically on start/resume and when expired.
+  - `WORKFLOWS_SECRETS_TTL_SECONDS` (default 3600) controls the TTL window.
 
 - Egress policy
   - Profile: `WORKFLOWS_EGRESS_PROFILE=strict|permissive|custom` (defaults to `strict` in prod, `permissive` elsewhere).
@@ -275,6 +337,8 @@ In production, when the content backend is configured for PostgreSQL (recommende
 ## WebUI
 
 - Basic tab at `tldw_Server_API/WebUI/tabs/workflows_content.html` for definition CRUD, run start (sync/async), run status, event stream, and artifact downloads (server and client‑side zip).
+- The Runs list displays status chips including a dedicated `waiting_approval` chip for human‑in‑the‑loop runs awaiting approval.
+- The Events viewer supports cursor pagination when enabled, and client/server‑side filtering by event types.
 
 ## Testing
 
@@ -287,6 +351,8 @@ In production, when the content backend is configured for PostgreSQL (recommende
 - Artifact path scope validation uses `commonpath` with a strict/relaxed toggle; consider moving to `Path.is_relative_to` when minimum Python supports it.
 - Per-run event counters reduce races; assess using DB-side sequences if needed under extreme concurrency.
 - SQLite still uses a lightweight pool; evaluate moving workflows to Postgres by default in production.
+- DAG validation currently checks explicit routing (`on_success`, `on_failure`, and branch targets) for cycles with helpful diagnostics; richer implicit chaining rules may require extended checks in future.
+- Per‑run event sequences are maintained via a counters table; existing runs fall back to `MAX+1` behavior on older schemas.
 
 ## Roadmap (v0.2+)
 

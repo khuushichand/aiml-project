@@ -13,7 +13,8 @@ import types
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
-from tldw_Server_API.app.core.Security.egress import is_url_allowed
+from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
+from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 
 
 class AdapterError(Exception):
@@ -45,14 +46,20 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     except Exception:
         pass
 
-    # Pre-pass: simple replace for {{ inputs.key }} tokens to be robust in sandbox
+    # Pre-pass: replacements for common tokens to be robust in sandbox
     try:
         import re
         if isinstance(context.get("inputs"), dict):
-            def repl(m):
+            # Handle {{ inputs.key || '' }}
+            def repl_fallback(m):
                 key = m.group(1)
                 return str(context["inputs"].get(key, ""))
-            template = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl, template)
+            template = re.sub(r"\{\{\s*inputs\.(\w+)\s*\|\|\s*''\s*\}\}", repl_fallback, template)
+            # Handle {{ inputs.key }}
+            def repl_simple(m):
+                key = m.group(1)
+                return str(context["inputs"].get(key, ""))
+            template = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl_simple, template)
     except Exception:
         pass
 
@@ -112,6 +119,13 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     Output:
       - {"documents": [...], "metadata": result.metadata}
     """
+    # Cooperative cancel (no-op if cancelled)
+    try:
+        if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+            return {"__status__": "cancelled"}
+    except Exception:
+        pass
+
     template_query = config.get("query") or ""
     rendered_query = apply_template_to_string(template_query, context) or template_query
 
@@ -186,6 +200,14 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     if getattr(result, "generated_answer", None) is not None:
         out["generated_answer"] = result.generated_answer
     return out
+
+
+    # Cooperative cancel check (early exit)
+    try:
+        if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+            return {"__status__": "cancelled"}
+    except Exception:
+        pass
 
 
 async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -364,7 +386,13 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
 
             # Global egress policy: private IPs and allowlist
             try:
-                if not is_url_allowed(uri):
+                tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+                allowed = False
+                try:
+                    allowed = is_url_allowed_for_tenant(uri, tenant_id)
+                except Exception:
+                    allowed = is_url_allowed(uri)
+                if not allowed:
                     out["metadata"].append({
                         "source": uri,
                         "status": "blocked_egress",
@@ -634,7 +662,11 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             msg_t = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl_simple, msg_t)
     except Exception:
         pass
-    message = _tmpl(msg_t, context) or msg_t
+    try:
+        message = _tmpl(msg_t, context) or msg_t
+    except Exception:
+        # Fall back to the pre-pass content if templating fails
+        message = msg_t
     # Optional PII redaction in logs
     try:
         import os as _os
@@ -882,6 +914,12 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
         service = await get_tts_service_v2()
         async with _async_file_writer(out_path) as writer:
             async for chunk in service.generate_speech(req, provider=provider):
+                # Cooperative cancel during streaming
+                try:
+                    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+                        return {"__status__": "cancelled"}
+                except Exception:
+                    pass
                 if isinstance(chunk, (bytes, bytearray)):
                     await writer.write(chunk)
                     size_bytes += len(chunk)
@@ -1005,6 +1043,12 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             pass
         return out
 
+    # Early cancel
+    try:
+        if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+            return {"__status__": "cancelled"}
+    except Exception:
+        pass
     kind = str(config.get("kind") or "web_scraping").strip().lower()
     # Web scraping
     if kind == "web_scraping":
@@ -1035,8 +1079,8 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
     user_agent = config.get("user_agent")
     custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
 
-        try:
-            result = await process_web_scraping_task(
+    try:
+        result = await process_web_scraping_task(
             scrape_method=scrape_method,
             url_input=url_input,
             url_level=url_level,
@@ -1055,9 +1099,9 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             user_id=None,
             user_agent=user_agent,
             custom_headers=custom_headers,
-            )
-        except Exception as e:
-            return {"error": f"process_media_error:{e}"}
+        )
+    except Exception as e:
+        return {"error": f"process_media_error:{e}"}
         # Normalize response
         articles = []
         try:
@@ -1228,7 +1272,13 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
             try:
                 if not (u.startswith("http://") or u.startswith("https://")):
                     continue
-                if not is_url_allowed(u):
+                tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+                allowed = False
+                try:
+                    allowed = is_url_allowed_for_tenant(u, tenant_id)
+                except Exception:
+                    allowed = is_url_allowed(u)
+                if not allowed:
                     continue
                 host = urlparse(u).hostname or ""
                 timeout = float(_os.getenv("WORKFLOWS_RSS_TIMEOUT", "8"))
@@ -1442,7 +1492,13 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
         return {"dispatched": False, "test_mode": True}
     try:
-        if not is_url_allowed(url):
+        tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+        ok = False
+        try:
+            ok = is_url_allowed_for_tenant(url, tenant_id)
+        except Exception:
+            ok = is_url_allowed(url)
+        if not ok:
             return {"dispatched": False, "error": "blocked_egress"}
         import httpx
         headers = {"content-type": "application/json"}
@@ -1534,6 +1590,17 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     out = {"branch": "true" if is_true else "false"}
     if next_id:
         out["__next__"] = next_id
+    # Trace decision as a child span for better visibility
+    try:
+        async with _start_span("workflows.branch", attributes={
+            "condition_template": cond_t,
+            "rendered": rendered,
+            "decision": out["branch"],
+            "next_id": next_id or ""
+        }):
+            pass
+    except Exception:
+        pass
     return out
 
 
@@ -1568,26 +1635,62 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
 
     sem = asyncio.Semaphore(concurrency)
 
-    async def _run_one(item):
+    async def _run_one(idx, item):
         async with sem:
+            # Honour cancellation before running each sub-step
+            try:
+                if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+                    return {"__status__": "cancelled"}
+            except Exception:
+                pass
             sub_ctx = {**context, "item": item}
-            if sub_type == "prompt":
-                return await run_prompt_adapter(sub_cfg, sub_ctx)
-            if sub_type == "log":
-                return await run_log_adapter(sub_cfg, sub_ctx)
-            if sub_type == "delay":
-                return await run_delay_adapter(sub_cfg, sub_ctx)
-            if sub_type == "rag_search":
-                return await run_rag_search_adapter(sub_cfg, sub_ctx)
-            if sub_type == "media_ingest":
-                return await run_media_ingest_adapter(sub_cfg, sub_ctx)
-            if sub_type == "mcp_tool":
-                return await run_mcp_tool_adapter(sub_cfg, sub_ctx)
-            if sub_type == "webhook":
-                return await run_webhook_adapter(sub_cfg, sub_ctx)
-            return {"error": f"unsupported_substep:{sub_type}"}
+            # Child span per item to establish parent/child relationships under the main step span
+            try:
+                preview = str(item)
+                if len(preview) > 80:
+                    preview = preview[:77] + "…"
+            except Exception:
+                preview = ""
+            try:
+                async with _start_span("workflows.map.item", attributes={
+                    "index": int(idx),
+                    "sub_type": sub_type,
+                    "item_preview": preview,
+                }):
+                    if sub_type == "prompt":
+                        return await run_prompt_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "log":
+                        return await run_log_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "delay":
+                        return await run_delay_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "rag_search":
+                        return await run_rag_search_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "media_ingest":
+                        return await run_media_ingest_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "mcp_tool":
+                        return await run_mcp_tool_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "webhook":
+                        return await run_webhook_adapter(sub_cfg, sub_ctx)
+                    return {"error": f"unsupported_substep:{sub_type}"}
+            except Exception:
+                # If tracing fails, still attempt the sub-step
+                if sub_type == "prompt":
+                    return await run_prompt_adapter(sub_cfg, sub_ctx)
+                if sub_type == "log":
+                    return await run_log_adapter(sub_cfg, sub_ctx)
+                if sub_type == "delay":
+                    return await run_delay_adapter(sub_cfg, sub_ctx)
+                if sub_type == "rag_search":
+                    return await run_rag_search_adapter(sub_cfg, sub_ctx)
+                if sub_type == "media_ingest":
+                    return await run_media_ingest_adapter(sub_cfg, sub_ctx)
+                if sub_type == "mcp_tool":
+                    return await run_mcp_tool_adapter(sub_cfg, sub_ctx)
+                if sub_type == "webhook":
+                    return await run_webhook_adapter(sub_cfg, sub_ctx)
+                return {"error": f"unsupported_substep:{sub_type}"}
 
-    results = await asyncio.gather(*[_run_one(it) for it in items], return_exceptions=False)
+    results = await asyncio.gather(*[_run_one(i, it) for i, it in enumerate(items)], return_exceptions=False)
     return {"results": results, "count": len(results)}
 
 

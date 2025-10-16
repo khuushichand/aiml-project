@@ -84,6 +84,18 @@ const TTS = {
         
         // Set initial provider
         this.switchProvider('vibevoice');
+
+        // Cleanup recording object URLs on tab unload
+        try {
+            window.addEventListener('beforeunload', () => {
+                try {
+                    if (this._neuttsRecorder && this._neuttsRecorder.url) URL.revokeObjectURL(this._neuttsRecorder.url);
+                } catch (_) {}
+                try {
+                    Object.values(this._recorders || {}).forEach(r => { if (r && r.url) URL.revokeObjectURL(r.url); });
+                } catch (_) {}
+            });
+        } catch (_) {}
     },
     
     // Set up event listeners
@@ -478,6 +490,7 @@ const TTS = {
 
             mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) rec.chunks.push(e.data); };
             mr.onstop = async () => {
+                try { if (rec._timer) { clearInterval(rec._timer); rec._timer = null; } } catch(_) {}
                 const blob = new Blob(rec.chunks, { type: 'audio/webm' });
                 rec.blob = blob;
                 const url = URL.createObjectURL(blob);
@@ -500,7 +513,23 @@ const TTS = {
                     const fi = document.getElementById(inputId);
                     if (fi) fi.disabled = true;
                 }
+                // Informational toast and long-clip hint
+                try { TTS.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
+                try { if (blob && blob.size > 5 * 1024 * 1024) TTS.showStatus('Long recording detected (>5MB). Aim for 3–15 seconds for best performance.', 'warning'); } catch(_) {}
             };
+            // Soft cap with countdown
+            try {
+                const MAX_SEC = 15;
+                const startTs = Date.now();
+                rec._timer = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                    const left = Math.max(0, MAX_SEC - elapsed);
+                    if (statusEl) statusEl.textContent = `Recording... ${left}s left`;
+                    if (elapsed >= MAX_SEC) {
+                        try { mr.stop(); } catch(_) {}
+                    }
+                }, 250);
+            } catch(_) {}
             mr.start();
         } catch (e) {
             console.error('Failed to start recording', e);
@@ -521,6 +550,7 @@ const TTS = {
     clearProviderRecording(provider) {
         const rec = this._recorders[provider];
         if (rec) {
+            try { if (rec.url) URL.revokeObjectURL(rec.url); } catch (_) {}
             rec.mediaRecorder = null;
             rec.chunks = [];
             rec.blob = null;
@@ -569,6 +599,7 @@ const TTS = {
                 }
             };
             mr.onstop = async () => {
+                try { if (this._neuttsRecorder._timer) { clearInterval(this._neuttsRecorder._timer); this._neuttsRecorder._timer = null; } } catch(_) {}
                 const blob = new Blob(this._neuttsRecorder.chunks, { type: 'audio/webm' });
                 this._neuttsRecorder.blob = blob;
                 const url = URL.createObjectURL(blob);
@@ -592,7 +623,24 @@ const TTS = {
                 if (clearBtn) clearBtn.disabled = false;
                 const fileInput = document.getElementById('neutts-ref-audio');
                 if (fileInput) fileInput.disabled = true;
+                // Brief informational toast
+                try { this.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
+                // Hint on overly long recordings (size heuristic)
+                try { if (blob && blob.size > 5 * 1024 * 1024) this.showStatus('Long recording detected (>5MB). Processing may be slow; aim for 3–15 seconds.', 'warning'); } catch(_) {}
             };
+            // Soft cap with countdown
+            try {
+                const MAX_SEC = 15;
+                const startTs = Date.now();
+                this._neuttsRecorder._timer = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                    const left = Math.max(0, MAX_SEC - elapsed);
+                    if (statusEl) statusEl.textContent = `Recording... ${left}s left`;
+                    if (elapsed >= MAX_SEC) {
+                        try { mr.stop(); } catch(_) {}
+                    }
+                }, 250);
+            } catch(_) {}
             mr.start();
         } catch (e) {
             console.error('Failed to start recording', e);
@@ -612,6 +660,7 @@ const TTS = {
     },
 
     clearNeuTTSRecording() {
+        try { if (this._neuttsRecorder && this._neuttsRecorder.url) URL.revokeObjectURL(this._neuttsRecorder.url); } catch (_) {}
         this._neuttsRecorder = { mediaRecorder: null, chunks: [], isRecording: false, blob: null, url: null };
         const audioEl = document.getElementById('neutts-rec-playback');
         if (audioEl) { try { audioEl.pause(); } catch(_){} audioEl.removeAttribute('src'); audioEl.style.display = 'none'; }

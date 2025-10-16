@@ -239,6 +239,32 @@ Most runtime behavior is configured via code defaults or YAML, not environment v
 
 Advanced constants like batch size, cache TTL, and connection pool are code-level defaults in `embeddings_v5_production_enhanced.py`.
 
+### HYDE Retrieval Flags (optional)
+If you enable HYDE/doc2query vector generation, you can tune retrieval fusion behavior via env flags:
+
+```bash
+# Fraction of top‑k to allocate to HYDE question vectors (0..1)
+export HYDE_K_FRACTION=0.5
+
+# Additive weight applied to HYDE similarity before merging (0..1)
+export HYDE_WEIGHT_QUESTION_MATCH=0.05
+
+# Skip HYDE search when baseline is strong (early exit)
+export HYDE_ONLY_IF_NEEDED=true
+export HYDE_SCORE_FLOOR=0.30   # baseline score threshold for early exit
+
+# Dedupe granularity
+# false: merge/fuse at media level (default)
+# true:  perform merge by parent_chunk_id for finer ranking
+export HYDE_DEDUPE_BY_PARENT=false
+```
+
+Notes
+- Media‑level dedupe (default) keeps one entry per media_id. Chunk‑level dedupe ranks distinct chunks from the same media when enabled.
+- When HYDE_ONLY_IF_NEEDED is true and the baseline chunk search returns ≥k with a max score ≥ HYDE_SCORE_FLOOR, HYDE is skipped to reduce latency.
+- HYDE vector generation itself is feature‑flagged separately (see HYDE‑Do‑1.md). Retrieval flags above affect only the search/merge phase.
+
+
 ### Provider Configuration (model definitions)
 
 For local models and provider defaults used by the embeddings implementation, define an Embeddings config compatible with `EmbeddingConfigSchema` (used by `Embeddings_Create`):

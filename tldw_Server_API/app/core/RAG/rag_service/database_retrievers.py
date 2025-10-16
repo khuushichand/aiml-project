@@ -629,7 +629,7 @@ class MediaDBRetriever(BaseRetriever):
                     return []
             
             # Build filter for vector search
-            filter_dict = {}
+            filter_dict: Dict[str, Any] = {}
             if media_type:
                 filter_dict["media_type"] = media_type
             
@@ -642,37 +642,200 @@ class MediaDBRetriever(BaseRetriever):
                 # Default: user-specific media collection
                 collection_name = f"user_{self.user_id}_media_embeddings"
             
-            # Perform vector search
-            results = await self.vector_store.search(
-                collection_name=collection_name,
-                query_vector=query_vector,
-                k=self.config.max_results,
-                filter=filter_dict if filter_dict else None,
-                include_metadata=True
-            )
-            
-            # Convert to Document format
-            documents = []
+            # HYDE-aware retrieval and merge
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings  # late import
+                hyde_enabled = bool(_settings.get("HYDE_ENABLED", False))
+                hyde_only_if_needed = bool(_settings.get("HYDE_ONLY_IF_NEEDED", True))
+                hyde_score_floor = float(_settings.get("HYDE_SCORE_FLOOR", 0.30) or 0.30)
+                hyde_k_frac = float(_settings.get("HYDE_K_FRACTION", 0.5) or 0.5)
+                hyde_weight = float(_settings.get("HYDE_WEIGHT_QUESTION_MATCH", 0.05) or 0.05)
+            except Exception:
+                hyde_enabled = False
+                hyde_only_if_needed = True
+                hyde_score_floor = 0.30
+                hyde_k_frac = 0.5
+                hyde_weight = 0.05
+
+            k = int(self.config.max_results or 10)
+
+            async def _search_with_filter(kind_filter: Optional[str], k_: int):
+                f = dict(filter_dict)
+                if kind_filter:
+                    f["kind"] = kind_filter
+                try:
+                    return await self.vector_store.search(
+                        collection_name=collection_name,
+                        query_vector=query_vector,
+                        k=k_,
+                        filter=f if f else None,
+                        include_metadata=True,
+                    )
+                except Exception as exc:
+                    logger.debug(f"Vector search with filter {f} failed, reason={exc}")
+                    return []
+
+            # 1) Baseline chunk search (prefer kind='chunk', fallback to no kind filter)
+            base_results = await _search_with_filter("chunk", k)
+            if not base_results:
+                base_results = await _search_with_filter(None, k)
+
+            # Optional early exit
+            max_base = max((r.score for r in base_results), default=0.0)
+            if not hyde_enabled or (hyde_only_if_needed and len(base_results) >= k and max_base >= hyde_score_floor):
+                # Convert and return baseline
+                documents: List[Document] = []
+                allowed_media_ids = kwargs.get("allowed_media_ids")
+                allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+                for result in base_results:
+                    doc_media_id = result.metadata.get("media_id", result.id)
+                    try:
+                        doc_media_id_int = int(str(doc_media_id))
+                    except Exception:
+                        doc_media_id_int = None
+                    if allowed_set is not None and (doc_media_id_int is None or doc_media_id_int not in allowed_set):
+                        continue
+                    documents.append(
+                        Document(
+                            id=result.metadata.get("media_id", result.id),
+                            content=result.content,
+                            metadata=result.metadata,
+                            score=result.score,
+                            source=DataSource.MEDIA_DB,
+                        )
+                    )
+                logger.debug(f"Retrieved {len(documents)} documents from vector search (baseline)")
+                return documents
+
+            # 2) HYDE search on question vectors
+            k_hyde = max(1, int(k * hyde_k_frac))
+            hyde_results = await _search_with_filter("hyde_q", k_hyde)
+
+            # 3) Merge — two modes: media-level (default) and optional chunk-level (by parent_chunk_id)
+            try:
+                dedupe_by_parent = bool(_settings.get("HYDE_DEDUPE_BY_PARENT", False))
+            except Exception:
+                dedupe_by_parent = False
+
+            if not dedupe_by_parent:
+                # Media-level merge (default)
+                best_score: Dict[str, float] = {}
+                doc_map: Dict[str, Document] = {}
+
+                def _maybe_add_media(result_obj):
+                    # Convert VectorSearchResult to Document (id=media_id preferred)
+                    d_id = result_obj.metadata.get("media_id", result_obj.id)
+                    d = Document(
+                        id=d_id,
+                        content=result_obj.content,
+                        metadata=result_obj.metadata,
+                        score=result_obj.score,
+                        source=DataSource.MEDIA_DB,
+                    )
+                    if d_id not in doc_map:
+                        doc_map[d_id] = d
+                    prev = best_score.get(d_id, 0.0)
+                    if d.score > prev:
+                        best_score[d_id] = d.score
+                        doc_map[d_id].score = d.score
+
+                # Add baseline first
+                for r in base_results:
+                    _maybe_add_media(r)
+
+                # Add/adjust HYDE
+                for r in hyde_results:
+                    adj = min(1.0, r.score + hyde_weight)
+                    d_id = r.metadata.get("media_id", r.id)
+                    prev = best_score.get(d_id, 0.0)
+                    if adj > prev:
+                        best_score[d_id] = adj
+                        if d_id in doc_map:
+                            doc_map[d_id].score = adj
+                        else:
+                            doc_map[d_id] = Document(
+                                id=d_id,
+                                content=r.content,
+                                metadata=r.metadata,
+                                score=adj,
+                                source=DataSource.MEDIA_DB,
+                            )
+
+                allowed_media_ids = kwargs.get("allowed_media_ids")
+                allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+                merged = list(doc_map.values())
+                if allowed_set is not None:
+                    tmp = []
+                    for d in merged:
+                        try:
+                            mid = int(str(d.metadata.get("media_id", d.id)))
+                        except Exception:
+                            mid = None
+                        if mid is not None and mid in allowed_set:
+                            tmp.append(d)
+                    merged = tmp
+                merged.sort(key=lambda d: d.score, reverse=True)
+                documents = merged[:k]
+                logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, media-level)")
+                return documents
+
+            # Chunk-level merge (by parent_chunk_id)
+            # Build base-by-chunk map
+            base_by_chunk: Dict[str, Tuple[float, Any]] = {}
+            for r in base_results:
+                chunk_key = r.id  # chunk vector id
+                sc = float(r.score)
+                if chunk_key not in base_by_chunk or sc > base_by_chunk[chunk_key][0]:
+                    base_by_chunk[chunk_key] = (sc, r)
+
+            # Best HYDE per parent chunk
+            hyde_by_parent: Dict[str, Tuple[float, Any]] = {}
+            for r in hyde_results:
+                parent = r.metadata.get("parent_chunk_id") or r.id
+                sc = min(1.0, float(r.score) + hyde_weight)
+                if parent not in hyde_by_parent or sc > hyde_by_parent[parent][0]:
+                    hyde_by_parent[parent] = (sc, r)
+
+            # Combine per chunk key
+            chunk_keys = set(base_by_chunk.keys()) | set(hyde_by_parent.keys())
+            chunk_docs: List[Document] = []
+            for ck in chunk_keys:
+                base_tuple = base_by_chunk.get(ck)
+                hyde_tuple = hyde_by_parent.get(ck)
+                base_sc = base_tuple[0] if base_tuple else 0.0
+                hyde_sc = hyde_tuple[0] if hyde_tuple else 0.0
+                best_sc = max(base_sc, hyde_sc)
+                # Prefer base result's metadata/content when present; else use HYDE
+                src = base_tuple[1] if base_tuple else (hyde_tuple[1] if hyde_tuple else None)
+                if not src:
+                    continue
+                d_id = src.metadata.get("media_id", src.id)
+                d = Document(
+                    id=d_id,
+                    content=src.content,
+                    metadata=src.metadata,
+                    score=best_sc,
+                    source=DataSource.MEDIA_DB,
+                )
+                chunk_docs.append(d)
+
+            # Apply allowed_media_ids filter
             allowed_media_ids = kwargs.get("allowed_media_ids")
             allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
-            for result in results:
-                doc_media_id = result.metadata.get("media_id", result.id)
-                try:
-                    doc_media_id_int = int(str(doc_media_id))
-                except Exception:
-                    doc_media_id_int = None
-                if allowed_set is not None and (doc_media_id_int is None or doc_media_id_int not in allowed_set):
-                    continue
-                doc = Document(
-                    id=result.metadata.get("media_id", result.id),
-                    content=result.content,
-                    metadata=result.metadata,
-                    score=result.score,
-                    source=DataSource.MEDIA_DB
-                )
-                documents.append(doc)
-            
-            logger.debug(f"Retrieved {len(documents)} documents from vector search")
+            if allowed_set is not None:
+                filtered: List[Document] = []
+                for d in chunk_docs:
+                    try:
+                        mid = int(str(d.metadata.get("media_id", d.id)))
+                    except Exception:
+                        mid = None
+                    if mid is not None and mid in allowed_set:
+                        filtered.append(d)
+                chunk_docs = filtered
+
+            chunk_docs.sort(key=lambda d: d.score, reverse=True)
+            documents = chunk_docs[:k]
+            logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, chunk-level)")
             return documents
             
         except Exception as e:

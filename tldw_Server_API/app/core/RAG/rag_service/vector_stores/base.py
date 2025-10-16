@@ -123,6 +123,20 @@ class VectorStoreAdapter(ABC):
             ids: IDs of vectors to delete
         """
         pass
+
+    @abstractmethod
+    async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
+        """
+        Delete vectors matching a metadata filter.
+
+        Args:
+            collection_name: Target collection name
+            filter: Metadata filter expression
+
+        Returns:
+            Number of deleted records if available, otherwise 0.
+        """
+        pass
     
     @abstractmethod
     async def search(

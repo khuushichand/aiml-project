@@ -318,15 +318,29 @@ async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
     """Remove a user from an organization. Returns removal status."""
     pool = await get_db_pool()
     async with pool.transaction() as conn:
+        removed = False
         if hasattr(conn, 'fetchrow'):
-            await conn.execute("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", org_id, user_id)
+            # PostgreSQL: use RETURNING to detect if a row was deleted
+            row = await conn.fetchrow(
+                "DELETE FROM org_members WHERE org_id = $1 AND user_id = $2 RETURNING org_id, user_id",
+                org_id, user_id,
+            )
+            removed = row is not None
         else:
-            await conn.execute("DELETE FROM org_members WHERE org_id = ? AND user_id = ?", (org_id, user_id))
+            # SQLite: check rowcount
+            cur = await conn.execute(
+                "DELETE FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
             try:
                 await conn.commit()
             except Exception:
                 pass
-        return {"org_id": int(org_id), "user_id": int(user_id), "removed": True}
+            try:
+                removed = (cur.rowcount or 0) > 0
+            except Exception:
+                removed = True  # best-effort fallback
+        return {"org_id": int(org_id), "user_id": int(user_id), "removed": bool(removed)}
 
 
 async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
@@ -388,13 +402,15 @@ async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
     pool = await get_db_pool()
     async with pool.transaction() as conn:
         try:
+            removed = False
             if hasattr(conn, 'fetchrow'):
-                await conn.execute(
-                    "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
+                row = await conn.fetchrow(
+                    "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2 RETURNING team_id, user_id",
                     team_id, user_id,
                 )
+                removed = row is not None
             else:
-                await conn.execute(
+                cur = await conn.execute(
                     "DELETE FROM team_members WHERE team_id = ? AND user_id = ?",
                     (team_id, user_id),
                 )
@@ -402,7 +418,11 @@ async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
                     await conn.commit()
                 except Exception:
                     pass
-            return {"team_id": int(team_id), "user_id": int(user_id), "removed": True}
+                try:
+                    removed = (cur.rowcount or 0) > 0
+                except Exception:
+                    removed = True
+            return {"team_id": int(team_id), "user_id": int(user_id), "removed": bool(removed)}
         except Exception as e:
             logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}")
             return {"team_id": int(team_id), "user_id": int(user_id), "removed": False}

@@ -1,5 +1,9 @@
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    from pydantic import field_validator
+except Exception:
+    from pydantic import validator as field_validator  # type: ignore
 
 
 SUPPORTED_WEBSEARCH_ENGINES = {"google", "duckduckgo", "bing", "brave"}
@@ -33,7 +37,8 @@ class WebSearchRequest(BaseModel):
 
     aggregate: bool = Field(False, description="If true, runs relevance + final answer aggregation")
 
-    @validator("engine")
+    @field_validator("engine")
+    @classmethod
     def validate_engine(cls, value: str) -> str:
         engine = value.lower()
         if engine not in SUPPORTED_WEBSEARCH_ENGINES:

@@ -70,7 +70,7 @@ def register_workflows_metrics() -> None:
         type=MetricType.HISTOGRAM,
         description="Workflow step duration in milliseconds",
         unit="ms",
-        labels=["type"],
+        labels=["type", "tenant"],
         buckets=[5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
     ))
 
@@ -96,4 +96,3 @@ try:
     register_workflows_metrics()
 except Exception:
     pass
-

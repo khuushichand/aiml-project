@@ -382,6 +382,7 @@ Notes:
 - Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
 - Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
 - VibeVoice TTS (getting started): `Docs/VIBEVOICE_GETTING_STARTED.md`
+ - NeuTTS Air (voice cloning, local): `Docs/STT-TTS/NEUTTS_TTS_SETUP.md`
 
 ### Monitoring (Prometheus + Grafana)
 - Prometheus scrape endpoints:
@@ -691,6 +692,7 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 #### RAG (Retrieval-Augmented Generation)
 - `POST /api/v1/rag/search` - Unified search with all features accessible
 - `POST /api/v1/rag/search/stream` - Streamed answer with incremental claim overlay (NDJSON)
+- `POST /api/v1/rag/ablate` - Compare baseline vs +rerank vs agentic variants
 - `POST /api/v1/rag/batch` - Batch processing for multiple queries
 - `GET /api/v1/rag/simple` - Simplified search interface
 - `GET /api/v1/rag/advanced` - Advanced search with common features
@@ -954,6 +956,39 @@ The RAG module has comprehensive documentation for both developers and API consu
 - **[RAG Developer Guide](Docs/Development/RAG-Developer-Guide.md)** - Architecture, components, testing, and extending the RAG module
 - **[RAG API Guide](Docs/API-related/RAG-API-Guide.md)** - Complete API reference with examples in JavaScript, Python, and cURL
 
+### Agentic Chunking (experimental)
+- Design doc: `Docs/Design/Agentic_Chunking.md`
+- Quick start (agentic search):
+```
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Summarize key findings of ResNet",
+    "strategy": "agentic",
+    "search_mode": "hybrid",
+    "top_k": 8,
+    "enable_generation": false,
+    "agentic_enable_tools": true,
+    "agentic_max_tool_calls": 6
+  }'
+```
+- Ablation helper:
+```
+curl -X POST "http://localhost:8000/api/v1/rag/ablate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How does dropout prevent overfitting?",
+    "top_k": 10,
+    "search_mode": "hybrid",
+    "with_answer": false,
+    "reranking_strategy": "none"
+  }'
+```
+- Capabilities (includes agentic knobs and quick_start examples):
+```
+curl -X GET "http://localhost:8000/api/v1/rag/capabilities"
+```
+
 ### Anthropic Contextual RAG (example config)
 
 To enable Contextual RAG using Anthropic for generating per‑chunk context headers and optional document outlines, set these in `tldw_Server_API/Config_Files/config.txt`:
@@ -1112,10 +1147,24 @@ python -m pytest tests/Media_Ingestion_Modification/ -v
 python -m pytest --cov=tldw_Server_API --cov-report=html
 ```
 
+Fast test (unit + integration only)
+```bash
+# Skips e2e and slow suites by default; trims heavy startup
+TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integration"
+```
+
+Strict fast test (avoid audio/LLM flakes)
+```bash
+# Further exclude external/networked/audio-heavy bits for quick local sanity
+TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integration" -k "not nemo and not parakeet and not elevenlabs and not transcription and not audio and not postgres"
+```
+
 ### Test Suite Toggles and CI Profile
 - Postgres-backed AuthNZ integration tests are skipped unless Postgres is reachable. Force run by setting `TLDW_TEST_POSTGRES_REQUIRED=1`.
 - MCP Unified tests are disabled by default. Enable with `RUN_MCP_TESTS=1`.
 - Mock OpenAI server tests are disabled by default. Enable with `RUN_MOCK_OPENAI=1`.
+- WebUI end-to-end tests are skipped by default. Enable with `-m e2e`.
+  - external_api tests are also excluded by default via pytest.ini; enable with `-m external_api`.
 
 Recommended CI env for broad coverage without heavy services:
 ```bash
@@ -1155,6 +1204,9 @@ python -m pytest -m "integration" -v
 
 # Property tests for a specific area
 python -m pytest -m "property" tldw_Server_API/tests/Embeddings_NEW/property -v
+
+# Only e2e (WebUI) tests
+python -m pytest -m "e2e" -v
 ```
 
 Notes

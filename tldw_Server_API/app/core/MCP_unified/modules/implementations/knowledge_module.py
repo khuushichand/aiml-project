@@ -86,6 +86,10 @@ class KnowledgeModule(BaseModule):
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
+        try:
+            self.validate_tool_arguments(tool_name, args)
+        except Exception as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "knowledge.search":
             return await self._search(args, context)
         if tool_name == "knowledge.get":
@@ -249,3 +253,33 @@ class KnowledgeModule(BaseModule):
             return await self._call_tool("prompts.get", {"prompt_id_or_name": str(idv)}, context)
         # Unsupported source
         raise ValueError(f"Unsupported source for get: {source}")
+
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+        if tool_name == "knowledge.search":
+            q = arguments.get("query")
+            if not isinstance(q, str) or not (1 <= len(q) <= 1000):
+                raise ValueError("query must be 1..1000 chars")
+            limit = int(arguments.get("limit", 20))
+            offset = int(arguments.get("offset", 0))
+            snip = int(arguments.get("snippet_length", 300))
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be 1..100")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if snip < 50 or snip > 2000:
+                raise ValueError("snippet_length must be 50..2000")
+            sources = arguments.get("sources")
+            if sources is not None and (not isinstance(sources, list) or any(s not in {"notes","media","chats","characters","prompts"} for s in sources)):
+                raise ValueError("sources must be subset of notes|media|chats|characters|prompts")
+        elif tool_name == "knowledge.get":
+            source = arguments.get("source")
+            if source not in {"notes","media","chats","characters","prompts"}:
+                raise ValueError("source invalid")
+            if arguments.get("id") is None:
+                raise ValueError("id is required")
+            retrieval = arguments.get("retrieval") or {}
+            if not isinstance(retrieval, dict):
+                raise ValueError("retrieval must be an object")
+            mode = retrieval.get("mode", "snippet")
+            if mode not in {"snippet","full","chunk","chunk_with_siblings","auto"}:
+                raise ValueError("retrieval.mode invalid")

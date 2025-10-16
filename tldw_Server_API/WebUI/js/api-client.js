@@ -512,45 +512,9 @@ class APIClient {
 
     // Generate cURL command for a request
     generateCurl(method, path, options = {}) {
-        const { body = null, query = {}, headers = {} } = options;
-
-        // Build URL with query parameters
-        const url = new URL(`${this.baseUrl}${path}`);
-        Object.keys(query).forEach(key => {
-            if (query[key] !== undefined && query[key] !== null && query[key] !== '') {
-                url.searchParams.append(key, query[key]);
-            }
-        });
-
-        let curl = `curl -X ${method} "${url.toString()}"`;
-
-        // Add headers
-        curl += ` \\\n  -H "Accept: application/json"`;
-        curl += ` \\\n  -H "Token: ${this.token}"`;
-        
-        Object.keys(headers).forEach(key => {
-            curl += ` \\\n  -H "${key}: ${headers[key]}"`;
-        });
-
-        // Add body
-        if (body) {
-            if (body instanceof FormData) {
-                for (let [key, value] of body.entries()) {
-                    if (value instanceof File) {
-                        curl += ` \\\n  -F "${key}=@${value.name}"`;
-                    } else {
-                        curl += ` \\\n  -F "${key}=${value}"`;
-                    }
-                }
-            } else {
-                curl += ` \\\n  -H "Content-Type: application/json"`;
-                const bodyStr = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
-                curl += ` \\\n  -d '${Utils.escapeCurlData(bodyStr)}'`;
-            }
-        }
-
-        return curl;
+        return this.generateCurlV2(method, path, options);
     }
+
 
     // Generate cURL command (auth-aware)
     generateCurlV2(method, path, options = {}) {

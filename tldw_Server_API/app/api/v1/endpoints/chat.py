@@ -180,6 +180,10 @@ from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+    UsageEventLogger,
+)
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -483,6 +487,7 @@ async def create_chat_completion(
     X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
     request: Request = None,  # Optional Request object for audit logging and rate limiting
     audit_service=Depends(get_audit_service_for_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
     current_loop = asyncio.get_running_loop()
@@ -531,6 +536,16 @@ async def create_chat_completion(
         except Exception as log_error:
             logger.warning(f"Failed to log audit event: {log_error}")
             # Continue without logging rather than failing the request
+
+    # Log lightweight usage event for personalization (best-effort)
+    try:
+        usage_log.log_event(
+            "chat.completions",
+            tags=[provider, model],
+            metadata={"message_count": len(request_data.messages), "stream": bool(request_data.stream)},
+        )
+    except Exception:
+        pass
     
     # Start tracking the request
     # Serialize request once and reuse

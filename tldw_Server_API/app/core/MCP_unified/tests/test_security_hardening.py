@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.MCP_unified.server import MCPServer
 from tldw_Server_API.app.core.MCP_unified.config import get_config
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.auth.rate_limiter import DistributedRateLimiter
+from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import AuthNZRBAC, Resource, Action
 from fastapi import WebSocketDisconnect
 
 
@@ -169,3 +170,14 @@ def test_redis_limiter_fallback_on_error():
     assert r2[0] is True
     r3 = asyncio.get_event_loop().run_until_complete(limiter.is_allowed("k2"))
     assert r3[0] is False
+
+
+@pytest.mark.asyncio
+async def test_rbac_denies_unmapped_permissions(monkeypatch):
+    policy = AuthNZRBAC(db_pool=None)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac._map_to_permission",
+        lambda *args, **kwargs: None,
+    )
+    allowed = await policy.check_permission("1", Resource.MEDIA, Action.CREATE)
+    assert allowed is False

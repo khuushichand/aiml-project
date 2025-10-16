@@ -7,6 +7,9 @@ Production-ready media management module with full MCP compliance.
 import os
 import asyncio
 import uuid
+import socket
+import ipaddress
+from urllib.parse import urlsplit
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from pathlib import Path
@@ -351,21 +354,21 @@ class MediaModule(BaseModule):
                 return await self._media_get_normalized(context=context, **arguments)
             elif tool_name == "search_media":
                 return await self._search_media(**arguments)
-            
+
             elif tool_name == "get_transcript":
-                return await self._get_transcript(**arguments)
-            
+                return await self._get_transcript(context=context, **arguments)
+
             elif tool_name == "get_media_metadata":
-                return await self._get_media_metadata(**arguments)
-            
+                return await self._get_media_metadata(context=context, **arguments)
+
             elif tool_name == "ingest_media":
                 return await self._ingest_media(**arguments)
-            
+
             elif tool_name == "update_media":
-                return await self._update_media(**arguments)
-            
+                return await self._update_media(context=context, **arguments)
+
             elif tool_name == "delete_media":
-                return await self._delete_media(**arguments)
+                return await self._delete_media(context=context, **arguments)
             
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
@@ -540,6 +543,8 @@ class MediaModule(BaseModule):
         meta = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
         if not meta:
             raise ValueError(f"Media not found: {media_id}")
+        # Ownership check
+        self._assert_media_access(media_id, context)
         content = meta.get("content") or ""
         item = {
             "id": meta.get("id"),
@@ -790,10 +795,13 @@ class MediaModule(BaseModule):
         media_id: int,
         include_timestamps: bool = False,
         format: str = "text",
+        context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Get media transcript with formatting options"""
         try:
+            # Ownership check first
+            self._assert_media_access(media_id, context)
             # Get transcript from database
             transcript_data = self.db.get_transcript(media_id)
             
@@ -835,10 +843,13 @@ class MediaModule(BaseModule):
         self,
         media_id: int,
         include_stats: bool = False,
+        context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Get comprehensive media metadata"""
         try:
+            # Ownership check
+            self._assert_media_access(media_id, context)
             # Get basic metadata
             metadata = self.db.get_media_metadata(media_id)
             
@@ -904,10 +915,13 @@ class MediaModule(BaseModule):
         self,
         media_id: int,
         updates: Dict[str, Any],
+        context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Update media with validation"""
         try:
+            # Ownership check
+            self._assert_media_access(media_id, context)
             # Validate media exists
             existing = self.db.get_media_metadata(media_id)
             if not existing:
@@ -945,10 +959,13 @@ class MediaModule(BaseModule):
         self,
         media_id: int,
         permanent: bool = False,
+        context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Delete media with soft/hard delete options"""
         try:
+            # Ownership check
+            self._assert_media_access(media_id, context)
             # Validate media exists
             existing = self.db.get_media_metadata(media_id)
             if not existing:
@@ -1047,18 +1064,104 @@ class MediaModule(BaseModule):
             del self._media_cache[key]
     
     def _validate_url(self, url: str) -> bool:
-        """Validate URL for ingestion"""
-        # Basic URL validation
-        if not url.startswith(("http://", "https://")):
-            return False
-        
-        # Check against blocklist
-        blocked_domains = self.config.settings.get("blocked_domains", [])
-        for domain in blocked_domains:
-            if domain in url:
+        """Validate URL for ingestion with SSRF safeguards.
+
+        Rules:
+        - Only http/https schemes
+        - Optional allowed_domains allowlist
+        - Enforce port allowlist (default 80/443)
+        - Reject hosts resolving to private/loopback/link-local/reserved/multicast
+        - Reject .local TLDs and empty hosts
+        """
+        try:
+            parts = urlsplit(url)
+            if parts.scheme not in {"http", "https"}:
                 return False
-        
-        return True
+            host = parts.hostname or ""
+            if not host:
+                return False
+            # Disallow .local
+            if host.endswith(".local"):
+                return False
+
+            # Allowlist check if configured
+            allowed_domains = self.config.settings.get("allowed_domains", []) or []
+            if allowed_domains:
+                host_l = host.lower()
+                ok = False
+                for d in allowed_domains:
+                    d = str(d).lower().lstrip(".")
+                    if host_l == d or host_l.endswith("." + d):
+                        ok = True
+                        break
+                if not ok:
+                    return False
+
+            # Blocklist check (substring match)
+            blocked_domains = self.config.settings.get("blocked_domains", []) or []
+            for d in blocked_domains:
+                try:
+                    if d and d.lower() in host.lower():
+                        return False
+                except Exception:
+                    pass
+
+            # Port allowlist (default http/https)
+            port = parts.port
+            allowed_ports = set(self.config.settings.get("allowed_ports", [80, 443]))
+            if port is not None and port not in allowed_ports:
+                return False
+
+            # Resolve and reject private/bad ranges
+            try:
+                addrinfos = socket.getaddrinfo(host, port or (80 if parts.scheme == "http" else 443))
+            except Exception:
+                return False
+            if not addrinfos:
+                return False
+            for ai in addrinfos:
+                try:
+                    ip_str = ai[4][0]
+                    ip = ipaddress.ip_address(ip_str)
+                    if (
+                        ip.is_private
+                        or ip.is_loopback
+                        or ip.is_link_local
+                        or ip.is_reserved
+                        or ip.is_multicast
+                    ):
+                        return False
+                except Exception:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _is_admin(self, context: Any | None) -> bool:
+        try:
+            roles = (getattr(context, "metadata", {}) or {}).get("roles")
+            return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
+        except Exception:
+            return False
+
+    def _assert_media_access(self, media_id: int, context: Any | None) -> None:
+        """Enforce that non-admin users can only access their own media when ownership is present."""
+        try:
+            if context is None or getattr(context, "user_id", None) is None:
+                return
+            if self._is_admin(context):
+                return
+            row = self.db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+            if not row:
+                return
+            owner = row.get("user_id")
+            if owner is not None and str(owner) != str(context.user_id):
+                raise PermissionError("Access denied for this media item")
+        except PermissionError:
+            raise
+        except Exception:
+            # Fail-open if ownership field not present or any non-critical error occurs
+            return
 
     def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
         """Stricter validation for high-risk tools."""

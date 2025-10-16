@@ -83,6 +83,10 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+    UsageEventLogger,
+)
 
 # -----------------------------
 # Code processing helpers
@@ -339,6 +343,24 @@ import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processin
 from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
+# Expose ingestion helpers at module scope for tests to patch
+try:
+    process_document_content = docs.process_document_content  # type: ignore[attr-defined]
+except Exception:
+    async def process_document_content(*args, **kwargs):  # pragma: no cover
+        raise RuntimeError("process_document_content not available")
+
+try:
+    process_pdf_task = pdf_lib.process_pdf_task  # type: ignore[attr-defined]
+except Exception:
+    async def process_pdf_task(*args, **kwargs):  # pragma: no cover
+        raise RuntimeError("process_pdf_task not available")
+
+try:
+    process_epub = books.process_epub  # type: ignore[attr-defined]
+except Exception:
+    def process_epub(*args, **kwargs):  # pragma: no cover
+        raise RuntimeError("process_epub not available")
 #
 # Document Processing
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
@@ -3111,7 +3133,7 @@ async def _process_document_like_item(
         if media_type == 'pdf':
              # --- FIX: Check file_bytes which were read earlier ---
              if file_bytes is None: raise ValueError("PDF processing requires file bytes, but they were not read.")
-             processing_func = pdf_lib.process_pdf_task # Use the async task wrapper
+             processing_func = process_pdf_task # Use the async task wrapper (module-level for test patching)
              run_in_executor = False # Task is already async
              specific_args = {
                  "file_bytes": file_bytes,
@@ -3129,7 +3151,7 @@ async def _process_document_like_item(
 
         elif media_type == "document":
              if not processing_filepath: raise ValueError("Document processing requires a file path.")
-             processing_func = docs.process_document_content
+             processing_func = process_document_content
              specific_args = {"doc_path": processing_filepath} # Pass Path object
              # --- FIX: Ensure process_document_content receives all its required args ---
              # Common args already contain api_name, api_key, prompts etc.
@@ -3138,7 +3160,7 @@ async def _process_document_like_item(
              if not processing_filepath: raise ValueError("Ebook processing requires a file path.")
              # Need a wrapper if process_epub is sync
              def _sync_process_ebook_wrapper(**kwargs):
-                return books.process_epub(**kwargs)
+                return process_epub(**kwargs)
              processing_func = _sync_process_ebook_wrapper
              specific_args = {
                  "file_path": str(processing_filepath),
@@ -3792,7 +3814,8 @@ async def add_media(
     files: Optional[List[UploadFile]] = File(None, description="List of files to upload"),
     # --- DB Dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user), # Use the correct dependency
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Add Media Endpoint**
@@ -3813,6 +3836,18 @@ async def add_media(
     # Basic check for presence of inputs still useful here
     _validate_inputs(form_data.media_type, form_data.urls, files)
     logger.info(f"Received request to add {form_data.media_type} media.")
+    try:
+        usage_log.log_event(
+            "media.add",
+            tags=[str(form_data.media_type or "")],
+            metadata={
+                "has_urls": bool(form_data.urls),
+                "files_count": len(files) if files else 0,
+                "perform_analysis": bool(form_data.perform_analysis),
+            },
+        )
+    except Exception:
+        pass
     # TODO: Implement actual authentication logic using the 'token' if needed
 
     # --- 2. Database Dependency (Handled by `db` parameter) ---
@@ -4276,6 +4311,7 @@ async def process_videos_endpoint(
     form_data: ProcessVideosForm = Depends(get_process_videos_form),
     # 4. File Uploads
     files: Optional[List[UploadFile]] = File(None, description="Video file uploads"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # user_info: dict = Depends(verify_token), # Optional Auth
 ):
     """
@@ -4294,6 +4330,14 @@ async def process_videos_endpoint(
     """
     # --- Validation and Logging ---
     logger.info("Request received for /process-videos. Form data validated via dependency.")
+    try:
+        usage_log.log_event(
+            "media.process.video",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
 
     if form_data.urls and form_data.urls == ['']:
         logger.info("Received urls=[''], treating as no URLs provided for video processing.")
@@ -4695,6 +4739,7 @@ async def process_audios_endpoint(
     form_data: ProcessAudiosForm = Depends(get_process_audios_form),
     # 4. File uploads remain separate
     files: Optional[List[UploadFile]] = File(None, description="Audio file uploads"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process Audios (No Persistence)**
@@ -4713,6 +4758,14 @@ async def process_audios_endpoint(
     # --- 0) Validation and Logging ---
     # Validation happened in the dependency. Log success or handle HTTPException.
     logger.info(f"Request received for /process-audios. Form data validated via dependency.")
+    try:
+        usage_log.log_event(
+            "media.process.audio",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
 
     if form_data.urls and form_data.urls == ['']:
         logger.info("Received urls=[''], treating as no URLs provided for audio processing.")
@@ -5206,6 +5259,7 @@ async def process_ebooks_endpoint(
     form_data: ProcessEbooksForm = Depends(get_process_ebooks_form), # Use the dependency
     # 4. File uploads remain separate
     files: Optional[List[UploadFile]] = File(None, description="EPUB file uploads (.epub)"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process Ebooks (No Persistence)**
@@ -5229,6 +5283,14 @@ async def process_ebooks_endpoint(
     Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-ebooks (no persistence).")
+    try:
+        usage_log.log_event(
+            "media.process.ebook",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
     # Log form data safely (exclude sensitive fields)
     # Use .model_dump() for Pydantic v2
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
@@ -5959,6 +6021,7 @@ async def process_documents_endpoint(
     form_data: ProcessDocumentsForm = Depends(get_process_documents_form), # Use the dependency
     # 4. File Upload
     files: Optional[List[UploadFile]] = File(None, description="Document file uploads (.txt, .md, .docx, .rtf, .html, .xml)"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process Documents (No Persistence)**
@@ -5981,6 +6044,14 @@ async def process_documents_endpoint(
     Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-documents (no persistence).")
+    try:
+        usage_log.log_event(
+            "media.process.document",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
 
     # Guardrails: restrict to a known set of document extensions for this endpoint.
@@ -6512,6 +6583,7 @@ async def process_pdfs_endpoint(
     vlm_backend: Optional[str] = Form(None, description="VLM backend (e.g., 'hf_table_transformer')"),
     vlm_detect_tables_only: bool = Form(True, description="Only keep 'table' detections"),
     vlm_max_pages: Optional[int] = Form(None, description="Max pages to scan with VLM"),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     **Process PDFs (No Persistence)**
@@ -6534,6 +6606,14 @@ async def process_pdfs_endpoint(
     Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-pdfs (no persistence).")
+    try:
+        usage_log.log_event(
+            "media.process.pdf",
+            tags=["no_db"],
+            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
+        )
+    except Exception:
+        pass
     ALLOWED_PDF_EXTENSIONS = ['.pdf']
     _validate_inputs("pdf", form_data.urls, files)
 
@@ -7073,6 +7153,7 @@ async def ingest_web_content(
     background_tasks: BackgroundTasks,
     token: str = Header(..., description="Authentication token"),
     db=Depends(get_media_db_for_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     A single endpoint that supports multiple advanced scraping methods:
@@ -7087,6 +7168,16 @@ async def ingest_web_content(
     # 1) Basic checks
     if not request.urls:
         raise HTTPException(status_code=400, detail="At least one URL is required")
+
+    # Log usage for web scraping ingest
+    try:
+        usage_log.log_event(
+            "webscrape.ingest",
+            tags=[str(request.scrape_method or "")],
+            metadata={"url_count": len(request.urls or []), "perform_analysis": bool(getattr(request, 'perform_analysis', False))},
+        )
+    except Exception:
+        pass
 
     # Topic monitoring (non-blocking): URLs and provided titles
     try:
@@ -7423,12 +7514,23 @@ async def process_web_scraping_endpoint(
         # token: str = Header(None), # Use Header(None) for optional
         # 2. DB Dependency
         db: MediaDatabase = Depends(get_media_db_for_user),
+        usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     ):
     """
     Ingest / scrape data from websites or sitemaps, optionally summarize,
     then either store ephemeral or persist in DB.
     """
     try:
+        # Log usage for web scraping process endpoint
+        try:
+            usage_log.log_event(
+                "webscrape.process",
+                tags=[str(payload.scrape_method or "")],
+                metadata={"mode": payload.mode, "max_pages": payload.max_pages, "max_depth": payload.max_depth},
+            )
+        except Exception:
+            pass
+
         # Delegates to the service
         result = await process_web_scraping_task(
             scrape_method=payload.scrape_method,

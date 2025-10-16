@@ -1285,6 +1285,8 @@ class WorkflowsDatabase:
         workflow_id: Optional[int] = None,
         created_after: Optional[str] = None,
         created_before: Optional[str] = None,
+        cursor_ts: Optional[str] = None,
+        cursor_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at",
@@ -1311,8 +1313,20 @@ class WorkflowsDatabase:
         # Whitelist order_by to known columns
         allowed_order = {"created_at", "started_at", "ended_at"}
         ob = order_by if order_by in allowed_order else "created_at"
-        sql += f" ORDER BY {ob} {'DESC' if order_desc else 'ASC'} LIMIT ? OFFSET ?"
-        params.extend([int(limit), int(offset)])
+        # Apply cursor seek if provided (seek pagination)
+        if cursor_ts and cursor_id:
+            cmp = "<" if order_desc else ">"
+            # Add tie-breaker on run_id; for DESC use run_id < last_id if same ts, for ASC use run_id > last_id
+            tcmp = "<" if order_desc else ">"
+            sql += f" AND (({ob} {cmp} ?) OR ({ob} = ? AND run_id {tcmp} ?))"
+            params.extend([cursor_ts, cursor_ts, cursor_id])
+            # When using cursor, ignore numeric offset to avoid skipping
+            sql += f" ORDER BY {ob} {'DESC' if order_desc else 'ASC'}, run_id {'DESC' if order_desc else 'ASC'} LIMIT ?"
+            params.extend([int(limit)])
+        else:
+            # Stable ordering with tie-breaker by run_id
+            sql += f" ORDER BY {ob} {'DESC' if order_desc else 'ASC'}, run_id {'DESC' if order_desc else 'ASC'} LIMIT ? OFFSET ?"
+            params.extend([int(limit), int(offset)])
 
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
@@ -1622,7 +1636,8 @@ class WorkflowsDatabase:
             placeholders = ",".join(["?"] * len(types))
             sql += f" AND event_type IN ({placeholders})"
             params.extend(list(types))
-        sql += " ORDER BY event_seq ASC LIMIT ?"
+        # Stable ordering: primary by event_seq (per-run unique), tie-breaker by event_id
+        sql += " ORDER BY event_seq ASC, event_id ASC LIMIT ?"
         params.append(int(limit))
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
@@ -2201,6 +2216,58 @@ class WorkflowsDatabase:
                 (attempts, last_error, next_attempt_at_iso, dlq_id),
             )
         self._conn.commit()
+
+    def list_webhook_dlq_all(self, *, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List all DLQ rows with stable ordering (admin UI)."""
+        if self._using_backend():
+            query = (
+                "SELECT id, tenant_id, run_id, url, body_json, attempts, next_attempt_at, last_error, created_at "
+                "FROM workflow_webhook_dlq ORDER BY created_at ASC, id ASC LIMIT %s OFFSET %s"
+            )
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                rows = self._fetchall_backend(query, (int(limit), int(offset)), connection=conn)
+            return [dict(r) if isinstance(r, dict) else {
+                "id": r[0], "tenant_id": r[1], "run_id": r[2], "url": r[3], "body_json": r[4],
+                "attempts": r[5], "next_attempt_at": r[6], "last_error": r[7], "created_at": r[8]
+            } for r in rows or []]
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT id, tenant_id, run_id, url, body_json, attempts, next_attempt_at, last_error, created_at
+            FROM workflow_webhook_dlq
+            ORDER BY created_at ASC, id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (int(limit), int(offset)),
+        )
+        rows = cur.fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows or []:
+            try:
+                out.append({
+                    "id": r[0],
+                    "tenant_id": r[1],
+                    "run_id": r[2],
+                    "url": r[3],
+                    "body_json": r[4],
+                    "attempts": r[5],
+                    "next_attempt_at": r[6],
+                    "last_error": r[7],
+                    "created_at": r[8],
+                })
+            except Exception:
+                out.append({
+                    "id": r.get("id"),
+                    "tenant_id": r.get("tenant_id"),
+                    "run_id": r.get("run_id"),
+                    "url": r.get("url"),
+                    "body_json": r.get("body_json"),
+                    "attempts": r.get("attempts"),
+                    "next_attempt_at": r.get("next_attempt_at"),
+                    "last_error": r.get("last_error"),
+                    "created_at": r.get("created_at"),
+                })
+        return out
 
     def reject_step_decision(
         self,

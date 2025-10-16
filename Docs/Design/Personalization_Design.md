@@ -1,6 +1,6 @@
 # Deep Personalization: Per-User Profiles, Memories, and RAG Biasing
 
-Status: Draft (Design)
+Status: Active (MVP scaffold implemented)
 
 Owner: Core (RAG, LLM, AuthNZ)
 
@@ -9,6 +9,30 @@ Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2–3)
 ## Summary
 
 Provide opt-in, explainable personalization that leverages a per-user topic profile and concise memories to improve retrieval, chat grounding, and UX. Personalization remains transparent, reversible (purge), and user-controlled.
+
+## Current Status (v0.2.x dev)
+
+- Feature flags: loaded from config; endpoints are gated when disabled.
+  - Config: `[personalization] enabled=true` in `tldw_Server_API/Config_Files/config.txt`.
+  - Exposed at runtime via `GET /api/v1/config/docs-info` under `capabilities.personalization`.
+- Storage: per-user SQLite `Personalization.db` with `usage_events`, `topic_profiles`, `semantic_memories` (episodic stub present).
+- Event logging: best-effort `UsageEventLogger` integrated into chat, TTS, audio transcription, media processing (videos, audios, ebooks, documents, pdfs), and web scraping endpoints.
+- API endpoints (scaffolded and functional): opt-in, purge, profile, preferences, memories list/add/delete; explanations placeholder.
+- Consolidation service: background loop + admin trigger; current implementation upserts topic scores from recent event tags. In‑memory last-tick status is available.
+- RAG integration: scorer/context builder stubs exist; blending weights and “why” tracing to be iterated.
+- WebUI: Personalization tab (preview) for viewing profile/weights and adding/listing memories; tab visibility follows server capabilities.
+- Tests: basic endpoint CRUD, feature flag presence, and usage-event logging across relevant media/audio/web endpoints.
+
+## Changelog
+
+- v0.2.x dev
+  - Implemented feature flags and capability exposure via `/api/v1/config/docs-info`.
+  - Added per-user SQLite Personalization DB; event logger integrated across chat/audio/media/web scraping.
+  - Scaffolded personalization API (opt-in, purge, profile, preferences, memories CRUD; explanations placeholder).
+  - Added consolidation service (tag-frequency topic upserts), admin trigger, and in-memory last-tick status with admin GET status endpoint.
+  - WebUI tab wired behind capabilities; added unit tests for usage-event logging on ebooks/documents/pdfs.
+- v0.1.0
+  - Initial draft design with goals, architecture, data model, and milestones.
 
 ## Goals
 
@@ -84,6 +108,8 @@ Chroma (per-user collections):
     - Incremental clustering → update `TopicProfile` + Chroma centroid.
     - Summarize frequent patterns into `PersonalMemorySemantic` (LLM-assisted, rate limited).
     - Move highlights into `PersonalMemoryEpisodic` for short-term recall.
+  - MVP behavior (implemented): compute tag-frequency topic scores from recent events; upsert into `topic_profiles`.
+  - Ops: maintains in‑memory `last_ticks` per user for status; graceful start/stop with app lifecycle.
 
 - Personalization Scorer (RAG)
   - Location: `tldw_Server_API/app/core/RAG/personalization_scorer.py`
@@ -125,12 +151,21 @@ Base path: `/api/v1/personalization`
 
 Schemas live under: `tldw_Server_API/app/api/v1/schemas/personalization.py`
 
+Implementation notes:
+- All endpoints are feature-gated; return 404 when personalization is disabled.
+- Explanations endpoint is a placeholder pending integration with the reranker trace.
+
+Admin & Ops:
+- `POST /api/v1/admin/personalization/consolidate` (admin) triggers one-off consolidation.
+- `GET  /api/v1/admin/personalization/status` (admin) returns background service state and per-user last tick.
+
 ## WebUI Additions
 
 - Personalization Dashboard (`/webui/personalization`)
   - Opt-in toggle, sliders for `alpha/beta/gamma`, half-life selector.
   - Topic list with affinity bars; memory list with search, pin, delete.
   - “Why” popovers on search/chat results.
+  - Visibility controlled by capability map from `GET /api/v1/config/docs-info` (`capabilities.personalization`).
 
 ## Configuration
 
@@ -146,6 +181,9 @@ recency_half_life_days = 14
 ```
 
 Environment overrides supported via existing config loader.
+
+Runtime capability surface:
+- `GET /api/v1/config/docs-info` → includes `capabilities` and `supported_features` maps (for backward compatibility).
 
 ## Privacy & Security
 
@@ -165,6 +203,7 @@ Environment overrides supported via existing config loader.
   - RAG search with/without personalization; uplift in MRR@k.
   - Chat injection remains within token budget and improves judged relevance.
   - Opt-in/out and purge flows, including Chroma cleanup.
+  - Usage-event logging smoke tests for TTS, web scraping, ebooks/documents/pdfs process endpoints.
 
 - Fixtures/Mocks
   - Mock embeddings and LLM summarization for deterministic tests.
@@ -200,4 +239,3 @@ Environment overrides supported via existing config loader.
 - Token bloat in chat → enforce strict memory caps and concise summaries.
 - Privacy concerns → opt-in, purge, and clear data visibility/editing.
 - Overfitting to recent interests → recency half-life configurable and visible.
-

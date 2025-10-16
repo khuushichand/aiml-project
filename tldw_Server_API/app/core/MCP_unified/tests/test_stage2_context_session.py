@@ -1,22 +1,9 @@
-"""
-Stage 2 plumbing tests: RequestContext db_paths and safe config parsing.
-Tests are skipped by default; enable with RUN_MCP_TESTS=1.
-"""
-
-import os
-import pytest
-
-_os = os
-_os.environ.setdefault("RUN_MCP_TESTS", "0")
+"""Stage 2 plumbing tests: RequestContext db_paths and safe config parsing."""
 
 from typing import Dict, Any
 
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.server import MCPServer
-
-
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 
 
 def test_request_context_db_paths_derivation():
@@ -48,4 +35,3 @@ def test_safe_config_merge_allowlist_and_clamp():
     assert merged["order_by"] == "recent"
     assert merged["maxSessionUris"] <= 5000
     assert "ignored" not in merged
-

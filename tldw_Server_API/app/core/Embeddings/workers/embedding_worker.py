@@ -30,6 +30,7 @@ from fnmatch import fnmatch
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from ..messages import normalize_message
+from ..hyde import generate_questions, question_hash, normalize_question
 import json as _json
 
 
@@ -421,6 +422,7 @@ class EmbeddingWorker(BaseWorker):
                         dimensions=len(embedding) if isinstance(embedding, list) else len(embedding.tolist()),
                         metadata={
                             **(chunk.metadata or {}),
+                            "kind": "chunk",
                             "model_provider": model_provider,
                             "embedder_name": embedder_name,
                             "embedder_version": embedder_version,
@@ -428,6 +430,82 @@ class EmbeddingWorker(BaseWorker):
                         }
                     )
                     embedding_data_list.append(embedding_data)
+
+                    # HYDE/doc2query generation (Option A: inline in embedding worker)
+                    try:
+                        if bool(settings.get("HYDE_ENABLED", False)):
+                            try:
+                                hyde_n = int(settings.get("HYDE_QUESTIONS_PER_CHUNK", 0) or 0)
+                            except Exception:
+                                hyde_n = 0
+                            if hyde_n > 0:
+                                # Choose language: override from settings unless 'auto'
+                                lang_cfg = str(settings.get("HYDE_LANGUAGE", "auto") or "auto").lower()
+                                if lang_cfg == "auto":
+                                    lang_detect = self._detect_language(chunk.content)
+                                    language = "en" if lang_detect == "english" else None
+                                else:
+                                    language = lang_cfg
+                                # Provider/model for HYDE question generation
+                                hyde_provider = settings.get("HYDE_PROVIDER")
+                                hyde_model = settings.get("HYDE_MODEL")
+                                hyde_temp = float(settings.get("HYDE_TEMPERATURE", 0.2) or 0.2)
+                                hyde_max_tokens = int(settings.get("HYDE_MAX_TOKENS", 96) or 96)
+                                hyde_prompt_ver = settings.get("HYDE_PROMPT_VERSION", 1)
+
+                                questions = generate_questions(
+                                    text=chunk.content,
+                                    n=hyde_n,
+                                    provider=hyde_provider,
+                                    model=hyde_model,
+                                    temperature=hyde_temp,
+                                    max_tokens=hyde_max_tokens,
+                                    language=language,
+                                    prompt_version=hyde_prompt_ver,
+                                )
+                                if questions:
+                                    # Embed questions using the same embedder used for the parent chunk
+                                    q_embeddings = await self._generate_embeddings(
+                                        questions,
+                                        model_config,
+                                        model_provider,
+                                    )
+                                    for qi, qtext in enumerate(questions):
+                                        try:
+                                            qvec = q_embeddings[qi]
+                                        except Exception:
+                                            continue
+                                        qh = question_hash(qtext)
+                                        qid = f"{chunk.chunk_id}:q:{qh[:8]}"
+                                        meta = {
+                                            **(chunk.metadata or {}),
+                                            "kind": "hyde_q",
+                                            "parent_chunk_id": chunk.chunk_id,
+                                            "hyde_rank": qi,
+                                            "question_hash": qh,
+                                            "model_provider": model_provider,
+                                            "embedder_name": embedder_name,
+                                            "embedder_version": embedder_version,
+                                            "hyde_prompt_version": hyde_prompt_ver,
+                                            "hyde_generator": f"{hyde_provider}:{hyde_model}" if (hyde_provider and hyde_model) else "",
+                                        }
+                                        if language:
+                                            meta["language"] = language
+                                        # Create embedding data for HYDE question
+                                        qvec_list = qvec.tolist() if hasattr(qvec, 'tolist') else qvec
+                                        embedding_data_list.append(
+                                            EmbeddingData(
+                                                chunk_id=qid,
+                                                embedding=qvec_list,
+                                                model_used=model_name,
+                                                dimensions=len(qvec_list) if hasattr(qvec_list, '__len__') else len(qvec),
+                                                metadata=meta,
+                                            )
+                                        )
+                                    logger.debug(f"HYDE: added {len(questions)} question embeddings for chunk {chunk.chunk_id}")
+                    except Exception as _hyde_err:
+                        # Never block the pipeline on HYDE
+                        logger.debug(f"HYDE generation skipped/failed for chunk {chunk.chunk_id}: {_hyde_err}")
                 
                 # Update progress
                 progress = 25 + (50 * (i + len(batch_chunks)) / len(message.chunks))

@@ -492,6 +492,21 @@ def load_settings():
                 if isinstance(comprehensive_config, dict) else None
             )
         ),
+        # --- HYDE/doc2query (per-chunk) feature flags ---
+        "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
+        "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),
+        "HYDE_PROVIDER": os.getenv("HYDE_PROVIDER"),
+        "HYDE_MODEL": os.getenv("HYDE_MODEL"),
+        "HYDE_TEMPERATURE": float(os.getenv("HYDE_TEMPERATURE", "0.2")),
+        "HYDE_MAX_TOKENS": int(os.getenv("HYDE_MAX_TOKENS", "96")),
+        "HYDE_LANGUAGE": os.getenv("HYDE_LANGUAGE", "auto"),
+        "HYDE_PROMPT_VERSION": int(os.getenv("HYDE_PROMPT_VERSION", "1")),
+        # Retrieval side HYDE controls
+        "HYDE_WEIGHT_QUESTION_MATCH": float(os.getenv("HYDE_WEIGHT_QUESTION_MATCH", "0.05")),
+        "HYDE_K_FRACTION": float(os.getenv("HYDE_K_FRACTION", "0.5")),
+        "HYDE_ONLY_IF_NEEDED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ONLY_IF_NEEDED", "true")),
+        "HYDE_SCORE_FLOOR": float(os.getenv("HYDE_SCORE_FLOOR", "0.30")),
+        "HYDE_DEDUPE_BY_PARENT": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         # You can continue to merge other specific keys or whole sections
@@ -713,6 +728,47 @@ def load_settings():
                 (_cp.get('RAG', 'default_fts_level', fallback='media').lower() if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'media')
             )
         ))(os.getenv('RAG_DEFAULT_FTS_LEVEL'), load_comprehensive_config()),
+
+        # --- Feature Flags: Personalization & Persona Agent ---
+        # Personalization
+        "PERSONALIZATION_ENABLED": (lambda _cp: (
+            _cp.getboolean('personalization', 'enabled', fallback=True) if _cp and hasattr(_cp, 'has_section') and _cp.has_section('personalization') else True
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_ALPHA": (lambda _cp: (
+            float(_cp.get('personalization', 'alpha', fallback='0.2')) if _cp and _cp.has_section('personalization') else 0.2
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_BETA": (lambda _cp: (
+            float(_cp.get('personalization', 'beta', fallback='0.6')) if _cp and _cp.has_section('personalization') else 0.6
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_GAMMA": (lambda _cp: (
+            float(_cp.get('personalization', 'gamma', fallback='0.2')) if _cp and _cp.has_section('personalization') else 0.2
+        ))(load_comprehensive_config()),
+        "PERSONALIZATION_RECENCY_HALF_LIFE_DAYS": (lambda _cp: (
+            int(_cp.get('personalization', 'recency_half_life_days', fallback='14')) if _cp and _cp.has_section('personalization') else 14
+        ))(load_comprehensive_config()),
+
+        # Persona Agent and RBAC
+        "PERSONA_ENABLED": (lambda _cp: (
+            _cp.getboolean('persona', 'enabled', fallback=True) if _cp and hasattr(_cp, 'has_section') and _cp.has_section('persona') else True
+        ))(load_comprehensive_config()),
+        "PERSONA_DEFAULT_PERSONA": (lambda _cp: (
+            _cp.get('persona', 'default_persona', fallback='Research Assistant') if _cp and _cp.has_section('persona') else 'Research Assistant'
+        ))(load_comprehensive_config()),
+        "PERSONA_VOICE": (lambda _cp: (
+            _cp.get('persona', 'voice', fallback='default') if _cp and _cp.has_section('persona') else 'default'
+        ))(load_comprehensive_config()),
+        "PERSONA_STT": (lambda _cp: (
+            _cp.get('persona', 'stt', fallback='faster_whisper') if _cp and _cp.has_section('persona') else 'faster_whisper'
+        ))(load_comprehensive_config()),
+        "PERSONA_MAX_TOOL_STEPS": (lambda _cp: (
+            int(_cp.get('persona', 'max_tool_steps', fallback='3')) if _cp and _cp.has_section('persona') else 3
+        ))(load_comprehensive_config()),
+        "PERSONA_RBAC_ALLOW_EXPORT": (lambda _cp: (
+            _cp.getboolean('persona.rbac', 'allow_export', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
+        ))(load_comprehensive_config()),
+        "PERSONA_RBAC_ALLOW_DELETE": (lambda _cp: (
+            _cp.getboolean('persona.rbac', 'allow_delete', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
+        ))(load_comprehensive_config()),
     }
 
     # --- Warnings ---

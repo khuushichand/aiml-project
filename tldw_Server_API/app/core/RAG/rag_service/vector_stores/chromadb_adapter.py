@@ -197,6 +197,23 @@ class ChromaDBAdapter(VectorStoreAdapter):
             logger.error(f"Failed to delete vectors from '{collection_name}': {e}")
             raise
 
+    async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
+        """Delete vectors by metadata filter (best-effort) in ChromaDB.
+
+        Returns 0 when count is not available.
+        """
+        if not self._initialized:
+            await self.initialize()
+        try:
+            collection = self.manager.get_or_create_collection(collection_name)
+            delete = getattr(collection, 'delete', None)
+            if callable(delete):
+                delete(where=filter)  # type: ignore
+            return 0
+        except Exception as e:
+            logger.error(f"Failed to delete by filter in '{collection_name}': {e}")
+            return 0
+
     # Adapter-specific helper: list vectors with pagination
     async def list_vectors_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._initialized:

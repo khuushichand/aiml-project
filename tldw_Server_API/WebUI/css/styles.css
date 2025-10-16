@@ -510,6 +510,23 @@ input[type="file"] {
     background: rgba(0, 168, 107, 0.05);
 }
 
+/* Disabled inputs: clearer visual state */
+input[disabled],
+button[disabled],
+select[disabled],
+textarea[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+    filter: grayscale(20%);
+}
+
+/* Dim the visible file input label when the hidden file input is disabled */
+input[type="file"][disabled] + .file-input-label {
+    opacity: 0.6;
+    cursor: not-allowed;
+    border-color: var(--color-border-dark);
+}
+
 /* Checkboxes and Radio Buttons */
 .checkbox-group,
 .radio-group {

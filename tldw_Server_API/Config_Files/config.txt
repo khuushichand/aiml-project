@@ -587,3 +587,22 @@ cache_ttl = 300
 
 [Web-Scraping]
 stealth_wait_ms = 5000
+
+# --- Feature Flags: Personalization & Persona Agent ---
+[personalization]
+enabled = true
+alpha = 0.2
+beta = 0.6
+gamma = 0.2
+recency_half_life_days = 14
+
+[persona]
+enabled = true
+default_persona = Research Assistant
+voice = default
+stt = faster_whisper
+max_tool_steps = 3
+
+[persona.rbac]
+allow_export = false
+allow_delete = false

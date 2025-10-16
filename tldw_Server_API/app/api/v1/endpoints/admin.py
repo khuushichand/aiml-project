@@ -114,6 +114,10 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgMembershipItem,
 )
 
+# Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
+# Provide an alias to the public function for backward compatibility in tests.
+_is_postgres_backend = is_postgres_backend
+
 #######################################################################################################################
 #
 # Router Configuration
@@ -3598,3 +3602,34 @@ async def export_llm_usage_csv(
 #
 ## End of admin.py
 #######################################################################################################################
+# ---------------------------------------------
+# Personalization admin helpers
+# ---------------------------------------------
+
+@router.post("/personalization/consolidate", response_model=dict)
+async def trigger_personalization_consolidation(
+    user_id: Optional[str] = Query(None, description="User ID to consolidate; defaults to single-user id"),
+):
+    """
+    Trigger personalization consolidation for a given user (admin-only).
+    """
+    try:
+        from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
+        svc = get_consolidation_service()
+        ok = await svc.trigger_consolidation(user_id=user_id)
+        return {"status": "ok" if ok else "error", "user_id": user_id}
+    except Exception as e:
+        logger.warning(f"Admin consolidate trigger failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to trigger consolidation")
+
+
+@router.get("/personalization/status", response_model=dict)
+async def get_personalization_status():
+    """Return in-memory consolidation status (last tick per user)."""
+    try:
+        from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
+        svc = get_consolidation_service()
+        return svc.get_status()  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.warning(f"Admin status fetch failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch status")

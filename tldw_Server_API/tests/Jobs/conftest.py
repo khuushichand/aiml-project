@@ -1,6 +1,8 @@
 import os
 import pytest
 
+# Load shared Postgres helpers via top-level tests/conftest.py (pytest_plugins)
+
 # Mark every test in this directory as part of the 'jobs' suite
 pytestmark = pytest.mark.jobs
 
@@ -22,5 +24,12 @@ def _reset_settings_and_env(monkeypatch):
         reset_settings()
     except Exception:
         # Some tests may import before settings module exists; that's fine
+        pass
+    # Ensure Jobs acquire gate is open for test isolation (some tests import app,
+    # whose shutdown sets the gate to True; reset here to avoid bleed)
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+        JobManager.set_acquire_gate(False)
+    except Exception:
         pass
     yield

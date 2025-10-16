@@ -871,6 +871,7 @@ async function startAudioTTSRecording() {
         if (b2) b2.disabled = false;
         mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _audioTTSRec.chunks.push(e.data); };
         mr.onstop = () => {
+            try { if (_audioTTSRec._timer) { clearInterval(_audioTTSRec._timer); _audioTTSRec._timer = null; } } catch(_){}
             const blob = new Blob(_audioTTSRec.chunks, { type: 'audio/webm' });
             _audioTTSRec.blob = blob;
             const url = URL.createObjectURL(blob);
@@ -888,6 +889,19 @@ async function startAudioTTSRecording() {
             if (fileInput) fileInput.disabled = true;
             try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
         };
+        // Soft cap with countdown
+        try {
+            const MAX_SEC = 15;
+            const startTs = Date.now();
+            _audioTTSRec._timer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                const left = Math.max(0, MAX_SEC - elapsed);
+                if (s) s.textContent = `Recording... ${left}s left`;
+                if (elapsed >= MAX_SEC) {
+                    try { mr.stop(); } catch(_){}
+                }
+            }, 250);
+        } catch(_){}
         mr.start();
     } catch (e) {
         console.error('AudioTTS recording failed', e);
@@ -901,6 +915,7 @@ function stopAudioTTSRecording() {
 }
 
 function clearAudioTTSRecording() {
+    try { if (_audioTTSRec && _audioTTSRec.url) URL.revokeObjectURL(_audioTTSRec.url); } catch(_) {}
     _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
     const p = document.getElementById('audioTTS_rec_playback');
     if (p) { try { p.pause(); } catch(_){} p.removeAttribute('src'); p.style.display='none'; }
@@ -964,6 +979,7 @@ async function startFileTransRecording() {
         if (b2) b2.disabled = false;
         mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _fileTransRec.chunks.push(e.data); };
         mr.onstop = () => {
+            try { if (_fileTransRec._timer) { clearInterval(_fileTransRec._timer); _fileTransRec._timer = null; } } catch(_){}
             const blob = new Blob(_fileTransRec.chunks, { type: 'audio/webm' });
             _fileTransRec.blob = blob;
             const url = URL.createObjectURL(blob);
@@ -981,6 +997,19 @@ async function startFileTransRecording() {
             if (file) file.disabled = true;
             try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
         };
+        // Soft cap with countdown
+        try {
+            const MAX_SEC = 15;
+            const startTs = Date.now();
+            _fileTransRec._timer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTs) / 1000);
+                const left = Math.max(0, MAX_SEC - elapsed);
+                if (s) s.textContent = `Recording... ${left}s left`;
+                if (elapsed >= MAX_SEC) {
+                    try { mr.stop(); } catch(_){}
+                }
+            }, 250);
+        } catch(_){}
         mr.start();
     } catch (e) {
         console.error('FileTrans recording failed', e);
@@ -994,6 +1023,7 @@ function stopFileTransRecording() {
 }
 
 function clearFileTransRecording() {
+    try { if (_fileTransRec && _fileTransRec.url) URL.revokeObjectURL(_fileTransRec.url); } catch(_) {}
     _fileTransRec = { mr: null, chunks: [], blob: null, url: null };
     const p = document.getElementById('fileTrans_rec_playback');
     if (p) { try { p.pause(); } catch(_){} p.removeAttribute('src'); p.style.display='none'; }
@@ -3419,3 +3449,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // Try to reveal admin-only controls after initial load
     setTimeout(revealAdminOnlyElements, 600);
 });
+
+// Best-effort: revoke any recording object URLs on tab unload to prevent leaks
+try {
+    window.addEventListener('beforeunload', () => {
+        try { if (typeof _audioTTSRec !== 'undefined' && _audioTTSRec && _audioTTSRec.url) URL.revokeObjectURL(_audioTTSRec.url); } catch(_) {}
+        try { if (typeof _fileTransRec !== 'undefined' && _fileTransRec && _fileTransRec.url) URL.revokeObjectURL(_fileTransRec.url); } catch(_) {}
+    });
+} catch (_) {}

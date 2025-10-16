@@ -30,9 +30,18 @@ def _map_to_permission(resource: Resource, action: Action, resource_id: Optional
     elif resource == Resource.TOOL:
         # Treat executing tools as general read capability for now (extend as needed)
         base = "media"
-    elif resource in (Resource.PROMPT, Resource.NOTE, Resource.CONVERSATION, Resource.TRANSCRIPT, Resource.RESOURCE, Resource.MODULE):
-        # Map to read if not otherwise specified
-        base = "media"
+    elif resource == Resource.PROMPT:
+        base = "prompts"
+    elif resource == Resource.NOTE:
+        base = "notes"
+    elif resource == Resource.CONVERSATION:
+        base = "conversations"
+    elif resource == Resource.TRANSCRIPT:
+        base = "transcripts"
+    elif resource == Resource.RESOURCE:
+        base = "resources"
+    elif resource == Resource.MODULE:
+        base = "modules"
     else:
         base = None
 
@@ -81,8 +90,13 @@ class AuthNZRBAC:
             return False
         perm = _map_to_permission(resource, action, resource_id)
         if not perm:
-            # No mapping: default allow basic read operations; deny admin
-            return action != Action.ADMIN
+            logger.warning(
+                "Denied MCP permission check due to missing mapping",
+                resource=resource.value,
+                action=action.value,
+                resource_id=resource_id,
+            )
+            return False
 
         pool = await self._get_pool()
         uid = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id

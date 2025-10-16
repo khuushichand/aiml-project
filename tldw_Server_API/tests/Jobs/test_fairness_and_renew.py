@@ -17,7 +17,8 @@ def test_priority_fairness_in_acquire(tmp_path):
     )
     first = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w1")
     assert first is not None
-    assert int(first["id"]) == int(j_low["id"])  # lower number == higher priority
+    # Higher numeric priority should be acquired first (DESC)
+    assert int(first["id"]) == int(j_high["id"])  # priority 9 before 1
 
 
 def test_renew_prevents_reclaim(tmp_path):
@@ -30,7 +31,8 @@ def test_renew_prevents_reclaim(tmp_path):
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="wA")
     assert acq is not None
     # Renew before expiry
-    ok = jm.renew_job_lease(int(acq["id"]), seconds=2)
+    # Provide worker_id/lease_id to exercise enforced path as well
+    ok = jm.renew_job_lease(int(acq["id"]), seconds=2, worker_id=str(acq.get("worker_id") or "wA"), lease_id=str(acq.get("lease_id")))
     assert ok
     # Wait 1.2s; should still be leased
     time.sleep(1.2)

@@ -6,12 +6,18 @@ providing a clean API interface with all features accessible.
 """
 
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 try:
-    # Pydantic v1
-    from pydantic import root_validator  # type: ignore
+    # Pydantic v2
+    from pydantic import model_validator, field_validator  # type: ignore
 except Exception:
-    root_validator = None  # type: ignore
+    model_validator = None  # type: ignore
+    from pydantic import validator as field_validator  # type: ignore
+try:
+    # Pydantic v2
+    from pydantic import model_validator  # type: ignore
+except Exception:
+    model_validator = None  # type: ignore
 from pydantic import ConfigDict
 
 # Load contextual retrieval defaults from settings (config.txt/env)
@@ -58,9 +64,25 @@ class UnifiedRAGRequest(BaseModel):
         example=["media_db", "notes"]
     )
 
-    if root_validator:
-        @root_validator(pre=True)
+    # ========== STRATEGY SELECTION ==========
+    strategy: Literal["standard", "agentic"] = Field(
+        default="standard",
+        description="Pipeline strategy: standard (pre-chunked) or agentic (query-time synthetic chunk)",
+        example="agentic",
+    )
+
+    if model_validator is not None:
+        @model_validator(mode="before")
         def _map_legacy_min_relevance(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                    values["min_score"] = values.get("min_relevance_score")
+            except Exception:
+                pass
+            return values
+    elif root_validator:
+        @root_validator(pre=True)
+        def _map_legacy_min_relevance_v1(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
                     values["min_score"] = values.get("min_relevance_score")
@@ -80,7 +102,8 @@ class UnifiedRAGRequest(BaseModel):
         example="my_corpus"
     )
 
-    @validator("sources", pre=True, always=True)
+    @field_validator("sources", mode="before")
+    @classmethod
     def _validate_sources(cls, v):
         allowed = {"media_db", "notes", "characters", "chats"}
         alias_map = {"media": "media_db", "character_cards": "characters"}
@@ -98,16 +121,19 @@ class UnifiedRAGRequest(BaseModel):
             normalized.append(key)
         return normalized
 
-    @validator("index_namespace", pre=True, always=True)
-    def _alias_corpus_to_index_namespace(cls, v, values):
-        # If index_namespace is empty but corpus provided, use corpus
-        try:
-            if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(values.get("corpus"), str):
-                c = values.get("corpus", "").strip()
-                return c or v
-        except Exception:
-            pass
-        return v
+    # Map corpus -> index_namespace at model-level (before validation)
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _alias_corpus_namespace(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict):
+                    v = values.get("index_namespace")
+                    corpus = values.get("corpus")
+                    if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
+                        values["index_namespace"] = corpus.strip() or v
+            except Exception:
+                pass
+            return values
     
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = Field(
@@ -153,8 +179,9 @@ class UnifiedRAGRequest(BaseModel):
         example=0.0
     )
 
-    @validator("min_score", pre=True)
-    def _alias_min_relevance_score(cls, v, values):
+    @field_validator("min_score", mode="before")
+    @classmethod
+    def _alias_min_relevance_score(cls, v):
         # Accept legacy field name 'min_relevance_score' as an alias
         try:
             if v is None:
@@ -347,6 +374,75 @@ class UnifiedRAGRequest(BaseModel):
         ge=1,
         description="Maximum tokens allowed to include a parent document; if parent exceeds, it is omitted",
         example=1200
+    )
+
+    # ========== AGENTIC CHUNKING (OPTIONAL) ==========
+    agentic_top_k_docs: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Number of coarse documents to consider when building the synthetic chunk",
+        example=3,
+    )
+    agentic_window_chars: int = Field(
+        default=1200,
+        ge=200,
+        le=20000,
+        description="Window size around hits for span extraction (characters)",
+        example=1200,
+    )
+    agentic_max_tokens_read: int = Field(
+        default=6000,
+        ge=500,
+        le=20000,
+        description="Approximate token budget for assembling the synthetic chunk",
+        example=6000,
+    )
+    agentic_max_tool_calls: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="Reserved for future LLM-tool orchestration; ignored by baseline",
+        example=8,
+    )
+    agentic_extractive_only: bool = Field(
+        default=True,
+        description="If true, assembled chunk is purely extractive from sources",
+        example=True,
+    )
+    agentic_quote_spans: bool = Field(
+        default=True,
+        description="Include span quotes and offsets in provenance metadata",
+        example=True,
+    )
+    agentic_debug_trace: bool = Field(
+        default=False,
+        description="Emit extra debug logs for agentic execution",
+        example=False,
+    )
+    agentic_enable_tools: bool = Field(
+        default=False,
+        description="Enable bounded tool loop (search_within/open_section/expand_window/quote_spans)",
+        example=False,
+    )
+    agentic_use_llm_planner: bool = Field(
+        default=False,
+        description="Use an LLM to plan tool use (ReAct style); falls back to heuristics when unavailable",
+        example=False,
+    )
+    agentic_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.1,
+        le=30.0,
+        description="Wall-clock time budget for the agentic tool loop",
+        example=5.0,
+    )
+    agentic_cache_ttl_sec: int = Field(
+        default=600,
+        ge=1,
+        le=86400,
+        description="TTL for ephemeral chunk cache (seconds)",
+        example=600,
     )
 
     # ========== ADVANCED RETRIEVAL ==========
@@ -871,7 +967,8 @@ class UnifiedRAGRequest(BaseModel):
         }
     })
     
-    @validator('sources')
+    @field_validator('sources')
+    @classmethod
     def validate_sources(cls, v):
         valid_sources = {"media_db", "media", "notes", "characters", "chats"}
         if v:
@@ -880,7 +977,8 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid sources: {invalid}. Valid options: {valid_sources}")
         return v
     
-    @validator('expansion_strategies')
+    @field_validator('expansion_strategies')
+    @classmethod
     def validate_expansion_strategies(cls, v):
         if v:
             valid_strategies = {"acronym", "synonym", "semantic", "domain", "entity"}
@@ -889,7 +987,8 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid strategies: {invalid}. Valid options: {valid_strategies}")
         return v
     
-    @validator('chunk_type_filter')
+    @field_validator('chunk_type_filter')
+    @classmethod
     def validate_chunk_types(cls, v):
         if v:
             valid_types = {"text", "code", "table", "list"}
@@ -1187,8 +1286,8 @@ class UnifiedBatchRequest(BaseModel):
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
 
-    if root_validator:
-        @root_validator(pre=True)
+    if model_validator is not None:
+        @model_validator(mode="before")
         def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
@@ -1196,16 +1295,19 @@ class UnifiedBatchRequest(BaseModel):
             except Exception:
                 pass
             return values
-
-    @validator("index_namespace", pre=True, always=True)
-    def _alias_corpus_to_index_namespace_batch(cls, v, values):
-        try:
-            if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(values.get("corpus"), str):
-                c = values.get("corpus", "").strip()
-                return c or v
-        except Exception:
-            pass
-        return v
+    # Batch: Map corpus -> index_namespace at model-level
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _alias_corpus_namespace_batch(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict):
+                    v = values.get("index_namespace")
+                    corpus = values.get("corpus")
+                    if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
+                        values["index_namespace"] = corpus.strip() or v
+            except Exception:
+                pass
+            return values
     
     model_config = ConfigDict(json_schema_extra={
         "example": {

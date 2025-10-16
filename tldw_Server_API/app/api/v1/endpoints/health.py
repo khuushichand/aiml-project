@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
@@ -68,10 +69,13 @@ async def readyz():
         stats = {"queue_depth": None, "active_tenants": None, "active_workflows": None}
     db = _check_workflows_db()
     ready = bool(db.get("ok")) and (db.get("schema_version") is None or db.get("schema_version") == db.get("expected_version"))
-    return {
+    body = {
         "ready": ready,
         "engine": stats,
         "db": db,
         "time": _utcnow_iso(),
     }
-
+    # Fail readiness (HTTP 503) if schema version mismatch or DB not ok
+    if not ready:
+        return JSONResponse(body, status_code=503)
+    return JSONResponse(body, status_code=200)

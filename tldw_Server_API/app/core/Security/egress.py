@@ -10,9 +10,10 @@ from urllib.parse import urlparse
 
 DEFAULT_ALLOWED_SCHEMES = {"http", "https"}
 ALLOWLIST_ENV = "WORKFLOWS_EGRESS_ALLOWLIST"
+DENYLIST_ENV = "WORKFLOWS_EGRESS_DENYLIST"
 BLOCK_PRIVATE_ENV = "WORKFLOWS_EGRESS_BLOCK_PRIVATE"
 ALLOWED_PORTS_ENV = "WORKFLOWS_EGRESS_ALLOWED_PORTS"
-PROFILE_ENV = "WORKFLOWS_EGRESS_PROFILE"  # strict | permissive | custom
+PROFILENAME = "WORKFLOWS_EGRESS_PROFILE"  # strict | permissive | custom
 
 # Webhook-specific per-tenant allow/deny controls
 WEBHOOK_ALLOWLIST_ENV = "WORKFLOWS_WEBHOOK_ALLOWLIST"
@@ -184,9 +185,12 @@ def evaluate_url_policy(
     allowlist = list(allowlist) if allowlist is not None else None
     if allowlist is None:
         allowlist = _get_allowlist(os.getenv(ALLOWLIST_ENV, ""))
+    denylist = list(denylist) if denylist is not None else None
+    if denylist is None:
+        denylist = _get_allowlist(os.getenv(DENYLIST_ENV, ""))
 
     # Profile handling: strict requires explicit allowlist match
-    profile = (os.getenv(PROFILE_ENV, "") or "").strip().lower()
+    profile = (os.getenv(PROFILENAME, "") or "").strip().lower()
     if not profile:
         # Per-environment sensible defaults
         env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
@@ -262,3 +266,29 @@ def is_webhook_url_allowed_for_tenant(url: str, tenant_id: str) -> bool:
     deny = _parse_list_env(os.getenv(f"{WEBHOOK_DENYLIST_ENV}_{t_key}") or os.getenv(WEBHOOK_DENYLIST_ENV))
     result = evaluate_url_policy(url, allowlist=allow if allow else None, denylist=deny if deny else None)
     return result.allowed
+
+
+def is_url_allowed_for_tenant(url: str, tenant_id: str) -> bool:
+    """General egress evaluation with per-tenant overrides.
+
+    Env:
+      - WORKFLOWS_EGRESS_ALLOWLIST, WORKFLOWS_EGRESS_DENYLIST (global)
+      - WORKFLOWS_EGRESS_ALLOWLIST_<TENANT>, WORKFLOWS_EGRESS_DENYLIST_<TENANT>
+      - WORKFLOWS_EGRESS_BLOCK_PRIVATE, WORKFLOWS_EGRESS_PROFILE
+
+    Precedence:
+      - Deny at any level wins (global or tenant)
+      - Allow lists are unioned (host allowed if present in either global or tenant allow)
+      - If no allowlists provided, permissive profile allows public hosts; strict requires allow match
+    """
+    t_key = (tenant_id or "default").upper().replace("-", "_")
+    # Tenant overrides fall back to global lists
+    global_allow = _get_allowlist(os.getenv(ALLOWLIST_ENV, ""))
+    global_deny = _get_allowlist(os.getenv(DENYLIST_ENV, ""))
+    tenant_allow = _get_allowlist(os.getenv(f"{ALLOWLIST_ENV}_{t_key}", ""))
+    tenant_deny = _get_allowlist(os.getenv(f"{DENYLIST_ENV}_{t_key}", ""))
+    # Deny is union
+    deny = list(dict.fromkeys([*global_deny, *tenant_deny]))
+    # Allow is union; empty means no constraint for permissive profile
+    allow = list(dict.fromkeys([*global_allow, *tenant_allow]))
+    return evaluate_url_policy(url, allowlist=(allow or None), denylist=(deny or None)).allowed

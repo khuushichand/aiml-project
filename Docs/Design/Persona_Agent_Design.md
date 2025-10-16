@@ -1,6 +1,6 @@
 # Persona Interaction/Collaborator (Agent with Voice & Tools)
 
-Status: Draft (Design)
+Status: Active (MVP scaffold implemented)
 
 Owner: Core (LLM, Audio, MCP, AuthNZ, WebUI)
 
@@ -9,6 +9,28 @@ Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2–3)
 ## Summary
 
 Introduce a first-class Persona agent (text + optional voice + avatar) that chats naturally, remembers context, and uses server tools (via MCP Unified) to help with ingestion, search, analysis, and exports. Actions are transparent, previewed, and require confirmation for impactful operations.
+
+## Current Status (v0.2.x dev)
+
+- Feature flag: endpoints/WS are gated; disabled state returns empty catalog/404 and WS notice.
+  - Config: `[persona] enabled=true` in `tldw_Server_API/Config_Files/config.txt`.
+  - Exposed at runtime via `GET /api/v1/config/docs-info` under `capabilities.persona`.
+- Endpoints: `GET /catalog`, `POST /session`, `WS /stream` implemented (scaffold).
+  - WS loop: plan → confirm → act using MCP tools; naive plan heuristics; per-step confirmations expected from client.
+  - RBAC: allow_export/allow_delete gates enforced server-side per step.
+- MCP Unified: tool calls use existing unified server with user-scoped execution.
+- WebUI: Persona tab (preview) and basic dock wiring; visibility follows capabilities.
+- Tests: basic WS plan/confirm smoke test.
+
+## Changelog
+
+- v0.2.x dev
+  - Feature flag gating and capability exposure via `/api/v1/config/docs-info`.
+  - Implemented persona endpoints (catalog, session) and WS stream with plan → confirm → act loop and RBAC guards.
+  - Integrated MCP Unified tool calls; added WebUI tab visibility based on capabilities.
+  - Added minimal WS smoke test for plan/confirm flow.
+- v0.1.0
+  - Initial draft design with goals, architecture, and API outline.
 
 ## Goals
 
@@ -85,6 +107,11 @@ Base path: `/api/v1/persona`
 
 Schemas live under: `tldw_Server_API/app/api/v1/schemas/persona.py`
 
+Implementation notes:
+- WS accepts `token`/`api_key` similar to MCP; resolves single-user id when applicable.
+- Tool name → module mapping is minimal; error messages returned for unknown/forbidden tools.
+- Client is responsible for rendering plan steps and sending back approvals.
+
 ## Tool Use Loop (Plan → Confirm → Act → Review)
 
 1. Persona drafts a short plan (1–3 steps max by default) with tools and inputs.
@@ -110,6 +137,7 @@ Guardrails:
 - Action Preview: shows tool plan steps with toggles; confirm/cancel buttons.
 - Transcript Panel: interleaves messages with tool calls/results; downloadable.
 - Persona Selector: choose persona/voice within session.
+- Visibility controlled by capability map from `GET /api/v1/config/docs-info` (`capabilities.persona`).
 
 ## Configuration
 
@@ -128,6 +156,9 @@ allow_export = false
 allow_delete = false
 ```
 
+Runtime capability surface:
+- `GET /api/v1/config/docs-info` → includes `capabilities` and `supported_features` maps (for backward compatibility).
+
 ## Security & Permissions
 
 - AuthNZ: Sessions tied to `user_id`; RBAC governs tool access and scope.
@@ -144,6 +175,7 @@ allow_delete = false
   - WS flow: connect → chat → plan → confirm → execute → stream TTS.
   - Permissions: attempts to call restricted tools are denied/logged.
   - Voice pipeline: STT partials drive interim captions; TTS emits playable chunks.
+  - WS smoke tests for plan/confirm path.
 
 - Mocks/Fixtures
   - Mock MCP tools with deterministic outputs.
@@ -171,4 +203,3 @@ allow_delete = false
 - Tool misuse → strict confirmations, RBAC scopes, and audit logs.
 - Latency in voice mode → stream partials early; bound TTS chunk sizes.
 - Context bloat → limit session turns and injected memories; prune aggressively.
-

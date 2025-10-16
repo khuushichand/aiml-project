@@ -21,7 +21,7 @@ from prometheus_client import Histogram
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 from ..messages import build_dedupe_key, classify_failure, validate_schema
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from .dlq_crypto import encrypt_payload_if_configured
+from ..dlq_crypto import encrypt_payload_if_configured
 
 
 T = TypeVar('T', bound=EmbeddingJobMessage)

@@ -102,6 +102,19 @@ def load_safe_config() -> Dict:
     
     safe_config["configured_llm_providers"] = configured_providers
     
+    # Feature flags / capabilities (safe to expose)
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings
+        caps = {
+            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True)),
+            "persona": bool(_settings.get("PERSONA_ENABLED", True)),
+        }
+        # expose both for backward-compat and forward-looking UI
+        safe_config["supported_features"] = caps
+        safe_config["capabilities"] = caps
+    except Exception:
+        pass
+    
     return safe_config
 
 
@@ -136,6 +149,10 @@ async def get_documentation_config():
         "api_key": config.get("api_key_for_docs") or "YOUR_API_KEY",
         "base_url": base_url,
         "configured_providers": config.get("configured_llm_providers", []),
+        # Surface capabilities map so WebUI can dynamically hide/show experimental tabs
+        "capabilities": config.get("capabilities", config.get("supported_features", {})),
+        # Keep supported_features for older clients
+        "supported_features": config.get("supported_features", {}),
         "examples": {
             "python": generate_python_example(
                 config.get("api_key_for_docs") or "YOUR_API_KEY",

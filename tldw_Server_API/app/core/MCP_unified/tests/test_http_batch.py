@@ -10,6 +10,8 @@ _os.environ.setdefault("TEST_MODE", "true")
 _os.environ.setdefault("DISABLE_HEAVY_STARTUP", "1")
 _os.environ.setdefault("ENABLE_TRACING", "false")
 _os.environ.setdefault("OTEL_METRICS_EXPORTER", "console")
+_os.environ.setdefault("MCP_WS_AUTH_REQUIRED", "false")
+_os.environ.setdefault("MCP_ALLOWED_IPS", "")
 
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
@@ -32,8 +34,4 @@ def test_http_batch_initialize_and_ping():
     for item in data:
         assert item.get("jsonrpc") == "2.0"
         assert item.get("error") is None
-
-
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 

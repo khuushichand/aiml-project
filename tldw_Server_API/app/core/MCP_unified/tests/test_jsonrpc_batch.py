@@ -2,41 +2,54 @@
 JSON-RPC batch support tests for MCP Unified over WebSocket and protocol-level.
 """
 
-import os
 import pytest
-import os as _os
-
-# Minimize startup side-effects for tests
-_os.environ.setdefault("TEST_MODE", "true")
-_os.environ.setdefault("DISABLE_HEAVY_STARTUP", "1")
-_os.environ.setdefault("ENABLE_TRACING", "false")
-_os.environ.setdefault("OTEL_METRICS_EXPORTER", "console")
-
 from fastapi.testclient import TestClient
-from tldw_Server_API.app.main import app
+
+from tldw_Server_API.app.core.MCP_unified import get_mcp_server
 from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+from tldw_Server_API.app.main import app
 
 
-client = TestClient(app)
+@pytest.fixture
+def ws_client(monkeypatch):
+    # Minimize startup side-effects for tests
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
+    monkeypatch.setenv("ENABLE_TRACING", "false")
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "console")
+    monkeypatch.setenv("MCP_WS_AUTH_REQUIRED", "false")
+    monkeypatch.setenv("MCP_ALLOWED_IPS", "")
+
+    client = TestClient(app)
+    server = get_mcp_server()
+    server.config.ws_auth_required = False
+    server.config.allowed_client_ips = []
+    server.config.blocked_client_ips = []
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 @pytest.mark.asyncio
-async def test_ws_jsonrpc_batch_initialize_and_ping():
-    with client.websocket_connect("/api/v1/mcp/ws?client_id=batch") as ws:
+async def test_ws_jsonrpc_batch_initialize_and_ping(ws_client):
+    with ws_client.websocket_connect("/api/v1/mcp/ws?client_id=batch") as ws:
         # Send a batch request: initialize + ping
-        ws.send_json([
-            {
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": {"clientInfo": {"name": "Batch WS"}},
-                "id": 1,
-            },
-            {
-                "jsonrpc": "2.0",
-                "method": "ping",
-                "id": 2,
-            },
-        ])
+        ws.send_json(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {"clientInfo": {"name": "Batch WS"}},
+                    "id": 1,
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "method": "ping",
+                    "id": 2,
+                },
+            ]
+        )
         msg = ws.receive_json()
         # Ignore ping frames
         while isinstance(msg, dict) and msg.get("type") == "ping":
@@ -58,7 +71,3 @@ async def test_protocol_notification_returns_none():
     ctx = RequestContext(request_id="notif-1", client_id="unit-test")
     resp = await protocol.process_request(req, ctx)
     assert resp is None
-
-
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")

@@ -181,6 +181,34 @@ class MetricsCollector:
             'CPU usage percentage',
             registry=self.registry
         )
+
+        # Validation metrics
+        self.tool_invalid_params = Counter(
+            'mcp_tool_invalid_params_total',
+            'Total invalid tool parameter errors',
+            ['module', 'tool'],
+            registry=self.registry
+        )
+        self.tool_validator_missing = Counter(
+            'mcp_tool_validator_missing_total',
+            'Total write tools missing validator override',
+            ['module', 'tool'],
+            registry=self.registry
+        )
+
+        # Idempotency metrics (write tools)
+        self.idempotency_hits = Counter(
+            'mcp_idempotency_hits_total',
+            'Total idempotent cache hits for write tools',
+            ['module', 'tool'],
+            registry=self.registry
+        )
+        self.idempotency_misses = Counter(
+            'mcp_idempotency_misses_total',
+            'Total idempotent cache misses for write tools',
+            ['module', 'tool'],
+            registry=self.registry
+        )
         
         # Server info
         self.server_info = Info(
@@ -344,6 +372,30 @@ class MetricsCollector:
         self._metrics[f"rate_limit_fallback_{backend}"].append(metric)
         if self.enable_prometheus:
             self.rate_limit_fallbacks.labels(backend=backend).inc()
+
+    def record_idempotency_hit(self, module: str, tool: str):
+        """Record an idempotency cache hit for a write-capable tool."""
+        metric = MetricData(
+            name="idempotency_hit",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"module": module, "tool": tool},
+        )
+        self._metrics["idempotency_hit"].append(metric)
+        if self.enable_prometheus:
+            self.idempotency_hits.labels(module=module, tool=tool).inc()
+
+    def record_idempotency_miss(self, module: str, tool: str):
+        """Record an idempotency cache miss for a write-capable tool."""
+        metric = MetricData(
+            name="idempotency_miss",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"module": module, "tool": tool},
+        )
+        self._metrics["idempotency_miss"].append(metric)
+        if self.enable_prometheus:
+            self.idempotency_misses.labels(module=module, tool=tool).inc()
     
     def record_cache_access(self, cache_name: str, hit: bool):
         """Record cache access"""
@@ -394,6 +446,35 @@ class MetricsCollector:
             return b"# Prometheus metrics not enabled\n"
         
         return generate_latest(self.registry)
+
+    # Validation metrics helpers
+    def record_tool_invalid_params(self, module: str, tool: str):
+        metric = MetricData(
+            name="tool_invalid_params",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"module": module, "tool": tool},
+        )
+        self._metrics["tool_invalid_params"].append(metric)
+        if self.enable_prometheus:
+            try:
+                self.tool_invalid_params.labels(module=module, tool=tool).inc()
+            except Exception:
+                pass
+
+    def record_tool_validator_missing(self, module: str, tool: str):
+        metric = MetricData(
+            name="tool_validator_missing",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"module": module, "tool": tool},
+        )
+        self._metrics["tool_validator_missing"].append(metric)
+        if self.enable_prometheus:
+            try:
+                self.tool_validator_missing.labels(module=module, tool=tool).inc()
+            except Exception:
+                pass
     
     def get_internal_metrics(self, period_seconds: int = 300) -> Dict[str, Any]:
         """

@@ -33,8 +33,11 @@
     </div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
       <label style="margin:0">Templates</label>
+      <input id="wfTpl_search" type="search" placeholder="Search templates..." style="min-width:200px" onkeydown="if(event.key==='Enter'){wfTplLoadList()}" oninput="wfTplQueryChanged()"/>
+      <label style="margin:0 0 0 6px">Tag</label>
+      <select id="wfTpl_tag" style="min-width:160px"><option value="">(all)</option></select>
       <select id="wfTpl_select" style="min-width:240px"></select>
-      <button class="api-button" onclick="wfTplLoadList()">Refresh</button>
+      <button class="api-button" onclick="wfTplLoadList()">Search/Refresh</button>
       <button class="api-button" onclick="wfTplApply()">Load Selected</button>
       <button class="api-button" onclick="wfTplInsert()">Insert Selected</button>
       <button class="api-button" onclick="wfTplRun()">Run This Template</button>
@@ -45,6 +48,7 @@
         <span style="opacity:0.8">|</span>
         <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
       </label>
+      <button class="api-button" onclick="wfTplResetFilters()" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
     </div>
     <textarea id="wfDef_payload" rows="12" style="width:100%">{
   "name": "hello",
@@ -162,7 +166,17 @@
     try{
       const sel = document.getElementById('wfTpl_select');
       sel.innerHTML = '';
-      const items = await apiClient.makeRequest('GET','/api/v1/workflows/templates');
+      const q = (document.getElementById('wfTpl_search')?.value||'').trim();
+      const tagSel = document.getElementById('wfTpl_tag');
+      const tagVal = (tagSel?.value||'').trim();
+      let url = '/api/v1/workflows/templates';
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (tagVal) params.set('tag', tagVal);
+      if ([...params.keys()].length){ url += '?' + params.toString(); }
+      const items = await apiClient.makeRequest('GET', url);
+      // persist filters
+      wfTplSavePrefs();
       if (!Array.isArray(items) || items.length===0){
         const opt = document.createElement('option'); opt.value=''; opt.textContent='(no templates found)'; sel.appendChild(opt); return;
       }
@@ -188,6 +202,14 @@
       }catch(_){ }
       Toast.success('Templates loaded');
     }catch(e){ Toast.error('Failed to load templates: '+(e?.message||e)); }
+  }
+  function wfTplResetFilters(){
+    try{
+      const q = document.getElementById('wfTpl_search'); if (q) q.value = '';
+      const tagSel = document.getElementById('wfTpl_tag'); if (tagSel) tagSel.value = '';
+      wfTplSavePrefs();
+      wfTplLoadList();
+    }catch(_){ }
   }
   function wfHumanTitle(s){
     try{
@@ -380,6 +402,13 @@
       }catch(_){ }
       // Cleanup on unload
       window.addEventListener('beforeunload', ()=>{ try{ if (wfStatusTimer) clearInterval(wfStatusTimer); }catch(_){ } });
+    }catch(_){ }
+  }
+  function wfStopWatchStatus(){
+    try{
+      if (wfStatusTimer){ clearInterval(wfStatusTimer); wfStatusTimer = null; Toast.info('Stopped watching'); }
+      // Also stop auto events refresh if enabled
+      try{ const chk=document.getElementById('wfEvents_auto'); if (chk && chk.checked){ chk.checked=false; wfToggleAutoEvents(); } }catch(_){ }
     }catch(_){ }
   }
 
@@ -686,6 +715,7 @@
       <span class="chip" data-status="running" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
       <span class="chip" data-status="paused" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
       <span class="chip" data-status="waiting_human" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
+      <span class="chip" data-status="waiting_approval" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_approval</span>
       <span class="chip" data-status="succeeded" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
       <span class="chip" data-status="failed" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
       <span class="chip" data-status="cancelled" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
@@ -726,18 +756,27 @@
     <input type="number" id="wfList_limit" value="25" min="1" max="200" style="width:80px">
     <label>Offset</label>
     <input type="number" id="wfList_offset" value="0" min="0" style="width:80px">
-    <button class="api-button" onclick="wfListRuns()">List Runs</button>
-    <button class="api-button" onclick="wfClearFilters()">Clear Filters</button>
+    <label style="margin-left:8px" title="When enabled, the cursor token is used and the 'offset' value is ignored."><input type="checkbox" id="wfList_use_cursor" onchange="wfSaveFilters()"> Use cursor</label>
+    <button class="api-button btn-sm" onclick="wfShowCursorHelp()" title="What is cursor pagination?">Cursor Help</button>
+    <label>Cursor</label>
+    <input type="text" id="wfList_cursor" placeholder="opaque token" style="width:260px" oninput="wfSaveFilters()">
+    <button class="api-button btn-sm" onclick="wfResetCursor()">Reset cursor</button>
+      <button class="api-button" onclick="wfListRuns()">List Runs</button>
+      <button class="api-button" onclick="wfCopyRunsCurl()" title="Copy the current runs list request as cURL, including cursor if enabled">Copy cURL (List)</button>
+      <button class="api-button" onclick="wfClearFilters()">Clear Filters</button>
   </div>
   <div class="form-group">
     <label>Run ID</label>
     <input type="text" id="wfRun_run_id" placeholder="uuid" />
     <button class="api-button" onclick="wfGetRun()">Get Status</button>
     <button class="api-button" onclick="wfGetEvents()">Get Events</button>
+    <button class="api-button" onclick="wfStopWatchStatus()">Stop Watching</button>
     <label>Events Limit</label>
     <input type="number" id="wfEvents_limit" min="1" max="1000" value="500" style="width:90px"/>
     <button class="api-button" onclick="wfGetNextEvents()">Load Next Events</button>
     <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto" onchange="wfToggleAutoEvents()"> Auto-refresh</label>
+    <label style="margin-left:8px" title="Use server-provided Next-Cursor header for paging instead of since=last_seq"><input type="checkbox" id="wfEvents_use_cursor"> Use cursor (events)</label>
+    <button class="api-button btn-sm" id="wfEvents_next_cursor_btn" onclick="wfGetNextEvents()" disabled>Next (cursor)</button>
     <label style="margin-left:8px">Filter (types)</label>
     <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px"/>
     <button class="api-button" onclick="wfListArtifacts()">List Artifacts</button>
@@ -755,6 +794,7 @@
     <button class="api-button" onclick="wfClearJson('wfRun_result')">Clear</button>
   </div>
   <pre id="wfRun_result" class="json-viewer"></pre>
+  <div id="wfRuns_cursor_hint" style="margin-top:4px;color:var(--color-base-0)"></div>
   <div class="form-group" style="margin-top:4px;color:var(--color-base-0)">
     <span id="wfEvents_info"></span>
   </div>
@@ -763,13 +803,127 @@
   <div class="form-group">
     <button class="api-button" id="wfList_prev" onclick="wfPrevPage()" disabled>Prev</button>
     <button class="api-button" id="wfList_next" onclick="wfNextPage()" disabled>Next</button>
+    <button class="api-button" id="wfList_next_cursor" onclick="wfNextCursor()" disabled>Next (cursor)</button>
     <span id="wfList_page_info" style="margin-left:8px;color:var(--color-base-0)"></span>
+    <span id="wfList_cursor_info" style="margin-left:8px;color:var(--color-base-0)"></span>
+    <div style="margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+      <label style="margin:0">next_cursor</label>
+      <input type="text" id="wfList_next_cursor_value" style="min-width:420px" readonly placeholder="(will appear after listing)"/>
+      <button class="api-button" id="wfList_copy_cursor_btn" onclick="wfCopyNextCursor()" disabled>Copy</button>
+    </div>
   </div>
   <div id="wfRun_artifacts" class="json-viewer"></div>
+  <div class="card" style="margin-top:16px">
+    <h3>Webhook DLQ (Admin)</h3>
+    <div class="form-group">
+      <label>Limit</label>
+      <input type="number" id="wfDlq_limit" value="50" min="1" max="500" style="width:80px">
+      <label>Offset</label>
+      <input type="number" id="wfDlq_offset" value="0" min="0" style="width:80px">
+      <button class="api-button" onclick="wfDlqLoad()">Refresh</button>
+    </div>
+    <div id="wfDlq_table"></div>
+  </div>
   <script>
   function wfQuickHours(){
     const v = document.getElementById('wfList_quick').value;
     document.getElementById('wfList_last_hours').value = v || '';
+  }
+  function wfCopyRunsCurl(){
+    try{
+      const params = new URLSearchParams();
+      // statuses
+      const picked = wfSelectedStatuses();
+      const statusText = (document.getElementById('wfList_status').value||'').trim();
+      if (picked.length){ picked.forEach(s=>params.append('status', s)); }
+      if (statusText){ statusText.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>params.append('status', s)); }
+      // basic fields
+      const setIf = (k,id)=>{ const v=(document.getElementById(id)?.value||'').trim(); if (v) params.set(k, v); };
+      setIf('workflow_id','wfList_workflow_id');
+      const caRaw = (document.getElementById('wfList_created_after')?.value||'').trim(); if (caRaw) params.set('created_after', new Date(caRaw).toISOString());
+      const cbRaw = (document.getElementById('wfList_created_before')?.value||'').trim(); if (cbRaw) params.set('created_before', new Date(cbRaw).toISOString());
+      setIf('order_by','wfList_order_by'); setIf('order','wfList_order'); setIf('limit','wfList_limit');
+      const useCursor = !!document.getElementById('wfList_use_cursor')?.checked;
+      const cursorVal = (document.getElementById('wfList_cursor')?.value||'').trim();
+      if (useCursor && cursorVal){ params.set('cursor', cursorVal); }
+      else { setIf('offset','wfList_offset'); }
+      const qs = params.toString();
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : 'http://localhost:8000';
+      const token = (apiClient && apiClient.token) ? apiClient.token : '$API_KEY';
+      const url = `${base}/api/v1/workflows/runs${qs ? ('?'+qs): ''}`;
+      const snippet = `curl -sS -H "X-API-KEY: ${token}" "${url}"`;
+      navigator.clipboard.writeText(snippet).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed'));
+    }catch(e){ Toast.error('Copy failed: '+(e?.message||e)); }
+  }
+  async function wfDlqLoad(){
+    try{
+      const limit = parseInt(document.getElementById('wfDlq_limit').value||'50');
+      const offset = parseInt(document.getElementById('wfDlq_offset').value||'0');
+      const resp = await apiClient.makeRequest('GET', `/api/v1/workflows/webhooks/dlq?limit=${limit}&offset=${offset}`);
+      const items = resp?.items || [];
+      let html = '<table style="width:100%;border-collapse:collapse">';
+      html += '<thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">ID</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Tenant</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Run</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">URL</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Attempts</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Next Attempt</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Last Error</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Actions</th></tr></thead>'; 
+      html += '<tbody>';
+      items.forEach(it => {
+        const id = it.id; const t = it.tenant_id||''; const rid = it.run_id||''; const url = it.url||''; const at = it.attempts||0; const next = it.next_attempt_at||''; const err = it.last_error||'';
+        html += `<tr>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${id}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${t}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${rid}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><code>${escapeHtml(url)}</code></td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${at}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${next||''}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><code>${escapeHtml(String(err)).slice(0,120)}</code></td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><button class=\"api-button\" onclick=\"wfDlqReplay(${id})\">Replay</button></td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      document.getElementById('wfDlq_table').innerHTML = html;
+    }catch(e){ document.getElementById('wfDlq_table').innerHTML = '<em>Failed to load DLQ</em>'; Toast.error('DLQ load failed: '+(e?.message||e)); }
+  }
+  async function wfDlqReplay(id){
+    try{
+      const r = await apiClient.makeRequest('POST', `/api/v1/workflows/webhooks/dlq/${id}/replay`);
+      if (r && r.ok) { Toast.success('Replay dispatched'); wfDlqLoad(); }
+      else { Toast.error('Replay failed'); }
+    }catch(e){ Toast.error('Replay error: '+(e?.message||e)); }
+  }
+  // Persist/restore runs filters
+  function wfSaveFilters(){
+    try{
+      const payload = {
+        last_hours: (document.getElementById('wfList_last_hours')?.value||'').trim(),
+        status: (document.getElementById('wfList_status')?.value||'').trim(),
+        workflow_id: (document.getElementById('wfList_workflow_id')?.value||'').trim(),
+        created_after: (document.getElementById('wfList_created_after')?.value||'').trim(),
+        created_before: (document.getElementById('wfList_created_before')?.value||'').trim(),
+        order_by: (document.getElementById('wfList_order_by')?.value||'').trim(),
+        order: (document.getElementById('wfList_order')?.value||'').trim(),
+        limit: (document.getElementById('wfList_limit')?.value||'').trim(),
+        offset: (document.getElementById('wfList_offset')?.value||'').trim(),
+        use_cursor: !!(document.getElementById('wfList_use_cursor')?.checked),
+        cursor: (document.getElementById('wfList_cursor')?.value||'').trim(),
+      };
+      if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-runs-filters', payload);
+    }catch(_){ }
+  }
+  function wfRestoreFilters(){
+    try{
+      const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('workflows-runs-filters') : null;
+      if (!saved) return;
+      const setv = (id,v)=>{ try{ const el=document.getElementById(id); if (el && v!=null) el.value = v; }catch(_){ } };
+      setv('wfList_last_hours', saved.last_hours);
+      setv('wfList_status', saved.status);
+      setv('wfList_workflow_id', saved.workflow_id);
+      setv('wfList_created_after', saved.created_after);
+      setv('wfList_created_before', saved.created_before);
+      setv('wfList_order_by', saved.order_by);
+      setv('wfList_order', saved.order);
+      setv('wfList_limit', saved.limit);
+      setv('wfList_offset', saved.offset);
+      try{ const uc=document.getElementById('wfList_use_cursor'); if (uc) uc.checked = !!saved.use_cursor; }catch(_){ }
+      setv('wfList_cursor', saved.cursor);
+    }catch(_){ }
   }
   function wfToggleChip(el){
     const selected = el.getAttribute('data-selected') === '1';
@@ -780,9 +934,10 @@
     const chips = document.querySelectorAll('#wfList_status_chips .chip[data-selected="1"]');
     return Array.from(chips).map(c=>c.getAttribute('data-status'));
   }
-  let wfLastList = { limit: 0, offset: 0, next_offset: null };
+  let wfLastList = { limit: 0, offset: 0, next_offset: null, next_cursor: null };
   async function wfListRuns(){
     try{
+      wfSaveFilters();
       const params = new URLSearchParams();
       const picked = wfSelectedStatuses();
       const statusText = (document.getElementById('wfList_status').value||'').trim();
@@ -799,7 +954,10 @@
       params.set('order_by', document.getElementById('wfList_order_by').value);
       params.set('order', document.getElementById('wfList_order').value);
       params.set('limit', document.getElementById('wfList_limit').value);
-      params.set('offset', document.getElementById('wfList_offset').value);
+      const useCursor = !!document.getElementById('wfList_use_cursor').checked;
+      const cursorVal = (document.getElementById('wfList_cursor').value||'').trim();
+      if (useCursor && cursorVal){ params.set('cursor', cursorVal); }
+      else { params.set('offset', document.getElementById('wfList_offset').value); }
       const url = '/api/v1/workflows/runs?' + params.toString();
       const resp = await apiClient.makeRequest('GET', url);
       set('wfRun_result', resp);
@@ -807,17 +965,85 @@
       // Update pager state
       const limit = parseInt(document.getElementById('wfList_limit').value || '25');
       const offset = parseInt(document.getElementById('wfList_offset').value || '0');
-      wfLastList = { limit, offset, next_offset: resp?.next_offset ?? null };
-      document.getElementById('wfList_prev').disabled = offset <= 0;
-      document.getElementById('wfList_next').disabled = (resp?.next_offset == null);
+      wfLastList = { limit, offset, next_offset: resp?.next_offset ?? null, next_cursor: resp?.next_cursor ?? null };
+      document.getElementById('wfList_prev').disabled = useCursor ? true : (offset <= 0);
+      document.getElementById('wfList_next').disabled = useCursor ? true : (resp?.next_offset == null);
+      document.getElementById('wfList_next_cursor').disabled = useCursor ? (resp?.next_cursor == null) : true;
       const count = Array.isArray(resp?.runs) ? resp.runs.length : 0;
       document.getElementById('wfList_page_info').textContent = `showing ${count} (limit ${limit}) offset ${offset}`;
+      const nc = resp?.next_cursor || '';
+      const infoEl = document.getElementById('wfList_cursor_info');
+      if (infoEl){
+        if (useCursor){
+          if (nc){ infoEl.innerHTML = `next_cursor: ${String(nc).slice(0,24)}… <button class=\"api-button btn-sm\" onclick=\"wfCopyNextCursor()\">Copy</button>`; }
+          else { infoEl.innerHTML = 'next_cursor: (none)'; }
+        } else {
+          infoEl.innerHTML = '';
+        }
+      }
+      const ncInput = document.getElementById('wfList_next_cursor_value');
+      const ncBtn = document.getElementById('wfList_copy_cursor_btn');
+      if (ncInput){ ncInput.value = nc || ''; }
+      if (ncBtn){ ncBtn.disabled = !nc; }
+      try{
+        const hint = document.getElementById('wfRuns_cursor_hint');
+        if (hint){
+          if (useCursor && nc){
+            hint.innerHTML = `Tip: A next_cursor is available below. You can copy it here: <button class=\"api-button btn-sm\" onclick=\"wfCopyNextCursor()\">Copy next_cursor</button>`;
+          } else {
+            hint.innerHTML = '';
+          }
+        }
+      }catch(_){ }
     }catch(e){ Toast.error('List runs failed: '+(e?.message||e)); }
   }
   function wfPrevPage(){ try{ const off = Math.max(0, (wfLastList.offset||0) - (wfLastList.limit||25)); document.getElementById('wfList_offset').value = off; wfListRuns(); }catch(e){} }
   function wfNextPage(){ try{ if (wfLastList.next_offset != null){ document.getElementById('wfList_offset').value = wfLastList.next_offset; wfListRuns(); } }catch(e){} }
+  function wfNextCursor(){ try{ if (wfLastList.next_cursor){ const inp=document.getElementById('wfList_cursor'); inp.value = wfLastList.next_cursor; wfListRuns(); } }catch(e){} }
+  function wfResetCursor(){ try{ const inp=document.getElementById('wfList_cursor'); if (inp){ inp.value=''; wfSaveFilters(); } Toast.info('Cursor cleared'); }catch(_){ }
+  function wfCopyNextCursor(){ try{ const v=(document.getElementById('wfList_next_cursor_value')?.value||''); if (!v){ Toast.error('No next_cursor'); return; } navigator.clipboard.writeText(v).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed')); }catch(e){ Toast.error('Copy failed'); } }
+  function wfShowCursorHelp(){
+    try{
+      const modal = document.getElementById('wfModal');
+      const pre = document.getElementById('wfModal_content');
+      if (!modal || !pre) return;
+      pre.textContent = [
+        'Cursor pagination returns an opaque token (next_cursor) representing your current position in a stable order. ',
+        'Use this token as the "cursor" parameter on subsequent requests to fetch the next page. ',
+        'When a cursor value is provided, the numeric "offset" is ignored. ',
+        'This approach avoids missed or duplicated items when new records arrive or timestamps tie.',
+        '',
+        'Tips:',
+        ' - Toggle "Use cursor" to switch from offset paging to cursor paging.',
+        ' - Copy the full next_cursor from the field below the pager or use the inline Copy buttons.',
+        ' - The token includes ordering info; do not edit it.'
+      ].join('\n');
+      modal.style.display = 'flex';
+    }catch(_){ }
+  }
   async function wfGetRun(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
-  let wfEventsState = { runId: null, lastSeq: null, timer: null };
+  let wfEventsState = { runId: null, lastSeq: null, nextCursor: null, timer: null };
+  async function wfFetchEvents(urlRelative){
+    try{
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : '';
+      const url = base + urlRelative;
+      const headers = { 'Accept': 'application/json' };
+      if (apiClient && apiClient.token){
+        if (apiClient.authMode === 'multi-user' && !apiClient.preferApiKeyInMultiUser){
+          headers['Authorization'] = `Bearer ${apiClient.token}`;
+        } else {
+          headers['X-API-KEY'] = apiClient.token;
+        }
+      }
+      const t0 = performance.now();
+      const resp = await fetch(url, { method:'GET', headers });
+      const latency = Math.round(performance.now()-t0);
+      if (!resp.ok){ throw new Error(`HTTP ${resp.status}`); }
+      const data = await resp.json();
+      const nextCursor = resp.headers.get('Next-Cursor');
+      return { data, latency, nextCursor };
+    }catch(e){ throw e; }
+  }
   let wfPayloadCache = {};
   async function wfGetEvents(){
     try{
@@ -826,12 +1052,12 @@
       const typesRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
       const params = new URLSearchParams({ limit: String(limit) });
       if (typesRaw){ typesRaw.split(',').map(s=>s.trim()).filter(Boolean).forEach(t=>params.append('types', t)); }
-      const t0 = performance.now();
-      const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events?${params.toString()}`);
-      const latency = Math.round(performance.now()-t0);
-      set('wfRun_result',r);
+      const { data: r, latency, nextCursor } = await wfFetchEvents(`/api/v1/workflows/runs/${id}/events?${params.toString()}`);
+      set('wfRun_result', r);
       wfEventsState.runId = id;
       wfEventsState.lastSeq = Array.isArray(r)&&r.length? r[r.length-1].event_seq : null;
+      wfEventsState.nextCursor = nextCursor || null;
+      const btn = document.getElementById('wfEvents_next_cursor_btn'); if (btn){ btn.disabled = !(document.getElementById('wfEvents_use_cursor')?.checked && wfEventsState.nextCursor); }
       wfRenderEventsTable(r, latency, false);
     }catch(e){Toast.error(e?.message||e);} }
   async function wfGetNextEvents(){
@@ -840,17 +1066,19 @@
       const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
       const typesRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
       const params = new URLSearchParams({ limit: String(limit) });
-      if (wfEventsState.runId===id && wfEventsState.lastSeq!=null){ params.set('since', String(wfEventsState.lastSeq)); }
+      const useCursor = !!document.getElementById('wfEvents_use_cursor')?.checked;
+      if (useCursor && wfEventsState.nextCursor){ params.set('cursor', wfEventsState.nextCursor); }
+      else if (wfEventsState.runId===id && wfEventsState.lastSeq!=null){ params.set('since', String(wfEventsState.lastSeq)); }
       if (typesRaw){ typesRaw.split(',').map(s=>s.trim()).filter(Boolean).forEach(t=>params.append('types', t)); }
       let url = `/api/v1/workflows/runs/${id}/events?${params.toString()}`;
-      const t0 = performance.now();
-      const r = await apiClient.makeRequest('GET', url);
-      const latency = Math.round(performance.now()-t0);
+      const { data: r, latency, nextCursor } = await wfFetchEvents(url);
       // Append to existing result view
       const cur = (()=>{ try{ return JSON.parse(document.getElementById('wfRun_result').textContent||'[]'); }catch(e){ return []; } })();
       const merged = Array.isArray(cur)? cur.concat(r) : r;
       set('wfRun_result', merged);
       if (Array.isArray(r)&&r.length){ wfEventsState.lastSeq = r[r.length-1].event_seq; wfEventsState.runId = id; }
+      wfEventsState.nextCursor = nextCursor || wfEventsState.nextCursor;
+      const btn2 = document.getElementById('wfEvents_next_cursor_btn'); if (btn2){ btn2.disabled = !(useCursor && wfEventsState.nextCursor); }
       wfRenderEventsTable(r, latency, true);
     }catch(e){ Toast.error(e?.message||e); }
   }
@@ -1144,7 +1372,7 @@
       const runs = Array.isArray(resp?.runs) ? resp.runs : [];
       if (!runs.length){ document.getElementById('wfRun_list').innerHTML = '<em>No runs</em>'; return; }
       const chip = (st)=>{
-        const colors = { queued:'#888', running:'#0a84ff', paused:'#f0ad4e', waiting_human:'#6f42c1', succeeded:'#2e7d32', failed:'#c62828', cancelled:'#616161' };
+        const colors = { queued:'#888', running:'#0a84ff', paused:'#f0ad4e', waiting_human:'#6f42c1', waiting_approval:'#8e44ad', succeeded:'#2e7d32', failed:'#c62828', cancelled:'#616161' };
         const color = colors[st] || '#555';
         return `<span style="display:inline-block;padding:2px 6px;border-radius:10px;background:${color};color:#fff;font-size:12px">${st}</span>`;
       };
@@ -1170,6 +1398,7 @@
       });
       html += '</tbody></table>';
       document.getElementById('wfRun_list').innerHTML = html;
+      try{ wfAppendWebhookButtons(); }catch(_){}
     }catch(e){ document.getElementById('wfRun_list').innerHTML = '<em>Error rendering</em>'; }
   }
   async function wfGetEventsFor(runId){
@@ -1177,6 +1406,47 @@
       const r = await apiClient.makeRequest('GET', `/api/v1/workflows/runs/${runId}/events`);
       set('wfRun_result', r);
     }catch(e){ Toast.error('Events failed: '+(e?.message||e)); }
+  }
+  function wfAppendWebhookButtons(){
+    try{
+      const container = document.getElementById('wfRun_list');
+      if (!container) return;
+      const rows = container.querySelectorAll('tbody tr');
+      rows.forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        if (cells.length < 7) return;
+        const actions = cells[cells.length-1];
+        // If already has Webhooks button, skip
+        if (actions && actions.textContent.includes('Webhooks')) return;
+        // Derive run_id from the link in first cell
+        let rid = '';
+        try{
+          const a = tr.querySelector('td a[href="#"]');
+          if (a){ rid = a.textContent.trim(); }
+        }catch(_){ rid = ''; }
+        if (!rid) return;
+        const btn = document.createElement('button');
+        btn.className = 'api-button';
+        btn.textContent = 'Webhooks';
+        btn.title = 'Show webhook delivery history';
+        btn.addEventListener('click', () => wfShowWebhookDeliveries(rid));
+        actions.appendChild(document.createTextNode(' '));
+        actions.appendChild(btn);
+      });
+    }catch(_){ }
+  }
+  async function wfShowWebhookDeliveries(runId){
+    try{
+      const r = await apiClient.makeRequest('GET', `/api/v1/workflows/runs/${runId}/webhooks/deliveries`);
+      const items = (r && r.deliveries) ? r.deliveries : [];
+      const modal = document.getElementById('wfModal');
+      const pre = document.getElementById('wfModal_content');
+      if (!modal || !pre){ Toast.error('Modal unavailable'); return; }
+      let text = `Webhook deliveries for ${runId}\n\n`;
+      items.forEach(d => { text += `#${d.event_seq} ${d.created_at} host=${d.host||''} status=${d.status||''} code=${d.code||''}\n`; });
+      pre.textContent = text || '(no deliveries)';
+      modal.style.display = 'flex';
+    }catch(e){ Toast.error('Deliveries failed: '+(e?.message||e)); }
   }
 </script>
 <script>
@@ -1267,7 +1537,7 @@
     try{
       const target = document.getElementById('tabWorkflowsDefinitions');
       if (!target) return;
-      const trigger = () => { try { wfTplLoadList(); } catch(e) { /* ignore */ } };
+      const trigger = () => { try { wfTplInit(); } catch(e) { /* ignore */ } };
       // If already active (first open), trigger immediately
       if (target.classList.contains('active')) { trigger(); }
       // Observe class changes to detect activation
@@ -1280,6 +1550,69 @@
       });
       obs.observe(target, { attributes: true });
       // Cleanup on unload
+      window.addEventListener('beforeunload', ()=>{ try{ obs.disconnect(); }catch(_){} });
+    }catch(e){ /* ignore */ }
+  })();
+  async function wfTplInit(){
+    try{
+      await wfTplLoadTags();
+      wfTplRestorePrefs();
+      await wfTplLoadList();
+    }catch(e){ /* ignore */ }
+  }
+  async function wfTplLoadTags(){
+    try{
+      const tagSel = document.getElementById('wfTpl_tag');
+      if (!tagSel) return;
+      // load only once per session
+      if (tagSel._wf_loaded_tags) return;
+      const tags = await apiClient.makeRequest('GET','/api/v1/workflows/templates/tags');
+      const arr = Array.isArray(tags)? tags : [];
+      tagSel.innerHTML = '<option value="">(all)</option>' + arr.map(t=>`<option value="${t}">${t}</option>`).join('');
+      tagSel._wf_loaded_tags = true;
+      // save on change
+      try { if (!tagSel._wf_onchange){ tagSel.addEventListener('change', ()=>{ wfTplSavePrefs(); wfTplLoadList(); }); tagSel._wf_onchange = true; } } catch(_){ }
+    }catch(e){ /* ignore */ }
+  }
+  // Debounced search for templates
+  let _wfTplDebounce = null;
+  function wfTplQueryChanged(){
+    try{
+      wfTplSavePrefs();
+      if (_wfTplDebounce){ clearTimeout(_wfTplDebounce); }
+      _wfTplDebounce = setTimeout(()=>{ try{ wfTplLoadList(); }catch(_){ } }, 350);
+    }catch(_){ }
+  }
+  function wfTplSavePrefs(){
+    try{
+      const q = (document.getElementById('wfTpl_search')?.value||'').trim();
+      const tag = (document.getElementById('wfTpl_tag')?.value||'').trim();
+      if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-templates-filters', { q, tag });
+    }catch(_){ }
+  }
+  function wfTplRestorePrefs(){
+    try{
+      const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('workflows-templates-filters') : null;
+      if (!saved) return;
+      try{ const el=document.getElementById('wfTpl_search'); if (el) el.value = saved.q || ''; }catch(_){ }
+      try{ const el=document.getElementById('wfTpl_tag'); if (el && saved.tag){ el.value = saved.tag; } }catch(_){ }
+    }catch(_){ }
+  }
+  // Auto-restore Runs filters when Runs tab becomes active
+  (function(){
+    try{
+      const target = document.getElementById('tabWorkflowsRuns');
+      if (!target) return;
+      const trigger = () => { try { wfRestoreFilters(); } catch(e) { /* ignore */ } };
+      if (target.classList.contains('active')) { trigger(); }
+      const obs = new MutationObserver((muts)=>{
+        for (const m of muts){
+          if (m.attributeName === 'class' && target.classList.contains('active')){
+            trigger();
+          }
+        }
+      });
+      obs.observe(target, { attributes: true });
       window.addEventListener('beforeunload', ()=>{ try{ obs.disconnect(); }catch(_){} });
     }catch(e){ /* ignore */ }
   })();

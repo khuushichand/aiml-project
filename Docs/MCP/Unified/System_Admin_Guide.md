@@ -263,7 +263,45 @@ ufw allow from 10.0.0.0/8 to any port 9090  # Metrics (internal only)
 ufw enable
 ```
 
-### 4. Set Up User Management
+### 4. Enforce IP Allowlists / Denylists
+- Allow only trusted networks by setting environment variables:
+  ```bash
+  MCP_ALLOWED_IPS="10.0.0.0/24,203.0.113.42"
+  MCP_BLOCKED_IPS="0.0.0.0/0"
+  MCP_TRUST_X_FORWARDED=true   # only when running behind a trusted proxy
+  MCP_TRUSTED_PROXY_DEPTH=1    # number of proxies that append to X-Forwarded-For
+  ```
+- The server will return `403` for HTTP requests and close WebSockets with code `1008` when a client IP is outside the allowlist.
+- Keep complex network policy (security groups, NGINX allow/deny blocks) at the edge. The in-app guard is a defence-in-depth layer and ideal for local installs.
+
+### 5. Require Client Certificates (mTLS)
+- Enable client-certificate enforcement when fronting the service with an mTLS-capable proxy:
+  ```bash
+  MCP_CLIENT_CERT_REQUIRED=true
+  MCP_CLIENT_CERT_HEADER="X-SSL-Client-Verify"   # or X-Client-Cert
+  MCP_CLIENT_CERT_HEADER_VALUE="SUCCESS"         # expected value from the proxy
+  MCP_CLIENT_CA_BUNDLE="/etc/tldw/config/client-ca.pem"  # optional hint for process managers
+  ```
+- The application verifies the configured header on both HTTP and WebSocket requests and will reject connections lacking a valid certificate assertion.
+- Configure your proxy (Nginx, Traefik, Envoy) to terminate TLS, validate client certificates against the CA bundle, and forward the verification headers.
+
+### 6. Tighten WebSocket Authentication
+- Query-string authentication is disabled by default (`MCP_WS_ALLOW_QUERY_AUTH=false`) and the server now requires an `Authorization` header or `X-API-Key`.
+- Production deployments should keep `MCP_WS_AUTH_REQUIRED=true` (default) to block anonymous WebSocket sessions.
+- Configure heartbeat behaviour if necessary:
+  ```bash
+  MCP_WS_PING_INTERVAL=30
+  MCP_WS_PING_TIMEOUT=60
+  ```
+
+### 7. Bound HTTP Payload Size
+- Large ingestion payloads can exhaust resources. Set a ceiling that matches your deployment profile:
+  ```bash
+  MCP_HTTP_MAX_BODY_BYTES=1048576   # 1 MiB
+  ```
+- Requests exceeding the limit result in `413 Payload Too Large`, preventing oversized tool invocations from reaching the business logic.
+
+### 8. Set Up User Management
 ```python
 # create_admin.py
 import asyncio

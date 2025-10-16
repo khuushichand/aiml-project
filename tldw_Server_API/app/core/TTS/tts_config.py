@@ -10,7 +10,11 @@ from pathlib import Path
 #
 # Third-party Imports
 from loguru import logger
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    from pydantic import field_validator
+except Exception:
+    from pydantic import validator as field_validator  # type: ignore
 #
 # Local Imports
 from .adapters.base import AudioFormat
@@ -39,7 +43,8 @@ class ProviderConfig(BaseModel):
     auto_download: bool = True
     extra_params: Dict[str, Any] = Field(default_factory=dict)
     
-    @validator('api_key', pre=True)
+    @field_validator('api_key', mode='before')
+    @classmethod
     def resolve_api_key(cls, v):
         """Resolve API key from environment variables"""
         if v and v.startswith('${') and v.endswith('}'):

@@ -208,6 +208,36 @@ class PGVectorAdapter(VectorStoreAdapter):
             cur.close()
         await asyncio.get_event_loop().run_in_executor(None, _batch)
 
+    async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
+        """Delete rows matching a JSONB metadata filter; returns affected row count."""
+        tbl = self._sanitize_collection(collection_name)
+        if filter and isinstance(filter, dict) and len(filter) > 0:
+            where_sql, params = self._build_where_from_filter(filter)
+        else:
+            # No-op when filter is empty
+            return 0
+        def _run(pool, single, ef):
+            ctx = pool if pool is not None else single
+            with ctx as conn:
+                cur = conn.cursor()
+                try:
+                    try:
+                        cur.execute(f"SET hnsw.ef_search = {int(ef)}")
+                    except Exception:
+                        pass
+                    cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))
+                    rc = getattr(cur, 'rowcount', 0)
+                    conn.commit()
+                    return int(rc) if rc is not None else 0
+                finally:
+                    try: cur.close()
+                    except Exception: pass
+        rc = await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+        try:
+            return int(rc)
+        except Exception:
+            return 0
+
     # Adapter-specific helper: list vectors with pagination
     def _build_where_from_filter(self, filt: Dict[str, Any]) -> Tuple[str, List[Any]]:
         # Prefer JSON containment for simple equality maps

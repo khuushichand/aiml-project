@@ -380,6 +380,8 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                                 regd.set_gauge("prompt_studio.jobs.duration_p50_seconds", pct(0.5), labels)
                                 regd.set_gauge("prompt_studio.jobs.duration_p90_seconds", pct(0.9), labels)
                                 regd.set_gauge("prompt_studio.jobs.duration_p99_seconds", pct(0.99), labels)
+                        except Exception:
+                            pass
                 # Apply TTL policies if enabled (leader-elected per domain/queue on Postgres)
                 if ttl_enforce and (ttl_age or ttl_runtime):
                     try:

@@ -49,6 +49,18 @@ class StorageWorker(BaseWorker):
         )
 
         try:
+            # Determine target adapter (pgvector/chromadb) up-front
+            base_adapter = None
+            try:
+                base_adapter = VectorStoreFactory.create_from_settings(settings, user_id=str(message.user_id))
+            except Exception:
+                base_adapter = None
+            use_adapter_pg = False
+            try:
+                use_adapter_pg = bool(base_adapter and getattr(base_adapter, 'config', None) and base_adapter.config.store_type == VectorStoreType.PGVECTOR)  # type: ignore[attr-defined]
+            except Exception:
+                use_adapter_pg = False
+
             # Idempotency ledger short-circuit
             ledger_ttl = int(os.getenv("EMBEDDINGS_LEDGER_TTL_SECONDS", "86400") or 86400)
             id_key = (message.idempotency_key or "").strip() or None
@@ -113,7 +125,8 @@ class StorageWorker(BaseWorker):
             for embedding_data in message.embeddings:
                 ids.append(embedding_data.chunk_id)
                 embeddings.append(embedding_data.embedding)
-                documents.append("")  # ChromaDB requires documents, even if empty
+                # For Chroma we include an empty document string; safe no-op for pgvector
+                documents.append("")
                 metadatas.append(
                     {
                         **embedding_data.metadata,
@@ -130,21 +143,22 @@ class StorageWorker(BaseWorker):
             try:
                 if await self._is_media_soft_deleted(int(message.media_id)):
                     logger.warning(f"Media {message.media_id} is soft-deleted; removing vectors and completing job {message.job_id}.")
-                    # Remove any vectors for this media_id from the user-specific collection
-                    first_meta = metadatas[0] if metadatas else {}
-                    hint = {
-                        "embedder_name": first_meta.get("embedder_name", ""),
-                        "embedder_version": first_meta.get("embedder_version", ""),
-                    }
-                    collection = await self._get_or_create_collection(
-                        str(message.user_id), message.collection_name, hint
-                    )
-                    try:
-                        delete = getattr(collection, "delete", None)
-                        if callable(delete):
-                            delete(where={"media_id": str(message.media_id)})
-                    except Exception as _del_err:
-                        logger.error(f"Error removing vectors for soft-deleted media {message.media_id}: {_del_err}")
+                    if use_adapter_pg:
+                        # Adapter-based delete by filter (pgvector)
+                        try:
+                            inferred_dim = self._infer_embedding_dim(message.embeddings) if message.embeddings else int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
+                            adapter = await self._get_adapter_for_user(str(message.user_id), inferred_dim)
+                            await adapter.delete_by_filter(message.collection_name, {"media_id": str(message.media_id)})  # type: ignore[attr-defined]
+                        except Exception as _adel_err:
+                            logger.error(f"Adapter delete for soft-deleted media {message.media_id} failed: {_adel_err}")
+                    else:
+                        # Prefer adapter delete_by_filter for Chroma as well
+                        try:
+                            inferred_dim = self._infer_embedding_dim(message.embeddings) if message.embeddings else int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
+                            adapter = await self._get_adapter_for_user(str(message.user_id), inferred_dim)
+                            await adapter.delete_by_filter(message.collection_name, {"media_id": str(message.media_id)})  # type: ignore[attr-defined]
+                        except Exception as _del_err:
+                            logger.error(f"Adapter delete_by_filter for soft-deleted media {message.media_id} failed: {_del_err}")
                     await self._update_job_status(message.job_id, JobStatus.COMPLETED)
                     # Update ledger to completed for idempotency
                     try:
@@ -169,92 +183,102 @@ class StorageWorker(BaseWorker):
                 # Non-fatal: if DB unavailable, proceed with normal store path
                 pass
 
-            # Ensure collection via helper (for test compatibility)
-            # Provide embedder/version metadata hint on first creation
+            # Prepare adapter/collection and enforce metadata/dimension
             first_meta = metadatas[0] if metadatas else {}
             cur_name = str(first_meta.get('embedder_name') or first_meta.get('model_provider') or '')
             cur_ver = str(first_meta.get('embedder_version') or first_meta.get('model_used') or '')
-            col_meta_hint = {"embedder_name": cur_name, "embedder_version": cur_ver} if (cur_name or cur_ver) else None
-            # Include embedding dimension in metadata hint when available
             try:
                 inferred_dim = self._infer_embedding_dim(message.embeddings) if message.embeddings else None
             except Exception:
                 inferred_dim = None
-            if inferred_dim:
-                cm = dict(col_meta_hint or {})
-                cm["embedding_dimension"] = int(inferred_dim)
-            else:
-                cm = col_meta_hint
-            collection = await self._get_or_create_collection(
-                str(message.user_id), message.collection_name, cm
-            )
 
-            # Enforce embedder/version policy using collection metadata when available
-            try:
-                coll_meta = getattr(collection, 'metadata', None) or {}
-                # If collection lacks embedder metadata, set it now (best-effort)
-                if (not coll_meta.get('embedder_name') or not coll_meta.get('embedder_version')) and (cur_name or cur_ver):
-                    try:
-                        modify = getattr(collection, 'modify', None)
-                        if callable(modify):
-                            modify(metadata={"embedder_name": cur_name, "embedder_version": cur_ver})
-                            # refresh local view
-                            coll_meta = getattr(collection, 'metadata', coll_meta)
-                    except Exception:
-                        pass
-                if coll_meta and isinstance(coll_meta, dict):
-                    col_name = str(coll_meta.get('embedder_name') or '')
-                    col_ver = str(coll_meta.get('embedder_version') or '')
-                    if (col_name and col_ver) and (col_name != cur_name or col_ver != cur_ver):
-                        # Schedule re-embed request sidecar
+            if use_adapter_pg:
+                # Adapter-backed path (pgvector)
+                target_dim = int(inferred_dim) if inferred_dim else int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
+                adapter = await self._get_adapter_for_user(str(message.user_id), target_dim)
+                # Ensure collection/table exists with expected dim and tag metadata stored at collection level (best-effort)
+                try:
+                    meta = {"embedding_dimension": int(target_dim)}
+                    if cur_name or cur_ver:
+                        meta.update({"embedder_name": cur_name, "embedder_version": cur_ver})
+                    await adapter.create_collection(message.collection_name, metadata=meta)
+                except Exception as _c_err:
+                    logger.debug(f"Adapter create_collection warning: {_c_err}")
+            else:
+                # Chroma collection path (existing behavior)
+                col_meta_hint = {"embedder_name": cur_name, "embedder_version": cur_ver} if (cur_name or cur_ver) else None
+                cm = dict(col_meta_hint or {})
+                if inferred_dim:
+                    cm["embedding_dimension"] = int(inferred_dim)
+                collection = await self._get_or_create_collection(
+                    str(message.user_id), message.collection_name, cm
+                )
+                # Enforce embedder/version policy using collection metadata when available
+                try:
+                    coll_meta = getattr(collection, 'metadata', None) or {}
+                    # If collection lacks embedder metadata, set it now (best-effort)
+                    if (not coll_meta.get('embedder_name') or not coll_meta.get('embedder_version')) and (cur_name or cur_ver):
                         try:
-                            if self.redis_client:
-                                await self.redis_client.xadd('embeddings:reembed:requests', {
-                                    'user_id': str(message.user_id),
-                                    'collection': message.collection_name,
-                                    'current_embedder_name': col_name,
-                                    'current_embedder_version': col_ver,
-                                    'new_embedder_name': cur_name,
-                                    'new_embedder_version': cur_ver,
-                                    'job_id': message.job_id,
-                                })
+                            modify = getattr(collection, 'modify', None)
+                            if callable(modify):
+                                modify(metadata={"embedder_name": cur_name, "embedder_version": cur_ver})
+                                # refresh local view
+                                coll_meta = getattr(collection, 'metadata', coll_meta)
                         except Exception:
                             pass
-                        if os.getenv('EMBEDDER_ENFORCE_NO_MIX', 'false').lower() in ('1','true','yes'):
-                            raise RuntimeError('EMBEDDER_MISMATCH: collection uses different embedder/version')
-            except Exception as _embedder_check_err:
-                logger.debug(f"Embedder/version policy check warning: {_embedder_check_err}")
+                    if coll_meta and isinstance(coll_meta, dict):
+                        col_name = str(coll_meta.get('embedder_name') or '')
+                        col_ver = str(coll_meta.get('embedder_version') or '')
+                        if (col_name and col_ver) and (col_name != cur_name or col_ver != cur_ver):
+                            # Schedule re-embed request sidecar
+                            try:
+                                if self.redis_client:
+                                    await self.redis_client.xadd('embeddings:reembed:requests', {
+                                        'user_id': str(message.user_id),
+                                        'collection': message.collection_name,
+                                        'current_embedder_name': col_name,
+                                        'current_embedder_version': col_ver,
+                                        'new_embedder_name': cur_name,
+                                        'new_embedder_version': cur_ver,
+                                        'job_id': message.job_id,
+                                    })
+                            except Exception:
+                                pass
+                            if os.getenv('EMBEDDER_ENFORCE_NO_MIX', 'false').lower() in ('1','true','yes'):
+                                raise RuntimeError('EMBEDDER_MISMATCH: collection uses different embedder/version')
+                except Exception as _embedder_check_err:
+                    logger.debug(f"Embedder/version policy check warning: {_embedder_check_err}")
 
-            # Validate collection embedding dimension strictly and surface hard error on mismatch
-            try:
-                target_dim = int(inferred_dim) if inferred_dim else None
-                if target_dim:
-                    cmeta = getattr(collection, 'metadata', {}) or {}
-                    expected = None
-                    if isinstance(cmeta, dict) and cmeta.get('embedding_dimension'):
-                        try:
-                            expected = int(cmeta.get('embedding_dimension'))
-                        except Exception:
-                            expected = None
-                    if expected is None and hasattr(collection, 'get') and callable(getattr(collection, 'get')):
-                        # Sample one vector to infer existing dim when metadata absent
-                        try:
-                            sample = collection.get(limit=1, include=['embeddings'])
-                            emb = None
-                            if isinstance(sample, dict):
-                                embs = sample.get('embeddings')
-                                if embs and isinstance(embs, list) and len(embs) > 0:
-                                    emb = embs[0]
-                            if emb and hasattr(emb, '__len__'):
-                                expected = int(len(emb))
-                        except Exception:
-                            expected = None
-                    if expected is not None and expected != target_dim:
-                        logger.error(f"Embedding dimension mismatch for collection '{message.collection_name}': expected {expected}, new {target_dim}")
-                        raise RuntimeError("EMBEDDING_DIMENSION_MISMATCH")
-            except Exception:
-                # Fail fast per requirement
-                raise
+                # Validate collection embedding dimension strictly and surface hard error on mismatch
+                try:
+                    target_dim = int(inferred_dim) if inferred_dim else None
+                    if target_dim:
+                        cmeta = getattr(collection, 'metadata', {}) or {}
+                        expected = None
+                        if isinstance(cmeta, dict) and cmeta.get('embedding_dimension'):
+                            try:
+                                expected = int(cmeta.get('embedding_dimension'))
+                            except Exception:
+                                expected = None
+                        if expected is None and hasattr(collection, 'get') and callable(getattr(collection, 'get')):
+                            # Sample one vector to infer existing dim when metadata absent
+                            try:
+                                sample = collection.get(limit=1, include=['embeddings'])
+                                emb = None
+                                if isinstance(sample, dict):
+                                    embs = sample.get('embeddings')
+                                    if embs and isinstance(embs, list) and len(embs) > 0:
+                                        emb = embs[0]
+                                if emb and hasattr(emb, '__len__'):
+                                    expected = int(len(emb))
+                            except Exception:
+                                expected = None
+                        if expected is not None and expected != target_dim:
+                            logger.error(f"Embedding dimension mismatch for collection '{message.collection_name}': expected {expected}, new {target_dim}")
+                            raise RuntimeError("EMBEDDING_DIMENSION_MISMATCH")
+                except Exception:
+                    # Fail fast per requirement
+                    raise
 
             # Store in batches with adaptive sizing based on observed latency
             import time as _time
@@ -272,13 +296,24 @@ class StorageWorker(BaseWorker):
                         "emb.job_id": str(message.job_id),
                     },
                 ):
-                    await self._store_batch(
-                        collection,
-                        ids=ids[i:batch_end],
-                        embeddings=embeddings[i:batch_end],
-                        documents=documents[i:batch_end],
-                        metadatas=metadatas[i:batch_end],
-                    )
+                    if use_adapter_pg:
+                        # Adapter upsert path
+                        await adapter.upsert_vectors(
+                            collection_name=message.collection_name,
+                            ids=ids[i:batch_end],
+                            vectors=embeddings[i:batch_end],
+                            documents=documents[i:batch_end],
+                            metadatas=metadatas[i:batch_end],
+                        )
+                    else:
+                        # Chroma collection path
+                        await self._store_batch(
+                            collection,
+                            ids=ids[i:batch_end],
+                            embeddings=embeddings[i:batch_end],
+                            documents=documents[i:batch_end],
+                            metadatas=metadatas[i:batch_end],
+                        )
                 t1 = _time.perf_counter()
                 # Update progress
                 progress = 75 + (25 * batch_end / len(ids))

@@ -9,7 +9,7 @@ import json
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request, Body, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
@@ -92,6 +92,11 @@ MAX_STEP_CONFIG_BYTES = 32 * 1024
 
 def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     import json
+    # Optional JSON Schema validator
+    try:
+        import jsonschema  # type: ignore
+    except Exception:
+        jsonschema = None  # type: ignore
     # size
     size = len(json.dumps(defn, separators=(",", ":")))
     if size > MAX_DEFINITION_BYTES:
@@ -103,6 +108,101 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     if len(steps) > MAX_STEPS:
         raise HTTPException(status_code=422, detail="Too many steps")
     reg = StepTypeRegistry()
+    # Build a schema map (keep in sync with list_step_types())
+    step_schemas: Dict[str, Dict[str, Any]] = {
+        "prompt": {
+            "type": "object",
+            "properties": {
+                "template": {"type": "string"},
+                "model": {"type": "string"},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 300},
+                "retry": {"type": "integer", "minimum": 0, "default": 0},
+            },
+            "required": ["template"],
+            "additionalProperties": True,
+        },
+        "branch": {
+            "type": "object",
+            "properties": {
+                "condition": {"type": "string"},
+                "true_next": {"type": "string"},
+                "false_next": {"type": "string"}
+            },
+            "required": ["condition"],
+            "additionalProperties": False,
+        },
+        "map": {
+            "type": "object",
+            "properties": {
+                "items": {"type": ["array", "string"]},
+                "step": {"type": "object"},
+                "concurrency": {"type": "integer", "minimum": 1, "default": 4}
+            },
+            "required": ["items", "step"],
+            "additionalProperties": True,
+        },
+        "rag_search": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer", "minimum": 1, "default": 5},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 60},
+            },
+            "required": ["query"],
+            "additionalProperties": True,
+        },
+        "webhook": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "include_outputs": {"type": "boolean", "default": True},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+            },
+            "required": [],
+            "additionalProperties": True,
+        },
+        "tts": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string"},
+                "model": {"type": "string"},
+                "voice": {"type": "string"},
+                "response_format": {"type": "string"},
+                "speed": {"type": "number"},
+                "provider": {"type": "string"},
+                "output_filename_template": {"type": "string"},
+                "provider_options": {"type": "object"},
+                "attach_download_link": {"type": "boolean"},
+                "save_transcript": {"type": "boolean"},
+                "post_process": {"type": "object"},
+            },
+            "required": [],
+            "additionalProperties": True,
+        },
+        "delay": {
+            "type": "object",
+            "properties": {"milliseconds": {"type": "integer", "minimum": 1, "default": 1000}},
+            "required": ["milliseconds"],
+            "additionalProperties": False,
+        },
+        "log": {
+            "type": "object",
+            "properties": {"message": {"type": "string"}, "level": {"type": "string"}},
+            "required": ["message"],
+            "additionalProperties": True,
+        },
+        "process_media": {"type": "object", "additionalProperties": True},
+        "rss_fetch": {"type": "object", "additionalProperties": True},
+        "atom_fetch": {"type": "object", "additionalProperties": True},
+        "embed": {"type": "object", "additionalProperties": True},
+        "translate": {"type": "object", "additionalProperties": True},
+        "stt_transcribe": {"type": "object", "additionalProperties": True},
+        "notify": {"type": "object", "additionalProperties": True},
+        "diff_change_detector": {"type": "object", "additionalProperties": True},
+        "policy_check": {"type": "object", "additionalProperties": True},
+        "wait_for_human": {"type": "object", "additionalProperties": True},
+        "wait_for_approval": {"type": "object", "additionalProperties": True},
+    }
     for s in steps:
         t = (s.get("type") or "").strip()
         if not reg.has(t):
@@ -114,6 +214,119 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             raise HTTPException(status_code=422, detail="Invalid step config JSON")
         if cfg_bytes > MAX_STEP_CONFIG_BYTES:
             raise HTTPException(status_code=413, detail=f"Step '{s.get('id','')}' config too large")
+        # Optional schema validation when jsonschema is available
+        if jsonschema is not None:
+            schema = step_schemas.get(t)
+            if schema:
+                try:
+                    jsonschema.validate(cfg, schema)  # type: ignore[attr-defined]
+                except Exception as e:  # pragma: no cover - depends on optional dep
+                    raise HTTPException(status_code=422, detail=f"Invalid config for step '{s.get('id', t)}': {e}")
+
+    # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
+    _validate_dag(defn)
+
+
+def _validate_dag(defn: Dict[str, Any]) -> None:
+    steps = defn.get("steps") or []
+    if not isinstance(steps, list):
+        return
+    # Build id map and edges from explicit routing (on_success, on_failure, branch true/false)
+    id_to_idx = {}
+    for i, s in enumerate(steps):
+        sid = str(s.get("id") or f"step_{i+1}")
+        id_to_idx[sid] = i
+    edges: Dict[str, list[str]] = {}
+    for i, s in enumerate(steps):
+        sid = str(s.get("id") or f"step_{i+1}")
+        edges.setdefault(sid, [])
+        # explicit on_success
+        try:
+            succ = str(s.get("on_success") or "").strip()
+            if succ:
+                if succ not in id_to_idx:
+                    raise HTTPException(status_code=422, detail=f"Step '{sid}' on_success points to unknown step '{succ}'")
+                edges[sid].append(succ)
+        except Exception:
+            pass
+        # explicit on_failure
+        try:
+            failn = str(s.get("on_failure") or "").strip()
+            if failn:
+                if failn not in id_to_idx:
+                    raise HTTPException(status_code=422, detail=f"Step '{sid}' on_failure points to unknown step '{failn}'")
+                edges[sid].append(failn)
+        except Exception:
+            pass
+        # branch-specific
+        try:
+            if str(s.get("type") or "").strip() == "branch":
+                cfg = s.get("config") or {}
+                tn = str(cfg.get("true_next") or "").strip()
+                fn = str(cfg.get("false_next") or "").strip()
+                for nxt in [tn, fn]:
+                    if nxt:
+                        if nxt not in id_to_idx:
+                            raise HTTPException(status_code=422, detail=f"Step '{sid}' branch targets unknown step '{nxt}'")
+                        edges[sid].append(nxt)
+        except Exception:
+            pass
+
+    # Detect cycles among explicit edges (DFS)
+    visiting: Dict[str, bool] = {}
+    visited: Dict[str, bool] = {}
+    path: list[str] = []
+
+    def _dfs(u: str) -> Optional[list[str]]:
+        visiting[u] = True
+        path.append(u)
+        for v in edges.get(u, []):
+            if visiting.get(v):
+                # cycle detected; extract cycle path
+                if v in path:
+                    start = path.index(v)
+                    cyc = path[start:] + [v]
+                else:
+                    cyc = path + [v]
+                return cyc
+            if not visited.get(v):
+                cyc = _dfs(v)
+                if cyc:
+                    return cyc
+        visiting[u] = False
+        visited[u] = True
+        path.pop()
+        return None
+
+    for node in list(id_to_idx.keys()):
+        if not visited.get(node):
+            cyc = _dfs(node)
+            if cyc:
+                # Provide useful diagnostics
+                pretty = " -> ".join(cyc)
+                raise HTTPException(status_code=422, detail=f"Workflow contains an explicit cycle: {pretty}")
+
+
+def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> Dict[str, str]:
+    """Return a dict including both legacy X-RateLimit-* and RFC-style RateLimit-* headers.
+
+    RateLimit-Reset is provided as delta-seconds; X-RateLimit-Reset remains epoch seconds.
+    """
+    import time as _time
+    now = int(_time.time())
+    delta = max(0, int(reset_epoch) - now)
+    headers = {
+        # RFC-ish
+        "RateLimit-Limit": str(limit),
+        "RateLimit-Remaining": str(max(0, remaining)),
+        "RateLimit-Reset": str(delta),
+        "Retry-After": str(delta),
+        # Legacy
+        "X-RateLimit-Limit": str(limit),
+        "X-RateLimit-Remaining": str(max(0, remaining)),
+        "X-RateLimit-Reset": str(reset_epoch),
+    }
+    return headers
 
 
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=201)
@@ -121,6 +334,8 @@ async def create_definition(
     body: WorkflowDefinitionCreate,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ):
     _validate_definition_payload(body.model_dump())
     # Basic step type validation is deferred to engine in v0.1; store as-is
@@ -134,6 +349,29 @@ async def create_definition(
         tags=body.tags,
         definition=body.model_dump(),
     )
+    # Audit create
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else "/api/v1/workflows",
+                method=(request.method if request else "POST"),
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.API_REQUEST,
+                category=AuditEventCategory.API_CALL,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="workflow",
+                resource_id=str(workflow_id),
+                action="create",
+                metadata={"name": body.name, "version": body.version},
+            )
+    except Exception:
+        pass
     return WorkflowDefinitionResponse(
         id=workflow_id,
         name=body.name,
@@ -168,10 +406,19 @@ async def create_new_version(
     body: WorkflowDefinitionCreate,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ):
     # Validate payload and create a new immutable version
     _validate_definition_payload(body.model_dump())
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    # Owner/admin check
+    d0 = db.get_definition(workflow_id)
+    if not d0 or d0.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(d0.owner_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Workflow not found")
     wid = db.create_definition(
         tenant_id=tenant_id,
         name=body.name,
@@ -182,6 +429,29 @@ async def create_new_version(
         tags=body.tags,
         definition=body.model_dump(),
     )
+    # Audit new version
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else f"/api/v1/workflows/{workflow_id}/versions",
+                method=(request.method if request else "POST"),
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.API_REQUEST,
+                category=AuditEventCategory.API_CALL,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="workflow",
+                resource_id=str(wid),
+                action="create_version",
+                metadata={"base_id": workflow_id, "version": body.version},
+            )
+    except Exception:
+        pass
     return WorkflowDefinitionResponse(id=wid, name=body.name, version=body.version, description=body.description, tags=body.tags, is_active=True)
 
 
@@ -190,13 +460,41 @@ async def delete_definition(
     workflow_id: int,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ):
     d = db.get_definition(workflow_id)
-    if not d or d.tenant_id != str(getattr(current_user, "tenant_id", "default")):
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if not d or d.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     ok = db.soft_delete_definition(workflow_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    # Audit delete
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else f"/api/v1/workflows/{workflow_id}",
+                method=(request.method if request else "DELETE"),
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                category=AuditEventCategory.DATA_ACCESS,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="workflow",
+                resource_id=str(workflow_id),
+                action="delete",
+            )
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -214,12 +512,19 @@ async def run_saved(
     d = db.get_definition(workflow_id)
     if not d:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    # Idempotency: reuse existing run if key matches
+    # Enforce owner or admin for running saved workflow definitions
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if d.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(d.owner_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    # Idempotency: reuse existing run if key matches
     if body and body.idempotency_key:
         existing = db.get_run_by_idempotency(tenant_id=tenant_id, user_id=str(current_user.id), idempotency_key=body.idempotency_key)
         if existing:
             return WorkflowRunResponse(
+                id=existing.run_id,
                 run_id=existing.run_id,
                 workflow_id=existing.workflow_id,
                 user_id=str(existing.user_id) if getattr(existing, 'user_id', None) is not None else None,
@@ -252,13 +557,13 @@ async def run_saved(
             c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
             if c_min >= burst_limit:
                 reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
-                headers = {"X-RateLimit-Limit": str(burst_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}
+                headers = _build_rate_limit_headers(burst_limit, 0, reset)
                 raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
             if c_day >= daily_limit:
                 # Reset at next UTC midnight
                 tomorrow = (now + _dt.timedelta(days=1)).date()
                 reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0))
-                headers = {"X-RateLimit-Limit": str(daily_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(reset_dt.timestamp()))}
+                headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
                 raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
     except HTTPException:
         raise
@@ -291,32 +596,40 @@ async def run_saved(
                     fe = fe.strip().lower() in {"1", "true", "yes", "on"}
                 tmpl = str(cfg.get("template", ""))
                 if fe or tmpl.strip().lower() == "bad":
-                    # Append minimal events and step failure
-                    db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_started", {"mode": mode})
-                    step_run_id = f"{run_id}:{s0.get('id','s1')}:{int(__import__('time').time()*1000)}"
+                    # If an on_failure route is defined and refers to a valid step, let the engine handle it
                     try:
-                        db.create_step_run(step_run_id=step_run_id, run_id=run_id, step_id=s0.get('id','s1'), name=s0.get('name') or s0.get('id','s1'), step_type='prompt', inputs={"config": cfg})
+                        failure_next = str(s0.get("on_failure") or "").strip()
+                        id_map = {str((st.get('id') or f'step_{i+1}')): True for i, st in enumerate(steps)}
+                        has_failure_route = bool(failure_next and id_map.get(failure_next))
                     except Exception:
-                        pass
-                    db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "step_started", {"step_id": s0.get('id','s1'), "type": "prompt"})
-                    try:
-                        db.complete_step_run(step_run_id=step_run_id, status="failed", outputs={}, error="forced_error")
-                    except Exception:
-                        pass
-                    db.update_run_status(run_id, status="failed", status_reason="forced_error", ended_at=_utcnow_iso(), error="forced_error")
-                    db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_failed", {"error": "forced_error"})
-                    run = db.get_run(run_id)
-                    return WorkflowRunResponse(
-                        run_id=run.run_id,
-                        workflow_id=run.workflow_id,
-                        user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
-                        status=run.status,
-                        status_reason=run.status_reason,
-                        inputs=json.loads(run.inputs_json or "{}"),
-                        outputs=json.loads(run.outputs_json or "null") if run.outputs_json else None,
-                        error=run.error,
-                        definition_version=run.definition_version,
-                    )
+                        has_failure_route = False
+                    if not has_failure_route:
+                        # Append minimal events and step failure (fast-fail)
+                        db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_started", {"mode": mode})
+                        step_run_id = f"{run_id}:{s0.get('id','s1')}:{int(__import__('time').time()*1000)}"
+                        try:
+                            db.create_step_run(step_run_id=step_run_id, run_id=run_id, step_id=s0.get('id','s1'), name=s0.get('name') or s0.get('id','s1'), step_type='prompt', inputs={"config": cfg})
+                        except Exception:
+                            pass
+                        db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "step_started", {"step_id": s0.get('id','s1'), "type": "prompt"})
+                        try:
+                            db.complete_step_run(step_run_id=step_run_id, status="failed", outputs={}, error="forced_error")
+                        except Exception:
+                            pass
+                        db.update_run_status(run_id, status="failed", status_reason="forced_error", ended_at=_utcnow_iso(), error="forced_error")
+                        db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_failed", {"error": "forced_error"})
+                        run = db.get_run(run_id)
+                        return WorkflowRunResponse(
+                            run_id=run.run_id,
+                            workflow_id=run.workflow_id,
+                            user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
+                            status=run.status,
+                            status_reason=run.status_reason,
+                            inputs=json.loads(run.inputs_json or "{}"),
+                            outputs=json.loads(run.outputs_json or "null") if run.outputs_json else None,
+                            error=run.error,
+                            definition_version=run.definition_version,
+                        )
     except Exception:
         pass
     engine = WorkflowEngine(db)
@@ -394,6 +707,20 @@ async def run_saved(
     "/runs",
     response_model=WorkflowRunListResponse,
     dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    openapi_extra={
+        "x-codeSamples": [
+            {
+                "lang": "bash",
+                "label": "Offset pagination",
+                "source": "curl -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/runs?limit=25&offset=0&order_by=created_at&order=desc\""
+            },
+            {
+                "lang": "bash",
+                "label": "Cursor pagination",
+                "source": "# First page\nRESP=$(curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/runs?limit=25&order_by=created_at&order=desc\")\nCUR=$(echo \"$RESP\" | jq -r '.next_cursor')\n# Next page using actual returned token\n[ \"$CUR\" != \"null\" ] && curl -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/runs?limit=25&cursor=$CUR\" || echo 'No next_cursor returned'"
+            }
+        ]
+    }
 )
 async def list_runs(
     status: Optional[List[str]] = Query(None, description="Filter by status (repeatable)"),
@@ -406,6 +733,7 @@ async def list_runs(
     order: str = Query("desc", description="asc|desc"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    cursor: Optional[str] = Query(None, description="Opaque continuation token for pagination (overrides offset)"),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
     request: Request = None,
@@ -473,6 +801,31 @@ async def list_runs(
         except Exception:
             pass
 
+    # Cursor parsing (base64url-encoded JSON)
+    cursor_ts = None
+    cursor_id = None
+    cur_order_by = (order_by or "created_at")
+    cur_order_desc = (str(order or "desc").lower() != "asc")
+    if cursor:
+        try:
+            import base64, json as _json
+            raw = base64.urlsafe_b64decode(cursor.encode("utf-8") + b"==").decode("utf-8")
+            tok = _json.loads(raw)
+            # Validate and adopt settings from token
+            token_ob = str(tok.get("order_by") or cur_order_by)
+            token_od = bool(tok.get("order_desc") if tok.get("order_desc") is not None else cur_order_desc)
+            token_ts = tok.get("last_ts")
+            token_id = tok.get("last_id")
+            if token_ts and token_id:
+                cursor_ts = str(token_ts)
+                cursor_id = str(token_id)
+                cur_order_by = token_ob
+                cur_order_desc = token_od
+                # When using cursor, ignore provided offset
+                offset = 0
+        except Exception:
+            pass
+
     rows = db.list_runs(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -480,10 +833,12 @@ async def list_runs(
         workflow_id=workflow_id,
         created_after=created_after,
         created_before=created_before,
-        limit=limit + 1,  # fetch one extra to decide next_offset
+        cursor_ts=cursor_ts,
+        cursor_id=cursor_id,
+        limit=limit + 1,  # fetch one extra to decide next token
         offset=offset,
-        order_by=(order_by or "created_at"),
-        order_desc=(str(order or "desc").lower() != "asc"),
+        order_by=cur_order_by,
+        order_desc=cur_order_desc,
     )
     has_more = len(rows) > limit
     if has_more:
@@ -503,7 +858,29 @@ async def list_runs(
                 ended_at=r.ended_at,
             )
         )
-    return WorkflowRunListResponse(runs=items, next_offset=(offset + limit) if has_more else None)
+    # Build next_cursor if we have more
+    next_cursor = None
+    if has_more and rows:
+        try:
+            import base64, json as _json
+            last = rows[-1]
+            last_ts = getattr(last, cur_order_by) or last.created_at
+            token_obj = {
+                "order_by": cur_order_by,
+                "order_desc": bool(cur_order_desc),
+                "last_ts": last_ts,
+                "last_id": last.run_id,
+            }
+            raw = _json.dumps(token_obj, default=str).encode("utf-8")
+            next_cursor = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+        except Exception:
+            next_cursor = None
+
+    return WorkflowRunListResponse(
+        runs=items,
+        next_offset=(offset + limit) if (has_more and cursor_ts is None) else None,
+        next_cursor=next_cursor,
+    )
 
 
 @router.post("/run", response_model=WorkflowRunResponse)
@@ -528,6 +905,7 @@ async def run_adhoc(
         existing = db.get_run_by_idempotency(tenant_id=tenant_id, user_id=str(current_user.id), idempotency_key=body.idempotency_key)
         if existing:
             return WorkflowRunResponse(
+                id=existing.run_id,
                 run_id=existing.run_id,
                 workflow_id=existing.workflow_id,
                 user_id=str(existing.user_id) if getattr(existing, 'user_id', None) is not None else None,
@@ -560,12 +938,12 @@ async def run_adhoc(
             c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
             if c_min >= burst_limit:
                 reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
-                headers = {"X-RateLimit-Limit": str(burst_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}
+                headers = _build_rate_limit_headers(burst_limit, 0, reset)
                 raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
             if c_day >= daily_limit:
                 tomorrow = (now + _dt.timedelta(days=1)).date()
                 reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0))
-                headers = {"X-RateLimit-Limit": str(daily_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(reset_dt.timestamp()))}
+                headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
                 raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
     except HTTPException:
         raise
@@ -643,6 +1021,7 @@ async def run_adhoc(
     except Exception:
         pass
     return WorkflowRunResponse(
+        id=run.run_id,
         run_id=run.run_id,
         workflow_id=run.workflow_id,
         user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
@@ -718,6 +1097,7 @@ async def get_run(
             pass
         raise HTTPException(status_code=404, detail="Run not found")
     return WorkflowRunResponse(
+        id=run.run_id,
         run_id=run.run_id,
         workflow_id=run.workflow_id,
         user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
@@ -739,6 +1119,11 @@ async def get_run(
                 "lang": "bash",
                 "label": "cURL",
                 "source": "curl -H 'X-API-KEY: $API_KEY' 'http://127.0.0.1:8000/api/v1/workflows/runs/{run_id}/events?limit=100'",
+            },
+            {
+                "lang": "bash",
+                "label": "cURL (cursor)",
+                "source": "# First page\nRESP=$(curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/runs/{run_id}/events?limit=50\")\nNEXT=$(curl -sSI -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/runs/{run_id}/events?limit=50\" | awk -F': ' '/^Next-Cursor:/ {print $2}' | tr -d '\r')\n# Next page using the Next-Cursor header value\n[ -n \"$NEXT\" ] && curl -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/runs/{run_id}/events?limit=50&cursor=$NEXT\" || echo 'No Next-Cursor returned'"
             }
         ]
     },
@@ -746,9 +1131,11 @@ async def get_run(
 )
 async def get_run_events(
     run_id: str,
-    since: Optional[int] = Query(None),
+    since: Optional[int] = Query(None, description="Return events with seq strictly greater than this value"),
     limit: int = Query(500, ge=1, le=1000),
     types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
+    cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),
+    response: Response = None,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
@@ -764,6 +1151,17 @@ async def get_run_events(
         raise HTTPException(status_code=404, detail="Run not found")
     # Normalize types to lower-case for consistency with UI filter chips
     types_norm = [t.strip() for t in (types or []) if str(t).strip()]
+    # Cursor token overrides since
+    if cursor:
+        try:
+            import base64, json as _json
+            pad = "=" * (-len(cursor) % 4)
+            raw = base64.urlsafe_b64decode((cursor + pad).encode("utf-8")).decode("utf-8")
+            tok = _json.loads(raw)
+            if isinstance(tok.get("last_seq"), int):
+                since = int(tok["last_seq"])  # seek after this seq
+        except Exception:
+            pass
     events = db.get_events(run_id, since=since, limit=limit, types=types_norm if types_norm else None)
     out: List[EventResponse] = []
     for e in events:
@@ -775,7 +1173,199 @@ async def get_run_events(
                 created_at=e["created_at"],
             )
         )
+    # Build next continuation token when we returned a full page
+    if response is not None and len(out) == int(limit):
+        try:
+            last_seq = int(out[-1].event_seq) if hasattr(out[-1], "event_seq") else int(events[-1]["event_seq"])  # type: ignore
+        except Exception:
+            try:
+                last_seq = int(events[-1]["event_seq"]) if events else None  # type: ignore
+            except Exception:
+                last_seq = None
+        if last_seq is not None:
+            import base64, json as _json
+            token = {"last_seq": last_seq}
+            raw = _json.dumps(token).encode("utf-8")
+            nxt = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+            try:
+                response.headers["Next-Cursor"] = nxt
+            except Exception:
+                pass
     return out
+
+
+@router.get(
+    "/runs/{run_id}/webhooks/deliveries",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
+async def get_run_webhook_deliveries(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    """Return webhook delivery history for a run (derived from events)."""
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
+    events = db.get_events(run_id, types=["webhook_delivery"]) or []
+    deliveries = []
+    for e in events:
+        p = e.get("payload_json") or {}
+        deliveries.append({
+            "event_seq": e.get("event_seq"),
+            "created_at": e.get("created_at"),
+            "host": p.get("host"),
+            "status": p.get("status"),
+            "code": p.get("code"),
+        })
+    return {"deliveries": deliveries}
+
+
+@router.get(
+    "/webhooks/dlq",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+)
+async def list_webhook_dlq(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    """Admin: list webhook DLQ entries (all tenants)."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        # Hide presence
+        raise HTTPException(status_code=404, detail="Not found")
+    rows = db.list_webhook_dlq_all(limit=limit, offset=offset)
+    out = []
+    for r in rows:
+        try:
+            body = json.loads(r.get("body_json") or "{}")
+        except Exception:
+            body = {}
+        out.append({
+            "id": r.get("id"),
+            "tenant_id": r.get("tenant_id"),
+            "run_id": r.get("run_id"),
+            "url": r.get("url"),
+            "attempts": r.get("attempts"),
+            "next_attempt_at": r.get("next_attempt_at"),
+            "last_error": r.get("last_error"),
+            "created_at": r.get("created_at"),
+            "body": body,
+        })
+    return {"items": out, "limit": limit, "offset": offset, "count": len(out)}
+
+
+@router.post(
+    "/webhooks/dlq/{dlq_id}/replay",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+)
+async def replay_webhook_dlq(
+    dlq_id: int,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    """Admin: attempt immediate replay of a DLQ item.
+
+    Honors the same allow/deny and replay headers as the engine.
+    In TEST_MODE, if WORKFLOWS_TEST_REPLAY_SUCCESS=true, the entry is deleted without network.
+    """
+    if not bool(getattr(current_user, "is_admin", False)):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Find the entry
+    rows = db.list_webhook_dlq_all(limit=1, offset=0)
+    target = None
+    for r in rows:
+        if int(r.get("id")) == int(dlq_id):
+            target = r
+            break
+    if not target:
+        # Slow path: scan in batches (SQLite-friendly)
+        off = 0
+        while True:
+            batch = db.list_webhook_dlq_all(limit=200, offset=off)
+            if not batch:
+                break
+            for r in batch:
+                if int(r.get("id")) == int(dlq_id):
+                    target = r
+                    break
+            if target:
+                break
+            off += len(batch)
+    if not target:
+        raise HTTPException(status_code=404, detail="DLQ item not found")
+
+    url = str(target.get("url") or "")
+    tenant_id = str(target.get("tenant_id") or "default")
+    try:
+        body = json.loads(target.get("body_json") or "{}")
+    except Exception:
+        body = {}
+
+    # Policy
+    try:
+        from tldw_Server_API.app.core.Security.egress import is_webhook_url_allowed_for_tenant as _allow_webhook
+        if not _allow_webhook(url, tenant_id):
+            raise HTTPException(status_code=400, detail="Denied by egress policy")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    # Test-mode short-circuit
+    import os as _os
+    if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and _os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "").lower() in {"1", "true", "yes", "on"}:
+        try:
+            db.delete_webhook_dlq(dlq_id=dlq_id)
+        except Exception:
+            pass
+        return {"ok": True, "simulated": True}
+
+    # Attempt delivery with the same headers/signing as engine
+    try:
+        import httpx, time as _time, hmac, hashlib
+        secret = _os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
+        ts = str(int(_time.time()))
+        headers = {
+            "content-type": "application/json",
+            "X-Signature-Timestamp": ts,
+            "X-Webhook-ID": f"wf-dlq-{dlq_id}-{ts}",
+            "X-Workflows-Signature-Version": "v1",
+        }
+        raw = json.dumps(body)
+        if secret:
+            sig = hmac.new(secret.encode("utf-8"), f"{ts}.{raw}".encode("utf-8"), hashlib.sha256).hexdigest()
+            headers["X-Workflows-Signature"] = sig
+            headers["X-Hub-Signature-256"] = f"sha256={sig}"
+        timeout = float(_os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, data=raw, headers=headers)
+        if 200 <= int(resp.status_code) < 400:
+            try:
+                db.delete_webhook_dlq(dlq_id=dlq_id)
+            except Exception:
+                pass
+            return {"ok": True, "status_code": int(resp.status_code)}
+        else:
+            # Update attempts/backoff minimally
+            db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=f"status={resp.status_code}", next_attempt_at_iso=None)
+            return {"ok": False, "status_code": int(resp.status_code)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=str(e), next_attempt_at_iso=None)
+        except Exception:
+            pass
+        return {"ok": False, "error": str(e)}
 
 
 @router.get(
@@ -873,6 +1463,74 @@ async def get_run_artifacts_manifest(
     if verify:
         resp["integrity_summary"] = {"mismatch_count": mismatches}
     return resp
+
+
+class VerifyBatchItem(BaseModel):
+    artifact_id: str
+    expected_sha256: Optional[str] = None
+
+
+class VerifyBatchRequest(BaseModel):
+    items: List[VerifyBatchItem]
+
+
+@router.post(
+    "/runs/{run_id}/artifacts/verify-batch",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
+async def verify_artifacts_batch(
+    run_id: str,
+    body: VerifyBatchRequest,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    import hashlib as _h
+    from pathlib import Path as _P
+    results = []
+    for item in (body.items or []):
+        aid = str(item.artifact_id)
+        a = db.get_artifact(aid)
+        if not a:
+            results.append({"artifact_id": aid, "ok": False, "error": "not_found"})
+            continue
+        uri = str(a.get("uri") or "")
+        if not uri.startswith("file://"):
+            results.append({"artifact_id": aid, "ok": False, "error": "unsupported_uri"})
+            continue
+        fp = _P(uri[len("file://"):])
+        if not (fp.exists() and fp.is_file()):
+            results.append({"artifact_id": aid, "ok": False, "error": "file_missing"})
+            continue
+        try:
+            h = _h.sha256()
+            with fp.open("rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            calc = h.hexdigest()
+            recorded = str(a.get("checksum_sha256") or "").strip() or None
+            expected = str(item.expected_sha256 or "").strip() or recorded
+            mismatch = (expected is not None and calc != expected)
+            results.append({
+                "artifact_id": aid,
+                "ok": not mismatch,
+                "calculated": calc,
+                "expected": expected,
+                "recorded": recorded,
+            })
+        except Exception as e:
+            results.append({"artifact_id": aid, "ok": False, "error": str(e)})
+
+    return {"results": results}
 
 
 @router.get(
@@ -1018,7 +1676,53 @@ async def download_artifact(
     mime = art.get("mime_type") or _m.guess_type(str(p))[0] or "application/octet-stream"
     if allowed and not any(mime == a or (a.endswith("/*") and mime.startswith(a[:-1])) for a in allowed):
         raise HTTPException(status_code=415, detail=f"MIME not allowed: {mime}")
-    return FileResponse(str(p), filename=p.name, media_type=mime)
+    # Support Range requests (single range)
+    range_header = None
+    try:
+        range_header = request.headers.get("range") if request else None
+    except Exception:
+        range_header = None
+    if range_header and range_header.lower().startswith("bytes="):
+        try:
+            total = p.stat().st_size
+            rng = range_header.split("=", 1)[1]
+            start_str, end_str = (rng.split("-", 1) + [""])[:2]
+            if start_str:
+                start = int(start_str)
+                end = int(end_str) if end_str else total - 1
+            else:
+                # suffix-length: bytes=-N
+                length = int(end_str)
+                start = max(0, total - length)
+                end = total - 1
+            if start < 0 or end < start or end >= total:
+                raise ValueError("invalid_range")
+            length = end - start + 1
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+                "Content-Type": mime,
+                "Content-Disposition": f"attachment; filename={p.name}",
+            }
+            def _iter():
+                with p.open("rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    chunk = 64 * 1024
+                    while remaining > 0:
+                        data = f.read(min(chunk, remaining))
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+            return StreamingResponse(_iter(), status_code=206, headers=headers)
+        except Exception:
+            # 416 Range Not Satisfiable
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+    # Full response
+    headers = {"Accept-Ranges": "bytes", "Content-Disposition": f"attachment; filename={p.name}"}
+    return FileResponse(str(p), filename=p.name, media_type=mime, headers=headers)
 
 
 @router.get(
@@ -1308,10 +2012,10 @@ async def list_step_types():
         },
         "delay": {
             "type": "object",
-            "properties": {"ms": {"type": "integer", "minimum": 1, "default": 1000}},
-            "required": ["ms"],
+            "properties": {"milliseconds": {"type": "integer", "minimum": 1, "default": 1000}},
+            "required": ["milliseconds"],
             "additionalProperties": False,
-            "example": {"ms": 500},
+            "example": {"milliseconds": 500},
             "min_engine_version": "0.1.0",
         },
         "log": {
@@ -1352,10 +2056,10 @@ async def list_step_types():
             "properties": {
                 "urls": {"type": ["array","string"], "description": "RSS/Atom feed URLs (list or string)"},
                 "limit": {"type": "integer", "default": 10},
-                "include_content": {"type": "boolean", "default": true}
+                "include_content": {"type": "boolean", "default": True}
             },
             "required": ["urls"],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"urls": ["https://example.com/feed.xml"], "limit": 5},
             "min_engine_version": "0.1.3"
         },
@@ -1366,7 +2070,7 @@ async def list_step_types():
                 "limit": {"type": "integer", "default": 10}
             },
             "required": ["urls"],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"urls": ["https://example.com/atom.xml"]},
             "min_engine_version": "0.1.3"
         },
@@ -1379,7 +2083,7 @@ async def list_step_types():
                 "metadata": {"type": ["object","null"]}
             },
             "required": [],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"texts": "{{ last.text }}", "collection": "user_1_workflows"},
             "min_engine_version": "0.1.3"
         },
@@ -1392,7 +2096,7 @@ async def list_step_types():
                 "model": {"type": ["string","null"]}
             },
             "required": ["target_lang"],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"input": "{{ last.text }}", "target_lang": "fr"},
             "min_engine_version": "0.1.3"
         },
@@ -1402,11 +2106,11 @@ async def list_step_types():
                 "file_uri": {"type": "string", "description": "file:// path to audio/video"},
                 "model": {"type": "string", "default": "large-v3"},
                 "language": {"type": ["string","null"]},
-                "diarize": {"type": "boolean", "default": false},
-                "word_timestamps": {"type": "boolean", "default": false}
+                "diarize": {"type": "boolean", "default": False},
+                "word_timestamps": {"type": "boolean", "default": False}
             },
             "required": ["file_uri"],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"file_uri": "file:///abs/path/audio.wav", "model": "large-v3"},
             "min_engine_version": "0.1.3"
         },
@@ -1419,7 +2123,7 @@ async def list_step_types():
                 "headers": {"type": ["object","null"]}
             },
             "required": ["url","message"],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"url": "https://hooks.slack.com/services/...", "message": "{{ last.text }}"},
             "min_engine_version": "0.1.3"
         },
@@ -1431,7 +2135,7 @@ async def list_step_types():
                 "threshold": {"type": "number", "default": 0.9}
             },
             "required": [],
-            "additionalProperties": true,
+            "additionalProperties": True,
             "example": {"current": "{{ last.text }}", "method": "ratio", "threshold": 0.95},
             "min_engine_version": "0.1.3"
         },
@@ -1440,14 +2144,36 @@ async def list_step_types():
             "properties": {
                 "text_source": {"type": "string", "enum": ["last","inputs","field"], "default": "last"},
                 "field": {"type": "string"},
-                "block_on_pii": {"type": "boolean", "default": false},
+                "block_on_pii": {"type": "boolean", "default": False},
                 "block_words": {"type": "array", "items": {"type": "string"}},
                 "max_length": {"type": "integer", "minimum": 1},
-                "redact_preview": {"type": "boolean", "default": false}
+                "redact_preview": {"type": "boolean", "default": False}
             },
             "required": [],
-            "additionalProperties": true,
-            "example": {"text_source": "last", "block_on_pii": true, "block_words": ["secret","password"], "max_length": 10000},
+            "additionalProperties": True,
+            "example": {"text_source": "last", "block_on_pii": True, "block_words": ["secret","password"], "max_length": 10000},
+            "min_engine_version": "0.1.3"
+        },
+        "wait_for_human": {
+            "type": "object",
+            "properties": {
+                "instructions": {"type": "string"},
+                "assigned_to_user_id": {"type": ["string","integer","null"]}
+            },
+            "required": [],
+            "additionalProperties": True,
+            "example": {"instructions": "Review the summary and approve.", "assigned_to_user_id": null},
+            "min_engine_version": "0.1.3"
+        },
+        "wait_for_approval": {
+            "type": "object",
+            "properties": {
+                "instructions": {"type": "string"},
+                "assigned_to_user_id": {"type": ["string","integer","null"]}
+            },
+            "required": [],
+            "additionalProperties": True,
+            "example": {"instructions": "Await approval.", "assigned_to_user_id": null},
             "min_engine_version": "0.1.3"
         },
     }
@@ -1465,18 +2191,25 @@ async def list_step_types():
 
 
 @router.get("/templates")
-async def list_workflow_templates() -> list[dict[str, str]]:
+async def list_workflow_templates(q: Optional[str] = Query(None, description="Search query on name/title/tags"), tag: Optional[str] = Query(None, description="Filter by tag")) -> list[dict[str, Any]]:
     """List available example workflow templates shipped with the server.
 
     Returns a list of {name, filename} items. Use GET /api/v1/workflows/templates/{name}
     to retrieve the JSON content.
     """
     try:
-        # Locate repo root and Samples/Workflows directory
+        # Locate Samples/Workflows by walking upwards for robustness
         here = Path(__file__).resolve()
-        # repo_root = .../tldw_Server_API/app/api/v1/endpoints -> parents[5]
-        repo_root = here.parents[5] if len(here.parents) > 5 else here.parents[-1]
-        tpl_dir = repo_root / "Samples" / "Workflows"
+        tpl_dir = None
+        p = here
+        for _ in range(0, 9):
+            candidate = p.parent / "Samples" / "Workflows"
+            if candidate.exists():
+                tpl_dir = candidate
+                break
+            p = p.parent
+        if tpl_dir is None:
+            return []
         items: list[dict[str, str]] = []
         if tpl_dir.exists():
             for p in tpl_dir.glob("*.workflow.json"):
@@ -1495,36 +2228,120 @@ async def list_workflow_templates() -> list[dict[str, str]]:
                         raw = p.read_text(encoding="utf-8")
                         data = _json.loads(raw)
                         tpl_title = str(data.get("name") or "").strip()
+                        tags = data.get("tags") or []
                         if tpl_title:
                             title = tpl_title
+                        # Normalize tags to list[str]
+                        if not isinstance(tags, list):
+                            tags = []
                     except Exception:
                         # Ignore parse errors; fall back to filename-derived name
-                        pass
-                    items.append({"name": name, "filename": p.name, "title": title})
+                        tags = []
+                    item = {"name": name, "filename": p.name, "title": title, "tags": tags}
+                    items.append(item)
                 except Exception:
                     continue
+        # Optional search and tag filtering
+        def _match(s: str, query: str) -> bool:
+            try:
+                return query.lower() in s.lower()
+            except Exception:
+                return False
+        if q:
+            items = [it for it in items if _match(it.get("name", ""), q) or _match(it.get("title", ""), q) or any(_match(t, q) for t in (it.get("tags") or []))]
+        if tag:
+            items = [it for it in items if str(tag) in (it.get("tags") or [])]
         return items
     except Exception as e:
         logger.warning(f"Failed to list workflow templates: {e}")
         return []
 
 
-@router.get("/templates/{name}")
+@router.get(
+    "/templates/tags",
+    openapi_extra={
+        "x-codeSamples": [
+            {
+                "lang": "bash",
+                "label": "List tags",
+                "source": "curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/templates/tags\" | jq ."
+            }
+        ]
+    },
+)
+async def list_workflow_template_tags() -> list[str]:
+    return await list_workflow_template_tags_internal()
+
+@router.get(
+    "/templates/_tags_internal",
+)
+async def list_workflow_template_tags_internal() -> list[str]:
+    """Return the unique set of tags from all bundled templates."""
+    try:
+        # Robust search for Samples/Workflows
+        here = Path(__file__).resolve()
+        tpl_dir = None
+        p = here
+        for _ in range(0, 9):
+            candidate = p.parent / "Samples" / "Workflows"
+            if candidate.exists():
+                tpl_dir = candidate
+                break
+            p = p.parent
+        if tpl_dir is None or not tpl_dir.exists():
+            return []
+        tags_set: set[str] = set()
+        for f in tpl_dir.glob("*.workflow.json"):
+            try:
+                import json as _json
+                data = _json.loads(f.read_text(encoding="utf-8"))
+                tags = data.get("tags") or []
+                if isinstance(tags, list):
+                    for t in tags:
+                        try:
+                            s = str(t).strip()
+                            if s:
+                                tags_set.add(s)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+        return sorted(tags_set)
+    except Exception as e:
+        logger.warning(f"Failed to list template tags: {e}")
+        return []
+
+
+@router.get("/templates/{name:path}")
 async def get_workflow_template(name: str) -> Dict[str, Any]:
     """Return JSON content for a named workflow template (sans extension)."""
-    # Disallow path separators
-    if ("/" in name) or ("\\" in name) or name.strip() == "":
+    # Disallow traversal and separators (defense-in-depth with unquoting)
+    from urllib.parse import unquote as _unquote
+    raw = _unquote(name or "").strip()
+    if ("/" in raw) or ("\\" in raw) or raw == "":
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    # Reject path traversal patterns (.. segments)
+    if ".." in raw.split("/"):
         raise HTTPException(status_code=400, detail="Invalid template name")
     try:
+        # Robust search for Samples/Workflows
         here = Path(__file__).resolve()
-        repo_root = here.parents[5] if len(here.parents) > 5 else here.parents[-1]
-        tpl_dir = repo_root / "Samples" / "Workflows"
+        tpl_dir = None
+        p = here
+        for _ in range(0, 9):
+            candidate = p.parent / "Samples" / "Workflows"
+            if candidate.exists():
+                tpl_dir = candidate
+                break
+            p = p.parent
+        if tpl_dir is None:
+            raise HTTPException(status_code=404, detail="Template not found")
         # Support names passed either with or without the optional ".workflow" suffix
         candidates = [
-            tpl_dir / f"{name}.workflow.json",
+            tpl_dir / f"{raw}.workflow.json",
         ]
-        if not name.endswith(".workflow"):
-            candidates.append(tpl_dir / f"{name}.workflow.workflow.json")
+        if not raw.endswith(".workflow"):
+            candidates.append(tpl_dir / f"{raw}.workflow.workflow.json")
         target = next((c for c in candidates if c.exists() and c.is_file()), None)
         if not (tpl_dir.exists() and target):
             raise HTTPException(status_code=404, detail="Template not found")
@@ -1539,6 +2356,99 @@ async def get_workflow_template(name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Failed to read workflow template {name}: {e}")
         raise HTTPException(status_code=500, detail="Failed to load template")
+
+@router.get("/templates/_byname/{name:path}")
+async def get_workflow_template_legacy(name: str) -> Dict[str, Any]:
+    """Return JSON content for a named workflow template (sans extension)."""
+    # Disallow traversal and separators (defense-in-depth with unquoting)
+    from urllib.parse import unquote as _unquote
+    raw = _unquote(name or "").strip()
+    if ("/" in raw) or ("\\" in raw) or raw == "":
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    if ".." in raw.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    try:
+        # Robust search for Samples/Workflows
+        here = Path(__file__).resolve()
+        tpl_dir = None
+        p = here
+        for _ in range(0, 9):
+            candidate = p.parent / "Samples" / "Workflows"
+            if candidate.exists():
+                tpl_dir = candidate
+                break
+            p = p.parent
+        if tpl_dir is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+        # Support names passed either with or without the optional ".workflow" suffix
+        candidates = [
+            tpl_dir / f"{raw}.workflow.json",
+        ]
+        if not raw.endswith(".workflow"):
+            candidates.append(tpl_dir / f"{raw}.workflow.workflow.json")
+        target = next((c for c in candidates if c.exists() and c.is_file()), None)
+        if not (tpl_dir.exists() and target):
+            raise HTTPException(status_code=404, detail="Template not found")
+        import json as _json
+        # Size guard (1MB cap)
+        raw = target.read_text(encoding="utf-8")
+        if len(raw.encode("utf-8")) > 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Template too large")
+        return _json.loads(raw)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Failed to read workflow template {name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load template")
+
+
+@router.get(
+    "/templates/tags",
+    openapi_extra={
+        "x-codeSamples": [
+            {
+                "lang": "bash",
+                "label": "List tags",
+                "source": "curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/templates/tags\" | jq ."
+            }
+        ]
+    },
+)
+async def list_workflow_template_tags() -> list[str]:
+    """Return the unique set of tags from all bundled templates."""
+    try:
+        # Robust search for Samples/Workflows
+        here = Path(__file__).resolve()
+        tpl_dir = None
+        p = here
+        for _ in range(0, 9):
+            candidate = p.parent / "Samples" / "Workflows"
+            if candidate.exists():
+                tpl_dir = candidate
+                break
+            p = p.parent
+        if tpl_dir is None or not tpl_dir.exists():
+            return []
+        tags_set: set[str] = set()
+        for f in tpl_dir.glob("*.workflow.json"):
+            try:
+                import json as _json
+                data = _json.loads(f.read_text(encoding="utf-8"))
+                tags = data.get("tags") or []
+                if isinstance(tags, list):
+                    for t in tags:
+                        try:
+                            s = str(t).strip()
+                            if s:
+                                tags_set.add(s)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+        return sorted(tags_set)
+    except Exception as e:
+        logger.warning(f"Failed to list template tags: {e}")
+        return []
 
 
 @router.get("/config")
@@ -1649,6 +2559,10 @@ async def get_definition(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    # Owner/admin check for definition read (tighten RBAC)
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(d.owner_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Workflow not found")
     try:
         definition = json.loads(d.definition_json)
     except Exception:
@@ -1680,6 +2594,16 @@ async def approve_step(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
+    # Owner/admin check for the run
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
@@ -1705,6 +2629,15 @@ async def reject_step(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
     try:
         db.reject_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
         db.update_run_status(run_id, status="failed", status_reason="rejected_by_human", ended_at=_utcnow_iso())

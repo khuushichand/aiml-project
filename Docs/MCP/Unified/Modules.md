@@ -36,6 +36,9 @@
 
 - Default file: `tldw_Server_API/Config_Files/mcp_modules.yaml`
 
+See also: Using mcp_modules.yaml for a deeper walkthrough and common pitfalls.
+`Docs/MCP/Unified/Using_Modules_YAML.md`
+
 ```yaml
 modules:
   - id: media
@@ -81,3 +84,11 @@ modules:
 - Inspect logs when module registration fails (class import or configuration issues).
 - Ensure `PyYAML` is installed when using YAML configurations.
 - Confirm tool names and input schemas match between `get_tools` and `execute_tool`.
+- "Blocked module autoload" in logs: The server only autoloads modules under
+  `tldw_Server_API.app.core.MCP_unified.modules.implementations`. Move your module into this namespace.
+- Permission denied on tools: Check RBAC and ensure your token/role has `tools.execute:<name>`.
+- Write tools blocked: If `MCP_DISABLE_WRITE_TOOLS=1`, ingestion/management tools are disabled.
+- Idempotent writes not executing: Requests with the same `idempotencyKey` within TTL
+  will return the cached result. Change the key to force execution or wait for TTL expiry.
+- Rate limit errors: Tool or category limits may apply. Review the Security Knobs table in the MCP README
+  and your category mapping.

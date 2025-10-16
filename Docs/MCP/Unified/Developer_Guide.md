@@ -13,6 +13,7 @@
 8. [Debugging](#debugging)
 9. [Contributing](#contributing)
 10. [API Reference](#api-reference)
+11. [Validation Metrics](#validation-metrics)
 
 ## Architecture Overview
 
@@ -209,6 +210,38 @@ async def register_modules(registry: ModuleRegistry):
 5. **Health Checks**: Implement meaningful health checks
 6. **Resource Management**: Properly initialize and cleanup resources
 7. **Testing**: Write unit and integration tests
+
+## Validation Metrics
+
+MCP Unified enforces input safety at the protocol boundary and exposes validation counters for observability.
+
+What is validated
+- JSON Schema (protocol-level, config-gated):
+  - Required fields (inputSchema.required)
+  - Primitive types: string, number, integer, boolean, object, array
+  - Unknown fields rejected when inputSchema.additionalProperties is false
+- Module validators (module-level):
+  - Each write-capable tool must implement validate_tool_arguments with strict checks.
+  - Arguments are sanitized first via BaseModule.sanitize_input(), then validated.
+
+Config flags
+- MCP_VALIDATE_INPUT_SCHEMA (default: true)
+  - When false, protocol-level schema checks are skipped.
+- MCP_DISABLE_WRITE_TOOLS (default: false)
+  - When true, all write-capable tools are rejected at the protocol layer (good for demos or read-only ops).
+
+Counters exposed (Prometheus + internal)
+- mcp_tool_invalid_params_total{module,tool}
+  - Incremented when:
+    - Protocol JSON Schema validation fails, or
+    - Module.validate_tool_arguments raises.
+- mcp_tool_validator_missing_total{module,tool}
+  - Incremented when a write-capable tool does not override validate_tool_arguments.
+
+Notes for module authors
+- Mark write tools with metadata.category in {ingestion, management} to get consistent safety handling and rate policy.
+- Always override validate_tool_arguments for write tools and prefer allowlists.
+- Keep inputSchema accurate; it improves developer UX and reduces noisy traffic.
 
 ## API Integration
 

@@ -1,22 +1,13 @@
-"""
-Knowledge.get tests using stub source modules for chats, characters, and prompts.
+"""Knowledge.get tests using stub source modules for chats, characters, and prompts."""
 
-Enable with RUN_MCP_TESTS=1.
-"""
-
-import os
 import pytest
 from typing import Dict, Any, List
-
-os.environ.setdefault("RUN_MCP_TESTS", "0")
 
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.knowledge_module import KnowledgeModule
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 
-_RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
 
 
 class StubChatsModule(BaseModule):
@@ -146,4 +137,3 @@ async def test_knowledge_get_for_additional_sources():
     out_prompts = await km.execute_tool("knowledge.get", {"source": "prompts", "id": "greeting"}, context=ctx)
     assert out_prompts["meta"]["source"] == "prompts"
     assert out_prompts["content"]["name"] == "greeting"
-

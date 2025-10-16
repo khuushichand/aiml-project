@@ -62,6 +62,10 @@ from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_sing
 
 # For logging (if you use the same logger as in your PDF endpoint)
 from loguru import logger
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+    UsageEventLogger,
+)
 
 # Initialize rate limiter
 def _rate_limit_key(request: _FastAPIRequest) -> str:
@@ -121,6 +125,7 @@ async def create_speech(
     request: Request,                   # Required for rate limiter and to check for client disconnects
     tts_service: TTSServiceV2 = Depends(get_tts_service),
     current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Generates audio from the input text.
@@ -167,6 +172,14 @@ async def create_speech(
             detail=str(e)
         )
     logger.info(f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}")
+    try:
+        usage_log.log_event(
+            "audio.tts",
+            tags=[str(request_data.model or ""), str(request_data.voice or "")],
+            metadata={"stream": bool(getattr(request_data, 'stream', False)), "format": request_data.response_format},
+        )
+    except Exception:
+        pass
 
     # V2 service handles model mapping internally via the adapter factory
     # No need for manual mapping here
@@ -202,6 +215,13 @@ async def create_speech(
                     logger.info("Client disconnected, stopping audio generation.")
                     break
                 yield audio_chunk_bytes
+        except TTSValidationError as e:
+            logger.warning(f"TTS validation error during streaming: {e}")
+            # Map validation failures to 400 for both stream and non-stream
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
         except HTTPException: # Re-raise HTTPExceptions directly
             raise
         except TTSProviderNotConfiguredError as e:
@@ -273,6 +293,12 @@ async def create_speech(
                     "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
                     "Cache-Control": "no-cache",
                 },
+            )
+        except TTSValidationError as e:
+            logger.warning(f"TTS validation error (non-streaming): {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
             )
         except HTTPException:
             raise
@@ -699,6 +725,7 @@ async def create_translation(
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
     current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Translates audio into English.
@@ -711,7 +738,14 @@ async def create_translation(
     Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
           `Docs/API-related/Audio_Transcription_API.md`
     """
-    
+    try:
+        usage_log.log_event(
+            "audio.transcriptions",
+            tags=[str(model or "")],
+            metadata={"filename": getattr(file, 'filename', None), "language": language or None},
+        )
+    except Exception:
+        pass
     # For translation, we'll use the transcription endpoint with language detection
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model

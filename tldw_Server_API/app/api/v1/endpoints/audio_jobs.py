@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field
+try:
+    # Pydantic v2
+    from pydantic import model_validator  # type: ignore
+except Exception:  # pragma: no cover - fallback for older environments
+    model_validator = None  # type: ignore
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -24,15 +29,29 @@ class SubmitAudioJobRequest(BaseModel):
     perform_analysis: bool = Field(False, description="Whether to run LLM analysis after chunking")
     api_name: Optional[str] = Field(None, description="LLM provider key for analysis stage")
 
-    @root_validator
-    def _validate_inputs(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        url = (values.get("url") or "").strip()
-        lp = (values.get("local_path") or "").strip()
-        if not url and not lp:
-            raise ValueError("Either 'url' or 'local_path' must be provided")
-        if url and lp:
-            raise ValueError("Provide only one of 'url' or 'local_path'")
-        return values
+    if model_validator is not None:
+        @model_validator(mode="after")
+        def _validate_inputs(self) -> "SubmitAudioJobRequest":
+            url = (self.url or "").strip() if self.url else ""
+            lp = (self.local_path or "").strip() if self.local_path else ""
+            if not url and not lp:
+                raise ValueError("Either 'url' or 'local_path' must be provided")
+            if url and lp:
+                raise ValueError("Provide only one of 'url' or 'local_path'")
+            return self
+    else:
+        # Backward-compatible path for environments still on Pydantic v1
+        from pydantic import root_validator as _rv  # type: ignore
+
+        @_rv
+        def _validate_inputs(cls, values: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
+            url = (values.get("url") or "").strip()
+            lp = (values.get("local_path") or "").strip()
+            if not url and not lp:
+                raise ValueError("Either 'url' or 'local_path' must be provided")
+            if url and lp:
+                raise ValueError("Provide only one of 'url' or 'local_path'")
+            return values
 
 
 class SubmitAudioJobResponse(BaseModel):
