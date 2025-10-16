@@ -19,7 +19,6 @@ from pathlib import Path
 from tldw_Server_API.app.core.Evaluations.config_manager import get_rate_limit_config, get_config
 # Import connection pool
 from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
-import sqlite3
 
 
 class UserTier(Enum):
