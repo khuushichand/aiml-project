@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from Helper_Scripts import hyde_backfill
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 class _DummySettings(dict):
@@ -14,7 +15,7 @@ class _DummySettings(dict):
 
 class _FakeAdapter:
     def __init__(self):
-        self.config = SimpleNamespace(embedding_dim=3)
+        self.config = SimpleNamespace(embedding_dim=3, store_type="chromadb")
         self.upserts = []
         self._pages_returned = 0
 
@@ -48,6 +49,10 @@ class _FakeAdapter:
 @pytest.mark.unit
 def test_hyde_backfill_embeds_real_vectors(monkeypatch):
     adapter = _FakeAdapter()
+    registry = get_metrics_registry()
+    registry.values.pop("hyde_questions_generated_total", None)
+    registry.values.pop("hyde_generation_failures_total", None)
+    registry.values.pop("hyde_vectors_written_total", None)
 
     # Patch settings to a lightweight dict
     dummy_settings = _DummySettings(
@@ -100,3 +105,11 @@ def test_hyde_backfill_embeds_real_vectors(monkeypatch):
     for meta in metadatas:
         assert meta.get("kind") == "hyde_q"
         assert meta.get("question_hash"), "question_hash should be recorded"
+    stats = registry.get_metric_stats(
+        "hyde_questions_generated_total",
+        labels={"provider": "openai", "model": "gpt-hyde", "source": "backfill"},
+    )
+    assert stats and stats.get("sum") == 2
+    vector_stats = registry.get_metric_stats("hyde_vectors_written_total", labels={"store": "chromadb"})
+    assert vector_stats and vector_stats.get("sum") == 2
+    assert not registry.get_metric_stats("hyde_generation_failures_total")

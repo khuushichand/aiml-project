@@ -23,11 +23,14 @@ class DatabasePaths:
     AUDIT_DB_NAME = "unified_audit.db"
     EVALUATIONS_DB_NAME = "evaluations.db"
     PERSONALIZATION_DB_NAME = "Personalization.db"
+    WORKFLOWS_DB_NAME = "workflows.db"
+    WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
     
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
     AUDIT_SUBDIR = "audit"
     EVALUATIONS_SUBDIR = "evaluations"
+    WORKFLOWS_SUBDIR = "workflows"
     
     @staticmethod
     def get_user_base_directory(user_id: int) -> Path:
@@ -124,6 +127,30 @@ class DatabasePaths:
         return user_dir / DatabasePaths.PERSONALIZATION_DB_NAME
     
     @staticmethod
+    def get_workflows_db_path(user_id: int) -> Path:
+        """Get the path to the user's workflows database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        workflows_dir = user_dir / DatabasePaths.WORKFLOWS_SUBDIR
+        try:
+            workflows_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Failed to create workflows directory {workflows_dir}: {e}")
+            raise
+        return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
+    
+    @staticmethod
+    def get_workflows_scheduler_db_path(user_id: int) -> Path:
+        """Get the path to the user's workflows scheduler database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        workflows_dir = user_dir / DatabasePaths.WORKFLOWS_SUBDIR
+        try:
+            workflows_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Failed to create workflows scheduler directory {workflows_dir}: {e}")
+            raise
+        return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
+    
+    @staticmethod
     def get_all_user_db_paths(user_id: int) -> Dict[str, Path]:
         """
         Get all database paths for a user.
@@ -138,6 +165,8 @@ class DatabasePaths:
             "audit": DatabasePaths.get_audit_db_path(user_id),
             "evaluations": DatabasePaths.get_evaluations_db_path(user_id),
             "personalization": DatabasePaths.get_personalization_db_path(user_id),
+            "workflows": DatabasePaths.get_workflows_db_path(user_id),
+            "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
         }
     
     @staticmethod

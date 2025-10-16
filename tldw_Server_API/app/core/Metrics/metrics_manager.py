@@ -499,6 +499,30 @@ class MetricsRegistry:
                 labels=["provider", "model"]
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="hyde_questions_generated_total",
+                type=MetricType.COUNTER,
+                description="Total HYDE/doc2query questions generated",
+                labels=["provider", "model", "source"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="hyde_generation_failures_total",
+                type=MetricType.COUNTER,
+                description="Total HYDE/doc2query generation failures",
+                labels=["provider", "model", "source", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="hyde_vectors_written_total",
+                type=MetricType.COUNTER,
+                description="Total HYDE/doc2query vectors written to storage",
+                labels=["store"],
+            )
+        )
 
         # Upload metrics
         self.register_metric(

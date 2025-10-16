@@ -28,6 +28,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Evaluations.webhook_security import WebhookSecurityValidator
 from tldw_Server_API.app.core.Evaluations.connection_pool import ConnectionPool
 
@@ -38,6 +39,7 @@ class TestPathTraversalProtection:
     def test_path_traversal_in_config(self):
         """Test that path traversal attempts in config are blocked"""
         manager = EvaluationManager()
+        expected_path = DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()).resolve()
         
         # Mock config with path traversal attempt
         with patch.object(manager, 'config') as mock_config:
@@ -50,11 +52,12 @@ class TestPathTraversalProtection:
             # Should not traverse outside project directory
             assert "../" not in str(safe_path)
             assert "etc/passwd" not in str(safe_path)
-            assert "Databases" in str(safe_path)
+            assert safe_path == expected_path
     
     def test_absolute_path_outside_project(self):
         """Test that absolute paths outside project are rejected"""
         manager = EvaluationManager()
+        expected_path = DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()).resolve()
         
         with patch.object(manager, 'config') as mock_config:
             mock_config.has_section.return_value = True
@@ -64,7 +67,7 @@ class TestPathTraversalProtection:
             
             # Should use safe default path instead
             assert "/etc/sensitive" not in str(safe_path)
-            assert "Databases/evaluations.db" in str(safe_path)
+            assert safe_path == expected_path
     
     def test_null_byte_injection(self):
         """Test that null byte injection is handled"""

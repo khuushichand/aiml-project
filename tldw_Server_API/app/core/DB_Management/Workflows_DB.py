@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from .backends.base import (
     BackendType,
     DatabaseBackend,
@@ -35,7 +36,7 @@ class WorkflowsSchemaError(RuntimeError):
     pass
 
 
-DEFAULT_DB_PATH = Path("Databases") / "workflows.db"
+DEFAULT_DB_PATH = DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id())
 
 
 WORKFLOWS_POSTGRES_SCHEMA = """

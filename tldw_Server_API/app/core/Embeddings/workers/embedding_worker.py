@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from ..messages import normalize_message
 from ..hyde import generate_questions, question_hash, normalize_question
+from tldw_Server_API.app.core.Metrics import increment_counter
 import json as _json
 
 
@@ -443,6 +444,8 @@ class EmbeddingWorker(BaseWorker):
                     embedding_data_list.append(embedding_data)
 
                     # HYDE/doc2query generation (Option A: inline in embedding worker)
+                    hyde_provider = settings.get("HYDE_PROVIDER")
+                    hyde_model = settings.get("HYDE_MODEL")
                     try:
                         if bool(settings.get("HYDE_ENABLED", False)):
                             try:
@@ -457,11 +460,14 @@ class EmbeddingWorker(BaseWorker):
                                 else:
                                     language = lang_cfg
                                 # Provider/model for HYDE question generation
-                                hyde_provider = settings.get("HYDE_PROVIDER")
-                                hyde_model = settings.get("HYDE_MODEL")
                                 hyde_temp = float(settings.get("HYDE_TEMPERATURE", 0.2) or 0.2)
                                 hyde_max_tokens = int(settings.get("HYDE_MAX_TOKENS", 96) or 96)
                                 hyde_prompt_ver = settings.get("HYDE_PROMPT_VERSION", 1)
+                                hyde_labels = {
+                                    "provider": hyde_provider or "unknown",
+                                    "model": hyde_model or "unknown",
+                                    "source": "worker",
+                                }
 
                                 questions = generate_questions(
                                     text=chunk.content,
@@ -474,6 +480,11 @@ class EmbeddingWorker(BaseWorker):
                                     prompt_version=hyde_prompt_ver,
                                 )
                                 if questions:
+                                    increment_counter(
+                                        "hyde_questions_generated_total",
+                                        len(questions),
+                                        labels=hyde_labels,
+                                    )
                                     # Embed questions using the same embedder used for the parent chunk
                                     q_embeddings = await self._generate_embeddings(
                                         questions,
@@ -517,6 +528,16 @@ class EmbeddingWorker(BaseWorker):
                                     logger.debug(f"HYDE: added {len(questions)} question embeddings for chunk {chunk.chunk_id}")
                     except Exception as _hyde_err:
                         # Never block the pipeline on HYDE
+                        increment_counter(
+                            "hyde_generation_failures_total",
+                            1,
+                            labels={
+                                "provider": hyde_provider or "unknown",
+                                "model": hyde_model or "unknown",
+                                "source": "worker",
+                                "reason": type(_hyde_err).__name__,
+                            },
+                        )
                         logger.debug(f"HYDE generation skipped/failed for chunk {chunk.chunk_id}: {_hyde_err}")
                 
                 # Update progress

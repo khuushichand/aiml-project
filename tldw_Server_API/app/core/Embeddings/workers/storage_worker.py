@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, List
 
 from loguru import logger
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+from tldw_Server_API.app.core.Metrics import increment_counter
 
 from ..queue_schemas import (
     JobStatus,
@@ -60,6 +61,17 @@ class StorageWorker(BaseWorker):
                 use_adapter_pg = bool(base_adapter and getattr(base_adapter, 'config', None) and base_adapter.config.store_type == VectorStoreType.PGVECTOR)  # type: ignore[attr-defined]
             except Exception:
                 use_adapter_pg = False
+
+            store_label = "chromadb"
+            try:
+                if base_adapter and getattr(base_adapter, "config", None):
+                    store_type = getattr(base_adapter.config, "store_type", VectorStoreType.CHROMADB)  # type: ignore[attr-defined]
+                    if isinstance(store_type, VectorStoreType):
+                        store_label = store_type.value
+            except Exception:
+                store_label = "chromadb"
+            if use_adapter_pg:
+                store_label = "pgvector"
 
             # Idempotency ledger short-circuit
             ledger_ttl = int(os.getenv("EMBEDDINGS_LEDGER_TTL_SECONDS", "86400") or 86400)
@@ -196,6 +208,14 @@ class StorageWorker(BaseWorker):
                 # Adapter-backed path (pgvector)
                 target_dim = int(inferred_dim) if inferred_dim else int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
                 adapter = await self._get_adapter_for_user(str(message.user_id), target_dim)
+                try:
+                    store_type = getattr(adapter, "config", None)
+                    if store_type and isinstance(getattr(store_type, "store_type", None), VectorStoreType):
+                        store_label = store_type.store_type.value  # type: ignore[attr-defined]
+                    else:
+                        store_label = "pgvector"
+                except Exception:
+                    store_label = "pgvector"
                 # Ensure collection/table exists with expected dim and tag metadata stored at collection level (best-effort)
                 try:
                     meta = {"embedding_dimension": int(target_dim)}
@@ -325,6 +345,21 @@ class StorageWorker(BaseWorker):
                 elif elapsed > 1.50 and batch_size > 10:
                     batch_size = max(10, batch_size // 2)
                 i = batch_end
+
+            hyde_written = sum(
+                1
+                for meta in metadatas
+                if isinstance(meta, dict) and str(meta.get("kind")) == "hyde_q"
+            )
+            if hyde_written:
+                try:
+                    increment_counter(
+                        "hyde_vectors_written_total",
+                        hyde_written,
+                        labels={"store": store_label or "unknown"},
+                    )
+                except Exception:
+                    logger.debug("Failed to record hyde_vectors_written_total metric", exc_info=True)
 
             # Update SQL database
             await self._update_database(message.media_id, message.total_chunks)

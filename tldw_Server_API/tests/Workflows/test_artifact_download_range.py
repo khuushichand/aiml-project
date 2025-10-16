@@ -15,7 +15,8 @@ def client_and_db(tmp_path):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
-        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+        # Match the run's owner and tenant for strict owner checks
+        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True, tenant_id="default")
 
     def override_db():
         return db
@@ -32,7 +33,8 @@ def client_and_db(tmp_path):
 def _bootstrap_run_with_artifact(db: WorkflowsDatabase, tmpdir: Path):
     run_id = f"run-range-{uuid4()}"
     tenant = "default"
-    user_id = "tester"
+    # Use user_id that matches override_user().id
+    user_id = "1"
     db.create_run(run_id=run_id, tenant_id=tenant, user_id=user_id, inputs={})
     # Create a small file
     afile = tmpdir / "sample.bin"
@@ -58,6 +60,8 @@ def test_artifact_download_with_range(monkeypatch, tmp_path, client_and_db):
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "application/octet-stream")
     client, db = client_and_db
     run_id = _bootstrap_run_with_artifact(db, tmp_path)
+    # Sanity: run should be present in the overridden DB instance
+    assert db.get_run(run_id) is not None
     with client:
         # auth: tests use single-user mode; dependency injects admin-like claims
         # Fetch artifact list to get id

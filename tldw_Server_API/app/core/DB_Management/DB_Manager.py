@@ -56,6 +56,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 #
 # End of imports
 ############################################################################################################
@@ -76,7 +77,11 @@ single_user_db_path: str = content_db_settings.sqlite_path or './Databases/serve
 single_user_backup_path: str = content_db_settings.backup_path or 'database_backups'
 single_user_backup_dir: Union[str, bytes] = os.environ.get('DB_BACKUP_DIR', single_user_backup_path)
 single_user_chacha_path: str = single_user_config.get('Database', 'chacha_path', fallback='Databases/ChaChaNotes.db')
-single_user_workflows_path: str = single_user_config.get('Database', 'workflows_path', fallback='Databases/workflows.db')
+single_user_workflows_path: str = single_user_config.get(
+    'Database',
+    'workflows_path',
+    fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id()))
+)
 
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:

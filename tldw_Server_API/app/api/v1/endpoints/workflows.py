@@ -1544,6 +1544,7 @@ async def download_artifact(
     request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ):
+    import os as _os
     from pathlib import Path
     from fastapi.responses import FileResponse
     art = db.get_artifact(artifact_id)
@@ -1603,37 +1604,33 @@ async def download_artifact(
     else:
         raise HTTPException(status_code=400, detail="Only file artifacts are downloadable")
     p = Path(fpath).resolve()
-    # Containment check: must be under recorded workdir (if present)
-    workdir = art.get("metadata_json", {}).get("workdir") or art.get("uri", "")
-    try:
-        wd = Path(str(workdir).replace("file://", "")).resolve()
-        if wd.exists():
-            import os as _os
-            try:
-                common = _os.path.commonpath([str(p), str(wd)])
-                if common != str(wd):
-                    raise ValueError("path_outside_workdir")
-            except Exception:
-                raise ValueError("validation_error")
-    except Exception as _e:
-        # Allow non-blocking on validation failure depending on run override or env toggle.
-        # Semantics:
-        #   - If run.validation_mode == 'non-block' => always allow (non-strict)
-        #   - Otherwise fall back to env WORKFLOWS_ARTIFACT_VALIDATE_STRICT (default true)
-        import os as _os
-        env_strict = str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
-        run_val = getattr(run, 'validation_mode', None)
-        if isinstance(run_val, str) and run_val.lower() == 'non-block':
-            strict = False
-        else:
-            strict = env_strict
-        if strict:
-            raise HTTPException(status_code=400, detail="Invalid artifact path scope")
-        else:
-            try:
-                logger.warning(f"Artifact scope validation failed for {p}; proceeding due to non-strict setting: {_e}")
-            except Exception:
-                pass
+    # Containment check: must be under recorded workdir when present
+    workdir = art.get("metadata_json", {}).get("workdir")
+    if workdir:
+        try:
+            wd = Path(str(workdir).replace("file://", "")).resolve()
+            if wd.exists():
+                try:
+                    common = _os.path.commonpath([str(p), str(wd)])
+                    if common != str(wd):
+                        raise ValueError("path_outside_workdir")
+                except Exception:
+                    raise ValueError("validation_error")
+        except Exception as _e:
+            # Allow non-blocking on validation failure depending on run override or env toggle.
+            # Semantics:
+            #   - If run.validation_mode == 'non-block' => always allow (non-strict)
+            #   - Otherwise fall back to env WORKFLOWS_ARTIFACT_VALIDATE_STRICT (default true)
+            env_strict = str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+            run_val = getattr(run, 'validation_mode', None)
+            strict = not (isinstance(run_val, str) and run_val.lower() == 'non-block') and env_strict
+            if strict:
+                raise HTTPException(status_code=400, detail="Invalid artifact path scope")
+            else:
+                try:
+                    logger.warning(f"Artifact scope validation failed for {p}; proceeding due to non-strict setting: {_e}")
+                except Exception:
+                    pass
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     # Optional integrity verification when checksum recorded
@@ -1663,7 +1660,6 @@ async def download_artifact(
         # Do not block on hashing errors
         pass
     # Guardrails: max size and allowed MIME
-    import os as _os
     import mimetypes as _m
     max_bytes = int(_os.getenv("WORKFLOWS_ARTIFACT_MAX_DOWNLOAD_BYTES", "10485760"))
     try:

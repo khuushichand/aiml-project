@@ -15,9 +15,10 @@ from pydantic import Field, field_validator
 from loguru import logger
 try:
     # Prefer centralized loader to honor project config precedence
-    from tldw_Server_API.app.core.config import load_comprehensive_config
+    from tldw_Server_API.app.core.config import load_comprehensive_config, settings as core_settings
 except Exception:
     load_comprehensive_config = None  # Fallback if import graph changes
+    core_settings = None
 
 #######################################################################################################################
 #
@@ -755,6 +756,14 @@ def get_settings() -> Settings:
     if not _settings:
         overrides = _load_overrides_from_config()
         _settings = Settings(**overrides)
+        try:
+            base_dir = None
+            if core_settings:
+                base_dir = core_settings.get("USER_DB_BASE_DIR")
+            if base_dir:
+                _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
+        except Exception as exc:
+            logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
         # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic
         try:
             import os as _os, sys as _sys

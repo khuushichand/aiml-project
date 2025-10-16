@@ -50,6 +50,9 @@ Example PromQL:
 
 ## Embeddings (core)
 - `embeddings_generated_total{provider,model}`: Counter of embeddings created.
+- `hyde_questions_generated_total{provider,model,source}`: HYDE/doc2query questions emitted by embedding pipeline or backfill.
+- `hyde_generation_failures_total{provider,model,source,reason}`: HYDE question generation failures (non-blocking).
+- `hyde_vectors_written_total{store}`: HYDE vectors written to the configured vector store adapter.
 - `embedding_generation_duration_seconds{provider,model}`: Histogram of generation time.
 
 ## Embeddings v5 endpoint

@@ -2327,13 +2327,45 @@ async def health_check():
                 "last_failure": status_info["last_failure_time"]
             }
     
+    try:
+        hyde_enabled = bool(settings.get("HYDE_ENABLED", False))
+    except Exception:
+        hyde_enabled = False
+    try:
+        hyde_questions = int(settings.get("HYDE_QUESTIONS_PER_CHUNK", 0) or 0)
+    except Exception:
+        hyde_questions = 0
+    hyde_info = {
+        "enabled": hyde_enabled,
+        "questions_per_chunk": hyde_questions,
+    }
+    hyde_provider = settings.get("HYDE_PROVIDER")
+    hyde_model = settings.get("HYDE_MODEL")
+    if hyde_provider:
+        hyde_info["provider"] = hyde_provider
+    if hyde_model:
+        hyde_info["model"] = hyde_model
+    hyde_weight = settings.get("HYDE_WEIGHT_QUESTION_MATCH")
+    if hyde_weight is not None:
+        try:
+            hyde_info["weight"] = float(hyde_weight)
+        except Exception:
+            pass
+    hyde_k_fraction = settings.get("HYDE_K_FRACTION")
+    if hyde_k_fraction is not None:
+        try:
+            hyde_info["k_fraction"] = float(hyde_k_fraction)
+        except Exception:
+            pass
+    
     health_status = {
         "status": "healthy" if EMBEDDINGS_AVAILABLE else "degraded",
         "service": "embeddings_v5_production_enhanced",
         "timestamp": datetime.utcnow().isoformat(),
         "cache_stats": embedding_cache.stats(),
         "active_requests": active_embedding_requests._value.get(),
-        "circuit_breakers": breaker_status
+        "circuit_breakers": breaker_status,
+        "hyde": hyde_info,
     }
     
     if not EMBEDDINGS_AVAILABLE:

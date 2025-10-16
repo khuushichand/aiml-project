@@ -38,6 +38,7 @@ class WebUI {
 
         // Start DLQ badge updates
         this.startDlqBadgeUpdates();
+        this.startHydeStatusUpdates();
 
         // Apply capability-based visibility (hide experimental tabs dynamically)
         this.applyFeatureVisibilityFromServer();
@@ -342,6 +343,20 @@ class WebUI {
         };
         update();
         setInterval(update, 30000);
+    }
+
+    startHydeStatusUpdates() {
+        const update = async () => {
+            try {
+                if (typeof embeddingsRefreshHydeStatus === 'function') {
+                    await embeddingsRefreshHydeStatus();
+                }
+            } catch (e) {
+                // ignore
+            }
+        };
+        update();
+        setInterval(update, 60000);
     }
 
     showContent(contentId) {

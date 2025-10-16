@@ -13,6 +13,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 #######################################################################################################################
 #
@@ -531,22 +532,35 @@ async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
 def get_user_db_path(user_id: int, db_name: str = "media") -> str:
     """
-    Construct the file path for a user's personal database.
-    
+    Resolve the canonical path for a user's database file.
+
     Args:
         user_id: The user's ID
-        db_name: Name of the database (default: "media")
-        
+        db_name: Logical database key (media, chacha, prompts, audit, evaluations, personalization, etc.)
+
     Returns:
-        Path to the user's database file
-        
-    Example:
-        >>> get_user_db_path(123, "media")
-        './user_databases/user_123/media.db'
+        Absolute path to the requested database file as a string.
     """
-    settings = get_settings()
-    base_path = settings.USER_DATA_BASE_PATH
-    return f"{base_path}/user_{user_id}/{db_name}.db"
+    db_name_normalized = (db_name or "media").strip().lower()
+    path_getters = {
+        "media": DatabasePaths.get_media_db_path,
+        "chacha": DatabasePaths.get_chacha_db_path,
+        "chachanotes": DatabasePaths.get_chacha_db_path,
+        "prompts": DatabasePaths.get_prompts_db_path,
+        "audit": DatabasePaths.get_audit_db_path,
+        "evaluations": DatabasePaths.get_evaluations_db_path,
+        "personalization": DatabasePaths.get_personalization_db_path,
+        "workflows": DatabasePaths.get_workflows_db_path,
+    }
+
+    getter = path_getters.get(db_name_normalized)
+    if getter:
+        return str(getter(user_id))
+
+    # Fallback: place custom databases alongside the canonical user directory
+    fallback_path = DatabasePaths.get_user_base_directory(user_id) / f"{db_name_normalized}.db"
+    fallback_path.parent.mkdir(parents=True, exist_ok=True)
+    return str(fallback_path)
 
 
 def get_user_chromadb_path(user_id: int) -> str:
@@ -559,9 +573,10 @@ def get_user_chromadb_path(user_id: int) -> str:
     Returns:
         Path to the user's ChromaDB directory
     """
-    settings = get_settings()
-    base_path = settings.CHROMADB_BASE_PATH
-    return f"{base_path}/user_{user_id}"
+    base_dir = DatabasePaths.get_user_base_directory(user_id)
+    chroma_path = base_dir / "chroma_storage"
+    chroma_path.mkdir(parents=True, exist_ok=True)
+    return str(chroma_path)
 
 
 async def get_user_media_db(user_id: int, db_name: str = "media"):
@@ -578,15 +593,10 @@ async def get_user_media_db(user_id: int, db_name: str = "media"):
     Note:
         This creates the user directory structure if it doesn't exist.
     """
-    import os
     from pathlib import Path
     
-    # Get the database path
-    db_path = get_user_db_path(user_id, db_name)
-    
-    # Ensure the directory exists
-    db_dir = Path(db_path).parent
-    db_dir.mkdir(parents=True, exist_ok=True)
+    # Get the database path (ensures directory exists)
+    db_path = Path(get_user_db_path(user_id, db_name))
     
     # Import MediaDatabase (avoid circular import)
     try:
@@ -594,7 +604,7 @@ async def get_user_media_db(user_id: int, db_name: str = "media"):
         
         # Create and return the database instance
         # The MediaDatabase class should handle initialization
-        db_instance = MediaDatabase(db_path)
+        db_instance = MediaDatabase(str(db_path))
         return db_instance
         
     except ImportError as e:
@@ -611,17 +621,14 @@ async def ensure_user_directories(user_id: int):
     """
     from pathlib import Path
     
-    settings = get_settings()
-    
-    # Create user database directory
-    db_dir = Path(f"{settings.USER_DATA_BASE_PATH}/user_{user_id}")
-    db_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create user ChromaDB directory
-    chroma_dir = Path(f"{settings.CHROMADB_BASE_PATH}/user_{user_id}")
+    # Ensure database structure via centralized helpers
+    DatabasePaths.validate_database_structure(user_id)
+
+    # Ensure Chroma storage directory exists alongside other user assets
+    chroma_dir = Path(get_user_chromadb_path(user_id))
     chroma_dir.mkdir(parents=True, exist_ok=True)
     
-    logger.debug(f"Ensured directories exist for user {user_id}")
+    logger.debug(f"Ensured directories exist for user {user_id} -> {DatabasePaths.get_user_base_directory(user_id)}")
 
 
 async def cleanup_user_data(user_id: int):
@@ -635,21 +642,11 @@ async def cleanup_user_data(user_id: int):
         This permanently deletes all user data!
     """
     import shutil
-    from pathlib import Path
     
-    settings = get_settings()
-    
-    # Remove user database directory
-    db_dir = Path(f"{settings.USER_DATA_BASE_PATH}/user_{user_id}")
-    if db_dir.exists():
-        shutil.rmtree(db_dir)
-        logger.info(f"Removed database directory for user {user_id}")
-    
-    # Remove user ChromaDB directory
-    chroma_dir = Path(f"{settings.CHROMADB_BASE_PATH}/user_{user_id}")
-    if chroma_dir.exists():
-        shutil.rmtree(chroma_dir)
-        logger.info(f"Removed ChromaDB directory for user {user_id}")
+    base_dir = DatabasePaths.get_user_base_directory(user_id)
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+        logger.info(f"Removed user data directory for user {user_id}: {base_dir}")
 
 
 #

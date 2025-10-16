@@ -71,6 +71,10 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
             <span class="badge" id="dlq-badge-storage2" title="Storage DLQ depth" style="margin-left:6px;">storage: 0</span>
             <button class="api-button" style="margin-left:8px;" onclick="embeddingsRefreshDLQBadges()">Refresh DLQ</button>
         </div>
+        <div style="margin: 6px 0;">
+            <span class="badge badge-info" id="hyde-status-badge" title="HYDE/doc2query status">HYDE: loading…</span>
+            <button class="api-button" style="margin-left:8px;" onclick="embeddingsRefreshHydeStatus()">Refresh HYDE</button>
+        </div>
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/embeddings/health - Health Check</span>

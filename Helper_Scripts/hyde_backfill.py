@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Sequence
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Metrics import increment_counter
+
 
 async def _run(args: argparse.Namespace) -> int:
     # Deferred imports to avoid heavy deps unless invoked
@@ -38,6 +40,13 @@ async def _run(args: argparse.Namespace) -> int:
         return 2
     adapter = base  # already an initialized adapter factory returns adapter
     await adapter.initialize()
+    raw_store_type = getattr(getattr(adapter, "config", None), "store_type", None)
+    if raw_store_type is None:
+        store_label = "unknown"
+    else:
+        store_label = str(getattr(raw_store_type, "value", raw_store_type))
+        if not store_label:
+            store_label = "unknown"
 
     # HYDE config
     hyde_n = int(settings.get("HYDE_QUESTIONS_PER_CHUNK", 3) or 3)
@@ -47,6 +56,11 @@ async def _run(args: argparse.Namespace) -> int:
     hyde_max_tokens = int(settings.get("HYDE_MAX_TOKENS", 96) or 96)
     hyde_lang_cfg = str(settings.get("HYDE_LANGUAGE", "auto") or "auto").lower()
     hyde_ver = settings.get("HYDE_PROMPT_VERSION", 1)
+    hyde_metric_labels = {
+        "provider": hyde_provider or "unknown",
+        "model": hyde_model or "unknown",
+        "source": "backfill",
+    }
 
     # Build embedding app-config once per (provider, model) pair
     @lru_cache(maxsize=8)
@@ -127,10 +141,20 @@ async def _run(args: argparse.Namespace) -> int:
                     prompt_version=hyde_ver,
                 )
             except Exception as e:
+                increment_counter(
+                    "hyde_generation_failures_total",
+                    1,
+                    labels={**hyde_metric_labels, "reason": type(e).__name__},
+                )
                 logger.warning(f"HYDE generation failed for {chunk_id}: {e}")
                 continue
             if not questions:
                 continue
+            increment_counter(
+                "hyde_questions_generated_total",
+                len(questions),
+                labels=hyde_metric_labels,
+            )
             logger.debug(f"Chunk {chunk_id}: generated {len(questions)} HYDE questions")
             if args.dry_run:
                 logger.info(f"Would upsert {len(questions)} HYDE vectors for chunk {chunk_id}")
@@ -190,6 +214,11 @@ async def _run(args: argparse.Namespace) -> int:
             if not ids:
                 continue
             await adapter.upsert_vectors(store, ids=ids, vectors=vecs, documents=docs, metadatas=metas)
+            increment_counter(
+                "hyde_vectors_written_total",
+                len(ids),
+                labels={"store": store_label or "unknown"},
+            )
             total_upserted += len(ids)
         offset += len(items)
         if len(items) < limit:

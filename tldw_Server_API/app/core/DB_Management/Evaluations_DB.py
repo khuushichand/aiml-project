@@ -223,11 +223,11 @@ class EvaluationsDatabase:
                     eval_type TEXT NOT NULL,
                     eval_spec TEXT NOT NULL,
                     dataset_id TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     created_by TEXT,
                     metadata TEXT,
-                    deleted_at TIMESTAMP NULL
+                    deleted_at TEXT NULL
                 )
             """)
             
@@ -242,9 +242,9 @@ class EvaluationsDatabase:
                     progress TEXT,
                     results TEXT,
                     error_message TEXT,
-                    started_at TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     webhook_url TEXT,
                     usage TEXT,
                     FOREIGN KEY (eval_id) REFERENCES evaluations(id)
@@ -259,7 +259,7 @@ class EvaluationsDatabase:
                     description TEXT,
                     samples TEXT NOT NULL,
                     sample_count INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     created_by TEXT,
                     metadata TEXT
                 )
@@ -270,13 +270,13 @@ class EvaluationsDatabase:
                 CREATE TABLE IF NOT EXISTS internal_evaluations (
                     evaluation_id TEXT PRIMARY KEY,
                     evaluation_type TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     input_data TEXT,
                     results TEXT,
                     metadata TEXT,
                     user_id TEXT,
                     status TEXT DEFAULT 'pending',
-                    completed_at TIMESTAMP,
+                    completed_at TEXT,
                     embedding_provider TEXT,
                     embedding_model TEXT
                 )
@@ -287,8 +287,8 @@ class EvaluationsDatabase:
                 CREATE TABLE IF NOT EXISTS pipeline_presets (
                     name TEXT PRIMARY KEY,
                     config TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     user_id TEXT
                 )
             """)
@@ -300,8 +300,8 @@ class EvaluationsDatabase:
                     namespace TEXT,
                     run_id TEXT,
                     ttl_seconds INTEGER DEFAULT 86400,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    deleted_at TIMESTAMP NULL
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at TEXT NULL
                 )
             """)
             
@@ -319,10 +319,10 @@ class EvaluationsDatabase:
                     total_deliveries INTEGER DEFAULT 0,
                     successful_deliveries INTEGER DEFAULT 0,
                     failed_deliveries INTEGER DEFAULT 0,
-                    last_delivery_at TIMESTAMP,
+                    last_delivery_at TEXT,
                     last_error TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     webhook_id TEXT
                 )
             """)
@@ -346,7 +346,7 @@ class EvaluationsDatabase:
                     entity_type TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL,
                     entity_id TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(user_id, entity_type, idempotency_key)
                 )
                 """
@@ -358,7 +358,7 @@ class EvaluationsDatabase:
                     test_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     created_by TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     status TEXT NOT NULL DEFAULT 'pending',
                     config_json TEXT NOT NULL,
                     stats_json TEXT,
@@ -409,7 +409,7 @@ class EvaluationsDatabase:
                     ranked_metadatas TEXT,
                     ranked_documents TEXT,
                     rerank_scores TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id),
                     FOREIGN KEY (arm_id) REFERENCES embedding_abtest_arms(arm_id),
                     FOREIGN KEY (query_id) REFERENCES embedding_abtest_queries(query_id)

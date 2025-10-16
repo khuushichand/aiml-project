@@ -195,7 +195,23 @@ class DatabasePool:
                 await conn.execute("BEGIN")
                 
                 try:
-                    yield conn
+                    # Yield a shim that normalizes execute() parameter passing for SQLite
+                    class _SQLiteConnShim:
+                        def __init__(self, _c):
+                            self._c = _c
+                        async def execute(self, query: str, *args):
+                            # Accept both variadic params and single-sequence params
+                            q = _normalize_sqlite_sql(query)
+                            if len(args) == 0:
+                                return await self._c.execute(q)
+                            params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple, dict))) else args
+                            if isinstance(params, dict):
+                                return await self._c.execute(q, params)
+                            return await self._c.execute(q, tuple(params))
+                        def __getattr__(self, name: str):
+                            return getattr(self._c, name)
+
+                    yield _SQLiteConnShim(conn)
                     await conn.commit()
                 except Exception:
                     await conn.rollback()
@@ -242,7 +258,22 @@ class DatabasePool:
                 conn = await aiosqlite.connect(self.db_path)
                 await conn.execute("PRAGMA foreign_keys = ON")
                 conn.row_factory = aiosqlite.Row
-                yield conn
+                # Yield a shim with normalized execute() signature (see transaction())
+                class _SQLiteConnShim:
+                    def __init__(self, _c):
+                        self._c = _c
+                    async def execute(self, query: str, *args):
+                        q = _normalize_sqlite_sql(query)
+                        if len(args) == 0:
+                            return await self._c.execute(q)
+                        params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple, dict))) else args
+                        if isinstance(params, dict):
+                            return await self._c.execute(q, params)
+                        return await self._c.execute(q, tuple(params))
+                    def __getattr__(self, name: str):
+                        return getattr(self._c, name)
+
+                yield _SQLiteConnShim(conn)
             finally:
                 if conn:
                     await conn.close()

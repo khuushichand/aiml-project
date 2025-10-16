@@ -3,6 +3,8 @@ import types
 
 import pytest
 
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
 from tldw_Server_API.app.core.Embeddings.workers.embedding_worker import EmbeddingWorker, EmbeddingWorkerConfig
 from tldw_Server_API.app.core.Embeddings.queue_schemas import EmbeddingMessage, ChunkData
 
@@ -44,6 +46,9 @@ class _HYDEEmbeddingWorker(EmbeddingWorker):
 def test_hyde_option_a_inlines_generation(monkeypatch):
     # Patch settings inside the module under test
     import tldw_Server_API.app.core.Embeddings.workers.embedding_worker as emb_mod
+    registry = get_metrics_registry()
+    registry.values.pop("hyde_questions_generated_total", None)
+    registry.values.pop("hyde_generation_failures_total", None)
     # Enable HYDE with N=2 and fixed provider/model
     emb_mod.settings["HYDE_ENABLED"] = True
     emb_mod.settings["HYDE_QUESTIONS_PER_CHUNK"] = 2
@@ -97,4 +102,9 @@ def test_hyde_option_a_inlines_generation(monkeypatch):
             assert e.metadata.get("parent_chunk_id") == "c1"
             assert "question_hash" in e.metadata
             assert e.metadata.get("hyde_prompt_version") == 1
-
+    stats = registry.get_metric_stats(
+        "hyde_questions_generated_total",
+        labels={"provider": "openai", "model": "gpt-4o-mini", "source": "worker"},
+    )
+    assert stats and stats.get("sum") == 2
+    assert not registry.get_metric_stats("hyde_generation_failures_total")

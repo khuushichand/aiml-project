@@ -55,8 +55,6 @@ def test_ttl_sweep_cancel(monkeypatch, tmp_path):
 
     # Ensure this one is acquired: higher numeric priority wins in DESC ordering
     j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=10)
-    # Ensure this one is acquired by giving it higher priority (lower number)
-    j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=1)
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w1")
     assert acq is not None
     _backdate_sqlite_fields(int(acq["id"]), runtime_delta_s=3_600 * 3)  # running 3h
@@ -99,8 +97,6 @@ def test_ttl_sweep_fail(monkeypatch, tmp_path):
 
     # Make this one the processing target: higher numeric priority wins in DESC ordering
     j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=10)
-    # Make this one the processing target (higher priority)
-    j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=1)
     # And a second queued job that is old enough for age TTL
     j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     _backdate_sqlite_fields(int(j2["id"]), created_delta_s=3_600 * 2)

@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from enum import Enum
 from loguru import logger
 import asyncio
-from pathlib import Path
 import threading
 
 # Import configuration management
@@ -131,10 +130,8 @@ class UserRateLimiter:
             db_path: Path to rate limiting database
         """
         if db_path is None:
-            # Backward-compat: default to legacy global evaluations DB
-            db_dir = Path(__file__).parent.parent.parent.parent / "Databases"
-            db_dir.mkdir(parents=True, exist_ok=True)
-            db_path = db_dir / "evaluations.db"
+            # Default to canonical per-user evaluations DB (single-user ID in legacy contexts)
+            db_path = DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id())
         
         self.db_path = str(db_path)
         self._init_database()
@@ -164,9 +161,9 @@ class UserRateLimiter:
                     max_cost_per_day REAL DEFAULT 10.0,
                     max_cost_per_month REAL DEFAULT 100.0,
                     custom_limits TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    expires_at TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TEXT,
                     notes TEXT
                 )
             """)
@@ -177,7 +174,7 @@ class UserRateLimiter:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
                     endpoint TEXT NOT NULL,
-                    timestamp TIMESTAMP NOT NULL,
+                    timestamp TEXT NOT NULL,
                     tokens_used INTEGER DEFAULT 0,
                     cost REAL DEFAULT 0.0
                 )
@@ -192,7 +189,7 @@ class UserRateLimiter:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS daily_usage (
                     user_id TEXT NOT NULL,
-                    date DATE NOT NULL,
+                    date TEXT NOT NULL,
                     total_evaluations INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
                     total_cost REAL DEFAULT 0.0,
@@ -397,7 +394,7 @@ class UserRateLimiter:
                 SELECT total_evaluations, total_tokens, total_cost
                 FROM daily_usage
                 WHERE user_id = ? AND date = ?
-            """, (user_id, today))
+            """, (user_id, str(today)))
             
             row = cursor.fetchone()
             
@@ -465,7 +462,7 @@ class UserRateLimiter:
                     total_evaluations = total_evaluations + 1,
                     total_tokens = total_tokens + ?,
                     total_cost = total_cost + ?
-            """, (user_id, today, tokens_used, cost, tokens_used, cost))
+            """, (user_id, str(today), tokens_used, cost, tokens_used, cost))
             
             conn.commit()
     
@@ -593,7 +590,7 @@ class UserRateLimiter:
                 SELECT total_evaluations, total_tokens, total_cost
                 FROM daily_usage
                 WHERE user_id = ? AND date = ?
-            """, (user_id, today))
+            """, (user_id, str(today)))
             
             row = cursor.fetchone()
             
@@ -608,7 +605,7 @@ class UserRateLimiter:
                 SELECT SUM(total_cost)
                 FROM daily_usage
                 WHERE user_id = ? AND date >= ?
-            """, (user_id, month_start))
+            """, (user_id, str(month_start)))
             
             monthly_cost = cursor.fetchone()[0] or 0.0
         

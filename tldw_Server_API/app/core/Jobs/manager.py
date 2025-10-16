@@ -1192,7 +1192,7 @@ class JobManager:
                                     "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
                                     "  )"
                                     + (" AND owner_user_id = %s" if owner_user_id else "") +
-                                    "  ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                                    "  ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                                     ")"
                                     "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
                                     "WHERE id IN (SELECT id FROM picked) RETURNING *"
@@ -1226,7 +1226,7 @@ class JobManager:
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
-                            # Stable ordering: priority ASC (lower number is higher priority), then available/created asc, then id asc
+                            # Stable ordering: priority DESC (higher numeric first), then available/created asc, then id asc
                             base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
@@ -1870,32 +1870,46 @@ class JobManager:
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
+                        now_ts = self._clock.now_utc()
                         for it in items:
                             secs = max(1, min(int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600"), int(it.get("seconds") or 0)))
                             if enforce:
                                 cur.execute(
-                                    "UPDATE jobs SET leased_until = GREATEST(COALESCE(leased_until, NOW()), NOW() + (%s || ' seconds')::interval) WHERE id = %s AND status='processing' AND worker_id = %s AND lease_id = %s",
-                                    (secs, int(it.get("job_id")), it.get("worker_id"), it.get("lease_id")),
+                                    (
+                                        "UPDATE jobs SET leased_until = GREATEST(COALESCE(leased_until, %s), %s + (%s || ' seconds')::interval) "
+                                        "WHERE id = %s AND status='processing' AND worker_id = %s AND lease_id = %s"
+                                    ),
+                                    (now_ts, now_ts, secs, int(it.get("job_id")), it.get("worker_id"), it.get("lease_id")),
                                 )
                             else:
                                 cur.execute(
-                                    "UPDATE jobs SET leased_until = GREATEST(COALESCE(leased_until, NOW()), NOW() + (%s || ' seconds')::interval) WHERE id = %s AND status='processing'",
-                                    (secs, int(it.get("job_id"))),
+                                    (
+                                        "UPDATE jobs SET leased_until = GREATEST(COALESCE(leased_until, %s), %s + (%s || ' seconds')::interval) "
+                                        "WHERE id = %s AND status='processing'"
+                                    ),
+                                    (now_ts, now_ts, secs, int(it.get("job_id"))),
                                 )
                             affected += cur.rowcount or 0
             else:
                 with conn:
                     for it in items:
                         secs = max(1, min(int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600"), int(it.get("seconds") or 0)))
+                        now_str = self._clock.now_utc().astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
                         if enforce:
                             conn.execute(
-                                "UPDATE jobs SET leased_until = MAX(COALESCE(leased_until, DATETIME('now')), DATETIME('now', ?)) WHERE id = ? AND status='processing' AND worker_id = ? AND lease_id = ?",
-                                (f"+{secs} seconds", int(it.get("job_id")), it.get("worker_id"), it.get("lease_id")),
+                                (
+                                    "UPDATE jobs SET leased_until = MAX(COALESCE(leased_until, DATETIME(?)), DATETIME(?, ?)) "
+                                    "WHERE id = ? AND status='processing' AND worker_id = ? AND lease_id = ?"
+                                ),
+                                (now_str, now_str, f"+{secs} seconds", int(it.get("job_id")), it.get("worker_id"), it.get("lease_id")),
                             )
                         else:
                             conn.execute(
-                                "UPDATE jobs SET leased_until = MAX(COALESCE(leased_until, DATETIME('now')), DATETIME('now', ?)) WHERE id = ? AND status='processing'",
-                                (f"+{secs} seconds", int(it.get("job_id"))),
+                                (
+                                    "UPDATE jobs SET leased_until = MAX(COALESCE(leased_until, DATETIME(?)), DATETIME(?, ?)) "
+                                    "WHERE id = ? AND status='processing'"
+                                ),
+                                (now_str, now_str, f"+{secs} seconds", int(it.get("job_id"))),
                             )
                         affected += conn.total_changes or 0
             return int(affected)
@@ -3170,6 +3184,24 @@ class JobManager:
                     if dry_run:
                         return count
                     if set_now:
+                        # When moving to now, queued scheduled -> queued ready: update counters if enabled
+                        try:
+                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                now_ts = self._clock.now_utc()
+                                cur.execute(
+                                    (
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                        "AND status='queued' AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type"
+                                    ),
+                                    tuple(params + [now_ts]),
+                                )
+                                for r in (cur.fetchall() or []):
+                                    cur.execute(
+                                        "UPDATE job_counters SET scheduled_count = GREATEST(scheduled_count - %s, 0), ready_count = job_counters.ready_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                        (int(r["c"]), int(r["c"]), r["domain"], r["queue"], r["job_type"]),
+                                    )
+                        except Exception:
+                            pass
                         cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))
                     else:
                         if delta_seconds is None:
@@ -3194,6 +3226,26 @@ class JobManager:
                     return count
                 with conn:
                     if set_now:
+                        # Counters: queued scheduled -> queued ready for matching scope
+                        try:
+                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                now_str = self._clock.now_utc().astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+                                for r in conn.execute(
+                                    (
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "
+                                        "AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME(?)) GROUP BY domain,queue,job_type"
+                                    ),
+                                    tuple(params + [now_str])
+                                ).fetchall() or []:
+                                    conn.execute(
+                                        (
+                                            "UPDATE job_counters SET scheduled_count = CASE WHEN (scheduled_count - ?) < 0 THEN 0 ELSE scheduled_count - ? END, "
+                                            "ready_count = ready_count + ?, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?"
+                                        ),
+                                        (int(r[3]), int(r[3]), int(r[3]), r[0], r[1], r[2]),
+                                    )
+                        except Exception:
+                            pass
                         conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))
                     else:
                         if delta_seconds is None:
@@ -3244,6 +3296,24 @@ class JobManager:
                     with conn:
                         cur.execute(f"UPDATE jobs SET status='queued', available_at=NOW() WHERE {wh} AND status='failed' AND retry_count < max_retries", tuple(params))
                         if not only_failed:
+                            # Counters: queued scheduled -> queued ready
+                            try:
+                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                    now_ts = self._clock.now_utc()
+                                    cur.execute(
+                                        (
+                                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                            "AND status='queued' AND available_at > %s GROUP BY domain,queue,job_type"
+                                        ),
+                                        tuple(params + [now_ts]),
+                                    )
+                                    for r in (cur.fetchall() or []):
+                                        cur.execute(
+                                            "UPDATE job_counters SET scheduled_count = GREATEST(scheduled_count - %s, 0), ready_count = job_counters.ready_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                            (int(r["c"]), int(r["c"]), r["domain"], r["queue"], r["job_type"]),
+                                        )
+                            except Exception:
+                                pass
                             cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at > NOW()", tuple(params))
                     return count
             else:
@@ -3269,6 +3339,22 @@ class JobManager:
                 with conn:
                     conn.execute(f"UPDATE jobs SET status='queued', available_at=DATETIME('now') WHERE {wh} AND status='failed' AND retry_count < max_retries", tuple(params))
                     if not only_failed:
+                        # Counters: queued scheduled -> queued ready
+                        try:
+                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                for r in conn.execute(
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} AND status='queued' AND available_at > DATETIME('now') GROUP BY domain,queue,job_type",
+                                    tuple(params),
+                                ).fetchall() or []:
+                                    conn.execute(
+                                        (
+                                            "UPDATE job_counters SET scheduled_count = CASE WHEN (scheduled_count - ?) < 0 THEN 0 ELSE scheduled_count - ? END, "
+                                            "ready_count = ready_count + ?, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?"
+                                        ),
+                                        (int(r[3]), int(r[3]), int(r[3]), r[0], r[1], r[2]),
+                                    )
+                        except Exception:
+                            pass
                         conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at > DATETIME('now')", tuple(params))
                 return count
         finally:

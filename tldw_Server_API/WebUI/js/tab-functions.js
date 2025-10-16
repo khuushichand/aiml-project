@@ -562,7 +562,50 @@ async function embeddingsRefreshDLQBadges() {
         apply(badgeE2, 'embedding', map.embedding);
         apply(badgeC2, 'chunking', map.chunking);
         apply(badgeS2, 'storage', map.storage);
+        if (typeof embeddingsRefreshHydeStatus === 'function') {
+            await embeddingsRefreshHydeStatus();
+        }
     } catch (e) { /* ignore */ }
+}
+
+async function embeddingsRefreshHydeStatus() {
+    const badge = document.getElementById('hyde-status-badge');
+    if (!badge) return;
+    try {
+        const res = await apiClient.get('/api/v1/embeddings/health');
+        const hyde = (res && res.hyde) || {};
+        const enabled = !!hyde.enabled;
+        const infoParts = [];
+        const questionsPerChunk = hyde.questions_per_chunk;
+        if (enabled) {
+            if (typeof questionsPerChunk === 'number' && questionsPerChunk > 0) {
+                infoParts.push(`N=${questionsPerChunk}`);
+            }
+            if (hyde.provider && hyde.model) {
+                infoParts.push(`${hyde.provider}/${hyde.model}`);
+            } else if (hyde.provider) {
+                infoParts.push(`${hyde.provider}`);
+            }
+            if (hyde.weight !== undefined && hyde.weight !== null) {
+                const weight = Number.parseFloat(hyde.weight);
+                if (!Number.isNaN(weight)) {
+                    infoParts.push(`w=${weight.toFixed(2)}`);
+                }
+            }
+            badge.textContent = infoParts.length ? `HYDE: Enabled (${infoParts.join(', ')})` : 'HYDE: Enabled';
+            badge.classList.remove('badge-alert', 'badge-warning', 'badge-info');
+            badge.classList.add('badge-success');
+        } else {
+            const pending = (typeof questionsPerChunk === 'number' && questionsPerChunk > 0);
+            badge.textContent = pending ? `HYDE: Disabled (N=${questionsPerChunk})` : 'HYDE: Disabled';
+            badge.classList.remove('badge-success', 'badge-warning', 'badge-info');
+            badge.classList.add('badge-alert');
+        }
+    } catch (e) {
+        badge.textContent = 'HYDE: Unknown';
+        badge.classList.remove('badge-success');
+        badge.classList.add('badge-warning');
+    }
 }
 
 async function embeddingsSetDLQState(entryId, state) {

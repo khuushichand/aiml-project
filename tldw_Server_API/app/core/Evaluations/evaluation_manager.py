@@ -15,7 +15,7 @@ import uuid
 import sqlite3
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import asyncio
 from loguru import logger
@@ -29,87 +29,79 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 class EvaluationManager:
-    """Manages evaluation operations and persistence"""
+    """Manages evaluation operations and persistence."""
     
-    def __init__(self):
+    def __init__(self, db_path: Optional[Union[str, Path]] = None, *, user_id: Optional[int] = None):
         self.config = load_comprehensive_config()
-        self.db_path = self._get_db_path()
+        self._user_id = int(user_id) if user_id is not None else DatabasePaths.get_single_user_id()
+        self.db_path = self._get_db_path(explicit_path=db_path)
         self._init_database()
         # Session identifier to isolate list operations within the lifetime of this manager
         self._session_id = uuid.uuid4().hex
         # Track evaluations created since last listing (for property tests)
         self._recent_created_ids: list[str] = []
     
-    def _get_db_path(self) -> Path:
-        """Get a safe evaluations database path.
+    def _get_db_path(self, explicit_path: Optional[Union[str, Path]] = None) -> Path:
+        """Resolve a safe evaluations database path.
 
         Rules:
-        - Default to the per-user evaluations DB under the project `Databases` tree
-        - If a path is provided in config, only accept it when it resolves within the
-          allowed evaluations directory for the current (single) user
-        - Reject absolute paths outside the allowed directory and any traversal attempts
-          by falling back to the default path
+        - Default to the per-user evaluations DB derived from DatabasePaths
+        - If an explicit db_path argument is provided, honor it (after sanitization)
+        - Config-provided paths must resolve within the per-user base directory; otherwise
+          fall back to the default path
         - Strip any null bytes
         """
-        # Default safe location anchored to the project 'Databases' directory
-        # Tests expect fallback paths like '<project>/tldw_Server_API/Databases/evaluations.db'
-        project_root = Path(__file__).resolve().parents[4]  # .../tldw_Server_API
-        allowed_root: Path = (project_root / "Databases").resolve()
-        default_path: Path = (allowed_root / "evaluations.db").resolve()
+        base_dir = DatabasePaths.get_user_base_directory(self._user_id)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        default_path: Path = DatabasePaths.get_evaluations_db_path(self._user_id).resolve()
+        base_resolved = base_dir.resolve()
 
         # Read candidate from config if present
+        if explicit_path is not None:
+            candidate_str = str(explicit_path).replace("\x00", "")
+            try:
+                candidate_path = Path(candidate_str).expanduser()
+                candidate_path = candidate_path.resolve()
+            except Exception:
+                logger.warning(f"EvaluationManager: failed to resolve explicit db_path '{candidate_str}', using default.")
+                candidate_path = default_path
+            candidate_path.parent.mkdir(parents=True, exist_ok=True)
+            return candidate_path
+
         candidate_str: Optional[str] = None
         if self.config and self.config.has_section("Database"):
             candidate_str = self.config.get(
                 "Database",
                 "evaluations_db_path",
-                fallback=str(default_path)
+                fallback=None
             )
-        else:
-            candidate_str = str(default_path)
 
-        # Basic sanitization: remove null bytes
-        candidate_str = candidate_str.replace("\x00", "") if candidate_str else str(default_path)
+        candidate_path: Path = default_path
 
-        try:
-            candidate = Path(candidate_str)
-        except (TypeError, ValueError):
-            # If it's not a valid path-like, fall back
-            candidate = default_path
-
-        def _is_within(child: Path, parent: Path) -> bool:
+        if candidate_str:
+            candidate_str = candidate_str.replace("\x00", "")
             try:
-                child_resolved = child.resolve()
-                parent_resolved = parent.resolve()
-                # Python 3.9+: Path.is_relative_to
-                return child_resolved.is_relative_to(parent_resolved)
-            except AttributeError:
-                # Fallback for older Python (not expected here)
-                try:
-                    child_resolved.relative_to(parent_resolved)
-                    return True
-                except Exception:
-                    return False
+                raw_candidate = Path(candidate_str)
+            except (TypeError, ValueError):
+                raw_candidate = default_path
+
+            try:
+                if not raw_candidate.is_absolute():
+                    candidate_path = (base_dir / raw_candidate).resolve()
+                else:
+                    candidate_path = raw_candidate.resolve()
             except Exception:
-                return False
-
-        safe_path: Path
-        try:
-            if not candidate.is_absolute():
-                # Treat as relative to allowed_root and normalize
-                tentative = (allowed_root / candidate).resolve()
-                safe_path = tentative if _is_within(tentative, allowed_root) else default_path
+                logger.warning(f"EvaluationManager: failed to resolve evaluations_db_path '{candidate_str}', using default.")
+                candidate_path = default_path
             else:
-                # Absolute path: only accept if it lives under allowed_root
-                candidate_resolved = candidate.resolve()
-                safe_path = candidate_resolved if _is_within(candidate_resolved, allowed_root) else default_path
-        except Exception:
-            # Any resolution error → fall back
-            safe_path = default_path
+                try:
+                    candidate_path.relative_to(base_resolved)
+                except Exception:
+                    logger.warning(f"EvaluationManager: rejecting evaluations_db_path outside user directory: {candidate_path}")
+                    candidate_path = default_path
 
-        # Ensure directory exists for the chosen safe path
-        safe_path.parent.mkdir(parents=True, exist_ok=True)
-        return safe_path
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        return candidate_path
     
     def _init_database(self):
         """Initialize evaluation database using migration system"""

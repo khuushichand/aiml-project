@@ -53,11 +53,24 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
     timeout_s = float(os.getenv("JOBS_WEBHOOKS_TIMEOUT_SEC", "5") or "5")
     jm = JobManager()
     after_id = 0
-    # Resume from last seen id if provided
+    # Persistent cursor path (opt-in via env, defaults under Databases/)
+    cursor_path = os.getenv("JOBS_WEBHOOKS_CURSOR_PATH") or os.path.join(os.getcwd(), "Databases", "jobs_webhooks_cursor.txt")
+    # Resume from persisted cursor if present, unless explicitly overridden by env
+    persisted_after = None
     try:
-        after_id = int(os.getenv("JOBS_WEBHOOKS_AFTER_ID", "0") or 0)
+        if cursor_path and os.path.exists(cursor_path):
+            with open(cursor_path, "r", encoding="utf-8") as f:
+                persisted_after = int((f.read() or "0").strip() or 0)
     except Exception:
-        after_id = 0
+        persisted_after = None
+    try:
+        env_after = int(os.getenv("JOBS_WEBHOOKS_AFTER_ID", "0") or 0)
+    except Exception:
+        env_after = 0
+    if env_after:
+        after_id = env_after
+    elif persisted_after:
+        after_id = persisted_after
     logger.info("Starting Jobs webhooks worker")
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         while True:
@@ -112,7 +125,14 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
                         after_id = eid
                     except Exception as e:
                         logger.debug(f"Jobs webhook send error: {e}")
-                # Persist after_id optionally via env or omit for simplicity
+                # Persist latest cursor for resume across restarts
+                try:
+                    if cursor_path:
+                        os.makedirs(os.path.dirname(cursor_path), exist_ok=True)
+                        with open(cursor_path, "w", encoding="utf-8") as f:
+                            f.write(str(after_id))
+                except Exception:
+                    pass
             finally:
                 try:
                     conn.close()

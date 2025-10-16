@@ -276,6 +276,7 @@ Notes:
 - Uses best‑effort generation; failures are logged and skipped (no DLQ for HYDE).
 - Use `--dry-run` to preview changes without writing.
 - Prefer running during off‑peak hours; set caps via `HYDE_MAX_VECTORS_PER_DOC` and orchestrator backpressure/quotas.
+- The WebUI → Embeddings → Admin view shows a HYDE status badge so operators can confirm the current provider/model at a glance.
 
 - HYDE vector generation itself is feature‑flagged separately (see HYDE‑Do‑1.md). Retrieval flags above affect only the search/merge phase.
 

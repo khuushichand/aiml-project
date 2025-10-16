@@ -202,12 +202,6 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     return out
 
 
-    # Cooperative cancel check (early exit)
-    try:
-        if callable(context.get("is_cancelled")) and context["is_cancelled"]():
-            return {"__status__": "cancelled"}
-    except Exception:
-        pass
 
 
 async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
