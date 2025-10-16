@@ -16,6 +16,7 @@ from loguru import logger
 import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreAdapter,
     VectorStoreConfig,
@@ -109,6 +110,20 @@ def _allowed_providers() -> Optional[List[str]]:
     except Exception:
         pass
     return None
+
+
+def require_admin(user: User) -> None:
+    """Admin guard for vector store admin endpoints.
+
+    In single-user mode, the sole user is treated as admin.
+    """
+    try:
+        if is_single_user_mode():
+            return
+    except Exception:
+        pass
+    if not user or not getattr(user, 'is_admin', False):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
 
 
 def _allowed_models() -> Optional[List[str]]:
@@ -889,6 +904,7 @@ async def get_index_info(
     store_id: str = Path(...),
     current_user: User = Depends(get_request_user)
 ):
+    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     get_fn = getattr(adapter, 'get_index_info', None)
@@ -909,6 +925,7 @@ async def set_hnsw_ef_search(
     payload: HNSWEfSearchRequest = Body(...),
     current_user: User = Depends(get_request_user)
 ):
+    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     set_fn = getattr(adapter, 'set_ef_search', None)
@@ -932,6 +949,7 @@ async def rebuild_index(
     payload: RebuildIndexRequest = Body(...),
     current_user: User = Depends(get_request_user)
 ):
+    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     rebuild_fn = getattr(adapter, 'rebuild_index', None)
@@ -949,6 +967,75 @@ async def rebuild_index(
         return info
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Index rebuild failed: {e}")
+
+
+class DeleteByFilterRequest(BaseModel):
+    filter: Dict[str, Any] = Field(..., description="Metadata filter expression")
+
+
+@router.post("/vector_stores/{store_id}/admin/delete_by_filter")
+async def delete_by_filter(
+    store_id: str = Path(...),
+    payload: DeleteByFilterRequest = Body(...),
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    # Guardrails: reject empty/overly broad deletes
+    def _is_safe_filter(obj) -> bool:
+        # Minimal safety: must be a non-empty dict with at least one concrete condition.
+        if not isinstance(obj, dict) or not obj:
+            return False
+        # Disallow empty boolean operators
+        if '$or' in obj and (not isinstance(obj['$or'], list) or len(obj['$or']) == 0):
+            return False
+        if '$and' in obj and (not isinstance(obj['$and'], list) or len(obj['$and']) == 0):
+            return False
+        # Recursively ensure at least one field is constrained
+        def _has_concrete(node) -> bool:
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k in ('$and', '$or'):
+                        if isinstance(v, list) and any(_has_concrete(x) for x in v):
+                            return True
+                    else:
+                        # Field-level constraint present
+                        if v is None:
+                            continue
+                        if isinstance(v, dict):
+                            # Operators like $in/$gte etc — consider non-empty as concrete
+                            if any(True for _ in v.items()):
+                                return True
+                        else:
+                            return True
+            return False
+        return _has_concrete(obj)
+
+    if not _is_safe_filter(payload.filter):
+        raise HTTPException(status_code=400, detail="Unsafe or empty filter for delete_by_filter")
+    adapter = await _get_adapter_for_user(current_user, 1536)
+    await adapter.initialize()
+    fn = getattr(adapter, 'delete_by_filter', None)
+    if not callable(fn):
+        raise HTTPException(status_code=400, detail="Delete by filter not supported for this backend")
+    try:
+        deleted = await fn(store_id, payload.filter)  # type: ignore[misc]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Delete by filter failed: {e}")
+    return {"deleted": int(deleted or 0)}
+
+
+@router.get("/vector_stores/admin/health")
+async def vector_stores_health(current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    adapter = await _get_adapter_for_user(current_user, 1536)
+    await adapter.initialize()
+    fn = getattr(adapter, 'health', None)
+    if callable(fn):
+        try:
+            return await fn()  # type: ignore[misc]
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": True}
 
 
 @router.get("/vector_stores/{store_id}/vectors")

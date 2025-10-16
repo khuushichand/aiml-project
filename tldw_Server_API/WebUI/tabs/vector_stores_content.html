@@ -169,6 +169,11 @@
                     <input id="vec_delete_id" placeholder="vector id">
                     <button class="api-button btn-danger" onclick="vsDeleteVector()">Delete Vector</button>
                 </div>
+                <div class="form-group">
+                    <label for="vs_delete_filter">Delete By Filter (JSON):</label>
+                    <input id="vs_delete_filter" placeholder='{"media_id":"42"}'>
+                    <button class="api-button btn-danger" onclick="vsDeleteByFilter()">Delete by Filter</button>
+                </div>
             </div>
             <div class="column">
                 <h4>Result</h4>
@@ -440,8 +445,9 @@ async function vsFetchIndexBadgeForStore(storeId, badgeEl){
     if (!badgeEl) return;
     badgeEl.textContent = 'index: …';
     const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/admin/index_info`);
-    const t = (res.index_type || res.backend || 'n/a').toString().toLowerCase();
-    let text = `index: ${t}`;
+    const t = (res.index_type || 'n/a').toString().toLowerCase();
+    const backend = (res.backend || 'n/a').toString().toLowerCase();
+    let text = `index: ${t} • backend: ${backend}`;
     if (res.ops) text += ` (${res.ops})`;
     badgeEl.textContent = text;
     let bg = '#eee', fg = '#444';
@@ -489,6 +495,17 @@ async function vsDeleteVector(){
   const vecId = document.getElementById('vec_delete_id').value.trim();
   if (!storeId || !vecId){ alert('Enter store id and vector id'); return; }
   const res = await apiClient.delete(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/vectors/${encodeURIComponent(vecId)}`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsDeleteByFilter(){
+  const storeId = document.getElementById('vs_id').value.trim();
+  if (!storeId){ alert('Enter store id'); return; }
+  const txt = (document.getElementById('vs_delete_filter')?.value || '').trim();
+  if (!txt){ alert('Enter filter JSON'); return; }
+  let filt = {};
+  try { filt = JSON.parse(txt); } catch(e){ alert('Invalid filter JSON'); return; }
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/admin/delete_by_filter`, { filter: filt });
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
 }
 

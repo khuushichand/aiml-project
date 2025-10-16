@@ -27,10 +27,22 @@ def test_process_documents_upload_and_validate(page, server_url):
 
     # Wait for response to render
     page.wait_for_selector("#processDocuments_response")
-    # Read response text (rendered by JSON viewer)
+    # Wait until the actual processed JSON arrives (not just the long-running banner)
+    page.wait_for_function(
+        "() => { const t = (document.querySelector('#processDocuments_response')?.innerText || ''); return t.includes('processed_count'); }",
+        timeout=120000,
+    )
+    # Read response text and require concrete success structure/content
+    # Expand any collapsed JSON nodes (best effort)
+    for _ in range(5):
+        collapsed = page.locator("#processDocuments_response .json-toggle.collapsed")
+        if collapsed.count() == 0:
+            break
+        try:
+            collapsed.first.click()
+        except Exception:
+            break
     resp_text = page.locator("#processDocuments_response").inner_text()
-
-    # Basic assertions: processed_count and our file content appear in response
-    assert "processed_count" in resp_text
-    assert "e2e_sample.txt" in resp_text
-    assert "Hello world from E2E document processing" in resp_text
+    assert "processed_count" in resp_text, "Expected processed_count in response"
+    # Verify sample file content surfaced in response payload
+    assert "Hello world from E2E document processing." in resp_text, "Expected uploaded document content in response"

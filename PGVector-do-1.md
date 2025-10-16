@@ -56,6 +56,11 @@ Goal: Stand up pgvector locally; verify adapter path via Vector Store API.
   - `POST /api/v1/vector_stores` succeeds (pg tables created; HNSW or IVFFLAT index present).
   - `POST /api/v1/vector_stores/{id}/vectors` and `/query` work end‑to‑end.
 
+Quick start (local dev)
+- docker-compose -f docker-compose.pg.yml up -d
+- export PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw
+- Set RAG.vector_store_type=pgvector and create/query a store via WebUI or API.
+
 ### Phase 1 — Unify Storage Writes via Adapter (0.5–1 day)
 Goal: Make the embeddings storage worker write through `VectorStoreAdapter` (pgvector or chroma).
 
@@ -90,10 +95,26 @@ Goal: Copy existing Chroma collections to pgvector.
   - Reads from a Chroma collection (via `ChromaDBManager`) page‑wise.
   - Writes to pgvector via `PGVectorAdapter.upsert_vectors` with dimension checks.
   - Optionally re‑builds HNSW/ANALYZE.
+  - Optional `--seed-demo` to populate an in‑memory Chroma stub (CHROMADB_FORCE_STUB=true) for quick smoke.
 
 - Acceptance
   - Dry‑run and sample migration for a test collection.
   - Row counts match for a known collection.
+
+CLI usage
+```bash
+# Seed demo in stub and migrate to local pgvector
+export PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw
+export CHROMADB_FORCE_STUB=true
+python Helper_Scripts/chroma_to_pgvector_migrate.py --user-id 1 --collection demo_cli --seed-demo --page-size 100 --rebuild-index hnsw
+```
+
+Tuning notes
+- Postgres: set `maintenance_work_mem` higher during index build; ensure autovacuum is active.
+- pgvector index
+  - HNSW (>=0.7): lower build latency and memory tunable via `m` and `ef_construction`.
+  - IVFFLAT: set `lists` according to table size for recall/latency tradeoffs.
+- JSONB queries: prefer equality and `$in` operators; complex predicates may be slower.
 
 ### Phase 4 — Retrieval Validation (0.5 day)
 Goal: Confirm RAG retriever works with pgvector adapter.
@@ -177,6 +198,11 @@ settings `[RAG]`:
 - `pgvector.host`, `pgvector.port`, `pgvector.database`, `pgvector.user`, `pgvector.password`, `pgvector.sslmode`
 - Optional `pgvector.dsn` (overrides discrete params)
 - Optional `pgvector.hnsw_ef_search` (session; default 64)
+
+JSONB filter examples
+- Equality: `{ "kind": "chunk" }`
+- `$in`: `{ "media_id": { "$in": ["1","2","3"] } }`
+- `$and` composition: `{ "$and": [{"kind":"chunk"},{"hyde_rank": {"$lte": 2}}] }`
 
 Environment (examples)
 - `PG_TEST_DSN=postgresql://user:pass@localhost:5432/db`

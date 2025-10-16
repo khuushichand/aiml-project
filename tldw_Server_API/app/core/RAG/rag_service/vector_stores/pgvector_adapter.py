@@ -8,6 +8,7 @@ Notes:
 """
 from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
+from prometheus_client import Histogram, Counter
 import asyncio
 import re
 
@@ -15,6 +16,34 @@ from .base import VectorStoreAdapter, VectorStoreConfig, VectorSearchResult
 
 
 class PGVectorAdapter(VectorStoreAdapter):
+    # Prometheus metrics (module-level singletons per process)
+    _H_UPSERT_LAT = Histogram(
+        "pgvector_upsert_latency_seconds",
+        "Latency for pgvector upsert operations",
+        ["collection"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, float("inf")),
+    )
+    _H_QUERY_LAT = Histogram(
+        "pgvector_query_latency_seconds",
+        "Latency for pgvector search queries",
+        ["collection"],
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, float("inf")),
+    )
+    _H_DELETE_LAT = Histogram(
+        "pgvector_delete_latency_seconds",
+        "Latency for pgvector delete operations",
+        ["collection"],
+    )
+    _C_ROWS_UPSERTED = Counter(
+        "pgvector_rows_upserted_total",
+        "Rows upserted into pgvector",
+        ["collection"],
+    )
+    _C_ROWS_DELETED = Counter(
+        "pgvector_rows_deleted_total",
+        "Rows deleted from pgvector",
+        ["collection"],
+    )
     def __init__(self, config: VectorStoreConfig):
         super().__init__(config)
         self._conn = None  # Single connection fallback
@@ -197,7 +226,13 @@ class PGVectorAdapter(VectorStoreAdapter):
                 finally:
                     try: cur.close()
                     except Exception: pass
-        await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+        # Observe rows + latency
+        with self._H_UPSERT_LAT.labels(collection=tbl).time():
+            await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+        try:
+            self._C_ROWS_UPSERTED.labels(collection=tbl).inc(len(values))
+        except Exception:
+            pass
 
     async def delete_vectors(self, collection_name: str, ids: List[str]) -> None:
         tbl = self._sanitize_collection(collection_name)
@@ -205,8 +240,16 @@ class PGVectorAdapter(VectorStoreAdapter):
             cur = self._conn.cursor()
             cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])
             self._conn.commit()
-            cur.close()
-        await asyncio.get_event_loop().run_in_executor(None, _batch)
+            rc = getattr(cur, 'rowcount', 0)
+            try: cur.close()
+            except Exception: pass
+            return int(rc) if rc is not None else 0
+        with self._H_DELETE_LAT.labels(collection=tbl).time():
+            rc = await asyncio.get_event_loop().run_in_executor(None, _batch)
+        try:
+            self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc))
+        except Exception:
+            pass
 
     async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
         """Delete rows matching a JSONB metadata filter; returns affected row count."""
@@ -232,7 +275,12 @@ class PGVectorAdapter(VectorStoreAdapter):
                 finally:
                     try: cur.close()
                     except Exception: pass
-        rc = await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+        with self._H_DELETE_LAT.labels(collection=tbl).time():
+            rc = await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+        try:
+            self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc or 0))
+        except Exception:
+            pass
         try:
             return int(rc)
         except Exception:
@@ -512,17 +560,16 @@ class PGVectorAdapter(VectorStoreAdapter):
         else:
             dist_expr = "embedding <#> %s"  # inner product
         sql = f"SELECT id, content, metadata, {dist_expr} AS distance FROM {tbl}"
-        where_clauses = []
+        # Build WHERE using rich filter support (equality, $and/$or, $in, numeric cmp)
         params: List[Any] = [query_vector]
-        if filter:
-            # Simple JSONB @> filter match
-            where_clauses.append("metadata @> %s")
-            params.append(JsonDumper.dumps(filter))  # type: ignore
-        if where_clauses:
-            sql += " WHERE " + " AND ".join(where_clauses)
+        if filter and isinstance(filter, dict) and len(filter) > 0:
+            where_sql, where_params = self._build_where_from_filter(filter)
+            sql += where_sql
+            params.extend(where_params)
         sql += " ORDER BY distance ASC LIMIT %s"
         params.append(int(k))
-        rows = await self._query(sql, tuple(params))
+        with self._H_QUERY_LAT.labels(collection=tbl).time():
+            rows = await self._query(sql, tuple(params))
         results: List[VectorSearchResult] = []
         for rid, content, metadata, distance in rows:
             # Convert distance to similarity in [0,1] by heuristic
@@ -579,6 +626,24 @@ class PGVectorAdapter(VectorStoreAdapter):
         except Exception:
             pass
 
+    async def get_index_info(self, collection_name: str) -> Dict[str, Any]:
+        tbl = self._sanitize_collection(collection_name)
+        # Identify index type on embedding column
+        try:
+            rows = await self._query("SELECT indexdef FROM pg_indexes WHERE tablename = %s", (tbl,))
+            idxdef = " ".join([(r[0] or "") for r in rows])
+            idx_type = "hnsw" if "using hnsw" in idxdef.lower() else ("ivfflat" if "using ivfflat" in idxdef.lower() else "none")
+        except Exception:
+            idx_type = "unknown"
+        stats = await self.get_collection_stats(collection_name)
+        return {
+            "backend": "pgvector",
+            "index_type": idx_type,
+            "dimension": stats.get("dimension", self.config.embedding_dim),
+            "count": stats.get("count", 0),
+            "ops": "vector_%s_ops" % ((self.config.distance_metric or 'cosine')),
+        }
+
     async def close(self) -> None:
         try:
             if self._conn:
@@ -587,6 +652,34 @@ class PGVectorAdapter(VectorStoreAdapter):
             pass
         self._conn = None
         await super().close()
+
+    async def health(self) -> Dict[str, Any]:
+        ok = False
+        info: Dict[str, Any] = {"driver": self._driver or "unknown"}
+        # Include basic pool stats when psycopg_pool is available
+        try:
+            if self._pool is not None:
+                # Guarded getattr to avoid hard dependency on psycopg_pool internals
+                info["pool"] = {
+                    "min_size": getattr(self._pool, "min_size", None),
+                    "max_size": getattr(self._pool, "max_size", None),
+                    "num_connections": getattr(self._pool, "num_connections", None),
+                    "num_available": getattr(self._pool, "num_available", None),
+                }
+        except Exception:
+            pass
+        try:
+            rows = await self._query("SELECT 1", None)
+            ok = bool(rows)
+        except Exception:
+            try:
+                await self.initialize()
+                rows2 = await self._query("SELECT 1", None)
+                ok = bool(rows2)
+            except Exception:
+                ok = False
+        info["ok"] = bool(ok)
+        return info
 
 
 class JsonDumper:

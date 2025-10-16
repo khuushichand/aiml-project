@@ -127,7 +127,7 @@ The following additional step types are available and surfaced via `/step-types`
 - Indices/constraints and types:
   - Per‑run event ordering: composite index and unique constraint on `(run_id, event_seq)` in `workflow_events`.
   - Cascading deletes: `workflow_events`, `workflow_step_runs`, and `workflow_artifacts` reference `workflow_runs(run_id)` with `ON DELETE CASCADE` (PostgreSQL). New SQLite DBs use the same FK with `PRAGMA foreign_keys=ON`.
-  - Partial indexes on statuses: `status='running'` and `status='queued'` for faster active/queue queries (PostgreSQL and modern SQLite).
+  - Partial indexes on statuses: `status='running'`, `status='queued'`, `status='succeeded'`, and `status='failed'` for faster active/queue/history queries (PostgreSQL and modern SQLite).
   - JSON payloads: PostgreSQL stores `workflow_events.payload_json` as `JSONB` with a GIN index; SQLite stores JSON as `TEXT`.
 - Pooling & contention:
   - PostgreSQL uses `psycopg_pool` when available (min/max size, timeouts, max lifetime/idle) with `dict_row` rows; falls back to a minimal pool if not installed.
@@ -259,12 +259,44 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
  
 In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
 
+### Storage & Migrations
+
+- PostgreSQL schema stores `workflow_events.payload_json` as JSONB with a GIN index (`idx_events_payload_json_gin`) for efficient payload queries.
+- Run status indexes: a general `idx_runs_status` plus partial indexes for common statuses `running`, `queued`, `succeeded`, and `failed` speed common filters.
+- Per‑run event sequence uniqueness is enforced via a unique index on `(run_id, event_seq)`.
+- Versioned migrations: a `workflow_schema_version` table tracks the current schema version. Migrations are forward‑only and idempotent, and are applied on startup as needed.
+- Tests ensure both fresh initialization and upgrades from legacy schemas reach the current version and include the expected indexes (see `tests/Workflows/test_workflows_postgres_indexes.py`).
+
+### DB Maintenance (opt‑in)
+
+- A lightweight maintenance worker can periodically checkpoint SQLite WAL files and optionally run VACUUM, or run `VACUUM (ANALYZE)` on PostgreSQL.
+- Disabled by default; enable via:
+  - `WORKFLOWS_DB_MAINTENANCE_ENABLED=true`
+  - Interval: `WORKFLOWS_DB_MAINTENANCE_INTERVAL_SEC` (default 1800)
+  - SQLite tunables:
+    - `WORKFLOWS_SQLITE_CHECKPOINT=TRUNCATE|RESTART|PASSIVE` (default TRUNCATE)
+    - `WORKFLOWS_SQLITE_VACUUM=true|false` (default false)
+  - PostgreSQL tunable:
+    - `WORKFLOWS_POSTGRES_VACUUM=true|false` (default false)
+  
+The worker runs only when enabled and is started/stopped with the app lifecycle.
+
 ### Pagination
 
 - Runs listing supports offset and cursor pagination. Cursor is an opaque base64url token that encodes stable seek positions (timestamp and `run_id` tie‑breaker). When a `cursor` is provided, `offset` is ignored. Responses include `next_cursor` when there is a subsequent page.
 - Events listing supports `cursor` similarly and sets a `Next-Cursor` response header. When a `cursor` is provided, `since` is ignored.
 
 Ordering is stable with a tie‑breaker (`run_id` for runs; `event_id` for events) to avoid duplicates or gaps.
+
+## Scheduler
+
+- API: `/api/v1/scheduler/workflows` (create/list/get/update/delete), `/{id}/run-now`, and `/dry-run` to validate cron/timezone and preview next run.
+- Cron/timezone validation occurs on create/update with clear 422 feedback.
+- Per‑job concurrency control:
+  - `concurrency_mode`: `skip` (drop overlapping triggers) or `queue` (allow overlaps) maps to APScheduler `max_instances`/`coalesce` behavior.
+  - `misfire_grace_sec`: grace window for late triggers.
+  - `coalesce`: when true, combine multiple missed runs into a single execution.
+- History fields tracked per schedule: `last_run_at`, `next_run_at`, `last_status`.
 
 ## Validation Modes
 

@@ -73,6 +73,9 @@ const TTS = {
 
     // Initialize the TTS module
     init() {
+        // Per-provider recording soft-cap (seconds)
+        // Persisted via localStorage using key: tts_rec_max_seconds_<provider>
+        this._recMaxByProvider = {};
         console.log('Initializing TTS module...');
         this.loadHistory();
         this.checkProviderStatus();
@@ -81,7 +84,10 @@ const TTS = {
 
         // Initialize per-provider recorder states
         this._recorders = {}; // { provider: { mediaRecorder, chunks, isRecording, blob, url } }
-        
+
+        // Initialize per-provider recording settings UI and persistence
+        this._initRecSettingsUI();
+
         // Set initial provider
         this.switchProvider('vibevoice');
 
@@ -96,6 +102,80 @@ const TTS = {
                 } catch (_) {}
             });
         } catch (_) {}
+    },
+
+    // Internal: initialize per-provider recording settings controls
+    _initRecSettingsUI() {
+        const providersWithMic = ['vibevoice', 'higgs', 'chatterbox', 'neutts'];
+
+        // Back-compat: if old global key exists, use as default
+        let legacyDefault = 15;
+        try {
+            const legacy = parseInt(localStorage.getItem('tts_rec_max_seconds') || '', 10);
+            if (!isNaN(legacy)) legacyDefault = Math.max(3, Math.min(60, legacy));
+        } catch(_) {}
+
+        providersWithMic.forEach((p) => {
+            // Load from per-provider key with fallback to legacy default
+            let v = legacyDefault;
+            try {
+                const k = `tts_rec_max_seconds_${p}`;
+                const persisted = parseInt(localStorage.getItem(k) || '', 10);
+                if (!isNaN(persisted)) v = Math.max(3, Math.min(60, persisted));
+            } catch(_) {}
+            this._recMaxByProvider[p] = v;
+
+            // Wire input if present
+            const input = document.getElementById(`${p}-rec-max`);
+            if (input) {
+                input.value = String(v);
+                input.addEventListener('change', () => {
+                    try {
+                        const nv = Math.max(3, Math.min(60, parseInt(input.value || '15', 10)));
+                        this.setRecMaxSec(p, nv);
+                    } catch(_) {}
+                });
+            }
+
+            // Restore collapsible state
+            try {
+                const openKey = `rec_settings_open_${p}`;
+                const open = localStorage.getItem(openKey);
+                const body = document.getElementById(`rec-settings-${p}`);
+                const caret = document.getElementById(`rec-settings-caret-${p}`);
+                if (body) {
+                    const shouldOpen = open === '1';
+                    body.style.display = shouldOpen ? 'block' : 'none';
+                    if (caret) caret.textContent = shouldOpen ? '▾' : '▸';
+                }
+            } catch(_) {}
+        });
+    },
+
+    // Helpers for per-provider rec soft-cap
+    _getRecMaxSec(provider) {
+        const v = this._recMaxByProvider?.[provider];
+        if (typeof v === 'number' && !isNaN(v)) return v;
+        return 15;
+    },
+    setRecMaxSec(provider, seconds) {
+        const v = Math.max(3, Math.min(60, parseInt(String(seconds||'15'), 10)));
+        if (!this._recMaxByProvider) this._recMaxByProvider = {};
+        this._recMaxByProvider[provider] = v;
+        try { localStorage.setItem(`tts_rec_max_seconds_${provider}`, String(v)); } catch(_) {}
+        const input = document.getElementById(`${provider}-rec-max`);
+        if (input && String(parseInt(input.value||'0',10)) !== String(v)) input.value = String(v);
+    },
+
+    // Toggle the small collapsible for Recording Settings
+    toggleRecSettings(provider) {
+        const body = document.getElementById(`rec-settings-${provider}`);
+        const caret = document.getElementById(`rec-settings-caret-${provider}`);
+        if (!body) return;
+        const show = body.style.display === 'none' || body.style.display === '';
+        body.style.display = show ? 'block' : 'none';
+        if (caret) caret.textContent = show ? '▾' : '▸';
+        try { localStorage.setItem(`rec_settings_open_${provider}`, show ? '1' : '0'); } catch(_) {}
     },
     
     // Set up event listeners
@@ -472,8 +552,26 @@ const TTS = {
         try {
             const rec = this._recorders[provider] || (this._recorders[provider] = { mediaRecorder: null, chunks: [], isRecording: false, blob: null, url: null });
             if (rec.isRecording) return;
+            if (!window.MediaRecorder) {
+                if (statusEl) statusEl.textContent = 'Recording not supported by this browser';
+                return;
+            }
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            // Choose a supported mimeType for best compatibility
+            let mr;
+            try {
+                let opts;
+                if (MediaRecorder.isTypeSupported) {
+                    const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                    for (const mt of cands) {
+                        if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                    }
+                }
+                mr = new MediaRecorder(stream, opts);
+            } catch (_) {
+                // Fallback: try without options
+                mr = new MediaRecorder(stream);
+            }
             rec.mediaRecorder = mr;
             rec.chunks = [];
             rec.isRecording = true;
@@ -517,9 +615,9 @@ const TTS = {
                 try { TTS.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
                 try { if (blob && blob.size > 5 * 1024 * 1024) TTS.showStatus('Long recording detected (>5MB). Aim for 3–15 seconds for best performance.', 'warning'); } catch(_) {}
             };
-            // Soft cap with countdown
+            // Soft cap with countdown (per-provider)
             try {
-                const MAX_SEC = 15;
+                const MAX_SEC = Math.max(3, Math.min(60, parseInt((this._getRecMaxSec(provider)||15), 10)));
                 const startTs = Date.now();
                 rec._timer = setInterval(() => {
                     const elapsed = Math.floor((Date.now() - startTs) / 1000);
@@ -579,8 +677,27 @@ const TTS = {
     async startNeuTTSRecording() {
         try {
             if (this._neuttsRecorder.isRecording) return;
+            if (!window.MediaRecorder) {
+                const statusEl = document.getElementById('neutts-rec-status');
+                if (statusEl) statusEl.textContent = 'Recording not supported by this browser';
+                return;
+            }
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            // Choose a supported mimeType for best compatibility
+            let mr;
+            try {
+                let opts;
+                if (MediaRecorder.isTypeSupported) {
+                    const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                    for (const mt of cands) {
+                        if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                    }
+                }
+                mr = new MediaRecorder(stream, opts);
+            } catch (_) {
+                // Fallback: try without options
+                mr = new MediaRecorder(stream);
+            }
             this._neuttsRecorder.mediaRecorder = mr;
             this._neuttsRecorder.chunks = [];
             this._neuttsRecorder.isRecording = true;
@@ -628,9 +745,9 @@ const TTS = {
                 // Hint on overly long recordings (size heuristic)
                 try { if (blob && blob.size > 5 * 1024 * 1024) this.showStatus('Long recording detected (>5MB). Processing may be slow; aim for 3–15 seconds.', 'warning'); } catch(_) {}
             };
-            // Soft cap with countdown
+            // Soft cap with countdown (NeuTTS)
             try {
-                const MAX_SEC = 15;
+                const MAX_SEC = Math.max(3, Math.min(60, parseInt((this._getRecMaxSec('neutts')||15), 10)));
                 const startTs = Date.now();
                 this._neuttsRecorder._timer = setInterval(() => {
                     const elapsed = Math.floor((Date.now() - startTs) / 1000);

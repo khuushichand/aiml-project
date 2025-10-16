@@ -833,6 +833,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Workflows artifact GC worker: {e}")
 
+    # Workflows DB maintenance worker (checkpoint/VACUUM)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.workflows_db_maintenance import run_workflows_db_maintenance as _run_wf_maint
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Workflows DB maintenance worker")
+        else:
+            _wf_maint_enabled = (_os.getenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _wf_maint_enabled:
+                workflows_maint_stop_event = _asyncio.Event()
+                workflows_maint_task = _asyncio.create_task(_run_wf_maint(workflows_maint_stop_event))
+                logger.info("Workflows DB maintenance worker started with explicit stop_event signal")
+            else:
+                logger.info("Workflows DB maintenance worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Workflows DB maintenance worker: {e}")
+
     # Embeddings Re-embed expansion worker (Jobs-driven)
     try:
         import os as _os
@@ -1329,6 +1347,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 try:
                     workflows_gc_task.cancel()
+                except Exception:
+                    pass
+
+        # Workflows DB maintenance worker shutdown
+        if 'workflows_maint_task' in locals() and workflows_maint_task:
+            try:
+                if 'workflows_maint_stop_event' in locals() and workflows_maint_stop_event:
+                    workflows_maint_stop_event.set()
+                    await _asyncio.wait_for(workflows_maint_task, timeout=5.0)
+                    logger.info("Workflows DB maintenance worker stopped via stop_event")
+                else:
+                    workflows_maint_task.cancel()
+            except Exception:
+                try:
+                    workflows_maint_task.cancel()
                 except Exception:
                     pass
     except Exception:

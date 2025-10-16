@@ -207,7 +207,10 @@ class VectorStoreAdapter(ABC):
             collection_name: Name of the collection to optimize
         """
         pass
-    
+
+    async def health(self) -> Dict[str, Any]:
+        """Basic health check; adapters may override for richer info."""
+        return {"ok": True}
     async def close(self) -> None:
         """Close connection to the vector store."""
         self._initialized = False

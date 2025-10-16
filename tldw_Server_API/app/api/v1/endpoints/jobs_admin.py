@@ -460,6 +460,20 @@ class TTLSweepRequest(BaseModel):
     age_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail queued jobs older than this many seconds (created_at)")
     runtime_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail processing jobs running longer than this many seconds")
     action: str = Field(default="cancel", pattern="^(cancel|fail)$", description="Action to apply to matching jobs")
+    domain: Optional[str] = Field(default=None)
+    queue: Optional[str] = Field(default=None)
+    job_type: Optional[str] = Field(default=None)
+
+    model_config = ConfigDict(json_schema_extra={
+            "example": {
+                "age_seconds": 86400,
+                "runtime_seconds": 7200,
+                "action": "cancel",
+                "domain": "chatbooks",
+                "queue": "default",
+                "job_type": None,
+            }
+        })
 
 
 # -------------------- Job Events Outbox (CDC) --------------------
@@ -610,20 +624,7 @@ async def stream_job_events(after_id: int = 0, _=Depends(require_admin)):
                     pass
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
-    domain: Optional[str] = Field(default=None)
-    queue: Optional[str] = Field(default=None)
-    job_type: Optional[str] = Field(default=None)
 
-    model_config = ConfigDict(json_schema_extra={
-            "example": {
-                "age_seconds": 86400,
-                "runtime_seconds": 7200,
-                "action": "cancel",
-                "domain": "chatbooks",
-                "queue": "default",
-                "job_type": None,
-            }
-        })
 
 
 class TTLSweepResponse(BaseModel):

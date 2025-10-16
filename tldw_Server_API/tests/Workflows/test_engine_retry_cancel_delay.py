@@ -94,3 +94,38 @@ def test_retry_backoff_persists_attempts(client_with_wf: TestClient):
                 break
         time.sleep(0.02)
     assert attempt >= 2
+
+
+def test_backoff_cap_env_applied(monkeypatch, client_with_wf: TestClient):
+    client = client_with_wf
+    # Cap the backoff to 1s and intercept asyncio.sleep to capture durations
+    monkeypatch.setenv("WORKFLOWS_BACKOFF_CAP_SECONDS", "1")
+
+    sleep_calls = []
+
+    async def _fake_sleep(dur: float):
+        sleep_calls.append(float(dur))
+        return None
+
+    monkeypatch.setattr("asyncio.sleep", _fake_sleep)
+
+    # Force a timeout to trigger retry backoff in the engine
+    definition = {
+        "name": "retry-cap",
+        "version": 1,
+        "steps": [
+            {"id": "s1", "type": "prompt", "retry": 1, "timeout_seconds": 0.01, "config": {"template": "Y", "simulate_delay_ms": 100}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run?mode=async", json={"inputs": {}}).json()["run_id"]
+
+    # Wait briefly for one retry cycle to occur
+    import time
+    t0 = time.time()
+    while time.time() - t0 < 1.0 and len(sleep_calls) == 0:
+        time.sleep(0.02)
+
+    assert len(sleep_calls) >= 1
+    # The first backoff should be <= cap(1) + jitter(~<=0.75). Assert sanity bound 2.0s
+    assert sleep_calls[0] <= 2.0

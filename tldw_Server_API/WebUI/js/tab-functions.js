@@ -860,8 +860,26 @@ let _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
 async function startAudioTTSRecording() {
     try {
         if (_audioTTSRec.mr) return;
+        if (!window.MediaRecorder) {
+            const s = document.getElementById('audioTTS_rec_status');
+            if (s) s.textContent = 'Recording not supported by this browser';
+            return;
+        }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        // Choose a supported mimeType
+        let mr;
+        try {
+            let opts;
+            if (MediaRecorder.isTypeSupported) {
+                const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                for (const mt of cands) {
+                    if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                }
+            }
+            mr = new MediaRecorder(stream, opts);
+        } catch (_) {
+            mr = new MediaRecorder(stream);
+        }
         _audioTTSRec = { mr, chunks: [], blob: null, url: null };
         const s = document.getElementById('audioTTS_rec_status');
         const b1 = document.getElementById('audioTTS_rec_start');
@@ -891,7 +909,7 @@ async function startAudioTTSRecording() {
         };
         // Soft cap with countdown
         try {
-            const MAX_SEC = 15;
+            const MAX_SEC = Math.max(3, Math.min(60, parseInt((window._audioRecMaxSec||15), 10)));
             const startTs = Date.now();
             _audioTTSRec._timer = setInterval(() => {
                 const elapsed = Math.floor((Date.now() - startTs) / 1000);
@@ -968,8 +986,26 @@ let _fileTransRec = { mr: null, chunks: [], blob: null, url: null };
 async function startFileTransRecording() {
     try {
         if (_fileTransRec.mr) return;
+        if (!window.MediaRecorder) {
+            const s = document.getElementById('fileTrans_rec_status');
+            if (s) s.textContent = 'Recording not supported by this browser';
+            return;
+        }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        // Choose a supported mimeType
+        let mr;
+        try {
+            let opts;
+            if (MediaRecorder.isTypeSupported) {
+                const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
+                for (const mt of cands) {
+                    if (MediaRecorder.isTypeSupported(mt)) { opts = { mimeType: mt }; break; }
+                }
+            }
+            mr = new MediaRecorder(stream, opts);
+        } catch (_) {
+            mr = new MediaRecorder(stream);
+        }
         _fileTransRec = { mr, chunks: [], blob: null, url: null };
         const s = document.getElementById('fileTrans_rec_status');
         const b1 = document.getElementById('fileTrans_rec_start');
@@ -999,7 +1035,7 @@ async function startFileTransRecording() {
         };
         // Soft cap with countdown
         try {
-            const MAX_SEC = 15;
+            const MAX_SEC = Math.max(3, Math.min(60, parseInt((window._fileTransRecMaxSec||15), 10)));
             const startTs = Date.now();
             _fileTransRec._timer = setInterval(() => {
                 const elapsed = Math.floor((Date.now() - startTs) / 1000);
@@ -3448,7 +3484,108 @@ function revealAdminOnlyElements() {
 document.addEventListener('DOMContentLoaded', function() {
     // Try to reveal admin-only controls after initial load
     setTimeout(revealAdminOnlyElements, 600);
+    // Restore recording caps from localStorage and bind change events
+    try {
+        const ttsMax = parseInt(localStorage.getItem('audio_tts_rec_max_seconds') || '', 10);
+        if (!isNaN(ttsMax)) {
+            window._audioRecMaxSec = Math.max(3, Math.min(60, ttsMax));
+            const el = document.getElementById('audioTTS_rec_max');
+            if (el) el.value = String(window._audioRecMaxSec);
+        }
+        const ttsMaxEl = document.getElementById('audioTTS_rec_max');
+        if (ttsMaxEl) {
+            ttsMaxEl.addEventListener('change', () => {
+                try {
+                    const v = Math.max(3, Math.min(60, parseInt(ttsMaxEl.value || '15', 10)));
+                    window._audioRecMaxSec = v;
+                    localStorage.setItem('audio_tts_rec_max_seconds', String(v));
+                } catch(_) {}
+            });
+        }
+    } catch (_) {}
+    try {
+        const ftMax = parseInt(localStorage.getItem('file_trans_rec_max_seconds') || '', 10);
+        if (!isNaN(ftMax)) {
+            window._fileTransRecMaxSec = Math.max(3, Math.min(60, ftMax));
+            const el2 = document.getElementById('fileTrans_rec_max');
+            if (el2) el2.value = String(window._fileTransRecMaxSec);
+        }
+        const ftMaxEl = document.getElementById('fileTrans_rec_max');
+        if (ftMaxEl) {
+            ftMaxEl.addEventListener('change', () => {
+                try {
+                    const v = Math.max(3, Math.min(60, parseInt(ftMaxEl.value || '15', 10)));
+                    window._fileTransRecMaxSec = v;
+                    localStorage.setItem('file_trans_rec_max_seconds', String(v));
+                } catch(_) {}
+            });
+        }
+    } catch (_) {}
+    // Restore rec-settings collapsed state
+    try {
+        const openTTS = localStorage.getItem('rec_settings_open_audioTTS');
+        const bodyTTS = document.getElementById('rec-settings-audioTTS');
+        const caretTTS = document.getElementById('rec-settings-caret-audioTTS');
+        if (bodyTTS) {
+            const open = openTTS === '1';
+            bodyTTS.style.display = open ? 'block' : 'none';
+            if (caretTTS) caretTTS.textContent = open ? '▾' : '▸';
+        }
+    } catch(_) {}
+    try {
+        const openFT = localStorage.getItem('rec_settings_open_fileTrans');
+        const bodyFT = document.getElementById('rec-settings-fileTrans');
+        const caretFT = document.getElementById('rec-settings-caret-fileTrans');
+        if (bodyFT) {
+            const open = openFT === '1';
+            bodyFT.style.display = open ? 'block' : 'none';
+            if (caretFT) caretFT.textContent = open ? '▾' : '▸';
+        }
+    } catch(_) {}
 });
+
+// Toggle helpers for collapsible Recording Settings
+function toggleAudioTTSRecSettings() {
+    try {
+        const body = document.getElementById('rec-settings-audioTTS');
+        const caret = document.getElementById('rec-settings-caret-audioTTS');
+        if (!body) return;
+        const show = body.style.display === 'none' || body.style.display === '';
+        body.style.display = show ? 'block' : 'none';
+        if (caret) caret.textContent = show ? '▾' : '▸';
+        try { localStorage.setItem('rec_settings_open_audioTTS', show ? '1' : '0'); } catch(_) {}
+    } catch (_) {}
+}
+
+function toggleFileTransRecSettings() {
+    try {
+        const body = document.getElementById('rec-settings-fileTrans');
+        const caret = document.getElementById('rec-settings-caret-fileTrans');
+        if (!body) return;
+        const show = body.style.display === 'none' || body.style.display === '';
+        body.style.display = show ? 'block' : 'none';
+        if (caret) caret.textContent = show ? '▾' : '▸';
+        try { localStorage.setItem('rec_settings_open_fileTrans', show ? '1' : '0'); } catch(_) {}
+    } catch (_) {}
+}
+
+// Reset helpers
+function resetAudioTTSRecMax() {
+    try {
+        window._audioRecMaxSec = 15;
+        localStorage.setItem('audio_tts_rec_max_seconds', '15');
+        const el = document.getElementById('audioTTS_rec_max');
+        if (el) el.value = '15';
+    } catch(_) {}
+}
+function resetFileTransRecMax() {
+    try {
+        window._fileTransRecMaxSec = 15;
+        localStorage.setItem('file_trans_rec_max_seconds', '15');
+        const el = document.getElementById('fileTrans_rec_max');
+        if (el) el.value = '15';
+    } catch(_) {}
+}
 
 // Best-effort: revoke any recording object URLs on tab unload to prevent leaks
 try {

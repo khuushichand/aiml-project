@@ -58,3 +58,75 @@ POST /api/v1/rag/ablate
 Notes:
 - This endpoint is for experimentation and evaluation; it shares infrastructure with the unified pipeline and the agentic orchestrator.
 - For reproducibility in CI, agentic tool-loop and LLM planner are disabled by default; the strict variant enables tools under a small budget.
+
+## New Agentic Knobs (v0.2)
+
+- Query decomposition:
+  - `agentic_enable_query_decomposition` (bool, default false)
+  - `agentic_subgoal_max` (int, default 3)
+  - Effect: splits multi-hop queries into sub-goals and assembles spans per sub-goal.
+
+- Intra-doc semantic search:
+  - `agentic_enable_semantic_within` (bool, default true)
+  - `agentic_use_provider_embeddings_within` (bool, default false)
+  - `agentic_provider_embedding_model_id` (optional)
+  - Effect: embeds paragraphs with hashed vectors (default) or configured provider; caches per document version.
+
+- Structural anchors (headings/TOC):
+  - `agentic_enable_section_index` (bool, default true)
+  - `agentic_prefer_structural_anchors` (bool, default true)
+  - Effect: precompute heading→offset map; `open_section` prefers anchors; provenance includes `section_title`.
+
+- Tables/figures (heuristic):
+  - `agentic_enable_table_support` (bool, default true)
+  - Effect: for table-like queries, prioritize table-like paragraphs (pipes/tabs/numbers). Integrates with VLM late chunking when enabled.
+
+- VLM late chunking (agentic path):
+  - `agentic_enable_vlm_late_chunking` (bool, default false)
+  - `agentic_vlm_backend` (optional, e.g., `hf_table_transformer`, `docling`)
+  - `agentic_vlm_detect_tables_only` (bool, default true)
+  - `agentic_vlm_max_pages` (optional int)
+  - `agentic_vlm_late_chunk_top_k_docs` (int, default 2)
+  - Effect: for top‑k PDFs with local file paths, run table/figure detection and add VLM hints as extra spans.
+
+- Adaptive budgets & metrics:
+  - `agentic_adaptive_budgets` (bool, default true)
+  - `agentic_coverage_target` (float, default 0.8)
+  - `agentic_min_corroborating_docs` (int, default 2)
+  - `agentic_max_redundancy` (float, default 0.9)
+  - `agentic_enable_metrics` (bool, default true)
+  - Effect: dynamically stops the tool loop when term coverage and cross‑doc corroboration are sufficient; emits metrics for tool calls, durations, span lengths, and bytes read.
+
+- Verification on agentic generation:
+  - `require_hard_citations` (bool, default false)
+  - `enable_numeric_fidelity` (bool, default false)
+  - `numeric_fidelity_behavior` ("continue"|"ask"|"decline"|"retry", default "continue")
+  - `enable_claims` (bool, default false), `claim_verifier` ("nli"|"llm"|"hybrid"), `claims_top_k`, `claims_conf_threshold`, `claims_max`, `nli_model`, `claims_concurrency`
+  - Effect: verifies each sentence/claim and numeric values against assembled spans; attaches `hard_citations` and `numeric_fidelity` metadata.
+
+## Multi‑Hop Example
+
+POST /api/v1/rag/search
+{
+  "query": "Explain residual connections and dropout",
+  "strategy": "agentic",
+  "enable_generation": false,
+  "agentic_enable_tools": true,
+  "agentic_enable_query_decomposition": true,
+  "agentic_enable_semantic_within": true,
+  "agentic_enable_section_index": true,
+  "agentic_enable_table_support": true
+}
+
+When PDFs are present and tables matter (optional VLM integration):
+
+{
+  "query": "Compare accuracy tables for ResNet vs EfficientNet",
+  "strategy": "agentic",
+  "enable_generation": false,
+  "agentic_enable_tools": true,
+  "agentic_enable_vlm_late_chunking": true,
+  "agentic_vlm_backend": "hf_table_transformer",
+  "agentic_vlm_detect_tables_only": true,
+  "agentic_vlm_late_chunk_top_k_docs": 2
+}

@@ -24,8 +24,8 @@ This guide explains the Chat module’s architecture, key components, and how to
 ## Directory Map
 
  - `tldw_Server_API/app/core/Chat/`
-  - `Chat_Functions.py` – Legacy central dispatcher used by the API endpoint today; provider mappings are no longer duplicated here
-  - `chat_orchestrator.py` – Modern dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
+  - `Chat_Functions.py` – Legacy shim + utilities (e.g., ChatDictionary, helpers). The API endpoint dispatches via `chat_orchestrator`; this file forwards to it for test/backward compatibility. Provider mappings are not duplicated here.
+  - `chat_orchestrator.py` – Primary dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
   - `chat_helpers.py` – Request shaping helpers, conversion from API schemas, dictionary/character hooks
   - `provider_manager.py` & `provider_config.py` – Provider health/fallback management and authoritative handler/parameter mappings
   - `rate_limiter.py` – Module‑level rate limiting primitives & startup initialization
@@ -50,7 +50,7 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint now dispatches via `chat_orchestrator.chat_api_call(...)`, which sources mappings from `provider_config.py`. A compatibility shim remains in `Chat_Functions.chat_api_call` for legacy callers and tests.
+3. The endpoint uses lightweight helpers in `chat_service.py` and delegates to `chat_orchestrator.chat_api_call(...)`. Mappings are sourced from `provider_config.py`. A compatibility shim remains in `Chat_Functions.chat_api_call` for legacy callers and tests.
 4. `LLM_Calls/*` executes the provider‑specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.
@@ -141,12 +141,13 @@ Provider selection notes:
 ## Testing
 
 - Unit tests:
-  - Schema validation (`tests/Chat/test_chat_request_schemas.py`)
-  - Prompt templates (`tests/Chat/test_prompt_template_manager.py`)
-  - Dispatch shape and mapping (update tests when changing provider mappings)
+  - Schema validation: `tldw_Server_API/tests/Chat/test_chat_request_schemas.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py`
+  - Chat functions: `tldw_Server_API/tests/Chat/test_chat_functions.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_functions.py`
+  - Prompt templates: `tldw_Server_API/tests/Chat/test_prompt_template_manager.py`
+  - Dispatch shape/mapping: update tests when changing `provider_config`
 - Integration tests:
-  - Endpoint flow for `/api/v1/chat/completions` (`tests/Chat/test_chat_completions_integration.py`, `tests/Chat/test_chat_endpoint.py`)
-  - Streaming normalization (`tests/Chat/test_chat_endpoint_streaming_normalization.py`)
+  - Endpoint flow for `/api/v1/chat/completions`: `tldw_Server_API/tests/Chat/test_chat_completions_integration.py`, `tldw_Server_API/tests/Chat/test_chat_endpoint.py`, `tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`
+  - Streaming normalization: `tldw_Server_API/tests/Chat/test_chat_endpoint_streaming_normalization.py`
   - Consider provider mocks for deterministic behavior
 
 ## Maintenance Notes
@@ -158,6 +159,7 @@ Provider selection notes:
 
 Additional endpoint behavior to note:
 - Non‑stream responses include `tldw_conversation_id` in the JSON body for ease of client‑side state tracking.
+ - Streaming responses use SSE with an initial `stream_start` event, OpenAI‑style `data:` deltas, periodic heartbeats, and a `stream_end` event on completion.
 
 ---
 

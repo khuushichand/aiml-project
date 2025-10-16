@@ -665,6 +665,53 @@ class MetricsRegistry:
                 labels=["backend"],
             )
         )
+
+        # Agentic RAG metrics
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_tool_calls_total",
+                type=MetricType.COUNTER,
+                description="Total agentic tool calls",
+                labels=["tool"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_tool_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration per agentic tool call",
+                unit="s",
+                labels=["tool"],
+                buckets=[0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_cache_hits_total",
+                type=MetricType.COUNTER,
+                description="Total agentic cache hits",
+                labels=["cache_type"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="agentic_span_length_chars",
+                type=MetricType.HISTOGRAM,
+                description="Histogram of agentic span lengths (chars)",
+                unit="chars",
+                labels=["phase"],
+                buckets=[64, 128, 256, 512, 1024, 2048, 4096]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="span_bytes_read_total",
+                type=MetricType.COUNTER,
+                description="Total bytes read while assembling spans",
+                unit="bytes",
+                labels=["tool"],
+            )
+        )
     
     def register_metric(self, definition: MetricDefinition) -> bool:
         """

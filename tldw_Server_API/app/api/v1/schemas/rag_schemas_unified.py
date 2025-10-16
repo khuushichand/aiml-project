@@ -444,6 +444,116 @@ class UnifiedRAGRequest(BaseModel):
         description="TTL for ephemeral chunk cache (seconds)",
         example=600,
     )
+    # Query decomposition (multi-hop)
+    agentic_enable_query_decomposition: bool = Field(
+        default=False,
+        description="Enable heuristic multi-hop decomposition; run tool loop for each sub-goal and merge spans",
+        example=False,
+    )
+    agentic_subgoal_max: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum number of sub-goals to consider when decomposing queries",
+        example=3,
+    )
+    # Intra-doc semantic search
+    agentic_enable_semantic_within: bool = Field(
+        default=True,
+        description="Use paragraph-level semantic search within documents (hashed embeddings)",
+        example=True,
+    )
+    # Section index and anchors
+    agentic_enable_section_index: bool = Field(
+        default=True,
+        description="Build simple heading→offset index and prefer structural anchors for open_section",
+        example=True,
+    )
+    agentic_prefer_structural_anchors: bool = Field(
+        default=True,
+        description="Prefer structural anchors when selecting spans near section boundaries",
+        example=True,
+    )
+    # Table/figure support (heuristic)
+    agentic_enable_table_support: bool = Field(
+        default=True,
+        description="Prefer table-like spans when queries mention tables/figures; integrates with VLM late chunks when available",
+        example=True,
+    )
+    # VLM late chunking (agentic path)
+    agentic_enable_vlm_late_chunking: bool = Field(
+        default=False,
+        description="Use VLM late chunking for top-k PDFs to add table/figure hints inside agentic pipeline",
+        example=False,
+    )
+    agentic_vlm_backend: Optional[str] = Field(
+        default=None,
+        description="VLM backend name (e.g., 'hf_table_transformer', 'docling'); auto-select when None",
+        example="hf_table_transformer",
+    )
+    agentic_vlm_detect_tables_only: bool = Field(
+        default=True,
+        description="Keep only table detections; set false to include other VLM hints",
+        example=True,
+    )
+    agentic_vlm_max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Max pages per document to scan with VLM during agentic execution",
+        example=3,
+    )
+    agentic_vlm_late_chunk_top_k_docs: int = Field(
+        default=2,
+        ge=1,
+        le=25,
+        description="Top-k PDFs from coarse retrieval to pass to VLM late chunking (agentic)",
+        example=2,
+    )
+    # Provider embeddings for intra-doc vectors
+    agentic_use_provider_embeddings_within: bool = Field(
+        default=False,
+        description="Use configured embeddings provider to embed paragraphs for intra-doc semantic search; falls back to hashed",
+        example=False,
+    )
+    agentic_provider_embedding_model_id: Optional[str] = Field(
+        default=None,
+        description="Optional embedding model ID to override default for intra-doc paragraph embeddings",
+        example="text-embedding-3-small",
+    )
+
+    # Agentic adaptive budgets & observability
+    agentic_adaptive_budgets: bool = Field(
+        default=True,
+        description="Adapt max tool calls and read budget based on early coverage/corroboration",
+        example=True,
+    )
+    agentic_coverage_target: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Target fraction of query term coverage before early stop",
+        example=0.8,
+    )
+    agentic_min_corroborating_docs: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Minimum distinct documents contributing spans before early stop",
+        example=2,
+    )
+    agentic_max_redundancy: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Max allowable redundancy (1 - merged/raw span length) before discouraging more spans",
+        example=0.9,
+    )
+    agentic_enable_metrics: bool = Field(
+        default=True,
+        description="Emit agentic metrics (tool calls, timings, span histograms)",
+        example=True,
+    )
 
     # ========== ADVANCED RETRIEVAL ==========
     enable_multi_vector_passages: bool = Field(
@@ -868,6 +978,13 @@ class UnifiedRAGRequest(BaseModel):
         default=False,
         description="Enable debug logging",
         example=False
+    )
+
+    # ========== EXPLAIN / DRY-RUN ==========
+    explain_only: bool = Field(
+        default=False,
+        description="When strategy=agentic and enable_generation=false, return only plan + spans/provenance",
+        example=False,
     )
 
     # ========== GENERATION GUARDRAILS ==========

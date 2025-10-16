@@ -30,10 +30,28 @@ def client_with_overrides(monkeypatch):
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[check_rate_limit] = _noop
+    # Avoid DB initialization by overriding DB deps to return None
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user as _get_media_db
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as _get_chacha_db
+        async def _none_media_db():
+            return None
+        async def _none_chacha_db():
+            return None
+        fastapi_app.dependency_overrides[_get_media_db] = _none_media_db
+        fastapi_app.dependency_overrides[_get_chacha_db] = _none_chacha_db
+    except Exception:
+        pass
 
     try:
-        with TestClient(fastapi_app) as client:
-            yield client
+        # Prefer disabling lifespan to avoid DB/services startup in CI; skip if not supported
+        import inspect as _inspect
+        if 'lifespan' in _inspect.signature(TestClient.__init__).parameters:
+            with TestClient(fastapi_app, raise_server_exceptions=False, lifespan='off') as client:
+                yield client
+        else:
+            with TestClient(fastapi_app, raise_server_exceptions=False) as client:
+                yield client
     finally:
         fastapi_app.dependency_overrides.clear()
 
@@ -88,3 +106,13 @@ def test_rag_ablate_smoke(client_with_overrides, monkeypatch):
         md = r["result"].get("metadata", {})
         assert md.get("strategy") == "agentic"
 
+
+def test_rag_ablate_capabilities_smoke():
+    # Quick smoke to ensure capabilities advertises new agentic knobs
+    with TestClient(fastapi_app) as client:
+        resp = client.get("/api/v1/rag/capabilities")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        agentic = data.get("features", {}).get("agentic_chunking", {})
+        params = set(agentic.get("parameters", []))
+        assert {"agentic_adaptive_budgets", "agentic_coverage_target", "agentic_min_corroborating_docs"}.issubset(params)

@@ -20,7 +20,11 @@ class SchedulerConfig:
     
     # Database configuration
     database_url: str = field(
-        default_factory=lambda: os.getenv('DATABASE_URL', 'sqlite:///scheduler.db')
+        default_factory=lambda: (
+            os.getenv('SCHEDULER_DATABASE_URL')
+            or os.getenv('WORKFLOWS_SCHEDULER_DATABASE_URL')
+            or 'sqlite:///scheduler.db'
+        )
     )
     
     # Base path for all scheduler data

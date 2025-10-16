@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+import os
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -335,8 +336,12 @@ class WorkflowEngine:
                                 pass
 
                         if attempt <= max_retries:
-                            # Backoff with jitter
-                            backoff = min(2 ** (attempt - 1), 8)
+                            # Backoff with jitter; cap is configurable via WORKFLOWS_BACKOFF_CAP_SECONDS (default 8)
+                            try:
+                                _cap = int(os.getenv("WORKFLOWS_BACKOFF_CAP_SECONDS", "8"))
+                            except Exception:
+                                _cap = 8
+                            backoff = min(2 ** (attempt - 1), max(1, _cap))
                             jitter = (0.25 + (0.5 * (time.time() % 1)))
                             await asyncio.sleep(backoff + jitter)
 
@@ -576,7 +581,11 @@ class WorkflowEngine:
                 except Exception as e:
                     err = e
                 if attempt <= max_retries:
-                    backoff = min(2 ** (attempt - 1), 8)
+                    try:
+                        _cap = int(os.getenv("WORKFLOWS_BACKOFF_CAP_SECONDS", "8"))
+                    except Exception:
+                        _cap = 8
+                    backoff = min(2 ** (attempt - 1), max(1, _cap))
                     jitter = (0.25 + (0.5 * (time.time() % 1)))
                     await asyncio.sleep(backoff + jitter)
 
@@ -736,12 +745,13 @@ class WorkflowEngine:
 
     def _compute_max_retries_for_step(self, step_type: str, step_obj: Dict[str, Any]) -> int:
         """Adapter-level retry defaults with per-step override via 'retry'."""
-        # Explicit config wins
+        # Explicit config wins (subject to optional per-type caps)
+        specified: Optional[int] = None
         try:
             if "retry" in step_obj and step_obj.get("retry") is not None:
-                return max(0, int(step_obj.get("retry") or 0))
+                specified = max(0, int(step_obj.get("retry") or 0))
         except Exception:
-            pass
+            specified = None
         # Adapter defaults
         defaults = {
             "prompt": 1,
@@ -765,7 +775,23 @@ class WorkflowEngine:
             "notify": 0,
             "diff_change_detector": 0,
         }
-        return int(defaults.get(step_type, 0))
+        val = int(defaults.get(step_type, 0))
+        if specified is not None:
+            val = specified
+        # Per-type caps via env (if provided)
+        try:
+            caps = {
+                "prompt": os.getenv("WORKFLOWS_MAX_RETRIES_PROMPT"),
+                "tts": os.getenv("WORKFLOWS_MAX_RETRIES_TTS"),
+                "webhook": os.getenv("WORKFLOWS_MAX_RETRIES_WEBHOOK"),
+            }
+            cap_s = caps.get(step_type)
+            if cap_s is not None and str(cap_s).strip() != "":
+                cap = max(0, int(cap_s))
+                val = min(val, cap)
+        except Exception:
+            pass
+        return val
 
     async def _run_step_adapter(
         self,

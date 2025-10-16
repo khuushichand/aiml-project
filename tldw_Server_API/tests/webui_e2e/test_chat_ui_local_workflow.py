@@ -4,7 +4,7 @@ import pytest
 @pytest.mark.e2e
 def test_chat_ui_add_and_clear_local(page, server_url):
     page.goto(f"{server_url}/webui/")
-    page.get_by_role("tab", name="Chat").click()
+    page.get_by_role("tab", name="Chat", exact=True).click()
     # The chat UI lives within the Chat Completions tab
     page.get_by_role("tab", name="Chat Completions").click()
 
@@ -13,7 +13,7 @@ def test_chat_ui_add_and_clear_local(page, server_url):
 
     # Type a message and click Send (client-side handler)
     page.fill("#chat-input", "Hello there!")
-    page.get_by_role("button", name="Send").click()
+    page.get_by_role("button", name="Send message").click()
 
     # A new message element should appear in the chat messages container
     assert page.locator("#chat-messages .chat-message").count() >= 1

@@ -160,9 +160,30 @@
                             <span id="audioTTS_rec_status" class="text-muted">Idle (recording overrides file)</span>
                             <span id="audioTTS_recording_badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
                         </div>
-                    <audio id="audioTTS_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
+                        <!-- Recording Settings (collapsible) -->
+                        <div class="rec-settings" style="margin-top:8px;">
+                            <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="toggleAudioTTSRecSettings()">
+                                <span id="rec-settings-caret-audioTTS">▸</span> Recording Settings
+                            </div>
+                            <div id="rec-settings-audioTTS" class="rec-settings-body" style="display:none; margin-top:6px;">
+                                <label style="margin-left:2px; font-size:0.9em;">Max sec:
+                                    <input
+                                        type="number"
+                                        id="audioTTS_rec_max"
+                                        value="15"
+                                        min="3"
+                                        max="60"
+                                        style="width:64px;"
+                                        title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                        onchange="try{ window._audioRecMaxSec = Math.max(3, Math.min(60, parseInt(this.value||'15',10))); localStorage.setItem('audio_tts_rec_max_seconds', String(window._audioRecMaxSec)); }catch(_){}" />
+                                    <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                </label>
+                                <small style="margin-left:8px;"><a href="#" onclick="resetAudioTTSRecMax(); return false;">Reset</a></small>
+                            </div>
+                        </div>
+                        <audio id="audioTTS_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
+                    </div>
                 </div>
-            </div>
         </div>
         
         <!-- Advanced Options (provider-specific) -->
@@ -369,6 +390,27 @@
                             <button class="btn-small" id="fileTrans_rec_clear" onclick="clearFileTransRecording()" disabled>Clear</button>
                             <span id="fileTrans_rec_status" class="text-muted">Idle (recording overrides file)</span>
                             <span id="fileTrans_recording_badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                        </div>
+                        <!-- Recording Settings (collapsible) -->
+                        <div class="rec-settings" style="margin-top:8px;">
+                            <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="toggleFileTransRecSettings()">
+                                <span id="rec-settings-caret-fileTrans">▸</span> Recording Settings
+                            </div>
+                            <div id="rec-settings-fileTrans" class="rec-settings-body" style="display:none; margin-top:6px;">
+                                <label style="margin-left:2px; font-size:0.9em;">Max sec:
+                                    <input
+                                        type="number"
+                                        id="fileTrans_rec_max"
+                                        value="15"
+                                        min="3"
+                                        max="60"
+                                        style="width:64px;"
+                                        title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                        onchange="try{ window._fileTransRecMaxSec = Math.max(3, Math.min(60, parseInt(this.value||'15',10))); localStorage.setItem('file_trans_rec_max_seconds', String(window._fileTransRecMaxSec)); }catch(_){}" />
+                                    <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                </label>
+                                <small style="margin-left:8px;"><a href="#" onclick="resetFileTransRecMax(); return false;">Reset</a></small>
+                            </div>
                         </div>
                         <audio id="fileTrans_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
                     </div>

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+import os
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -25,6 +26,9 @@ class ScheduleCreateRequest(BaseModel):
     run_mode: str = Field("async", pattern="^(async|sync)$")
     validation_mode: str = Field("block", pattern="^(block|non-block)$")
     enabled: bool = True
+    concurrency_mode: str = Field("skip", pattern="^(skip|queue)$", description="skip: drop overlaps; queue: allow overlaps")
+    misfire_grace_sec: int = Field(300, ge=0, le=86400)
+    coalesce: bool = Field(True, description="Coalesce misfires into single run")
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -35,6 +39,9 @@ class ScheduleUpdateRequest(BaseModel):
     run_mode: Optional[str] = Field(None, pattern="^(async|sync)$")
     validation_mode: Optional[str] = Field(None, pattern="^(block|non-block)$")
     enabled: Optional[bool] = None
+    concurrency_mode: Optional[str] = Field(None, pattern="^(skip|queue)$")
+    misfire_grace_sec: Optional[int] = Field(None, ge=0, le=86400)
+    coalesce: Optional[bool] = None
 
 
 class ScheduleResponse(BaseModel):
@@ -49,6 +56,12 @@ class ScheduleResponse(BaseModel):
     enabled: bool
     tenant_id: str
     user_id: str
+    concurrency_mode: str
+    misfire_grace_sec: int
+    coalesce: bool
+    last_run_at: Optional[str]
+    next_run_at: Optional[str]
+    last_status: Optional[str]
 
 
 @router.post("", response_model=Dict[str, str], status_code=201)
@@ -56,6 +69,7 @@ async def create_schedule(
     body: ScheduleCreateRequest,
     current_user: User = Depends(get_request_user),
 ):
+    _validate_cron_or_422(body.cron, body.timezone)
     svc = get_workflows_scheduler()
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     sid = svc.create(
@@ -69,6 +83,9 @@ async def create_schedule(
         run_mode=body.run_mode,
         validation_mode=body.validation_mode,
         enabled=body.enabled,
+        concurrency_mode=body.concurrency_mode,
+        misfire_grace_sec=body.misfire_grace_sec,
+        coalesce=body.coalesce,
     )
     return {"id": sid}
 
@@ -111,6 +128,12 @@ async def list_schedules(
                 enabled=bool(r.enabled),
                 tenant_id=r.tenant_id,
                 user_id=r.user_id,
+                concurrency_mode=r.concurrency_mode,
+                misfire_grace_sec=r.misfire_grace_sec,
+                coalesce=bool(r.coalesce),
+                last_run_at=r.last_run_at,
+                next_run_at=r.next_run_at,
+                last_status=r.last_status,
             )
         )
     return out
@@ -145,6 +168,12 @@ async def get_schedule(
         enabled=bool(s.enabled),
         tenant_id=s.tenant_id,
         user_id=s.user_id,
+        concurrency_mode=s.concurrency_mode,
+        misfire_grace_sec=s.misfire_grace_sec,
+        coalesce=bool(s.coalesce),
+        last_run_at=s.last_run_at,
+        next_run_at=s.next_run_at,
+        last_status=s.last_status,
     )
 
 
@@ -165,6 +194,7 @@ async def update_schedule(
     if body.name is not None:
         update["name"] = body.name
     if body.cron is not None:
+        _validate_cron_or_422(body.cron, body.timezone or s.timezone)
         update["cron"] = body.cron
     if body.timezone is not None:
         update["timezone"] = body.timezone
@@ -176,6 +206,12 @@ async def update_schedule(
         update["validation_mode"] = body.validation_mode
     if body.enabled is not None:
         update["enabled"] = body.enabled
+    if body.concurrency_mode is not None:
+        update["concurrency_mode"] = body.concurrency_mode
+    if body.misfire_grace_sec is not None:
+        update["misfire_grace_sec"] = int(body.misfire_grace_sec)
+    if body.coalesce is not None:
+        update["coalesce"] = bool(body.coalesce)
     ok = svc.update(schedule_id, update)
     return {"ok": bool(ok)}
 
@@ -221,3 +257,34 @@ async def run_now(
     task_id = await core.submit("workflow_run", payload=payload, queue_name="workflows", metadata={"user_id": s.user_id})
     return {"task_id": task_id}
 
+
+class DryRunRequest(BaseModel):
+    cron: str
+    timezone: Optional[str] = None
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/dry-run", response_model=Dict[str, Any])
+async def dry_run_schedule(body: DryRunRequest, current_user: User = Depends(get_request_user)):
+    """Validate cron/timezone and return next run time and echo inputs.
+
+    Does not persist a schedule or submit a run.
+    """
+    _validate_cron_or_422(body.cron, body.timezone)
+    from apscheduler.triggers.cron import CronTrigger
+    tz = body.timezone or os.getenv("WORKFLOWS_SCHEDULER_TZ", "UTC")
+    trigger = CronTrigger.from_crontab(body.cron, timezone=tz)
+    from datetime import datetime
+    now = datetime.now(trigger.timezone)
+    nxt = trigger.get_next_fire_time(None, now)
+    return {
+        "valid": True,
+        "next_run_at": nxt.isoformat() if nxt else None,
+        "inputs_preview": body.inputs,
+    }
+def _validate_cron_or_422(cron: str, timezone: Optional[str]) -> None:
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        CronTrigger.from_crontab(cron, timezone=timezone or "UTC")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid cron expression: {e}")

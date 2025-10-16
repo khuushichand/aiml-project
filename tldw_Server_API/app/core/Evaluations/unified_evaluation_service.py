@@ -120,7 +120,51 @@ class UnifiedEvaluationService:
             )
         )
         
-        # Audit handled via unified audit adapter functions
+        # Audit logger shim for backward compatibility in tests
+        class _AuditShim:
+            def evaluation_created(self, *, user_id: str, eval_id: str, name: str, eval_type: str) -> None:
+                try:
+                    log_evaluation_created(user_id=user_id, eval_id=eval_id, name=name, eval_type=eval_type)
+                except Exception:
+                    pass
+
+            def evaluation_updated(self, *, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
+                try:
+                    log_evaluation_updated(user_id=user_id, eval_id=eval_id, updates=updates)
+                except Exception:
+                    pass
+
+            def evaluation_deleted(self, *, user_id: str, eval_id: str) -> None:
+                try:
+                    log_evaluation_deleted(user_id=user_id, eval_id=eval_id)
+                except Exception:
+                    pass
+
+            def run_started(self, *, user_id: str, run_id: str, eval_id: str, target_model: str) -> None:
+                try:
+                    log_run_started(user_id=user_id, run_id=run_id, eval_id=eval_id, target_model=target_model)
+                except Exception:
+                    pass
+
+            def run_cancelled(self, *, user_id: str, run_id: str) -> None:
+                try:
+                    log_run_cancelled(user_id=user_id, run_id=run_id)
+                except Exception:
+                    pass
+
+            def dataset_created(self, *, user_id: str, dataset_id: str, name: str, samples: int) -> None:
+                try:
+                    log_dataset_created(user_id=user_id, dataset_id=dataset_id, name=name, samples=samples)
+                except Exception:
+                    pass
+
+            def dataset_deleted(self, *, user_id: str, dataset_id: str) -> None:
+                try:
+                    log_dataset_deleted(user_id=user_id, dataset_id=dataset_id)
+                except Exception:
+                    pass
+
+        self.audit_logger = _AuditShim()
 
         # Initialize per-service webhook manager bound to this DB
         try:
@@ -1424,6 +1468,15 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
         # Return existing and mark as recently used
         if user_id in _service_instances_by_user:
             svc = _service_instances_by_user.pop(user_id)
+            # If tests override the DB via env, ensure the cached instance matches
+            try:
+                import os as _os
+                override_path = _os.getenv("EVALUATIONS_TEST_DB_PATH")
+                if override_path and getattr(getattr(svc, "db", None), "db_path", None) != override_path:
+                    # Replace with a new instance bound to the override path
+                    svc = UnifiedEvaluationService(db_path=override_path)
+            except Exception:
+                pass
             _service_instances_by_user[user_id] = svc
             return svc
 

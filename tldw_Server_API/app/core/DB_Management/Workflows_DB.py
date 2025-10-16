@@ -149,6 +149,8 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 -- Partial indexes on hot statuses for faster lookups
     CREATE INDEX IF NOT EXISTS idx_runs_status_running ON workflow_runs(status) WHERE status = 'running';
     CREATE INDEX IF NOT EXISTS idx_runs_status_queued ON workflow_runs(status) WHERE status = 'queued';
+    CREATE INDEX IF NOT EXISTS idx_runs_status_succeeded ON workflow_runs(status) WHERE status = 'succeeded';
+    CREATE INDEX IF NOT EXISTS idx_runs_status_failed ON workflow_runs(status) WHERE status = 'failed';
 
 -- Per-run event sequence counters (optional optimization)
     CREATE TABLE IF NOT EXISTS workflow_event_counters (
@@ -418,7 +420,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 3
+    _CURRENT_SCHEMA_VERSION = 4
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -667,6 +669,7 @@ class WorkflowsDatabase:
             1: self._backend_migrate_to_v1,
             2: self._backend_migrate_to_v2,
             3: self._backend_migrate_to_v3,
+            4: self._backend_migrate_to_v4,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -825,6 +828,27 @@ class WorkflowsDatabase:
             connection=conn,
         )
 
+    def _backend_migrate_to_v4(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        # Add additional partial indexes for common terminal statuses
+        try:
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_succeeded')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'succeeded'",
+                connection=conn,
+            )
+        except Exception:
+            pass
+        try:
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_failed')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'failed'",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
             return
@@ -970,6 +994,8 @@ class WorkflowsDatabase:
         try:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_running ON workflow_runs(status) WHERE status = 'running'")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_queued ON workflow_runs(status) WHERE status = 'queued'")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_succeeded ON workflow_runs(status) WHERE status = 'succeeded'")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_failed ON workflow_runs(status) WHERE status = 'failed'")
         except Exception:
             pass
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq)")

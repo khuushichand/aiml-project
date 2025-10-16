@@ -226,6 +226,46 @@ jobs:
           pytest -q \
             tldw_Server_API/tests/Embeddings/test_pgvector_delete_by_filter.py \
             tldw_Server_API/tests/Embeddings/test_storage_worker_pgvector_upsert.py
+            \
+            tldw_Server_API/tests/Embeddings/test_vector_store_admin_endpoints_pg_e2e.py
+
+  pgvector-migrate-local:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.pgvector == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tldw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" \
+          --health-interval 5s \
+          --health-timeout 3s \
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "psycopg[binary]>=3.1" loguru
+      - name: Run migration CLI with demo seed
+        env:
+          PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/tldw
+          CHROMADB_FORCE_STUB: 'true'
+          SINGLE_USER_FIXED_ID: '1'
+        run: |
+          python Helper_Scripts/chroma_to_pgvector_migrate.py --user-id 1 --collection demo_cli --seed-demo --page-size 50 --rebuild-index hnsw
 
   chroma-delete-filter:
     needs: [changes]

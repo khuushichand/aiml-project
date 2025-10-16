@@ -3449,6 +3449,12 @@ class MediaDatabase:
                         logger.debug(f"Cascade deleted {processed_children_count}/{len(children)} records in {table}.")
 
             logger.info(f"Soft delete successful for Media ID: {media_id}.")
+            # Invalidate agentic intra-doc paragraph vectors for this document
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                invalidate_intra_doc_vectors(str(media_id))
+            except Exception:
+                pass
             return True
         except (ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error soft deleting media ID {media_id}: {e}", exc_info=True)
@@ -3687,6 +3693,12 @@ class MediaDatabase:
                             media_id=media_id, content=content, prompt=prompt, analysis_content=analysis_content
                         )
                         _persist_chunks(conn, media_id)
+                        # Invalidate agentic intra-doc vectors on content update
+                        try:
+                            from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                            invalidate_intra_doc_vectors(str(media_id))
+                        except Exception:
+                            pass
                         return media_id, media_uuid, f"Media '{title}' updated to new version."
 
                     # Case A.2: Overwrite is FALSE.
@@ -4470,6 +4482,12 @@ class MediaDatabase:
                 self._update_fts_media(conn, media_id, current_title, target_content)  # Use original title, new content
 
             logger.info(f"Rolled back media {media_id} to state of doc ver {target_version_number}. New DocVer: {new_doc_version_number}, New MediaVer: {new_media_version}")
+            # Invalidate agentic intra-doc vectors after content rollback
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                invalidate_intra_doc_vectors(str(media_id))
+            except Exception:
+                pass
             return {'success': f'Rolled back to version {target_version_number}. State saved as new version {new_doc_version_number}.',
                     'new_document_version_number': new_doc_version_number,
                     'new_document_version_uuid': new_doc_version_uuid,
@@ -7458,6 +7476,12 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
 
         if int(deleted_count) > 0:
             logger.info(f"Permanently deleted Media ID: {media_id}. NO sync log generated.")
+            # Invalidate agentic intra-doc vectors
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                invalidate_intra_doc_vectors(str(media_id))
+            except Exception:
+                pass
             return True
         logger.error(f"Permanent delete failed unexpectedly Media {media_id}.")
         return False

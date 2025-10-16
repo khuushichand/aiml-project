@@ -156,3 +156,20 @@ def test_build_orchestrator_snapshot_age_zero_when_empty_xrange():
 
     snapshot = _asyncio.get_event_loop().run_until_complete(_run())
     assert snapshot["ages"]["embeddings:embedding"] == 0.0
+
+
+@pytest.mark.unit
+def test_orchestrator_summary_priority_depths(disable_heavy_startup, admin_user, fake_redis, monkeypatch):
+    # Enable priority flag and seed per-priority queue depths
+    monkeypatch.setenv("EMBEDDINGS_PRIORITY_ENABLED", "true")
+    fake_redis._queues["embeddings:embedding:high"] = 5
+    fake_redis._queues["embeddings:embedding:normal"] = 3
+    fake_redis._queues["embeddings:embedding:low"] = 1
+    client = TestClient(app)
+    resp = client.get("/api/v1/embeddings/orchestrator/summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    # Queues dictionary includes sub-queues
+    assert data["queues"].get("embeddings:embedding:high") == 5
+    # Priority summary present
+    assert data.get("priority", {}).get("embedding", {}).get("high") == 5

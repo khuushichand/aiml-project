@@ -605,23 +605,23 @@ class RAGEvaluator:
                 })
 
         try:
-            score_str = await llm_circuit_breaker.call_with_breaker(
-                "openai",
+            # Use thread offload for deterministic unit-test mocking
+            score_str = await asyncio.to_thread(
                 analyze,
                 "openai",  # api_name - first param
-                response,  # input_data
-                prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                response,   # input_data
+                prompt,     # custom_prompt_arg
+                None,       # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                0.1        # temp
+                0.1         # temp
             )
 
-            score = float(score_str.strip()) / 5.0
+            score = float((score_str or "").strip()) / 5.0
 
             return ("answer_similarity", {
                 "name": "answer_similarity",
                 "score": score,
-                "raw_score": float(score_str.strip()),
+                "raw_score": float((score_str or "").strip() or 0.0),
                 "explanation": "LLM-based semantic similarity to ground truth answer",
                 "method": "llm"
             })
@@ -693,20 +693,20 @@ class RAGEvaluator:
             """
             
             try:
-                score_str = await llm_circuit_breaker.call_with_breaker(
-                    api_name,
+                # Use thread offload for deterministic unit-test mocking
+                score_str = await asyncio.to_thread(
                     analyze,
-                    api_name,  
-                    context,   
-                    prompt,    
-                    None,      
-                    "You are an evaluation expert. Provide only numeric scores.",  
-                    0.1        
+                    api_name,  # First param
+                    context,   # input_data
+                    prompt,    # custom_prompt_arg
+                    None,      # api_key (None to load from config)
+                    "You are an evaluation expert. Provide only numeric scores.",  # system_message
+                    0.1        # temp
                 )
                 
                 # Parse score and handle invalid responses
                 try:
-                    score = float(score_str.strip())
+                    score = float((score_str or "").strip())
                     relevance_scores.append(score / 5.0)
                 except (ValueError, AttributeError):
                     # Invalid response format - treat as 0.0

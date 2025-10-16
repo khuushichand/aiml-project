@@ -91,6 +91,41 @@ PY
           name: coverage-linux-pg-${{ matrix.python-version }}
           path: coverage.xml
 
+      - name: Workflows subset coverage (Engine/Scheduler)
+        run: |
+          pytest -q \
+            --cov=tldw_Server_API/app/core/Workflows \
+            --cov=tldw_Server_API/app/services/workflows_scheduler.py \
+            --cov=tldw_Server_API/app/api/v1/endpoints/scheduler_workflows.py \
+            --cov-report=xml:coverage-workflows.xml
+      - name: Enforce Workflows subset coverage threshold
+        env:
+          WF_MIN_COVERAGE: ${{ env.WF_MIN_COVERAGE || 60 }}
+          CI_STRICT_COVERAGE: ${{ env.CI_STRICT_COVERAGE }}
+        run: |
+          python - << 'PY'
+import xml.etree.ElementTree as ET
+try:
+    tree = ET.parse('coverage-workflows.xml')
+    pct = float(tree.getroot().attrib.get('line-rate','0')) * 100.0
+except Exception:
+    pct = 0.0
+print(f"Workflows subset coverage: {pct:.2f}%")
+MIN_COVERAGE = float('${{ env.WF_MIN_COVERAGE || 60 }}')
+if pct < MIN_COVERAGE:
+    strict = '${{ env.CI_STRICT_COVERAGE || '0' }}'
+    msg = f"workflows subset coverage {pct:.2f}% < threshold {MIN_COVERAGE}%"
+    if strict in ('1','true','yes','on'):
+        raise SystemExit(msg)
+    else:
+        print('Warning: ' + msg)
+PY
+      - name: Upload workflows coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-workflows-linux-pg-${{ matrix.python-version }}
+          path: coverage-workflows.xml
+
   # Cross-OS matrix (SQLite path; PG tests are skipped if driver/env missing)
   workflows-tests-os-matrix:
     name: Workflows (OS Matrix)

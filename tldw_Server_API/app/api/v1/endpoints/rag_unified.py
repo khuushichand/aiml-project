@@ -327,9 +327,28 @@ async def get_capabilities(request: Request):
                 "agentic_use_llm_planner",
                 "agentic_time_budget_sec",
                 "agentic_cache_ttl_sec",
+                "agentic_enable_query_decomposition",
+                "agentic_subgoal_max",
+                "agentic_enable_semantic_within",
+                "agentic_enable_section_index",
+                "agentic_prefer_structural_anchors",
+                "agentic_enable_table_support",
+                "agentic_enable_vlm_late_chunking",
+                "agentic_vlm_backend",
+                "agentic_vlm_detect_tables_only",
+                "agentic_vlm_max_pages",
+                "agentic_vlm_late_chunk_top_k_docs",
+                "agentic_use_provider_embeddings_within",
+                "agentic_provider_embedding_model_id",
                 "agentic_extractive_only",
                 "agentic_quote_spans",
                 "agentic_debug_trace",
+                "agentic_adaptive_budgets",
+                "agentic_coverage_target",
+                "agentic_min_corroborating_docs",
+                "agentic_max_redundancy",
+                "agentic_enable_metrics",
+                "explain_only",
             ],
             "defaults": {
                 "strategy": "standard",
@@ -340,6 +359,24 @@ async def get_capabilities(request: Request):
                 "agentic_enable_tools": False,
                 "agentic_use_llm_planner": False,
                 "agentic_cache_ttl_sec": 600,
+                "agentic_enable_query_decomposition": False,
+                "agentic_subgoal_max": 3,
+                "agentic_enable_semantic_within": True,
+                "agentic_enable_section_index": True,
+                "agentic_prefer_structural_anchors": True,
+                "agentic_enable_table_support": True,
+                "agentic_enable_vlm_late_chunking": False,
+                "agentic_vlm_backend": None,
+                "agentic_vlm_detect_tables_only": True,
+                "agentic_vlm_max_pages": None,
+                "agentic_vlm_late_chunk_top_k_docs": 2,
+                "agentic_use_provider_embeddings_within": False,
+                "agentic_provider_embedding_model_id": None,
+                "agentic_adaptive_budgets": True,
+                "agentic_coverage_target": 0.8,
+                "agentic_min_corroborating_docs": 2,
+                "agentic_max_redundancy": 0.9,
+                "agentic_enable_metrics": True,
             },
         },
         "query_expansion": {
@@ -377,6 +414,11 @@ async def get_capabilities(request: Request):
             "supported": True,
             "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
             "include_page_numbers": True
+        },
+        "guardrails": {
+            "supported": True,
+            "require_hard_citations": True,
+            "notes": "When require_hard_citations=true and coverage<1.0, agentic path abstains with a succinct message"
         },
         "answer_generation": {
             "supported": True,
@@ -462,6 +504,24 @@ async def get_capabilities(request: Request):
         "user_context": {
             "supported": True,
             "fields": ["user_id", "session_id"]
+        },
+        "webui": {
+            "supported": True,
+            "controls": [
+                "strategy",
+                "agentic_enable_tools",
+                "agentic_max_tool_calls",
+                "agentic_max_tokens_read",
+                "agentic_adaptive_budgets",
+                "agentic_time_budget_sec",
+                "require_hard_citations",
+                "enable_numeric_fidelity",
+                "agentic_enable_query_decomposition",
+                "agentic_enable_vlm_late_chunking"
+            ],
+            "explain_panel": True,
+            "highlight_spans": True,
+            "section_anchors": True
         }
     }
 
@@ -519,6 +579,48 @@ async def get_capabilities(request: Request):
                 "enable_generation": False,
                 "agentic_enable_tools": True,
                 "agentic_max_tool_calls": 6
+            }
+        },
+        "agentic_verify": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "How many experiments were run and what supported the conclusion?",
+                "strategy": "agentic",
+                "enable_generation": True,
+                "require_hard_citations": True,
+                "enable_numeric_fidelity": True,
+                "numeric_fidelity_behavior": "continue"
+            }
+        },
+        "agentic_explain": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "Explain residual connections and dropout",
+                "strategy": "agentic",
+                "enable_generation": False,
+                "explain_only": True,
+                "agentic_enable_tools": True,
+                "agentic_enable_query_decomposition": True
+            }
+        },
+        "agentic_multihop_vlm": {
+            "endpoint": "/api/v1/rag/search",
+            "method": "POST",
+            "body": {
+                "query": "Compare accuracy tables for ResNet vs EfficientNet across datasets",
+                "strategy": "agentic",
+                "search_mode": "hybrid",
+                "top_k": 8,
+                "enable_generation": False,
+                "agentic_enable_tools": True,
+                "agentic_enable_query_decomposition": True,
+                "agentic_subgoal_max": 3,
+                "agentic_enable_vlm_late_chunking": True,
+                "agentic_vlm_backend": "hf_table_transformer",
+                "agentic_vlm_detect_tables_only": True,
+                "agentic_vlm_late_chunk_top_k_docs": 2
             }
         },
         "ablate": {
@@ -645,6 +747,25 @@ async def unified_search_endpoint(
                 time_budget_sec=(getattr(request, 'agentic_time_budget_sec', None)),
                 cache_ttl_sec=int(getattr(request, 'agentic_cache_ttl_sec', 600) or 600),
                 debug_trace=bool(getattr(request, 'agentic_debug_trace', False) or request.debug_mode),
+                enable_query_decomposition=bool(getattr(request, 'agentic_enable_query_decomposition', False)),
+                subgoal_max=int(getattr(request, 'agentic_subgoal_max', 3) or 3),
+                enable_semantic_within=bool(getattr(request, 'agentic_enable_semantic_within', True)),
+                enable_section_index=bool(getattr(request, 'agentic_enable_section_index', True)),
+                prefer_structural_anchors=bool(getattr(request, 'agentic_prefer_structural_anchors', True)),
+                enable_table_support=bool(getattr(request, 'agentic_enable_table_support', True)),
+                agentic_enable_vlm_late_chunking=bool(getattr(request, 'agentic_enable_vlm_late_chunking', False)),
+                agentic_vlm_backend=getattr(request, 'agentic_vlm_backend', None),
+                agentic_vlm_detect_tables_only=bool(getattr(request, 'agentic_vlm_detect_tables_only', True)),
+                agentic_vlm_max_pages=getattr(request, 'agentic_vlm_max_pages', None),
+                agentic_vlm_late_chunk_top_k_docs=int(getattr(request, 'agentic_vlm_late_chunk_top_k_docs', 2) or 2),
+                agentic_use_provider_embeddings_within=bool(getattr(request, 'agentic_use_provider_embeddings_within', False)),
+                agentic_provider_embedding_model_id=getattr(request, 'agentic_provider_embedding_model_id', None),
+                # new adaptive/metrics knobs
+                adaptive_budgets=bool(getattr(request, 'agentic_adaptive_budgets', True)),
+                coverage_target=float(getattr(request, 'agentic_coverage_target', 0.8) or 0.8),
+                min_corroborating_docs=int(getattr(request, 'agentic_min_corroborating_docs', 2) or 2),
+                max_redundancy=float(getattr(request, 'agentic_max_redundancy', 0.9) or 0.9),
+                enable_metrics=bool(getattr(request, 'agentic_enable_metrics', True)),
             )
 
             result = await agentic_rag_pipeline(
@@ -669,6 +790,17 @@ async def unified_search_endpoint(
                 enable_citations=request.enable_citations,
                 include_chunk_citations=request.enable_chunk_citations,
                 debug_mode=request.debug_mode,
+                # expose verification flags on agentic path
+                require_hard_citations=bool(getattr(request, 'require_hard_citations', False)),
+                enable_numeric_fidelity=bool(getattr(request, 'enable_numeric_fidelity', False)),
+                numeric_fidelity_behavior=str(getattr(request, 'numeric_fidelity_behavior', 'continue')),
+                enable_claims=bool(getattr(request, 'enable_claims', False)),
+                claim_verifier=str(getattr(request, 'claim_verifier', 'hybrid')),
+                claims_top_k=int(getattr(request, 'claims_top_k', 5) or 5),
+                claims_conf_threshold=float(getattr(request, 'claims_conf_threshold', 0.7) or 0.7),
+                claims_max=int(getattr(request, 'claims_max', 25) or 25),
+                nli_model=getattr(request, 'nli_model', None),
+                claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
             )
         else:
             # Execute unified pipeline with all parameters from request
@@ -1078,7 +1210,67 @@ async def unified_search_stream_endpoint(
             except Exception:
                 docs = []
 
-            # Emit initial contexts (top-k with minimal fields) + a safe rationale plan
+            # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
+            if getattr(request, 'strategy', 'standard') == 'agentic':
+                try:
+                    # Run agentic assembly without generation
+                    a_cfg = AgenticConfig(
+                        top_k_docs=int(getattr(request, 'agentic_top_k_docs', 3) or 3),
+                        window_chars=int(getattr(request, 'agentic_window_chars', 1200) or 1200),
+                        max_tokens_read=int(getattr(request, 'agentic_max_tokens_read', 6000) or 6000),
+                        max_tool_calls=int(getattr(request, 'agentic_max_tool_calls', 8) or 8),
+                        extractive_only=True,
+                        quote_spans=True,
+                        enable_tools=bool(getattr(request, 'agentic_enable_tools', False)),
+                        use_llm_planner=bool(getattr(request, 'agentic_use_llm_planner', False)),
+                        time_budget_sec=(getattr(request, 'agentic_time_budget_sec', None)),
+                        cache_ttl_sec=int(getattr(request, 'agentic_cache_ttl_sec', 600) or 600),
+                        debug_trace=bool(getattr(request, 'agentic_debug_trace', False) or request.debug_mode),
+                        enable_query_decomposition=bool(getattr(request, 'agentic_enable_query_decomposition', False)),
+                        subgoal_max=int(getattr(request, 'agentic_subgoal_max', 3) or 3),
+                        enable_semantic_within=bool(getattr(request, 'agentic_enable_semantic_within', True)),
+                        enable_section_index=bool(getattr(request, 'agentic_enable_section_index', True)),
+                        prefer_structural_anchors=bool(getattr(request, 'agentic_prefer_structural_anchors', True)),
+                        enable_table_support=bool(getattr(request, 'agentic_enable_table_support', True)),
+                        agentic_enable_vlm_late_chunking=bool(getattr(request, 'agentic_enable_vlm_late_chunking', False)),
+                        agentic_vlm_backend=getattr(request, 'agentic_vlm_backend', None),
+                        agentic_vlm_detect_tables_only=bool(getattr(request, 'agentic_vlm_detect_tables_only', True)),
+                        agentic_vlm_max_pages=getattr(request, 'agentic_vlm_max_pages', None),
+                        agentic_vlm_late_chunk_top_k_docs=int(getattr(request, 'agentic_vlm_late_chunk_top_k_docs', 2) or 2),
+                        agentic_use_provider_embeddings_within=bool(getattr(request, 'agentic_use_provider_embeddings_within', False)),
+                        agentic_provider_embedding_model_id=getattr(request, 'agentic_provider_embedding_model_id', None),
+                    )
+                    ares = await agentic_rag_pipeline(
+                        query=request.query,
+                        sources=request.sources,
+                        media_db=media_db,
+                        chacha_db=chacha_db,
+                        media_db_path=(media_db.db_path if media_db else None),
+                        notes_db_path=(chacha_db.db_path if chacha_db else None),
+                        character_db_path=(chacha_db.db_path if chacha_db else None),
+                        search_mode=request.search_mode,
+                        fts_level=request.fts_level,
+                        top_k=request.top_k,
+                        min_score=request.min_score,
+                        agentic=a_cfg,
+                        enable_generation=False,
+                        enable_citations=False,
+                        include_chunk_citations=False,
+                debug_mode=request.debug_mode,
+                explain_only=bool(getattr(request, 'explain_only', False)),
+            )
+                    # Emit plan + spans
+                    plan = ares.metadata.get('agentic_metrics', {}) if isinstance(ares.metadata, dict) else {}
+                    yield json.dumps({"type": "plan", "plan": plan}) + "\n"
+                    prov = ares.metadata.get('provenance') if isinstance(ares.metadata, dict) else None
+                    if prov:
+                        yield json.dumps({"type": "spans", "count": len(prov), "provenance": prov[:50]}) + "\n"
+                    # Use synthetic chunk as the sole document for streaming generation
+                    docs = ares.documents
+                except Exception:
+                    pass
+
+            # Emit initial contexts (top-k with minimal fields) + a safe rationale plan (standard path)
             try:
                 top_contexts = []
                 for doc in (docs or [])[: min(10, (request.top_k or 10))]:

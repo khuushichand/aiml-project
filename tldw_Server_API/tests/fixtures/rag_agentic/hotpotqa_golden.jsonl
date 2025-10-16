@@ -1,0 +1,2 @@
+{"id": "hpqa-1", "question": "Which section describes residual connections and what is the benefit?", "answers": ["Residual connections help gradient flow"], "contexts": [{"id": "hp1_a", "title": "ResNet", "text": "# Residuals\nResidual connections help gradient flow in deep networks.\n\n# Training\nStandard optimization"}, {"id": "hp1_b", "title": "Regularization", "text": "Dropout helps prevent overfitting."}]}
+

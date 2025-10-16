@@ -444,6 +444,11 @@
         
         <h3>Response:</h3>
         <pre id="ragSimpleSearch_response">---</pre>
+        <div class="form-group" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+            <button class="api-button" onclick="ragSimpleShowExplain()">Show Explain (Agentic)</button>
+            <span class="text-muted">Renders plan + spans when strategy=agentic (or provenance present)</span>
+        </div>
+        <div id="ragSimpleSearch_explainPanel" class="mt-2"></div>
         <div id="ragSimpleSearch_resultList" class="mt-2"></div>
     </div>
 
@@ -741,6 +746,11 @@
         
         <h3>Response:</h3>
         <pre id="ragComplexSearch_response">---</pre>
+        <div class="form-group" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+            <button class="api-button" onclick="ragComplexShowExplain()">Show Explain (Agentic)</button>
+            <span class="text-muted">Renders plan + spans when strategy=agentic (or provenance present)</span>
+        </div>
+        <div id="ragComplexSearch_explainPanel" class="mt-2"></div>
         <div id="ragComplexSearch_resultList" class="mt-2"></div>
     </div>
 
@@ -887,6 +897,28 @@
     buildResultList('ragSimpleSearch_resultList', 'ragSimpleSearch_response', 'ragSimpleSearch_corpus');
     buildResultList('ragComplexSearch_resultList', 'ragComplexSearch_response', 'ragComplexSearch_corpus');
   })();
+
+  // Explain panel renderers
+  function _renderExplainFromPre(preId, mountId) {
+    try {
+      const pre = document.getElementById(preId);
+      const mount = document.getElementById(mountId);
+      if (!pre || !mount) return;
+      let data = null;
+      try { data = JSON.parse(pre.textContent || ''); } catch (e) { data = null; }
+      if (!data || !data.metadata) { mount.textContent = 'No metadata available.'; return; }
+      const md = data.metadata;
+      if (typeof window.renderAgenticExplainPanel === 'function') {
+        window.renderAgenticExplainPanel(md, mount);
+      } else {
+        mount.textContent = 'Explain renderer not available.';
+      }
+    } catch (e) {
+      console.error('Explain render failed', e);
+    }
+  }
+  function ragSimpleShowExplain() { _renderExplainFromPre('ragSimpleSearch_response', 'ragSimpleSearch_explainPanel'); }
+  function ragComplexShowExplain() { _renderExplainFromPre('ragComplexSearch_response', 'ragComplexSearch_explainPanel'); }
 </script>
 
 <!-- RAG Embeddings Tab -->

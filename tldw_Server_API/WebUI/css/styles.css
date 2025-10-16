@@ -1702,3 +1702,23 @@ pre:hover .copy-button {
     font-weight: 600;
 }
 .lint-icon { margin-right: 6px; }
+/* ===========================
+   Disabled Controls Styling
+   =========================== */
+input[disabled],
+select[disabled],
+textarea[disabled],
+button[disabled],
+.form-control[disabled],
+.form-control-file[disabled] {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+    filter: grayscale(30%);
+}
+
+.file-upload-area[aria-disabled="true"],
+.file-upload-area.disabled {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}

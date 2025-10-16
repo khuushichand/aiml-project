@@ -140,6 +140,27 @@
                                     <span id="vibevoice-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
                                 </div>
                                 <audio id="vibevoice-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
+                                <!-- Recording Settings (collapsible) -->
+                                <div class="rec-settings" style="margin-top:8px;">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('vibevoice')">
+                                        <span id="rec-settings-caret-vibevoice">▸</span> Recording Settings
+                                    </div>
+                                    <div id="rec-settings-vibevoice" class="rec-settings-body" style="display:none; margin-top:6px;">
+                                        <label style="margin-left:2px; font-size:0.9em;">Max sec:
+                                            <input
+                                                type="number"
+                                                id="vibevoice-rec-max"
+                                                value="15"
+                                                min="3"
+                                                max="60"
+                                                style="width:64px;"
+                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                            />
+                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                        </label>
+                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('vibevoice', 15); return false;">Reset</a></small>
+                                    </div>
+                                </div>
                             </div>
                             <div class="setting-group">
                                 <label>Speaker Count</label>
@@ -325,6 +346,27 @@
                                     <span id="higgs-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
                                 </div>
                                 <audio id="higgs-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
+                                <!-- Recording Settings (collapsible) -->
+                                <div class="rec-settings" style="margin-top:8px;">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('higgs')">
+                                        <span id="rec-settings-caret-higgs">▸</span> Recording Settings
+                                    </div>
+                                    <div id="rec-settings-higgs" class="rec-settings-body" style="display:none; margin-top:6px;">
+                                        <label style="margin-left:2px; font-size:0.9em;">Max sec:
+                                            <input
+                                                type="number"
+                                                id="higgs-rec-max"
+                                                value="15"
+                                                min="3"
+                                                max="60"
+                                                style="width:64px;"
+                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                            />
+                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                        </label>
+                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('higgs', 15); return false;">Reset</a></small>
+                                    </div>
+                                </div>
                             </div>
                             <div class="setting-group">
                                 <label>Features</label>
@@ -398,6 +440,27 @@
                                     <span id="chatterbox-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
                                 </div>
                                 <audio id="chatterbox-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
+                                <!-- Recording Settings (collapsible) -->
+                                <div class="rec-settings" style="margin-top:8px;">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('chatterbox')">
+                                        <span id="rec-settings-caret-chatterbox">▸</span> Recording Settings
+                                    </div>
+                                    <div id="rec-settings-chatterbox" class="rec-settings-body" style="display:none; margin-top:6px;">
+                                        <label style="margin-left:2px; font-size:0.9em;">Max sec:
+                                            <input
+                                                type="number"
+                                                id="chatterbox-rec-max"
+                                                value="15"
+                                                min="3"
+                                                max="60"
+                                                style="width:64px;"
+                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                            />
+                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                        </label>
+                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('chatterbox', 15); return false;">Reset</a></small>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -518,8 +581,32 @@
                                     <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopNeuTTSRecording()" id="neutts-rec-stop" disabled>
                                         <i class="fas fa-stop"></i> Stop
                                     </button>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearNeuTTSRecording()" id="neutts-rec-clear" disabled>
+                                        <i class="fas fa-times"></i> Clear
+                                    </button>
                                     <span id="neutts-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
                                     <span id="neutts-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                                </div>
+                                <!-- Recording Settings (collapsible) -->
+                                <div class="rec-settings" style="margin-top:8px;">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('neutts')">
+                                        <span id="rec-settings-caret-neutts">▸</span> Recording Settings
+                                    </div>
+                                    <div id="rec-settings-neutts" class="rec-settings-body" style="display:none; margin-top:6px;">
+                                        <label style="margin-left:2px; font-size:0.9em;">Max sec:
+                                            <input
+                                                type="number"
+                                                id="neutts-rec-max"
+                                                value="15"
+                                                min="3"
+                                                max="60"
+                                                style="width:64px;"
+                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                            />
+                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                        </label>
+                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('neutts', 15); return false;">Reset</a></small>
+                                    </div>
                                 </div>
                                 <audio id="neutts-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
                                 <small class="text-muted">The recorded clip will be used as the reference audio automatically and overrides file selection.</small>

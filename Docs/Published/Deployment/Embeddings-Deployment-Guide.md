@@ -262,6 +262,21 @@ export HYDE_DEDUPE_BY_PARENT=false
 Notes
 - Media‑level dedupe (default) keeps one entry per media_id. Chunk‑level dedupe ranks distinct chunks from the same media when enabled.
 - When HYDE_ONLY_IF_NEEDED is true and the baseline chunk search returns ≥k with a max score ≥ HYDE_SCORE_FLOOR, HYDE is skipped to reduce latency.
+ 
+### HYDE Backfill CLI (optional)
+
+For existing collections, you can backfill HYDE question vectors offline using the helper script:
+
+```
+python Helper_Scripts/hyde_backfill.py --collection <collection_name> --page-size 200
+```
+
+Notes:
+- Respects HYDE_* configuration (provider, model, temperature, max tokens, language, prompt version).
+- Uses best‑effort generation; failures are logged and skipped (no DLQ for HYDE).
+- Use `--dry-run` to preview changes without writing.
+- Prefer running during off‑peak hours; set caps via `HYDE_MAX_VECTORS_PER_DOC` and orchestrator backpressure/quotas.
+
 - HYDE vector generation itself is feature‑flagged separately (see HYDE‑Do‑1.md). Retrieval flags above affect only the search/merge phase.
 
 
@@ -312,6 +327,26 @@ Key embeddings metrics (subset):
 - `embedding_cache_hits_total` – Cache hit rate
 - `active_embedding_requests` – Current load
 - Circuit breaker status is available via admin endpoints
+
+### pgvector backend metrics & admin
+- Prometheus emits pgvector operation histograms/counters (in `/api/v1/metrics/text`):
+  - `pgvector_upsert_latency_seconds`, `pgvector_query_latency_seconds`, `pgvector_delete_latency_seconds`
+  - `pgvector_rows_upserted_total`, `pgvector_rows_deleted_total`
+- Admin endpoints for pgvector/chroma:
+  - `GET  /api/v1/vector_stores/{id}/admin/index_info` → backend & index info
+  - `POST /api/v1/vector_stores/admin/hnsw_ef_search` → set session `ef_search` (pg only)
+  - `POST /api/v1/vector_stores/{id}/admin/rebuild_index` → rebuild ANN index (`hnsw|ivfflat|drop`)
+  - `POST /api/v1/vector_stores/{id}/admin/delete_by_filter` → delete by JSONB metadata filter
+  - `GET  /api/v1/vector_stores/admin/health` → adapter health summary
+
+Quick start:
+```bash
+docker-compose -f docker-compose.pg.yml up -d
+export PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw
+# Optional: seed and migrate a demo collection from Chroma stub
+CHROMADB_FORCE_STUB=true \
+python Helper_Scripts/chroma_to_pgvector_migrate.py --user-id 1 --collection demo_cli --seed-demo --rebuild-index hnsw
+```
 
 ### Health Checks and Admin Metrics
 

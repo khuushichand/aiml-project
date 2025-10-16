@@ -306,11 +306,33 @@ TTS_vibevoice = [
 ]
 
 TTS_chatterbox = [
+  # Core compute
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
-  "chatterbox-tts>=0.1.0",  # If available via pip
-  # Or install from source:
-  # git clone https://github.com/resemble-ai/chatterbox.git && cd chatterbox && pip install -e .
+  "numpy>=1.24.0",
+  "scipy>=1.10.0",
+  # HF stack
+  "transformers>=4.51.0",
+  "tokenizers>=0.13.0",
+  "huggingface_hub>=0.21.0",
+  "safetensors>=0.4.2",
+  # Audio / DSP
+  "librosa>=0.10.0",
+  # Diffusion / attention utils used in matcha blocks
+  "diffusers>=0.29.0",
+  "einops>=0.7.0",
+  # Conformer block dependency (for matcha decoder)
+  "conformer>=0.3.2",
+  # S3 tokenizer backend
+  "s3tokenizer>=0.1.6",
+]
+
+# Optional language preprocessing extras for multilingual text tokenization
+TTS_chatterbox_lang = [
+  "pykakasi>=2.2.1",          # Japanese romanization -> hiragana
+  "dicta-onnx>=0.2.0",        # Hebrew diacritics
+  "spacy-pkuseg>=0.0.33",     # Chinese segmentation
+  "russian_text_stresser>=1.0.5",  # Russian stress marks
 ]
 
 # NeuTTS Air (Neuphonic)

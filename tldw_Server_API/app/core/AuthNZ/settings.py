@@ -578,6 +578,11 @@ class Settings(BaseSettings):
                         "and follow the prompts (option \"Generate secure keys\").\n"
                         "Then set SINGLE_USER_API_KEY in your environment or .env file."
                     )
+            # In test contexts, normalize known placeholder keys to the deterministic test key
+            elif in_test_context and self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}:
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                self.SINGLE_USER_API_KEY = test_key
+                logger.debug("Normalized placeholder SINGLE_USER_API_KEY to deterministic test key for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"

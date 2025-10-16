@@ -335,6 +335,8 @@ def _cfg_float(name: str, default_val: float) -> float:
 BP_MAX_DEPTH = int(_cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000))
 BP_MAX_AGE_S = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
 TENANT_RPS = int(_cfg_int("EMBEDDINGS_TENANT_RPS", 0))  # 0 disables
+# Orchestrator snapshot scan cap (prevent unbounded SCAN work per build)
+ORCH_SCAN_MAX_KEYS = int(_cfg_int("EMB_ORCH_MAX_SCAN_KEYS", 500))
 
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
@@ -1864,7 +1866,8 @@ class EmbeddingsBatchResponse(BaseModel):
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,
     current_user: User = Depends(get_request_user),
-    request: Request = None
+    request: Request = None,
+    response: Response = None
 ) -> EmbeddingsBatchResponse:
     texts = payload.texts or []
     if not texts:
@@ -1922,6 +1925,15 @@ async def create_embeddings_batch_endpoint(
         model_id=model,
         dimensions=payload.dimensions
     )
+
+    # Attach quota headers if present (parity with single-item endpoint)
+    try:
+        if hasattr(request, 'state') and response is not None:
+            if getattr(request.state, 'rate_limit_limit', None) is not None:
+                response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
+                response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
+    except Exception:
+        pass
 
     return EmbeddingsBatchResponse(
         embeddings=embeddings,
@@ -2800,10 +2812,15 @@ async def get_dlq_stats(
                   "storage": {"processed": 0, "failed": 0}}
         try:
             cursor = 0
+            processed = 0
             while True:
                 cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
                 for k in keys:
+                    if processed >= ORCH_SCAN_MAX_KEYS:
+                        cursor = 0
+                        break
                     data = await client.get(k)
+                    processed += 1
                     if not data:
                         continue
                     try:
@@ -3210,11 +3227,25 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
     depths: Dict[str, int] = {}
     dlq_depths: Dict[str, int] = {}
     ages: Dict[str, float] = {}
+    # Optional per-priority depths when priority routing is enabled
+    priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
+    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}}
     for q in queues:
         try:
             depths[q] = await client.xlen(q)
         except Exception:
             depths[q] = 0
+        # Expose per-priority sub-queue depths (high/normal/low)
+        if priority_enabled:
+            stage = q.split(":", 1)[1]
+            for pr in ("high", "normal", "low"):
+                sub = f"{q}:{pr}"
+                try:
+                    dsub = await client.xlen(sub)
+                except Exception:
+                    dsub = 0
+                depths[sub] = dsub
+                priority_depths[stage][pr] = dsub
         # queue age (oldest entry)
         try:
             rng = await client.xrange(q, min='-', max='+', count=1)
@@ -3244,10 +3275,15 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
     }
     try:
         cursor = 0
+        processed = 0
         while True:
             cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
             for k in keys:
+                if processed >= ORCH_SCAN_MAX_KEYS:
+                    cursor = 0
+                    break
                 data = await client.get(k)
+                processed += 1
                 if not data:
                     continue
                 try:
@@ -3278,7 +3314,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         except Exception:
             pass
 
-    return {"queues": depths, "dlq": dlq_depths, "ages": ages, "stages": stages, "flags": flags, "ts": now_ts}
+    return {"queues": depths, "dlq": dlq_depths, "ages": ages, "stages": stages, "flags": flags, "priority": priority_depths if priority_enabled else {}, "ts": now_ts}
 
 
 async def _sse_orchestrator_stream(client: aioredis.Redis):

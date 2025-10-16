@@ -329,12 +329,22 @@ class EmbeddingWorker(BaseWorker):
                             model_name = model_config.model_name_or_path
                     
                     models_used.add(f"{model_provider}:{model_name}")
-                    
+
+                    chunk_metadata_src = dict(chunk.metadata or {})
+                    detected_language = chunk_metadata_src.get("language")
+                    if not detected_language:
+                        try:
+                            detected_language = self._detect_language(chunk.content)
+                        except Exception:
+                            detected_language = None
+                    if detected_language:
+                        chunk_metadata_src.setdefault("language", detected_language)
+                    chunk_cached = False
+
                     # Check Redis content-hash cache first (cross-run)
-                    redis_cached = None
                     try:
-                        if self.redis_client and isinstance(chunk.metadata, dict):
-                            chash = chunk.metadata.get("content_hash")
+                        if self.redis_client and chunk_metadata_src:
+                            chash = chunk_metadata_src.get("content_hash")
                             if chash:
                                 rkey = f"embeddings:contentcache:v1:{model_name}:{chash}"
                                 redis_raw = await self.redis_client.get(rkey)
@@ -343,8 +353,8 @@ class EmbeddingWorker(BaseWorker):
                                         payload = _json.loads(redis_raw)
                                         vec = payload.get("embedding")
                                         if isinstance(vec, list):
-                                            redis_cached = vec
                                             embedding = vec
+                                            chunk_cached = True
                                             cache_hits += 1
                                             logger.debug(f"Redis cache hit for chunk {chunk.chunk_id}")
                                     except Exception:
@@ -357,6 +367,7 @@ class EmbeddingWorker(BaseWorker):
                         cached_embedding = self.cache.get(chunk.content, model_name)
                         if cached_embedding:
                             embedding = cached_embedding
+                            chunk_cached = True
                             cache_hits += 1
                             logger.debug(f"LRU cache hit for chunk {chunk.chunk_id}")
                         else:
@@ -421,12 +432,12 @@ class EmbeddingWorker(BaseWorker):
                         model_used=model_name,
                         dimensions=len(embedding) if isinstance(embedding, list) else len(embedding.tolist()),
                         metadata={
-                            **(chunk.metadata or {}),
+                            **chunk_metadata_src,
                             "kind": "chunk",
                             "model_provider": model_provider,
                             "embedder_name": embedder_name,
                             "embedder_version": embedder_version,
-                            "cached": embedding is not None and cache_hits > cache_misses
+                            "cached": chunk_cached
                         }
                     )
                     embedding_data_list.append(embedding_data)
@@ -442,8 +453,7 @@ class EmbeddingWorker(BaseWorker):
                                 # Choose language: override from settings unless 'auto'
                                 lang_cfg = str(settings.get("HYDE_LANGUAGE", "auto") or "auto").lower()
                                 if lang_cfg == "auto":
-                                    lang_detect = self._detect_language(chunk.content)
-                                    language = "en" if lang_detect == "english" else None
+                                    language = detected_language
                                 else:
                                     language = lang_cfg
                                 # Provider/model for HYDE question generation
@@ -478,7 +488,7 @@ class EmbeddingWorker(BaseWorker):
                                         qh = question_hash(qtext)
                                         qid = f"{chunk.chunk_id}:q:{qh[:8]}"
                                         meta = {
-                                            **(chunk.metadata or {}),
+                                            **chunk_metadata_src,
                                             "kind": "hyde_q",
                                             "parent_chunk_id": chunk.chunk_id,
                                             "hyde_rank": qi,
@@ -491,6 +501,8 @@ class EmbeddingWorker(BaseWorker):
                                         }
                                         if language:
                                             meta["language"] = language
+                                        elif detected_language:
+                                            meta["language"] = detected_language
                                         # Create embedding data for HYDE question
                                         qvec_list = qvec.tolist() if hasattr(qvec, 'tolist') else qvec
                                         embedding_data_list.append(

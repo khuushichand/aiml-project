@@ -42,7 +42,11 @@ class SQLiteConnectionPool(ConnectionPool):
             db_path: Path to SQLite database file
             config: Database configuration
         """
-        self.db_path = db_path
+        # Normalize to absolute path to avoid CWD-related open errors under tests
+        try:
+            self.db_path = str(Path(db_path).resolve())
+        except Exception:
+            self.db_path = db_path
         self.config = config
         self._local = threading.local()
         self._connections: Dict[int, sqlite3.Connection] = {}
@@ -67,6 +71,14 @@ class SQLiteConnectionPool(ConnectionPool):
     
     def _create_connection(self) -> sqlite3.Connection:
         """Create a new SQLite connection with optimal settings."""
+        # Ensure database directory exists to avoid 'unable to open database file'
+        try:
+            dbp = Path(self.db_path)
+            if dbp.parent and not dbp.parent.exists():
+                dbp.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
         conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False,

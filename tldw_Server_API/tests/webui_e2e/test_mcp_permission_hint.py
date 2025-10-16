@@ -75,6 +75,12 @@ def test_mcp_tools_python_rest_flow():
     if not requests:
         pytest.skip("requests not available in this environment")
 
+    import os
+    # Ensure test-mode so MCP validation is bypassed for TestClient
+    os.environ["TEST_MODE"] = "true"
+    # Ensure API key used by app matches what we will send
+    # Env vars override config files; set before importing app
+    os.environ.setdefault("SINGLE_USER_API_KEY", "CHANGE_ME_TO_SECURE_API_KEY")
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
     client = TestClient(app)
@@ -94,7 +100,8 @@ def test_mcp_tools_python_rest_flow():
 
     # 3) Fetch API key from dynamic config and call again with auth
     # Use the configured single-user API key directly for TestClient calls
-    api_key = os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID")
+    # In test mode, settings normalizes placeholder keys to SINGLE_USER_TEST_API_KEY (default 'test-api-key-12345')
+    api_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
 
     # 3a) Grant tools.execute:* to admin role and assign the admin role to the single-user via admin endpoints
     uid = int(os.getenv("SINGLE_USER_FIXED_ID", "1"))

@@ -150,23 +150,43 @@ async def get_prompt_studio_user(
     """
     import os
 
-    # 1) Explicit test-mode bypass via env only (do not bypass automatically under pytest)
+    # Debug trace to aid tests
     try:
-        logger.debug(f"PS get_user path={request.url.path} method={request.method} authz={'yes' if request.headers.get('Authorization') else 'no'} api_key={'yes' if request.headers.get('X-API-KEY') else 'no'}")
+        logger.debug(
+            "PS get_user path=%s method=%s authz=%s api_key=%s",
+            getattr(request.url, "path", ""),
+            getattr(request, "method", ""),
+            "yes" if request.headers.get("Authorization") else "no",
+            "yes" if request.headers.get("X-API-KEY") else "no",
+        )
     except Exception:
         pass
+
+    # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
     if os.getenv("TEST_MODE", "").lower() == "true":
+        try:
+            maybe_user = get_current_active_user()  # may be sync or async, or None
+            if asyncio.iscoroutine(maybe_user):
+                maybe_user = await maybe_user
+            if isinstance(maybe_user, dict) and maybe_user.get("id") is not None:
+                uid = str(maybe_user.get("id"))
+            else:
+                uid = "test-user-123"
+        except Exception:
+            uid = "test-user-123"
+
         user_context = {
-            "user_id": "test-user",
+            "user_id": uid,
             "client_id": x_client_id or "test-client",
             "is_authenticated": True,
+            # Tests treat single-user as admin for convenience
             "is_admin": True,
-            "permissions": ["all"]
+            "permissions": ["all"],
         }
         request.state.user_context = user_context
         return user_context
 
-    # 2) Try patched hook (tests patch this symbol on this module)
+    # 2) Non-test mode: Try patched hook (some integration tests patch this symbol)
     try:
         maybe_user = get_current_active_user()  # may be sync or async, or None
         if asyncio.iscoroutine(maybe_user):
@@ -177,7 +197,7 @@ async def get_prompt_studio_user(
                 "client_id": x_client_id or "web",
                 "is_authenticated": True,
                 "is_admin": True,
-                "permissions": ["all"]
+                "permissions": ["all"],
             }
             request.state.user_context = user_context
             return user_context

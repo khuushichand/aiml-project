@@ -118,6 +118,13 @@ This tool is designed for:
 - `POST /api/v1/audio/speech` — Text-to-Speech (streaming and non-streaming)
 - `GET  /api/v1/audio/voices/catalog` — List available TTS voices (supports `?provider=openai|elevenlabs`)
 
+#### Recording Settings (TTS & Audio Tabs)
+- The TTS tab (per provider) and the Audio → TTS / File Transcription panels include a collapsible “Recording Settings” section.
+- Use “Max sec” to set a soft cap for microphone recordings; a countdown shows remaining seconds during capture.
+- On the TTS tab, caps persist per provider; in Audio → TTS and File Transcription, caps persist per panel.
+- If a recording is present, it overrides the file input and shows a “Using recorded sample” badge. Click “Clear” to restore file selection.
+- Recommended reference clips: 3–15 seconds, mono, minimal background noise.
+
 ### OCR Providers
 
 - The WebUI includes OCR evaluation forms under the Evaluations section (tabs: “OCR Evaluation” and “OCR PDF”).

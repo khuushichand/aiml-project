@@ -60,7 +60,7 @@ class EmbeddingsABTestConfig(BaseModel):
     arms: List[ABTestArm] = Field(min_length=1, description="Embedding models to compare")
     # Permit empty corpus in test-mode where synthetic or pre-existing collections may be used
     media_ids: List[int] = Field(default_factory=list, min_length=0, description="Media IDs to build the corpus from")
-    chunking: ABTestChunking
+    chunking: Optional[ABTestChunking] = None
     retrieval: ABTestRetrieval
     queries: List[ABTestQuery] = Field(min_length=1, description="Queries to evaluate")
     metric_level: Optional[Literal['media', 'chunk']] = Field(default='media', description="Metric granularity")

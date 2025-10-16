@@ -24,10 +24,13 @@ from ..tts_exceptions import (
     TTSProviderInitializationError,
     TTSAuthenticationError,
     TTSRateLimitError,
+    TTSQuotaExceededError,
     TTSNetworkError,
     TTSTimeoutError,
     TTSProviderError,
     TTSGenerationError,
+    TTSValidationError,
+    TTSError,
     auth_error,
     rate_limit_error,
     network_error,
@@ -357,7 +360,7 @@ class ElevenLabsAdapter(TTSAdapter):
                     provider=self.provider_name
                 )
 
-        except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError):
+        except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError, TTSQuotaExceededError, TTSValidationError):
             raise
         except Exception as e:
             logger.error(f"{self.provider_name} generation error: {e}")
@@ -482,8 +485,10 @@ class ElevenLabsAdapter(TTSAdapter):
                 self._raise_mapped_http_error(e)
             return response.content or b""
         except httpx.HTTPStatusError as e:
-            logger.error(f"{self.provider_name} HTTP error (non-stream): {e.response.status_code} - {e.response.text}")
             self._raise_mapped_http_error(e)
+        except TTSError:
+            # Propagate mapped TTS exceptions without wrapping/logging
+            raise
         except Exception as e:
             logger.error(f"{self.provider_name} non-stream error: {e}")
             raise
@@ -706,6 +711,9 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 raise TTSValidationError("Voice settings out of range", provider=self._provider_simple)
 
     async def generate(self, request: TTSRequest) -> TTSResponse:
+        # Default to non-streaming for adapter.generate() to match unit tests
+        # (streaming is exercised via generate_stream())
+        request.stream = False
         # Map request fields into extra_params expected by base adapter
         if request.model:
             request.extra_params["model"] = request.model
@@ -781,6 +789,9 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         if status in (401, 403):
             raise TTSAuthenticationError("elevenlabs authentication failed", provider=self._provider_simple)
         if status == 429:
+            # Distinguish quota vs. rate limit when possible
+            if code == "quota_exceeded":
+                raise TTSQuotaExceededError("elevenlabs quota exceeded", provider=self._provider_simple)
             retry = None
             try:
                 retry = int((e.response.headers or {}).get("retry-after", "0"))
@@ -795,7 +806,12 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             raise err
         if status and 400 <= status < 500 and code == "invalid_voice_id":
             from ..tts_exceptions import TTSValidationError
-            raise TTSValidationError("Invalid voice id", provider=self._provider_simple, details={"status": status})
+            message = None
+            try:
+                message = (detail.get("message") if isinstance(detail, dict) else None) or "Invalid voice id"
+            except Exception:
+                message = "Invalid voice id"
+            raise TTSValidationError(message, provider=self._provider_simple, details={"status": status})
 
         # Fallback to base behavior
         return super()._raise_mapped_http_error(e)
