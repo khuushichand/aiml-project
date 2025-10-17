@@ -329,7 +329,9 @@ class JobManager:
                             )
                             rowc = cur.fetchone()
                             if rowc:
-                                q_ready = int(rowc[0] or 0); q_sched = int(rowc[1] or 0); p = int(rowc[2] or 0)
+                                q_ready = int((rowc.get("ready_count") if isinstance(rowc, dict) else 0) or 0)
+                                q_sched = int((rowc.get("scheduled_count") if isinstance(rowc, dict) else 0) or 0)
+                                p = int((rowc.get("processing_count") if isinstance(rowc, dict) else 0) or 0)
                             else:
                                 q_ready = q_sched = p = 0
                         else:
@@ -339,20 +341,20 @@ class JobManager:
                                 (domain, queue, job_type),
                             )
                             q_ready_row = cur.fetchone()
-                            q_ready = int(q_ready_row["c"]) if q_ready_row is not None else 0
+                            q_ready = int((q_ready_row.get("c") if isinstance(q_ready_row, dict) else 0) if q_ready_row is not None else 0)
                             # scheduled queued (available_at in future)
                             cur.execute(
                                 "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW())",
                                 (domain, queue, job_type),
                             )
                             q_sched_row = cur.fetchone()
-                            q_sched = int(q_sched_row["c"]) if q_sched_row is not None else 0
+                            q_sched = int((q_sched_row.get("c") if isinstance(q_sched_row, dict) else 0) if q_sched_row is not None else 0)
                             cur.execute(
                                 "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='processing'",
                                 (domain, queue, job_type),
                             )
                             p_row = cur.fetchone()
-                            p = int(p_row["c"]) if p_row is not None else 0
+                            p = int((p_row.get("c") if isinstance(p_row, dict) else 0) if p_row is not None else 0)
                 else:
                     if counters_enabled:
                         rowc = conn.execute(
@@ -751,17 +753,19 @@ class JobManager:
                             # Max queued
                             max_q = self._quota_get("JOBS_QUOTA_MAX_QUEUED", domain, owner_user_id)
                             if max_q and owner_user_id:
-                                cur.execute("SELECT COUNT(*) FROM jobs WHERE domain=%s AND owner_user_id=%s AND status='queued'", (domain, owner_user_id))
-                                if int(cur.fetchone()[0]) >= max_q:
+                                cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND owner_user_id=%s AND status='queued'", (domain, owner_user_id))
+                                row_cnt = cur.fetchone()
+                                if int((row_cnt.get("c") if isinstance(row_cnt, dict) else 0)) >= max_q:
                                     raise ValueError("Quota exceeded: max queued per user/domain")
                             # Submits per minute
                             spm = self._quota_get("JOBS_QUOTA_SUBMITS_PER_MIN", domain, owner_user_id)
                             if spm and owner_user_id:
                                 cur.execute(
-                                    "SELECT COUNT(*) FROM jobs WHERE domain=%s AND owner_user_id=%s AND created_at >= (%s - interval '60 seconds')",
+                                    "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND owner_user_id=%s AND created_at >= (%s - interval '60 seconds')",
                                     (domain, owner_user_id, _now_dt),
                                 )
-                                if int(cur.fetchone()[0]) >= spm:
+                                row_spm = cur.fetchone()
+                                if int((row_spm.get("c") if isinstance(row_spm, dict) else 0)) >= spm:
                                     raise ValueError("Quota exceeded: submits per minute")
                         except Exception:
                             pass
@@ -799,7 +803,8 @@ class JobManager:
                                 row = cur.fetchone()
                             d = dict(row) if row else {"uuid": uuid_val, "status": "queued", "domain": domain, "queue": queue, "job_type": job_type}
                             try:
-                                increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                                if was_insert:
+                                    increment_created({"domain": domain, "queue": queue, "job_type": job_type})
                             except Exception:
                                 pass
                             # Counters bump (PG, idempotent insert occurred)
@@ -939,6 +944,7 @@ class JobManager:
                                 now,
                             ),
                         )
+                        inserted = bool(getattr(conn, "total_changes", 0))
                         row = conn.execute(
                             "SELECT * FROM jobs WHERE domain = ? AND queue = ? AND job_type = ? AND idempotency_key = ?",
                             (domain, queue, job_type, idempotency_key),
@@ -947,7 +953,8 @@ class JobManager:
                             d = dict(row)
                             try:
                                 self._update_gauges(domain=domain, queue=queue, job_type=job_type)
-                                increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                                if inserted:
+                                    increment_created({"domain": domain, "queue": queue, "job_type": job_type})
                             except Exception:
                                 pass
                             try:
@@ -1203,7 +1210,7 @@ class JobManager:
     ) -> Optional[Dict[str, Any]]:
         """Atomically acquire the next eligible job and start a lease.
 
-        Selection order: priority DESC, available_at/created_at ASC.
+        Selection order: priority ASC (lower = higher), available_at/created_at ASC.
         Reclaims expired processing jobs by allowing acquisition when
         `leased_until` is NULL or in the past.
         """
@@ -1226,8 +1233,9 @@ class JobManager:
                 try:
                     if self.backend == "postgres":
                         with self._pg_cursor(conn_q) as curq:
-                            curq.execute("SELECT COUNT(*) FROM jobs WHERE domain=%s AND owner_user_id=%s AND status='processing'", (domain, owner_user_id))
-                            if int(curq.fetchone()[0]) >= max_inflight:
+                            curq.execute("SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND owner_user_id=%s AND status='processing'", (domain, owner_user_id))
+                            _row = curq.fetchone()
+                            if int((_row.get("c") if isinstance(_row, dict) else 0)) >= max_inflight:
                                 return None
                     else:
                         rowc = conn_q.execute("SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND status='processing'", (domain, owner_user_id)).fetchone()
@@ -1301,7 +1309,7 @@ class JobManager:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
                             # Stable ordering: priority DESC (higher numeric first), then available/created asc, then id asc
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1326,7 +1334,11 @@ class JobManager:
                         # Counters: adjust queued->processing
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                is_sched = bool(d.get("available_at")) and (_parse_dt(d.get("available_at")) or datetime.utcnow()) > datetime.utcnow()
+                                _now = self._clock.now_utc()
+                                _av = _parse_dt(d.get("available_at"))
+                                if _av is not None and _av.tzinfo is None:
+                                    _av = _av.replace(tzinfo=_tz.utc)
+                                is_sched = bool(d.get("available_at")) and (_av or _now) > _now
                                 cur.execute(
                                     (
                                         "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(%s,%s,%s,0,0,0,0) "
@@ -1395,9 +1407,9 @@ class JobManager:
                             params_sub.append(owner_user_id)
                         # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1444,7 +1456,11 @@ class JobManager:
                         # Counters queued->processing
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                is_sched = bool(d.get("available_at")) and (_parse_dt(d.get("available_at")) or datetime.utcnow()) > datetime.utcnow()
+                                _now = self._clock.now_utc()
+                                _av = _parse_dt(d.get("available_at"))
+                                if _av is not None and _av.tzinfo is None:
+                                    _av = _av.replace(tzinfo=_tz.utc)
+                                is_sched = bool(d.get("available_at")) and (_av or _now) > _now
                                 conn.execute(
                                     (
                                         "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,?,?,?) "
@@ -1468,9 +1484,9 @@ class JobManager:
                             params.append(owner_user_id)
                         # Ordering: FIFO by default; when counters are enabled, prefer most recent
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         row = conn.execute(base, params).fetchone()
                         if not row:
                             return None
@@ -1494,7 +1510,11 @@ class JobManager:
                         d = dict(row)
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                is_sched = bool(d.get("available_at")) and (_parse_dt(d.get("available_at")) or datetime.utcnow()) > datetime.utcnow()
+                                _now = self._clock.now_utc()
+                                _av = _parse_dt(d.get("available_at"))
+                                if _av is not None and _av.tzinfo is None:
+                                    _av = _av.replace(tzinfo=_tz.utc)
+                                is_sched = bool(d.get("available_at")) and (_av or _now) > _now
                                 conn.execute(
                                     (
                                         "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,?,?,?) "
@@ -2018,6 +2038,16 @@ class JobManager:
                     with self._pg_cursor(conn) as cur:
                         for it in items:
                             res_obj = it.get("result")
+                            # Optional encryption at rest: prefer provided domain, otherwise fetch
+                            try:
+                                dom = it.get("domain")
+                                if not dom:
+                                    cur.execute("SELECT domain FROM jobs WHERE id=%s", (int(it.get("job_id")),))
+                                    _r = cur.fetchone()
+                                    dom = (_r.get("domain") if isinstance(_r, dict) else None) if _r else None
+                                res_obj = self._maybe_encrypt_json(res_obj, dom)
+                            except Exception:
+                                pass
                             ctok = it.get("completion_token")
                             if enforce:
                                 cur.execute(
@@ -2034,6 +2064,15 @@ class JobManager:
                 with conn:
                     for it in items:
                         res_obj = it.get("result")
+                        # Optional encryption at rest (SQLite): prefer provided domain, otherwise fetch
+                        try:
+                            dom = it.get("domain")
+                            if not dom:
+                                rowd = conn.execute("SELECT domain FROM jobs WHERE id = ?", (int(it.get("job_id")),)).fetchone()
+                                dom = rowd[0] if rowd else None
+                            res_obj = self._maybe_encrypt_json(res_obj, dom)
+                        except Exception:
+                            pass
                         ctok = it.get("completion_token")
                         if enforce:
                             cur = conn.execute(
@@ -2628,7 +2667,11 @@ class JobManager:
                             # Counters: queued (ready/scheduled) -> cancelled
                             try:
                                 if rowd and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                    is_sched = bool(rowd.get("available_at")) and ((_parse_dt(rowd.get("available_at")) or datetime.utcnow()) > datetime.utcnow())
+                                    _now2 = self._clock.now_utc()
+                                    _av2 = _parse_dt(rowd.get("available_at")) if rowd else None
+                                    if _av2 is not None and _av2.tzinfo is None:
+                                        _av2 = _av2.replace(tzinfo=_tz.utc)
+                                    is_sched = bool(rowd.get("available_at")) and ((_av2 or _now2) > _now2)
                                     add_ready = -1 if not is_sched else 0
                                     add_sched = -1 if is_sched else 0
                                     cur.execute(
@@ -2698,7 +2741,11 @@ class JobManager:
                         # Counters: queued (ready/scheduled) -> cancelled
                         try:
                             if rowd and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                is_sched = bool(rowd["available_at"]) and ((_parse_dt(rowd["available_at"]) or datetime.utcnow()) > datetime.utcnow())
+                                _now3 = self._clock.now_utc()
+                                _av3 = _parse_dt(rowd["available_at"]) if rowd and rowd["available_at"] else None
+                                if _av3 is not None and _av3.tzinfo is None:
+                                    _av3 = _av3.replace(tzinfo=_tz.utc)
+                                is_sched = bool(rowd["available_at"]) and ((_av3 or _now3) > _now3)
                                 add_ready = -1 if not is_sched else 0
                                 add_sched = -1 if is_sched else 0
                                 conn.execute(
@@ -3389,8 +3436,9 @@ class JobManager:
                     if status:
                         where.append("status=%s"); params.append(status)
                     wh = " AND ".join(where)
-                    cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params))
-                    count = int(cur.fetchone()[0])
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {wh}", tuple(params))
+                    _cnt_row = cur.fetchone()
+                    count = int((_cnt_row.get("c") if isinstance(_cnt_row, dict) else 0))
                     if dry_run:
                         return count
                     if set_now:
@@ -3494,13 +3542,14 @@ class JobManager:
                     wh = " AND ".join(where)
                     cur.execute(
                         (
-                            f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("
+                            f"SELECT COUNT(*) AS c FROM jobs WHERE {wh} AND ("
                             "(status='failed' AND retry_count < max_retries) "
                             + (" OR (status='queued' AND available_at > NOW())" if not only_failed else "") + ")"
                         ),
                         tuple(params),
                     )
-                    count = int(cur.fetchone()[0])
+                    _cnt = cur.fetchone()
+                    count = int((_cnt.get("c") if isinstance(_cnt, dict) else 0))
                     if dry_run:
                         return count
                     with conn:
@@ -3914,10 +3963,12 @@ class JobManager:
                     if job_type:
                         where_np.append("job_type = %s"); params_np.append(job_type)
                         where_pr.append("job_type = %s"); params_pr.append(job_type)
-                    cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
-                    res["non_processing_with_lease"] = int(cur.fetchone()[0])
-                    cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
-                    res["processing_expired"] = int(cur.fetchone()[0])
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
+                    _np = cur.fetchone()
+                    res["non_processing_with_lease"] = int((_np.get("c") if isinstance(_np, dict) else 0))
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
+                    _pr = cur.fetchone()
+                    res["processing_expired"] = int((_pr.get("c") if isinstance(_pr, dict) else 0))
                     if fix:
                         # Clear leases for non-processing
                         cur.execute(

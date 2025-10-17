@@ -107,7 +107,11 @@ class DatabasePool:
         schema_file = Path(__file__).parent.parent.parent.parent / "Databases" / "Postgres" / "Schema" / "postgresql_users.sql"
         
         if not schema_file.exists():
-            logger.warning(f"PostgreSQL schema file not found: {schema_file}")
+            # This path is expected in current builds: schema is provisioned by initialize.py/migrations.
+            logger.warning(
+                "PostgreSQL schema file not found at %s. Run 'python -m tldw_Server_API.app.core.AuthNZ.initialize' or apply DB migrations to create schema.",
+                schema_file,
+            )
             return
         
         try:

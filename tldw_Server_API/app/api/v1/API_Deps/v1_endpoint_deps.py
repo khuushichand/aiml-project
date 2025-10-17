@@ -3,7 +3,7 @@
 # Imports
 #
 # 3rd-party Libraries
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from loguru import logger
 from starlette import status
@@ -30,6 +30,7 @@ def _normalize_header_value(value):
 
 
 async def verify_token(
+    request: Request,
     Token: str = Header(None),
     x_api_key: str = Header(None, alias="X-API-KEY")
 ):  # Check both Token and X-API-KEY headers
@@ -98,7 +99,8 @@ async def verify_token(
         elif x_api_key:
             try:
                 api_mgr = await get_api_key_manager()
-                key_info = await api_mgr.validate_api_key(x_api_key)
+                client_ip = request.client.host if getattr(request, "client", None) else None
+                key_info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
                 if not key_info:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
                 # Success: we don't attach user here; endpoints that need it should use get_current_user

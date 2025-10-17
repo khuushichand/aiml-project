@@ -10,9 +10,12 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 def _testing_env():
     os.environ["TESTING"] = "true"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"  # force async path
+    # Allow fallback even when x-provider header is present for this mapping test suite
+    os.environ["EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER"] = "true"
     yield
     os.environ.pop("TESTING", None)
     os.environ.pop("USE_REAL_OPENAI_IN_TESTS", None)
+    os.environ.pop("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER", None)
 
 
 @pytest.fixture
@@ -58,4 +61,3 @@ def test_fallback_model_mapping_openai_to_hf(client, monkeypatch):
     assert calls["args"]["provider"] == "huggingface"
     # Must map openai small to HF all-MiniLM-L6-v2 by default
     assert calls["args"]["model_id"] == "sentence-transformers/all-MiniLM-L6-v2"
-

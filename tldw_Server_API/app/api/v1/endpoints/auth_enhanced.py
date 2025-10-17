@@ -5,6 +5,7 @@
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import secrets
+import base64
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Query
@@ -28,6 +29,7 @@ from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
 
 #######################################################################################################################
 #
@@ -227,12 +229,13 @@ async def reset_password(
                 detail="This reset token has already been used"
             )
         
-        # Validate new password
-        is_valid, requirements = password_service.validate_password_strength(data.new_password)
-        if not is_valid:
+        # Validate new password (service raises WeakPasswordError on failure)
+        try:
+            password_service.validate_password_strength(data.new_password)
+        except WeakPasswordError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Password does not meet requirements: {', '.join(requirements)}"
+                detail=str(e)
             )
         
         # Hash new password

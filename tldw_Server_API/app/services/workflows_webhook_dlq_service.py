@@ -50,29 +50,33 @@ def _get_lists_for_tenant(tenant_id: str) -> Tuple[List[str], List[str]]:
 
 
 def _host_allowed(url: str, tenant_id: str) -> bool:
+    """Apply centralized egress policy for webhook retries.
+
+    Prefer tenant-aware webhook policy; fallback to generic URL policy with
+    per-tenant allow/deny when available. This enforces scheme, port, and
+    private/reserved IP restrictions consistently.
+    """
     try:
-        p = urlparse(url)
-        host = p.hostname or ""
-        if not p.scheme or not host:
-            return False
+        # Use centralized webhook policy if available
+        from tldw_Server_API.app.core.Security import egress as _eg
+        if hasattr(_eg, "is_webhook_url_allowed_for_tenant"):
+            try:
+                return bool(_eg.is_webhook_url_allowed_for_tenant(url, tenant_id))
+            except Exception:
+                # Fall back to explicit evaluate_url_policy with derived lists
+                pass
+        # Fallback path: derive allow/deny lists and evaluate via core policy
         allow, deny = _get_lists_for_tenant(tenant_id)
-        # Denylist wins
-        for pat in deny:
-            if pat.startswith("*.") and host.endswith(pat[1:]):
+        if hasattr(_eg, "evaluate_url_policy"):
+            try:
+                res = _eg.evaluate_url_policy(url, allowlist=(allow or None), denylist=(deny or None))
+                return bool(getattr(res, "allowed", False))
+            except Exception:
                 return False
-            if host == pat:
-                return False
-        # If allowlist present, must match
-        if allow:
-            for pat in allow:
-                if pat.startswith("*.") and host.endswith(pat[1:]):
-                    return True
-                if host == pat:
-                    return True
-            return False
-        return True
+        # If policy module is missing, fail safe
+        return False
     except Exception as e:
-        logger.warning(f"DLQ allow/deny check failed for url={url}: {e}")
+        logger.warning(f"DLQ egress policy check failed for url={url}: {e}")
         return False
 
 
@@ -183,4 +187,3 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                 logger.debug(f"DLQ retry scheduled in {next_delay}s (id={dlq_id} attempts={attempts+1}): {err}")
 
     logger.info("Workflows webhook DLQ worker stopped")
-

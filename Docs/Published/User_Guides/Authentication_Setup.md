@@ -38,6 +38,10 @@ Use this API key in all requests:
 curl -H "X-API-KEY: your-api-key" http://localhost:8000/api/v1/media/search
 ```
 
+Note on tokens in single-user mode
+- Login endpoints are disabled/hidden; there are no JWTs. Authenticate with the `X-API-KEY` header only.
+- Bearer tokens are ignored in single-user mode. Some OpenAI-compatible clients send `Authorization: Bearer ...` — set the same value in `X-API-KEY` to authenticate.
+
 ## Multi-User Setup (Team/Production)
 
 For team deployments with user management:

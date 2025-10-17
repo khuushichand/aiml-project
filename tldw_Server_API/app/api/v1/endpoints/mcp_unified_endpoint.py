@@ -98,7 +98,8 @@ class AuthTokenResponse(BaseModel):
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    request: Request = None,
 ) -> Optional[TokenData]:
     """Get current user (AuthNZ JWT, MCP JWT, or API key)."""
     # Try AuthNZ JWT first (multi-user)
@@ -139,7 +140,8 @@ async def get_current_user(
                 # Fall through to multi-user API key validation
                 pass
             api_mgr = await get_api_key_manager()
-            info = await api_mgr.validate_api_key(x_api_key)
+            client_ip = request.client.host if request and getattr(request, "client", None) else None
+            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
             if info and info.get("user_id"):
                 return TokenData(sub=str(info["user_id"]), username=None, roles=["api_client"], permissions=[], token_type="access")
     except Exception as e:
@@ -242,6 +244,7 @@ async def mcp_request(
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     Process an MCP request via HTTP.
@@ -261,7 +264,8 @@ async def mcp_request(
     if x_api_key:
         try:
             api_mgr = await get_api_key_manager()
-            info = await api_mgr.validate_api_key(x_api_key)
+            client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
+            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
             if info:
                 if info.get('org_id') is not None:
                     metadata['org_id'] = info.get('org_id')
@@ -354,6 +358,7 @@ async def mcp_request_batch(
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     Process a batch of MCP requests via HTTP.
@@ -369,7 +374,8 @@ async def mcp_request_batch(
     if x_api_key:
         try:
             api_mgr = await get_api_key_manager()
-            info = await api_mgr.validate_api_key(x_api_key)
+            client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
+            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
             if info:
                 if info.get('org_id') is not None:
                     metadata['org_id'] = info.get('org_id')

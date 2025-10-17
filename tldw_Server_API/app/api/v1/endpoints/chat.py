@@ -8,44 +8,33 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.Utils.image_validation import (
-    validate_data_uri,
-    safe_decode_base64_image,
     validate_image_url
 )
 import asyncio
-import base64
 import datetime
 import json
 import os
 import sqlite3
 import time
 import uuid
-from collections import deque
 from functools import partial
-from io import BytesIO
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 from unittest.mock import Mock
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Body,
     Depends,
-    File,
-    Form,
     Header,
     HTTPException,
     Query,
     Request,
-    Response,
     status,
-    UploadFile
 )
-from fastapi.encoders import jsonable_encoder
-from requests import RequestException, HTTPError
+ 
 
 # Import new modules for integration
-from tldw_Server_API.app.core.DB_Management.async_db_wrapper import create_async_db
+ 
 # Temporary shim for test patch compatibility. Prefer real AuthNZ util if present.
 try:
     from tldw_Server_API.app.core.AuthNZ.auth_utils import (
@@ -67,27 +56,13 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
-
-# API Rate Limiter/Caching via Redis
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address as _get_remote_address
-
-# Custom key function that bypasses rate limiting in TEST_MODE
-def get_remote_address(request):
-    import os
-    if os.getenv("TEST_MODE") == "true":
-        return None  # Return None to bypass rate limiting
-    return _get_remote_address(request)
 from loguru import logger
-from starlette.background import BackgroundTask
 from starlette.responses import JSONResponse, StreamingResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     DEFAULT_CHARACTER_NAME,
     get_chacha_db_for_user,
 )
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     get_api_keys,
     ChatCompletionRequest,
@@ -105,11 +80,6 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
 from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call,
 )
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
-    ChatDictionary,
-    process_user_input,
-    update_chat_content,
-)
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
@@ -125,8 +95,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
-    save_conversation_with_messages,
-    update_conversation_with_rollback,
 )
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     StreamingResponseHandler,
@@ -358,9 +326,13 @@ async def _save_message_turn_to_db(
         # Track image processing metrics if images were processed
         if images:
             image_processing_time = time.time() - image_start_time
-            for _, _ in images:
+            for img_bytes, _ in images:
+                try:
+                    size = len(img_bytes) if img_bytes is not None else 0
+                except Exception:
+                    size = 0
                 metrics.track_image_processing(
-                    size_bytes=len(images[0][0]) if images else 0,
+                    size_bytes=size,
                     validation_time=image_processing_time
                 )
     except Exception as e_proc:
@@ -495,8 +467,7 @@ async def create_chat_completion(
     # Generate unique request ID for tracking and set it in context
     request_id = set_request_id()
     
-    # Wrap database with async wrapper for better performance
-    async_db = create_async_db(chat_db)
+    # Database is provided via dependency; async wrapper not needed here
     
     # Initialize metrics collector
     metrics = get_chat_metrics()
@@ -1115,6 +1086,27 @@ async def create_chat_completion(
         )
 
     except Exception as e_chat:
+        # Preserve explicit HTTPException raised earlier
+        if isinstance(e_chat, HTTPException):
+            raise e_chat
+        # Special-case DB errors here, because a generic Exception handler precedes
+        # the DB-specific except block below. Map to precise HTTP statuses.
+        if isinstance(e_chat, (InputError, ConflictError, CharactersRAGDBError)):
+            logger.error(
+                "Database Error: {} - {}",
+                type(e_chat).__name__,
+                str(e_chat),
+                exc_info=True,
+            )
+            db_status = (
+                status.HTTP_400_BAD_REQUEST if isinstance(e_chat, InputError) else
+                status.HTTP_409_CONFLICT if isinstance(e_chat, ConflictError) else
+                status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            client_detail = (
+                str(e_chat) if db_status < 500 else "A database error occurred. Please try again later."
+            )
+            raise HTTPException(status_code=db_status, detail=client_detail)
         # Handle legacy chat library exceptions robustly, even if class identity differs.
         # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
         is_chat_lib_error = (
@@ -1184,17 +1176,7 @@ async def create_chat_completion(
                 client_detail = "An internal server error occurred."
         raise HTTPException(status_code=err_status, detail=client_detail)
 
-    except (InputError, ConflictError, CharactersRAGDBError) as e_db:
-        logger.error(f"Database Error: {type(e_db).__name__} - {str(e_db)}", exc_info=True)
-        err_status = status.HTTP_400_BAD_REQUEST if isinstance(e_db, InputError) else \
-                     status.HTTP_409_CONFLICT if isinstance(e_db, ConflictError) else \
-                     status.HTTP_500_INTERNAL_SERVER_ERROR
-        # Standardize database error messages
-        if err_status < 500:
-            client_detail = str(e_db)  # Client errors can have detail
-        else:
-            client_detail = "A database error occurred. Please try again later."
-        raise HTTPException(status_code=err_status, detail=client_detail)
+    
 
     # Preserve intentionally raised HTTP errors (e.g., 400/401/429/503) from earlier logic
     except HTTPException as http_exc:

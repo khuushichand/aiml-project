@@ -2239,8 +2239,13 @@ UPDATE db_schema_version
                 #         self._migrate_from_v2_to_v3(conn)
                 #         # ...and so on
                 if current_initial_version < target_version:
-                    # Handle known migration paths
-                    if current_initial_version == 4 and target_version >= 5:
+                    # If this was a brand new database (version 0), we have already
+                    # applied the base schema and stepped migrations above. Skip
+                    # the secondary migration-path dispatcher.
+                    if current_initial_version == 0:
+                        pass
+                    # Handle known migration paths for pre-existing databases
+                    elif current_initial_version == 4 and target_version >= 5:
                         self._migrate_from_v4_to_v5(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 6 and current_db_version == 5:
@@ -3528,11 +3533,12 @@ UPDATE db_schema_version
         safe_search_term = f'"{search_term}"'
         query = """
                 SELECT cc.*
-                FROM character_cards_fts fts
-                         JOIN character_cards cc ON fts.rowid = cc.id
-                WHERE fts.character_cards_fts MATCH ? \
+                FROM character_cards_fts, character_cards cc
+                WHERE character_cards_fts.rowid = cc.id
+                  AND character_cards_fts MATCH ?
                   AND cc.deleted = 0
-                ORDER BY bm25(fts) ASC, cc.last_modified DESC LIMIT ? \
+                ORDER BY cc.last_modified DESC
+                LIMIT ?
                 """
         try:
             cursor = self.execute_query(query, (search_term, limit))
@@ -3855,8 +3861,9 @@ UPDATE db_schema_version
         Updates an existing conversation using optimistic locking.
 
         The update succeeds if `expected_version` matches the current database version.
-        `version` is incremented, `last_modified` updated to current UTC time,
-        and `client_id` set to the DB instance's `client_id`.
+        `version` is incremented and `last_modified` updated to current UTC time.
+        Note: this method does not change ownership; the `client_id` field is preserved
+        unless explicitly provided in `update_data` by a privileged caller.
 
         Updatable fields from `update_data`: 'title', 'rating'. Other fields are ignored.
         If `update_data` is empty or contains no updatable fields, metadata (version,
@@ -3944,17 +3951,17 @@ UPDATE db_schema_version
 
                 if not fields_to_update_sql:
                     # This block executes if update_data was empty or contained no recognized updatable fields.
-                    # We still need to update last_modified, version, and client_id due to the successful version check.
+                    # We still need to update last_modified and version due to the successful version check.
                     logger.info(
                         f"No specific updatable fields (e.g. title, rating) found for conversation {conversation_id}. Updating metadata only.")
-                    main_update_query = "UPDATE conversations SET last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 0"
-                    main_update_params = (now, next_version_val, self.client_id, conversation_id, expected_version)
+                    main_update_query = "UPDATE conversations SET last_modified = ?, version = ? WHERE id = ? AND version = ? AND deleted = 0"
+                    main_update_params = (now, next_version_val, conversation_id, expected_version)
                 else:
                     # If specific fields were found, add metadata fields to the update
-                    fields_to_update_sql.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+                    fields_to_update_sql.extend(["last_modified = ?", "version = ?"])
 
                     final_set_values = params_for_set_clause[:]  # Copy of values for specific fields
-                    final_set_values.extend([now, next_version_val, self.client_id])  # Add values for metadata fields
+                    final_set_values.extend([now, next_version_val])  # Add values for metadata fields
 
                     main_update_query = f"UPDATE conversations SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"
                     main_update_params = tuple(final_set_values + [conversation_id, expected_version])

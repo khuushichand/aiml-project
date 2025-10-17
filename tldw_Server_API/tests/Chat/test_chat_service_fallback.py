@@ -151,3 +151,62 @@ async def test_execute_non_stream_call_refreshes_credentials(monkeypatch):
         entry.get("selected_provider") == "openai" and entry.get("streaming") is False
         for entry in metrics.fallback_successes
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
+    metrics = _DummyMetrics()
+    provider_manager = _DummyProviderManager()
+
+    http_exc = HTTPException(status_code=429, detail="Rate limited")
+
+    def failing_llm_call():
+        raise http_exc
+
+    async def save_message_fn(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "get_request_queue", lambda: None)
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=None, api_key_id=None),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await execute_streaming_call(
+            current_loop=asyncio.get_running_loop(),
+            cleaned_args={
+                "api_endpoint": "openai",
+                "messages_payload": [],
+                "model": "gpt-test",
+                "streaming": True,
+            },
+            selected_provider="openai",
+            provider="openai",
+            model="gpt-test",
+            request_json="{}",
+            request=request,
+            metrics=metrics,
+            provider_manager=provider_manager,
+            templated_llm_payload=[],
+            should_persist=False,
+            final_conversation_id="conv-test",
+            character_card_for_context={"name": "Test"},
+            chat_db=None,
+            save_message_fn=save_message_fn,
+            audit_service=None,
+            audit_context=None,
+            client_id="client-test",
+            queue_execution_enabled=False,
+            enable_provider_fallback=False,
+            llm_call_func=failing_llm_call,
+            refresh_provider_params=lambda _provider: ({}, None),
+            moderation_getter=lambda: _DummyModeration(),
+        )
+
+    assert exc_info.value is http_exc
+    # The last llm call recorded should indicate an HTTPException error type
+    assert metrics.llm_calls[-1][3] in ("HTTPException", "HTTPException")

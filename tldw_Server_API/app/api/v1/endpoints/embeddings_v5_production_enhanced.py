@@ -426,10 +426,11 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
         if _is_multi_user_runtime() and tenant_rps > 0:
             client2 = await _get_redis_client()
             try:
-                ts = int(time.time())
-                key = f"embeddings:tenant:rps:{getattr(user, 'id', 'anon')}:{ts}"
+                # Use a single rolling key with 1-second TTL to avoid flakiness across second boundaries
+                key = f"embeddings:tenant:rps:{getattr(user, 'id', 'anon')}"
                 current = await client2.incr(key)
-                await client2.expire(key, 2)
+                # Ensure expiry of 1 second for a strict RPS window
+                await client2.expire(key, 1)
                 remaining = max(0, tenant_rps - int(current or 0))
                 if current > tenant_rps:
                     headers = {"Retry-After": "1", "X-RateLimit-Limit": str(tenant_rps), "X-RateLimit-Remaining": str(0)}
@@ -1751,13 +1752,13 @@ async def create_embedding_endpoint(
             # Try provider with fallback chain on failure
             last_error: Optional[Exception] = None
             # Fallback policy when explicit provider header is present:
-            # By default we still allow fallback to improve resilience in tests/local usage.
-            # Set EMBEDDINGS_STRICT_PROVIDER_HEADER=true to disable fallback when x-provider is set.
+            # Strict by default: do NOT fallback when `x-provider` header is set.
+            # To allow fallback even with header, set EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true
             try:
-                strict_hdr = os.getenv("EMBEDDINGS_STRICT_PROVIDER_HEADER", "").lower() in ("1", "true", "yes", "on")
+                allow_hdr = os.getenv("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER", "").lower() in ("1", "true", "yes", "on")
             except Exception:
-                strict_hdr = False
-            fallback_disabled = (x_provider is not None and strict_hdr)
+                allow_hdr = False
+            fallback_disabled = (x_provider is not None and not allow_hdr)
             chain = [provider] if fallback_disabled else resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]

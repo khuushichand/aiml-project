@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 
 from .types import Document, DataSource
+from .utils import normalize_scores as _normalize_scores
 from .vector_stores import VectorStoreFactory, VectorStoreConfig, VectorStoreType
 
 if TYPE_CHECKING:
@@ -303,28 +304,34 @@ class MediaDBRetriever(BaseRetriever):
         sql += " ORDER BY rank ASC LIMIT ?"
         params.append(self.config.max_results)
         
-        # Execute query
-        results = self._execute_query(sql, tuple(params))
-        
-        # Convert to documents
-        for row in results:
+        # Execute query and normalize scores to [0,1] (higher is better)
+        rows = list(self._execute_query(sql, tuple(params)))
+        raw_scores = [float(r["rank"]) if r["rank"] is not None else 0.0 for r in rows]
+        # bm25 (SQLite) is lower-better; invert before normalization
+        inv_scores = [-s for s in raw_scores]
+        norm = _normalize_scores(inv_scores, method="minmax") if rows else []
+
+        # Convert to documents and apply min_score threshold on normalized scores
+        min_score = float(self.config.min_score or 0.0)
+        for row, score in zip(rows, norm):
+            if score < min_score:
+                continue
             doc = Document(
                 id=str(row["id"]),
-                content=row["content"],
+                content=row["content"] or "",
                 source=DataSource.MEDIA_DB,
                 metadata={
-                    "title": row["title"],
-                    "media_type": row["type"],
-                    "url": row["url"],
-                    "created_at": row["ingestion_date"],
-                    "transcription_model": row["transcription_model"],
+                    "title": row.get("title"),
+                    "media_type": row.get("type"),
+                    "url": row.get("url"),
+                    "created_at": row.get("ingestion_date"),
+                    "transcription_model": row.get("transcription_model"),
                     "source": "media_db"
                 },
-                score=float(row["rank"]) if row["rank"] else 0.0
+                score=float(score)
             )
             documents.append(doc)
-        
-        logger.debug(f"Retrieved {len(documents)} documents from Media_DB")
+        logger.debug(f"Retrieved {len(documents)} documents from Media_DB (normalized scores)")
         
         return documents
 
@@ -422,21 +429,29 @@ class MediaDBRetriever(BaseRetriever):
             return []
 
         docs: List[Document] = []
+
+        # Normalize scores to [0,1] (higher is better)
+        norm_scores: List[float] = []
+        if rows:
+            row_maps = [r if isinstance(r, dict) else dict(r) for r in rows]
+            raw_vals: List[float] = []
+            for rm in row_maps:
+                rv = rm.get('rank')
+                try:
+                    raw_vals.append(float(rv) if rv is not None else 0.0)
+                except (TypeError, ValueError):
+                    raw_vals.append(0.0)
+            if backend_type == BackendType.SQLITE:
+                inv = [-v for v in raw_vals]
+                norm_scores = _normalize_scores(inv, method="minmax")
+            else:
+                norm_scores = _normalize_scores(raw_vals, method="minmax")
+        else:
+            row_maps = []
+
         min_score = float(self.config.min_score or 0.0)
-        for raw_row in rows or []:
-            row = raw_row if isinstance(raw_row, dict) else dict(raw_row)
-            try:
-                raw_rank = row.get('rank')
-            except Exception:
-                raw_rank = 0.0
-            try:
-                score_val = float(raw_rank) if raw_rank is not None else 0.0
-            except (TypeError, ValueError):
-                score_val = 0.0
-            # SQLite bm25 often returns lower (more negative) for better matches
-            if score_val < 0:
-                score_val = -score_val
-            if score_val < min_score:
+        for row, score_val in zip(row_maps, norm_scores):
+            if float(score_val) < min_score:
                 continue
 
             md: Dict[str, Any] = {}
@@ -486,7 +501,7 @@ class MediaDBRetriever(BaseRetriever):
                     content=content_text,
                     source=DataSource.MEDIA_DB,
                     metadata=md,
-                    score=score_val,
+                    score=float(score_val),
                     start_char=md.get('start_char'),
                     end_char=md.get('end_char'),
                     chunk_index=md.get('chunk_index'),
@@ -522,21 +537,27 @@ class MediaDBRetriever(BaseRetriever):
             logger.error(f"MediaDatabase search failed: {exc}")
             return []
         documents: List[Document] = []
-        min_score = float(self.config.min_score or 0.0)
         backend_type = getattr(self.media_db, 'backend_type', None)
+
+        # Normalize scores across results to [0,1] (higher is better)
+        raw_vals: List[float] = []
         for row in results:
-            raw_score = row.get('relevance_score')
-            if raw_score is None:
-                raw_score = row.get('rank')
+            rv = row.get('relevance_score')
+            if rv is None:
+                rv = row.get('rank')
             try:
-                score_val = float(raw_score) if raw_score is not None else 0.0
+                raw_vals.append(float(rv) if rv is not None else 0.0)
             except (TypeError, ValueError):
-                score_val = 0.0
-            if backend_type == BackendType.SQLITE and raw_score is not None and score_val < 0:
-                # SQLite FTS rank/bm25 implementations yield more negative scores for better matches;
-                # normalise to a positive value so min_score thresholds and ordering behave consistently.
-                score_val = -score_val
-            if score_val < min_score:
+                raw_vals.append(0.0)
+        if backend_type == BackendType.SQLITE:
+            inv = [-v for v in raw_vals]
+            norm_vals = _normalize_scores(inv, method="minmax") if raw_vals else []
+        else:
+            norm_vals = _normalize_scores(raw_vals, method="minmax") if raw_vals else []
+
+        min_score = float(self.config.min_score or 0.0)
+        for row, score_val in zip(results, norm_vals):
+            if float(score_val) < min_score:
                 continue
             metadata = {}
             if self.config.include_metadata:
@@ -564,7 +585,7 @@ class MediaDBRetriever(BaseRetriever):
                     content=content_text,
                     source=DataSource.MEDIA_DB,
                     metadata=metadata,
-                    score=score_val,
+                    score=float(score_val),
                 )
             )
         documents.sort(key=lambda doc: getattr(doc, 'score', 0.0), reverse=True)
@@ -1142,15 +1163,30 @@ class NotesDBRetriever(BaseRetriever):
             logger.error(f"ChaCha notes search failed: {exc}")
             return []
         documents: List[Document] = []
+        # Normalize backend-provided ranks (if present) to [0,1]
+        ranks = []
+        for r in results:
+            rv = r.get('rank')
+            try:
+                ranks.append(float(rv) if rv is not None else None)
+            except Exception:
+                ranks.append(None)
+        norm_map = {}
+        if any(v is not None for v in ranks):
+            vals = [v for v in ranks if v is not None]
+            if getattr(self.chacha_db, 'backend_type', None) == BackendType.POSTGRESQL:
+                scaled = _normalize_scores(vals, method="minmax")
+            else:
+                scaled = _normalize_scores([-v for v in vals], method="minmax")
+            it = iter(scaled)
+            for idx, v in enumerate(ranks):
+                if v is not None:
+                    norm_map[idx] = float(next(it))
         min_score = float(self.config.min_score or 0.0)
-        for row in results:
+        for idx, row in enumerate(results):
             if notebook_id and row.get('notebook_id') != notebook_id:
                 continue
-            score = row.get('rank') or 0.0
-            try:
-                score_val = float(score)
-            except (TypeError, ValueError):
-                score_val = 0.0
+            score_val = norm_map.get(idx, 0.75)
             if score_val < min_score:
                 continue
             metadata = {}
@@ -1169,7 +1205,7 @@ class NotesDBRetriever(BaseRetriever):
                     content=f"# {row.get('title')}\n\n{row.get('content', '')}",
                     source=DataSource.NOTES,
                     metadata=metadata,
-                    score=score_val,
+                    score=float(score_val),
                 )
             )
         documents.sort(key=lambda x: getattr(x, 'score', 0.0), reverse=True)
@@ -1357,13 +1393,35 @@ class CharacterCardsRetriever(BaseRetriever):
             try:
                 limit_cards = max(1, self.config.max_results // 2)
                 card_rows = self.chacha_db.search_character_cards(query, limit=limit_cards)
-                for row in card_rows:
+                # Normalize ranks if provided by backend (Postgres ts_rank or SQLite-derived)
+                raw_ranks = []
+                for r in card_rows:
+                    rv = r.get("rank")
+                    try:
+                        raw_ranks.append(float(rv) if rv is not None else None)
+                    except Exception:
+                        raw_ranks.append(None)
+                norm_map = {}
+                if any(v is not None for v in raw_ranks):
+                    vals = [v for v in raw_ranks if v is not None]
+                    if getattr(self.chacha_db, 'backend_type', None) == BackendType.POSTGRESQL:
+                        scaled = _normalize_scores(vals, method="minmax")
+                    else:
+                        scaled = _normalize_scores([-v for v in vals], method="minmax")
+                    it = iter(scaled)
+                    for idx, v in enumerate(raw_ranks):
+                        if v is not None:
+                            norm_map[idx] = float(next(it))
+                min_score = float(self.config.min_score or 0.0)
+                for idx, row in enumerate(card_rows):
                     name = row.get("name") or "(Unnamed)"
                     description = row.get("description") or ""
                     personality = row.get("personality") or ""
                     scenario = row.get("scenario") or ""
                     first_message = row.get("first_message") or ""
-                    rank = row.get("rank") or 0.0
+                    score_val = norm_map.get(idx, 0.75)
+                    if score_val < min_score:
+                        continue
 
                     content = (
                         f"# {name}\n\n"
@@ -1383,7 +1441,7 @@ class CharacterCardsRetriever(BaseRetriever):
                             "type": "character_card",
                             "source": "characters",
                         },
-                        score=float(rank) if isinstance(rank, (int, float)) else 0.75,
+                        score=float(score_val),
                     )
                     documents.append(doc)
 

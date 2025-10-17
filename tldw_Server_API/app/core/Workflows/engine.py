@@ -306,6 +306,11 @@ class WorkflowEngine:
                     if self.db.is_cancel_requested(run_id):
                         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
                         self._append_event(run_id, "run_cancelled", {"by": "user", "before_step": step_id})
+                        # Standardize webhook behavior on cancellation pre-execution
+                        try:
+                            await self._maybe_send_completion_webhook(definition, run_id, status="cancelled")
+                        except Exception:
+                            pass
                         return
 
                     # Execute with retries + timeout (trace nested span per step)
@@ -761,6 +766,14 @@ class WorkflowEngine:
             pass
         self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last, tokens_input=tokens_in, tokens_output=tokens_out, cost_usd=cost_usd)
         self._append_event(run_id, "run_completed", {"success": True})
+        # Parity with start_run: record completion metrics for continue_run path
+        try:
+            tenant_label = self._tenant_for_run(run_id)
+            increment_counter("workflows_runs_completed", labels={"tenant": tenant_label})
+            if duration_ms is not None:
+                observe_histogram("workflows_run_duration_ms", duration_ms, labels={"tenant": tenant_label})
+        except Exception:
+            pass
         try:
             await self._maybe_send_completion_webhook(definition, run_id, status="succeeded")
         except Exception:
@@ -810,7 +823,8 @@ class WorkflowEngine:
                 self._append_event(run_id, "step_cancelled", {"step_run_id": r.get("step_run_id"), "forced_kill": bool(forced)})
         except Exception:
             pass
-        self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user")
+        # Ensure ended_at is set on cancel for lifecycle completeness
+        self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
         self._append_event(run_id, "run_cancelled", {"by": "user"})
         self._clear_tenant_cache(run_id)
 

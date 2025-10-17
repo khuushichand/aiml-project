@@ -2,8 +2,9 @@ import os
 import pytest
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.tests.Embeddings.fakes import FakeAsyncRedisSummary
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -36,3 +37,64 @@ def fake_redis(monkeypatch):
     monkeypatch.setattr(aioredis, "from_url", fake_from_url)
     return fake
 
+
+# Lightweight app client + auth fixtures for property/unit tests in this package
+@pytest.fixture
+def test_client(disable_heavy_startup):
+    """Minimal TestClient with CSRF and auth header set.
+
+    Scope: function — keeps isolation across property-based runs.
+    """
+    # Build client
+    client = TestClient(app, raise_server_exceptions=False)
+    # Double-submit CSRF: cookie + header
+    csrf = "test-csrf"
+    client.cookies.set("csrf_token", csrf)
+    client.headers["X-CSRF-Token"] = csrf
+    # Accept Authorization in single-user mode
+    client.headers["Authorization"] = "Bearer test-api-key"
+    try:
+        yield client
+    finally:
+        # Ensure dependency overrides do not leak across tests
+        try:
+            app.dependency_overrides.clear()
+        except Exception:
+            pass
+
+
+@pytest.fixture
+def auth_headers():
+    csrf = "test-csrf"
+    return {
+        "Authorization": "Bearer test-api-key",
+        "X-CSRF-Token": csrf,
+        "Content-Type": "application/json",
+    }
+
+
+@pytest.fixture
+def regular_user():
+    return User(id=1, username="testuser", email="t@example.com", is_active=True, is_admin=False)
+
+
+@pytest.fixture(autouse=True)
+def _sanitize_jsonschema_module(monkeypatch):
+    """Ensure sys.modules['jsonschema'] is a proper ModuleType when present.
+
+    Some tests stub 'jsonschema' with a SimpleNamespace for targeted assertions.
+    Hypothesis inspects sys.modules and expects hashable module objects; wrapping
+    the stub in a ModuleType avoids TypeError from unhashable SimpleNamespace.
+    """
+    import sys as _sys
+    import types as _types
+    mod = _sys.modules.get("jsonschema")
+    if mod is not None and not isinstance(mod, _types.ModuleType):
+        wrapper = _types.ModuleType("jsonschema")
+        # Carry over commonly used attributes if present
+        for attr in ("validate",):
+            try:
+                setattr(wrapper, attr, getattr(mod, attr))
+            except Exception:
+                pass
+        monkeypatch.setitem(_sys.modules, "jsonschema", wrapper)

@@ -242,11 +242,29 @@ class QuotaManager:
                 # Cursor may be list or cursor
                 if hasattr(cursor, 'fetchone'):
                     row = cursor.fetchone()
-                    return int(row[0] if isinstance(row, (list, tuple)) else row.get('c', 0)) if row else 0
+                    if not row:
+                        return 0
+                    # sqlite3.Row supports key access but is not dict
+                    try:
+                        # dict-like row
+                        return int(row.get('c', 0))  # type: ignore[attr-defined]
+                    except Exception:
+                        try:
+                            # sqlite3.Row or tuple
+                            if hasattr(row, 'keys'):
+                                return int(row['c'])  # type: ignore[index]
+                            return int(row[0])
+                        except Exception:
+                            return 0
                 elif isinstance(cursor, list) and cursor:
                     row = cursor[0]
                     if isinstance(row, dict):
                         return int(row.get('c', 0))
+                    if hasattr(row, 'keys'):
+                        try:
+                            return int(row['c'])
+                        except Exception:
+                            return 0
                     if isinstance(row, (list, tuple)):
                         return int(row[0])
                 return 0

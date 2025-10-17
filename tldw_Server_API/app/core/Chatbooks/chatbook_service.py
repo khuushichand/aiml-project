@@ -1176,6 +1176,15 @@ class ChatbookService:
             Tuple of (manifest, error_message)
         """
         try:
+            # Defense-in-depth: validate the archive before extraction
+            try:
+                from .chatbook_validators import ChatbookValidator
+                ok, err = ChatbookValidator.validate_zip_file(file_path)
+                if not ok:
+                    return None, err or "Invalid archive"
+            except Exception:
+                # If validator import fails, continue with cautious extraction guards
+                pass
             # Extract to temporary directory
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             extract_dir = self.temp_dir / f"preview_{timestamp}"
@@ -1594,26 +1603,42 @@ class ChatbookService:
         try:
             # Get expired jobs
             now = datetime.utcnow()
-            results = self.db.execute_query(
+            cursor = self.db.execute_query(
                 "SELECT * FROM export_jobs WHERE user_id = ? AND expires_at < ? AND status = ?",
                 (self.user_id, now.isoformat(), ExportStatus.COMPLETED.value)
             )
-            
+            results = self._fetch_results(cursor)
+
+            if not results:
+                return 0
+
             deleted_count = 0
             for row in results:
-                if row['output_path'] and Path(row['output_path']).exists():
+                # Support both dict and tuple rows
+                if isinstance(row, dict):
+                    output_path = row.get('output_path')
+                    job_id = row.get('job_id')
+                else:
+                    # tuple field order: job_id, user_id, status, chatbook_name, output_path, ...
+                    output_path = row[4] if len(row) > 4 else None
+                    job_id = row[0]
+
+                if output_path and Path(output_path).exists():
                     try:
-                        Path(row['output_path']).unlink()
+                        Path(output_path).unlink()
                         deleted_count += 1
                     except Exception as e:
                         logger.error(f"Error deleting expired export: {e}")
-                
+
                 # Update job status
-                self.db.execute_query(
-                    "UPDATE export_jobs SET status = ? WHERE job_id = ?",
-                    ('expired', row['job_id'])
-                )
-            
+                try:
+                    self.db.execute_query(
+                        "UPDATE export_jobs SET status = ? WHERE job_id = ?",
+                        ('expired', job_id)
+                    )
+                except Exception as _e:
+                    logger.debug(f"Failed to mark job {job_id} expired: {_e}")
+
             return deleted_count
         except Exception as e:
             logger.error(f"Error cleaning up expired exports: {e}")
@@ -2290,7 +2315,10 @@ class ChatbookService:
             
             # Handle both dict (from real DB) and tuple (from mocked tests)
             if isinstance(row, tuple):
-                # Convert tuple to dict using expected field order
+                # Convert tuple to dict using expected field order.
+                # Column 13 in tests may be legacy metadata JSON; in DB it's download_url.
+                col13 = row[13] if len(row) > 13 else None
+                is_json_like = isinstance(col13, str) and col13.strip().startswith('{')
                 row = {
                     'job_id': row[0],
                     'user_id': row[1],
@@ -2305,7 +2333,8 @@ class ChatbookService:
                     'total_items': row[10] if len(row) > 10 else 0,
                     'processed_items': row[11] if len(row) > 11 else 0,
                     'file_size_bytes': row[12] if len(row) > 12 else None,
-                    'metadata': row[13] if len(row) > 13 else None,
+                    'download_url': None if is_json_like else (col13 if len(row) > 13 else None),
+                    'metadata': col13 if is_json_like else None,
                     'expires_at': row[14] if len(row) > 14 else None
                 }
             

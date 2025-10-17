@@ -2738,13 +2738,16 @@ class MediaDatabase:
         if fts_search_active and (sort_by == "relevance" or not sort_by):
             # Ensure relevance score is available for ordering.
             if self.backend_type == BackendType.SQLITE:
-                if not any("fts.rank AS relevance_score" in part for part in base_select_parts):
-                    base_select_parts.append("fts.rank AS relevance_score")
+                # Use bm25 for consistent relevance and let lower scores rank higher
+                if not any("AS relevance_score" in part for part in base_select_parts):
+                    # bm25() expects the FTS5 table name, not the alias
+                    base_select_parts.append("bm25(media_fts) AS relevance_score")
+                order_by_clause_str = "ORDER BY relevance_score ASC, m.last_modified DESC, m.id DESC"
             elif self.backend_type == BackendType.POSTGRESQL and postgres_tsquery:
                 if not any("relevance_score" in part for part in base_select_parts):
                     base_select_parts.append("ts_rank(m.media_fts_tsv, to_tsquery('english', ?)) AS relevance_score")
                     fts_select_params.append(postgres_tsquery)
-            order_by_clause_str = "ORDER BY relevance_score DESC, m.last_modified DESC, m.id DESC"
+                order_by_clause_str = "ORDER BY relevance_score DESC, m.last_modified DESC, m.id DESC"
 
         else:
             if sort_by == "date_desc":

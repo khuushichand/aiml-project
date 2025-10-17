@@ -727,15 +727,19 @@ async def test_authentication():
         else:
             # Test JWT system
             from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-            
-            jwt_service = await get_jwt_service()
-            
-            # Create test token
-            test_payload = {"sub": "test_user", "user_id": 1}
-            test_token = jwt_service.create_access_token(test_payload)
-            
-            # Validate test token
-            decoded = jwt_service.decode_token(test_token)
+
+            # Initialize JWT service (sync accessor)
+            jwt_service = get_jwt_service()
+
+            # Create a minimal, valid access token
+            test_token = jwt_service.create_access_token(
+                user_id=1,
+                username="test_user",
+                role="user",
+            )
+
+            # Validate the token via access-token decoder
+            decoded = jwt_service.decode_access_token(test_token)
             
             if decoded and decoded.get("sub") == "test_user":
                 print("✅ JWT authentication system working")

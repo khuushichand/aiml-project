@@ -110,9 +110,10 @@ JWT token creation and validation for multi-user mode.
 ```python
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 
-jwt_service = await get_jwt_service()
-token = jwt_service.create_access_token({"sub": username, "user_id": user_id})
-payload = jwt_service.decode_token(token)
+# Initialize service (sync) and create/verify an access token
+jwt_service = get_jwt_service()
+token = jwt_service.create_access_token(user_id=user_id, username=username, role="user")
+payload = jwt_service.decode_access_token(token)
 ```
 
 ### 4. Password Service (`password_service.py`)

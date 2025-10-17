@@ -5,7 +5,7 @@ Supports both Redis (for distributed deployments) and in-memory (for single-inst
 """
 
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 
 # Optional Redis import: allow running without redis-py installed
@@ -202,7 +202,7 @@ class CharacterRateLimiter:
             )
         return True
     
-    async def get_usage_stats(self, user_id: int) -> Dict[str, any]:
+    async def get_usage_stats(self, user_id: int) -> Dict[str, Any]:
         """
         Get current usage statistics for a user.
         

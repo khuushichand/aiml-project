@@ -163,12 +163,12 @@ async def create_chatbook(
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
         
-        # Convert content selections to use string enums
+        # Convert content selections to use core ContentType enums
         content_selections = {}
         for content_type, ids in request_data.content_selections.items():
-            if isinstance(content_type, str):
-                content_type = ContentType(content_type)
-            content_selections[content_type] = ids
+            # Handle both schema enums and strings robustly
+            ct_val = content_type.value if hasattr(content_type, 'value') else str(content_type)
+            content_selections[ContentType(ct_val)] = ids
         
         # Create chatbook
         success, message, result = await service.create_chatbook(
@@ -407,14 +407,13 @@ async def import_chatbook(
                 pass
             raise HTTPException(status_code=400, detail=error)
         
-        # Convert content selections if provided
+        # Convert content selections if provided (schema enum or string keys)
         content_selections = None
         if import_request.content_selections:
             content_selections = {}
             for content_type, ids in import_request.content_selections.items():
-                if isinstance(content_type, str):
-                    content_type = ContentType(content_type)
-                content_selections[content_type] = ids
+                ct_val = content_type.value if hasattr(content_type, 'value') else str(content_type)
+                content_selections[ContentType(ct_val)] = ids
         
         # Import chatbook
         success, message, result = await service.import_chatbook(
@@ -885,8 +884,12 @@ async def download_chatbook(
         FileResponse with the chatbook file
     """
     try:
-        # Validate job_id format (UUID)
-        if not ChatbookValidator.validate_job_id(job_id):
+        # Validate job_id format
+        # Accept UUIDs. If using Prompt Studio backend, also accept numeric IDs.
+        backend = getattr(service, "_jobs_backend", "core")
+        is_uuid = ChatbookValidator.validate_job_id(job_id)
+        is_ps_valid = backend == "prompt_studio" and job_id.isdigit()
+        if not (is_uuid or is_ps_valid):
             raise HTTPException(status_code=400, detail="Invalid job ID format")
         
         # Get job from service (validates ownership)
@@ -1035,7 +1038,24 @@ async def cleanup_expired_exports(
     """
     try:
         deleted_count = service.cleanup_expired_exports()
-        
+
+        # Audit cleanup action for traceability
+        try:
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/cleanup",
+                method="POST",
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_exports",
+                action="chatbook_cleanup_expired_exports",
+                metadata={"deleted_count": deleted_count},
+            )
+        except Exception:
+            pass
+
         return CleanupExpiredExportsResponse(
             deleted_count=deleted_count
         )

@@ -924,6 +924,22 @@ The RAG module exposes a comprehensive unified API:
 - `GET /api/v1/rag/capabilities` - Feature defaults, supported options, and limits
 - `GET /api/v1/rag/health` - Health check with detailed component status
 
+## Scoring and Thresholds
+
+- All retrieval scores are normalized to a 0–1 range with higher=better.
+  - SQLite FTS uses bm25; raw bm25 (lower=better) is inverted and min–max normalized per result set.
+  - PostgreSQL FTS uses ts_rank; raw ranks are min–max normalized per result set.
+  - Vector similarity scores are min–max normalized before fusion where applicable.
+- The `min_score` parameter in `RetrievalConfig` applies to these normalized scores consistently across backends.
+- Ordering semantics:
+  - SQLite FTS default ordering uses `bm25(table) ASC`.
+  - PostgreSQL FTS default ordering uses `ts_rank(...) DESC`.
+  - After retrieval, the pipeline sorts by the normalized scores in descending order.
+
+Implications:
+- Thresholds like `min_score=0.3` behave consistently on SQLite and Postgres.
+- When mixing sources (notes, characters, media, claims), each retriever normalizes within its result set before fusion.
+
 ### Example API Usage (unified search with all options)
 
 ```bash

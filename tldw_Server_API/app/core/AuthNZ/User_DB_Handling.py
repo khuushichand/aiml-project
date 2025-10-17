@@ -297,10 +297,12 @@ async def get_request_user(
     - In Multi-User Mode: Verifies the Bearer token (passed via 'token' parameter)
       and returns the User object fetched from Users_DB.
     """
-    # Test-mode bypass for evaluations when admin gating is explicitly disabled
+    # Test-mode bypasses are disabled in production for safety
     try:
         import os as _os
-        if _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"} and \
+        _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        # Test-mode bypass for evaluations when admin gating is explicitly disabled
+        if not _prod and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"} and \
            _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}:
             logger.info("TESTING with EVALS_HEAVY_ADMIN_ONLY disabled: bypassing auth, returning single-user test instance")
             return get_single_user_instance()
@@ -309,10 +311,16 @@ async def get_request_user(
     # Lightweight bypass for broader test contexts to avoid auth friction
     try:
         import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and \
+        _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        if not _prod and _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and \
            _os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}:
             logger.info("TEST_MODE with DISABLE_HEAVY_STARTUP: bypassing auth, returning single-user test instance")
             return get_single_user_instance()
+        # If production and test flags are set, warn loudly (once per process)
+        elif _prod and (_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}):
+            if not getattr(get_request_user, "_warned_testflags_prod", False):
+                logger.warning("TEST flags detected while tldw_production=true; test-only auth bypasses are disabled.")
+                setattr(get_request_user, "_warned_testflags_prod", True)
     except Exception:
         pass
     #print(f"DEBUGPRINT: Inside get_request_user. api_key from header: '{api_key}', token from scheme: '{token}'") #DEBUGPRINT

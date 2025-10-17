@@ -60,12 +60,9 @@ class ChatbookValidator:
         if len(base_filename) > cls.MAX_NAME_LENGTH:
             return False, f"Filename too long (max {cls.MAX_NAME_LENGTH} characters)", ""
         
-        # Check extension - look for any valid extension in the filename
-        has_valid_extension = False
-        for valid_ext in cls.VALID_EXTENSIONS:
-            if valid_ext in base_filename.lower():
-                has_valid_extension = True
-                break
+        # Check extension - look for any valid extension in the basename
+        lower_name = base_filename.lower()
+        has_valid_extension = any(valid_ext in lower_name for valid_ext in cls.VALID_EXTENSIONS)
         
         if not has_valid_extension:
             return False, f"Invalid file type. Allowed: {', '.join(cls.VALID_EXTENSIONS)}", ""

@@ -507,8 +507,31 @@ class JWTService:
         # calls SessionManager.refresh_session() to persist rotation and ensure
         # revocation of previous refresh tokens.
 
-        # Verify the refresh token (no blacklist by default; see note above)
+        # Verify the refresh token (stateless by default; see note above)
         payload = self.verify_token(refresh_token, token_type="refresh")
+
+        # Optional guard: best-effort blacklist enforcement for the presented refresh token
+        try:
+            jti = payload.get("jti")
+            if jti:
+                import asyncio as _asyncio
+                # If we're not in an event loop, run the async blacklist check synchronously
+                try:
+                    _asyncio.get_running_loop()
+                    in_loop = True
+                except RuntimeError:
+                    in_loop = False
+                if not in_loop:
+                    from tldw_Server_API.app.core.AuthNZ.token_blacklist import is_token_blacklisted as _is_bl
+                    if _asyncio.run(_is_bl(jti)):
+                        raise InvalidTokenError("Token has been revoked")
+                else:
+                    # In running event loops, avoid blocking; log a hint to prefer /auth/refresh path
+                    logger.debug("refresh_access_token called in running loop; blacklist may not be enforced here. Prefer /auth/refresh endpoint.")
+        except InvalidTokenError:
+            raise
+        except Exception as _guard_e:
+            logger.debug(f"Refresh helper blacklist guard skipped: {_guard_e}")
         
         # Extract user information
         user_id = int(payload["sub"])

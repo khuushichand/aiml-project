@@ -363,7 +363,8 @@ async def build_context_and_messages(
     client_id_from_db = getattr(chat_db, "client_id", None)
     conversation_created = False
     conv_id = final_conversation_id
-    if should_persist and final_character_db_id is None:
+    # Ensure a valid character ID is present before attempting persistence
+    if should_persist and character_db_id is None:
         logger.warning(
             "Persistence requested but no character ID is available; disabling persistence for conversation %s.",
             final_conversation_id or "<new>",

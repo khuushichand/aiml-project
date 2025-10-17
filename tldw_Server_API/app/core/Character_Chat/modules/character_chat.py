@@ -11,34 +11,61 @@ from typing import Dict, List, Optional, Tuple, Any
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError, InputError
+from .character_utils import replace_placeholders
 
 
 def process_db_messages_to_ui_history(
-    messages: List[Dict[str, Any]]
+    messages: List[Dict[str, Any]],
+    char_name: Optional[str] = None,
+    user_name: Optional[str] = None,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
     """Convert database messages to UI history format.
-    
+
+    - Accepts rows that may have either `sender` (from DB) or `role` keys.
+    - Optionally performs placeholder replacement using provided names.
+
     Args:
         messages: List of message dictionaries from the database
-        
+        char_name: Optional character name for placeholder replacement
+        user_name: Optional user name for placeholder replacement
+
     Returns:
         List of tuples (user_message, bot_message) for UI display
     """
-    history = []
-    current_user_msg = None
-    
+    history: List[Tuple[Optional[str], Optional[str]]] = []
+    current_user_msg: Optional[str] = None
+
     for msg in messages:
-        if msg.get('role') == 'user':
-            current_user_msg = msg.get('content')
-        elif msg.get('role') in ['assistant', 'character']:
-            bot_msg = msg.get('content')
-            history.append((current_user_msg, bot_msg))
-            current_user_msg = None
-    
+        sender = (msg.get('sender') or msg.get('role') or '').lower()
+        content = msg.get('content', '')
+
+        if char_name is not None or user_name is not None:
+            content = replace_placeholders(content, char_name, user_name)
+
+        if sender == 'user':
+            # If there was an unpaired user message, emit it before starting a new one
+            if current_user_msg is not None:
+                history.append((current_user_msg, None))
+            current_user_msg = content
+        elif sender in {'assistant', 'character'}:
+            # Pair with pending user message if present, otherwise emit as bot-only turn
+            if current_user_msg is not None:
+                history.append((current_user_msg, content))
+                current_user_msg = None
+            else:
+                history.append((None, content))
+        else:
+            # Unknown sender: treat as bot side
+            if current_user_msg is not None:
+                history.append((current_user_msg, content))
+                current_user_msg = None
+            else:
+                history.append((None, content))
+
     # Handle trailing user message without response
-    if current_user_msg:
+    if current_user_msg is not None:
         history.append((current_user_msg, None))
-    
+
     return history
 
 
@@ -219,7 +246,8 @@ def delete_conversation_by_id(
         True if successful, False otherwise
     """
     try:
-        success = db.delete_conversation(conversation_id, expected_version)
+        # Use soft-delete with optimistic locking
+        success = db.soft_delete_conversation(conversation_id, expected_version)
         if success:
             logger.info(f"Deleted conversation {conversation_id}")
         else:
@@ -281,12 +309,23 @@ def post_message_to_conversation(
         The new message ID, or None on error
     """
     try:
-        message_id = db.add_message_to_conversation(
-            conversation_id=conversation_id,
-            role=role,
-            content=content,
-            metadata=metadata or {}
-        )
+        # Map abstract role to DB sender field
+        role_normalized = (role or 'user').lower()
+        sender_map = {
+            'user': 'user',
+            'assistant': 'assistant',
+            'character': 'assistant',  # normalize to assistant for downstream compatibility
+        }
+        sender = sender_map.get(role_normalized, 'user')
+
+        msg_data: Dict[str, Any] = {
+            'conversation_id': conversation_id,
+            'sender': sender,
+            'content': content,
+        }
+        # Note: metadata is not stored directly in current DB schema for messages
+
+        message_id = db.add_message(msg_data)
         logger.info(f"Added message {message_id} to conversation {conversation_id}")
         return message_id
     except CharactersRAGDBError as e:

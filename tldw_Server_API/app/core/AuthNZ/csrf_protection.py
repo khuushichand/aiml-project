@@ -330,12 +330,40 @@ def validate_csrf_token(request: Request) -> bool:
         HTTPException: If CSRF validation fails
     """
     manager = CSRFTokenManager()
-    
+
     if manager.should_protect(request):
+        # Resolve user_id when CSRF binding is enabled to validate suffix binding
+        user_id = None
+        try:
+            user_id = getattr(request.state, 'user_id', None)
+        except Exception:
+            user_id = None
+
+        # Lightweight bearer decode path (sync) to enrich user_id when possible
+        try:
+            if user_id is None and get_settings().CSRF_BIND_TO_USER:
+                auth_header = request.headers.get("authorization")
+                if auth_header and auth_header.lower().startswith("bearer "):
+                    token = auth_header.split(" ", 1)[1].strip()
+                    if token:
+                        from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                        payload = get_jwt_service().decode_access_token(token)
+                        uid = payload.get("user_id") or payload.get("sub")
+                        if isinstance(uid, str):
+                            try:
+                                uid = int(uid)
+                            except Exception:
+                                uid = None
+                        if isinstance(uid, int):
+                            user_id = uid
+        except Exception:
+            # Best-effort enrichment; fall back to no user binding if unavailable
+            pass
+
         cookie_token = request.cookies.get(manager.token_cookie_name)
         header_token = request.headers.get(manager.token_header_name)
-        
-        if not manager.validate_token(cookie_token, header_token):
+
+        if not manager.validate_token(cookie_token, header_token, user_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="CSRF token validation failed"

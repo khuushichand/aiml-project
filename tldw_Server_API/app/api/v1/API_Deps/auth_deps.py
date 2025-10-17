@@ -345,7 +345,9 @@ async def get_current_user(
     if not credentials and x_api_key:
         try:
             api_mgr = await get_api_key_manager()
-            key_info = await api_mgr.validate_api_key(api_key=x_api_key)
+            # Forward client IP for allowed_ips enforcement
+            client_ip = request.client.host if getattr(request, "client", None) else None
+            key_info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
             if not key_info:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
