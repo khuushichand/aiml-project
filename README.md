@@ -34,6 +34,7 @@
 Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 
 - Docs Hub: `Docs/Documentation.md`
+- Jobs Module: `Docs/Code_Documentation/Jobs_Module.md`
 - MCP Rate Limits Tuning: `Docs/Deployment/Operations/MCP_Rate_Limits_Tuning.md`
 - Database Backends & Migrations: `Docs/Database-Backends.md`
 - Moderation/Guardrails: `Docs/Moderation-Guardrails.md`
@@ -151,7 +152,7 @@ PST/OST note
 
 ### Search & Retrieval (Unified RAG)
 - **Unified Pipeline** [Stable]: Async architecture with a single, parameter-driven pipeline
-- **Hybrid Search** [Stable]: BM25 (SQLite FTS5) + vector embeddings (ChromaDB) with Reciprocal Rank Fusion
+- **Hybrid Search** [Stable]: BM25 (SQLite FTS5) + vector embeddings (ChromaDB or pgvector) with Reciprocal Rank Fusion
 - **Advanced Strategies** [Stable]: Query Fusion, HyDE (Hypothetical Document Embeddings), vanilla search
 - **Multi-Source Retrieval** [Stable]: Search across media, notes, characters, and chat history simultaneously
 - **Smart Caching** [Stable]: LRU cache with semantic matching and TTL management
@@ -482,7 +483,13 @@ See the [Migration Guide](#migration-guide) if upgrading from a previous version
 tldw_server is built as a modern, scalable API service:
 
 - **Framework**: FastAPI with async/await support
-- **Database**: SQLite with FTS5 for search, ChromaDB for embeddings
+- **Database**: SQLite with FTS5 for search; vector embeddings via pluggable backends (ChromaDB default; pgvector optional)
+
+### Vector Store Backends
+- ChromaDB (default): simple local setup for small installs; no-op ef_search; index is managed internally.
+- pgvector (optional): production-grade Postgres extension with HNSW/IVFFLAT support, pooling, and JSONB metadata filters.
+  - Configure in `Config_Files/config.txt` under `[RAG]` with `vector_store_type=pgvector` and `pgvector_*` keys (host, port, user, password, database, sslmode, pool sizes, hnsw_ef_search).
+  - Admin endpoints (WebUI and REST) expose index info, ef_search (pg only), and rebuild operations.
 - **API Design**: RESTful endpoints following OpenAPI 3.0
 - **Authentication**: JWT tokens with role-based access control
 - **Background Jobs**: Async task processing for long operations
@@ -1509,3 +1516,68 @@ Environment flags summary:
 - `DISABLE_AUTHNZ_SCHEDULER`: Disable AuthNZ scheduler (retention/cleanup). Default: off.
 - `DISABLE_USAGE_AGGREGATOR`: Disable HTTP usage daily aggregator. Default: off.
 - `DISABLE_LLM_USAGE_AGGREGATOR`: Disable LLM usage daily aggregator. Default: off.
+
+### RAG Rollout Toggles
+You can enable or disable new RAG features via `config.txt` or environment variables. Env vars take precedence.
+
+Config (`tldw_Server_API/Config_Files/config.txt`), section `[RAG]`:
+
+```ini
+[RAG]
+enable_structure_index = true         # persist headings/paragraph offsets; enrich retrieval metadata
+strict_extractive = false             # assemble answers only from retrieved spans (standard strategy)
+require_hard_citations = false        # gate on per‑sentence hard‑citation coverage
+low_confidence_behavior = continue    # continue | ask | decline when evidence is thin
+agentic_cache_backend = memory        # memory | sqlite for agentic ephemeral cache
+agentic_cache_ttl_sec = 600           # TTL in seconds
+```
+
+Environment variables (override config):
+
+```bash
+export RAG_ENABLE_STRUCTURE_INDEX=true
+export RAG_STRICT_EXTRACTIVE=false
+export RAG_REQUIRE_HARD_CITATIONS=false
+export RAG_LOW_CONFIDENCE_BEHAVIOR=continue
+export RAG_AGENTIC_CACHE_BACKEND=memory
+export RAG_AGENTIC_CACHE_TTL_SEC=600
+```
+
+Note: The loader propagates these `[RAG]` values into process env when unset.
+
+## Debugging (Workflows)
+
+Enable targeted debug logs for the Workflows module via environment flags:
+
+- `WORKFLOWS_DEBUG=1` – enable broad Workflows debug logs across endpoints and engine
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` – add logs to artifact endpoints (IDs, paths, Range handling)
+- `WORKFLOWS_DLQ_DEBUG=1` – verbose logs for webhook DLQ endpoints and worker
+
+See the curated docs for details:
+- Workflows PRD: `Docs/Published/Workflows_PRD.md`
+- Runbook: `Docs/Published/Workflows_Runbook.md`
+- Performance: `Docs/Published/Workflows_Performance.md`
+- Audit configuration
+  - `AUDIT_HIGH_RISK_SCORE`: Integer threshold for classifying events as high-risk (default `70`). Used for risk counters and to trigger immediate flushes.
+## Audit Export
+
+Audit logs can be exported via the API or programmatically from the service.
+
+- Endpoint: `GET /api/v1/audit/export`
+  - Query params:
+    - `format`: `json` or `csv` (default `json`)
+    - `start_time`, `end_time`: ISO8601 timestamps (accepts `Z` suffix)
+    - `event_type`, `category`: comma-separated enum names or values
+    - `min_risk_score`, `user_id`, `request_id`, `correlation_id`
+    - `filename`: suggested download name; the server normalizes the extension to match the format
+    - `stream` (JSON only): when `true`, returns a streaming response for large JSON exports
+  - Notes:
+    - CSV exports use a fixed header schema for consistent column order across paths.
+    - `stream=true` is rejected for CSV (returns 400).
+
+- Programmatic export (Python): `UnifiedAuditService.export_events(...)`
+  - `format`: `json` or `csv`
+  - `file_path`: When provided, streams to the file in chunks (CSV and JSON paths)
+  - `stream`: When `True` and `file_path` is `None` with `format='json'`, returns an async generator yielding JSON array chunks
+  - `chunk_size`: Controls page size for scanning the database
+  - `max_rows`: Optional limit to cap the number of exported rows (applies to both streaming and non-streaming)

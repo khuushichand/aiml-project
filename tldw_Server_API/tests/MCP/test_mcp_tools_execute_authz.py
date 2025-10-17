@@ -16,7 +16,7 @@ client = TestClient(app)
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def test_tools_execute_unauth_401():

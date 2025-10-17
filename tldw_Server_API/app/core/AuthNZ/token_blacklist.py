@@ -4,6 +4,7 @@
 # Imports
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Set
+from collections import deque
 import json
 import asyncio
 #
@@ -41,9 +42,33 @@ class TokenBlacklist:
         self.redis_client: Optional[redis_async.Redis] = None
         self._initialized = False
         
-        # Cache for recently checked tokens (in-memory)
+        # In-memory LRU cache of recently seen blacklisted JTIs
         self._local_cache: Set[str] = set()
+        self._local_order: deque[str] = deque()
         self._cache_size_limit = 1000
+
+    def _cache_add(self, jti: str) -> None:
+        """Add a JTI to local LRU cache."""
+        if not jti:
+            return
+        if jti in self._local_cache:
+            # Refresh order: remove and append
+            try:
+                self._local_order.remove(jti)
+            except ValueError:
+                pass
+            self._local_order.append(jti)
+            return
+        # Insert new
+        self._local_cache.add(jti)
+        self._local_order.append(jti)
+        # Evict oldest if exceeding limit
+        while len(self._local_cache) > self._cache_size_limit:
+            try:
+                oldest = self._local_order.popleft()
+            except IndexError:
+                break
+            self._local_cache.discard(oldest)
         
     async def initialize(self):
         """Initialize blacklist service and create tables if needed"""
@@ -200,11 +225,8 @@ class TokenBlacklist:
         if not self._initialized:
             await self.initialize()
         
-        # Add to local cache
-        self._local_cache.add(jti)
-        if len(self._local_cache) > self._cache_size_limit:
-            # Remove oldest entries if cache is too large
-            self._local_cache = set(list(self._local_cache)[-self._cache_size_limit:])
+        # Add to local cache (LRU)
+        self._cache_add(jti)
         
         # Add to Redis if available
         if self.redis_client:
@@ -283,7 +305,7 @@ class TokenBlacklist:
                 exists = await self.redis_client.exists(key)
                 if exists:
                     # Add to local cache for next time
-                    self._local_cache.add(jti)
+                    self._cache_add(jti)
                     return True
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis error checking blacklist: {e}")
@@ -309,7 +331,7 @@ class TokenBlacklist:
                 
                 if exists:
                     # Add to local cache
-                    self._local_cache.add(jti)
+                    self._cache_add(jti)
                     return True
                     
         except Exception as e:
@@ -473,9 +495,10 @@ class TokenBlacklist:
             if count > 0:
                 logger.info(f"Cleaned up {count} expired tokens from blacklist")
                 
-            # Clear local cache periodically
-            if len(self._local_cache) > self._cache_size_limit / 2:
+            # Clear local cache periodically if it grew too large (soft reset)
+            if len(self._local_cache) > self._cache_size_limit * 2:
                 self._local_cache.clear()
+                self._local_order.clear()
                 
             return count
             

@@ -131,10 +131,16 @@ def cleanup_db(ctx, days, dry_run):
             # Cleanup unified audit logs by retention window
             svc = UnifiedAuditService()
             import asyncio as _asyncio
-            _asyncio.get_event_loop().run_until_complete(svc.initialize())
+            try:
+                _asyncio.run(svc.initialize())
+            except RuntimeError:
+                pass
             # Set retention_days temporarily and execute cleanup
             svc.retention_days = days
-            _asyncio.get_event_loop().run_until_complete(svc.cleanup_old_logs())
+            try:
+                _asyncio.run(svc.cleanup_old_logs())
+            except RuntimeError:
+                pass
             print_success(f"Unified audit cleanup completed for records older than {days} days")
         
     except Exception as e:

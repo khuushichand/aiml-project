@@ -12,6 +12,7 @@ from typing import Dict, Any
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
 # ============================================================================
@@ -35,11 +36,11 @@ def isolated_db():
     
     # Add default character
     db.add_character_card({
-        "name": "Default Character",
+        "name": DEFAULT_CHARACTER_NAME,
         "description": "Test character",
         "personality": "Helpful",
         "scenario": "Testing",
-        "system_prompt": "You are a test assistant",
+        "system_prompt": "You are a helpful AI assistant.",
         "first_message": "Hello!",
         "creator_notes": "Test"
     })

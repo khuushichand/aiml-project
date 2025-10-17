@@ -392,7 +392,7 @@ def test_migration_v6_to_v7_adds_reverse_column(tmp_path):
     conn2 = db.get_connection()
     try:
         ver2 = conn2.execute("SELECT version FROM db_schema_version WHERE schema_name='rag_char_chat_schema'").fetchone()[0]
-        assert ver2 == 7
+        assert ver2 == 8
         cols2 = [r[1] for r in conn2.execute("PRAGMA table_info(flashcards)")]
         assert 'reverse' in cols2
     finally:

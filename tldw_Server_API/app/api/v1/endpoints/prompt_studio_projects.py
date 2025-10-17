@@ -196,9 +196,8 @@ async def create_project(
     except ConflictError as e:
         # For compatibility with tests, return existing project as if created
         try:
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
+            # Use DB helper to run a backend-aware query (placeholder-safe)
+            cursor = db._execute(
                 """
                 SELECT * FROM prompt_studio_projects
                 WHERE name = ? AND user_id = ? AND deleted = 0

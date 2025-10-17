@@ -95,7 +95,7 @@ rag_qa_db_path = Databases/RAG_QA_Chat.db
 character_db_path = Databases/chatDB.db
 
 [Chunking]
-`chunking_method` = words
+chunking_method = words
 chunk_max_size = 400
 chunk_overlap = 200
 adaptive_chunking = false
@@ -213,6 +213,14 @@ model_lru_ttl_seconds = 3600
 
 [RAG]
 vector_store_type = chromadb
+# pgvector connection options (optional; do not set defaults here)
+# pgvector_dsn =
+# pgvector_host =
+# pgvector_port =
+# pgvector_database =
+# pgvector_user =
+# pgvector_password =
+# pgvector_sslmode =
 enable_parent_expansion = false
 parent_expansion_size = 500
 include_sibling_chunks = false
@@ -239,6 +247,31 @@ llama_reranker_normalize = -1
 llama_reranker_max_doc_chars = 2000
 llama_reranker_template_mode = auto
 transformers_reranker_model = 
+
+# --- RAG Feature Toggles (Phased Rollout) ---
+# Structure index: persist headings/paragraph offsets and surface section metadata in retrieval
+# Env override: RAG_ENABLE_STRUCTURE_INDEX=true|false (default true)
+enable_structure_index = true
+
+# Strict extractive mode for standard pipeline: assemble answers only from retrieved spans
+# Env override: RAG_STRICT_EXTRACTIVE=true|false (default false)
+strict_extractive = false
+
+# Require per-sentence hard citations coverage; gates answer when coverage < 1.0
+# Env override: RAG_REQUIRE_HARD_CITATIONS=true|false (default false)
+require_hard_citations = false
+
+# Behavior on low confidence (insufficient evidence): continue|ask|decline
+# Env override: RAG_LOW_CONFIDENCE_BEHAVIOR=continue|ask|decline (default continue)
+low_confidence_behavior = continue
+
+# Agentic cache backend for ephemeral chunks: memory|sqlite
+# Env override: RAG_AGENTIC_CACHE_BACKEND=memory|sqlite (default memory)
+agentic_cache_backend = memory
+
+# TTL (seconds) for agentic cache entries
+# Env override: RAG_AGENTIC_CACHE_TTL_SEC (default 600)
+agentic_cache_ttl_sec = 600
 
 [API]
 anthropic_model = claude-opus-4-20250514

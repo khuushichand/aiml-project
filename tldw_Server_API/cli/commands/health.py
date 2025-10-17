@@ -236,8 +236,14 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
         from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
         svc = UnifiedAuditService()
         import asyncio as _asyncio
-        _asyncio.get_event_loop().run_until_complete(svc.initialize())
-        events = _asyncio.get_event_loop().run_until_complete(svc.query_events(limit=1))
+        try:
+            _asyncio.run(svc.initialize())
+        except RuntimeError:
+            pass
+        try:
+            events = _asyncio.run(svc.query_events(limit=1))
+        except RuntimeError:
+            events = []
         health_data['components']['audit_logging'] = {
             'status': 'ok',
             'message': 'Unified audit logging operational',

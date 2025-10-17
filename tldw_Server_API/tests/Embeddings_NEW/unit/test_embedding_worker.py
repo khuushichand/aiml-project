@@ -79,7 +79,7 @@ class TestEmbeddingWorkerInitialization:
         )
         worker = EmbeddingWorker(cfg)
         # Call private generation with HF config
-        embeddings = asyncio.get_event_loop().run_until_complete(
+        embeddings = asyncio.run(
             worker._generate_embeddings(["hello"], HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         )
         assert len(embeddings) == 1

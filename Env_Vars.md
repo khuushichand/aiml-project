@@ -13,6 +13,8 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma‑separated or JSON array.
+- `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
+- `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
 - `ENABLE_SECURITY_HEADERS`: Enable security headers middleware (defaults to true in production).
 - `UVICORN_WORKERS`: Uvicorn worker count (default 4 in Docker).
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).
@@ -64,6 +66,16 @@ Notes:
 - `RAG_RERANK_CALIB_W_LLM`: Weight for LLM reranker score. Default `3.0`.
 - `RAG_MIN_RELEVANCE_PROB`: Minimum calibrated probability to allow generation. Default `0.35`.
 - `RAG_SENTINEL_MARGIN`: Required margin of (top_prob − sentinel_prob) to consider evidence strong enough. Default `0.10`.
+
+### RAG Rollout Toggles (Structure, Planner, Cache)
+- `RAG_ENABLE_STRUCTURE_INDEX`: Enable persisted document structure index (sections/paragraphs with char offsets) and retrieval metadata enrichment. Defaults to `true`. Config file key: `[RAG] enable_structure_index`.
+- `RAG_STRICT_EXTRACTIVE`: Use strict extractive answer path in the standard pipeline (assemble only from retrieved spans). Defaults to `false`. Config key: `[RAG] strict_extractive`.
+- `RAG_LOW_CONFIDENCE_BEHAVIOR`: Behavior when evidence is insufficient after guardrails (`continue` | `ask` | `decline`). Defaults to `continue`. Config key: `[RAG] low_confidence_behavior`.
+- `RAG_AGENTIC_CACHE_BACKEND`: Agentic ephemeral cache backend (`memory` | `sqlite`). Defaults to `memory`. Config key: `[RAG] agentic_cache_backend`.
+- `RAG_AGENTIC_CACHE_TTL_SEC`: TTL for agentic cache entries in seconds. Defaults to `600`. Config key: `[RAG] agentic_cache_ttl_sec`.
+
+Notes:
+- These env vars take precedence over `.env`, which takes precedence over `config.txt`. The loader now propagates `config.txt` defaults into process env when unset, so modules reading `os.getenv` will honor file settings by default.
 
 ### Ingest & Chunking
 - `INGEST_ENABLE_DEDUP`: Enable near‑duplicate removal at ingestion time (`true|false`, default `true`).
@@ -195,16 +207,18 @@ Runtime overrides (non‑persistent) are available via API:
 - `EMBEDDINGS_PRIORITY_WEIGHTS`: Comma‑separated weights for `high`, `normal`, `low` priority buckets used by workers when `EMBEDDINGS_PRIORITY_ENABLED=true`. Example: `high:5,normal:3,low:1` (default).
 
 ### Vector Store: pgvector
-- `RAG.vector_store_type`: Set to `pgvector` to activate the pgvector adapter (default `chromadb`). This key is typically set in config; env may override via a JSON snippet if used with a config loader.
-- `PGVECTOR_HOST`: Postgres host (default `localhost`).
-- `PGVECTOR_PORT`: Postgres port (default `5432`).
-- `PGVECTOR_DATABASE`: Database name (default `postgres`).
-- `PGVECTOR_USER`: Username (default `postgres`).
-- `PGVECTOR_PASSWORD`: Password (no default).
-- `PGVECTOR_SSLMODE`: SSL mode (default `prefer`).
-- `PGVECTOR_DSN`: Optional DSN string that overrides discrete params.
-- `PGVECTOR_POOL_SIZE`: Optional connection pool size (default `5`).
-- `PGVECTOR_HNSW_EF_SEARCH`: Optional session `ef_search` for HNSW queries (default `64`).
+- `RAG.vector_store_type`: Set to `pgvector` to activate the pgvector adapter (default `chromadb`).
+  - Important: For normal server operation, pgvector connection settings are sourced from `config.txt` and are not overridden by environment variables. Tests and helper scripts may still use env-only DSNs.
+- Test/runtime variables (used by tests/scripts; not overriding server pgvector settings):
+  - `PGVECTOR_HOST`: Postgres host (default `localhost`).
+  - `PGVECTOR_PORT`: Postgres port (default `5432`).
+  - `PGVECTOR_DATABASE`: Database name (default `postgres`).
+  - `PGVECTOR_USER`: Username (default `postgres`).
+  - `PGVECTOR_PASSWORD`: Password (no default).
+  - `PGVECTOR_SSLMODE`: SSL mode (default `prefer`).
+  - `PGVECTOR_DSN`: Optional DSN string.
+  - `PGVECTOR_POOL_SIZE`: Optional connection pool size (default `5`).
+  - `PGVECTOR_HNSW_EF_SEARCH`: Optional session `ef_search` for HNSW queries (default `64`).
 
 Quick start (local dev):
 - `docker-compose -f docker-compose.pg.yml up -d` to start Postgres with pgvector.

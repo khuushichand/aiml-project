@@ -1,7 +1,9 @@
 # moderation.py
 # Description: Admin endpoints for Moderation settings (per-user overrides and blocklist)
 
-from typing import Any
+from __future__ import annotations
+
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Response
 from loguru import logger
 
@@ -82,7 +84,7 @@ async def update_blocklist(data: ModerationBlocklistUpdate, _: Any = Depends(req
     summary="Inspect effective moderation policy for a user",
     tags=["moderation"],
 )
-async def get_effective_policy(user_id: str | None = Query(None, description="User ID to compute effective policy; optional"), _: Any = Depends(require_admin)):
+async def get_effective_policy(user_id: Optional[str] = Query(None, description="User ID to compute effective policy; optional"), _: Any = Depends(require_admin)):
     svc = get_moderation_service()
     try:
         snapshot = svc.effective_policy_snapshot(user_id)
@@ -159,7 +161,7 @@ async def get_blocklist_managed(response: Response, _: Any = Depends(require_adm
 async def append_blocklist_line(
     payload: BlocklistAppendRequest,
     response: Response,
-    if_match: str | None = Header(None, alias="If-Match"),
+    if_match: Optional[str] = Header(None, alias="If-Match"),
     _: Any = Depends(require_admin),
 ):
     if not if_match:
@@ -187,7 +189,7 @@ async def append_blocklist_line(
 async def delete_blocklist_item(
     item_id: int,
     response: Response,
-    if_match: str | None = Header(None, alias="If-Match"),
+    if_match: Optional[str] = Header(None, alias="If-Match"),
     _: Any = Depends(require_admin),
 ):
     if not if_match:

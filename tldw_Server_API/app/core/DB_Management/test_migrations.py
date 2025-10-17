@@ -11,7 +11,7 @@ from pathlib import Path
 import json
 import shutil
 
-from db_migration import (
+from tldw_Server_API.app.core.DB_Management.db_migration import (
     Migration, DatabaseMigrator, MigrationError
 )
 

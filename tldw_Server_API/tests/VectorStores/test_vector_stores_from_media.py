@@ -107,8 +107,7 @@ def test_create_from_media_with_existing_embeddings(client):
     # Instead directly import and use _adapter_for_user
     # Retrieve adapter by calling our fake factory
     import asyncio
-    loop = asyncio.get_event_loop()
-    fake_adapter = loop.run_until_complete(vs._adapter_for_user(User(id=1, username='x', email='e', is_active=True, is_admin=True), 8))
+    fake_adapter = asyncio.run(vs._adapter_for_user(User(id=1, username='x', email='e', is_active=True, is_admin=True), 8))
     source = fake_adapter.get_or_create_collection('user_1_media_embeddings')
     source.data['ids'] = ['m123_c0']
     source.data['embeddings'] = [[0.0]*8]

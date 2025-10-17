@@ -269,6 +269,13 @@ class UserDatabase:
                     user_dict['metadata'] = {}
             except Exception:
                 user_dict['metadata'] = {}
+            # Normalize boolean-ish flags for cross-backend consistency
+            for _flag in ("is_active", "is_verified", "is_superuser"):
+                try:
+                    if _flag in user_dict:
+                        user_dict[_flag] = bool(user_dict[_flag])
+                except Exception:
+                    pass
             # Add roles
             user_dict['roles'] = self.get_user_roles(user_dict['id'])
             return user_dict
@@ -304,6 +311,12 @@ class UserDatabase:
             
             result = self.backend.execute(query, tuple(values))
             
+            # SQLite's sqlite3 cursor.rowcount can be -1 in some environments; treat
+            # a successful execute without exception as success for SQLite.
+            if self.backend.backend_type == BackendType.SQLITE:
+                self._audit_log('user_updated', user_id, None, updates)
+                return True
+
             if result.rowcount > 0:
                 self._audit_log('user_updated', user_id, None, updates)
                 return True

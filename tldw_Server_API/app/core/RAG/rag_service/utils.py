@@ -93,25 +93,39 @@ def chunk_text(
     # Try to split on separator first
     if separator and separator in text:
         sections = text.split(separator)
+        # Pre-compute the starting offset of each section within the original text
+        section_starts = []
+        offset = 0
+        for i, section in enumerate(sections):
+            section_starts.append(offset)
+            offset += len(section)
+            if i < len(sections) - 1:
+                offset += len(separator)
+
         chunks = []
         current_chunk = ""
         current_start = 0
-        
-        for section in sections:
-            if len(current_chunk) + len(section) + len(separator) <= chunk_size:
-                if current_chunk:
-                    current_chunk += separator + section
-                else:
-                    current_chunk = section
+
+        for section, section_start in zip(sections, section_starts):
+            if not section and current_chunk:
+                # Preserve empty sections by treating them as separators only
+                candidate_len = len(current_chunk) + len(separator)
             else:
-                if current_chunk:
-                    chunks.append((current_chunk, current_start))
+                candidate_len = len(current_chunk) + (len(separator) if current_chunk else 0) + len(section)
+
+            if current_chunk and candidate_len <= chunk_size:
+                current_chunk = current_chunk + separator + section
+            elif not current_chunk:
                 current_chunk = section
-                current_start = len(text) - len(separator.join(sections[sections.index(section):]))
-        
+                current_start = section_start
+            else:
+                chunks.append((current_chunk, current_start))
+                current_chunk = section
+                current_start = section_start
+
         if current_chunk:
             chunks.append((current_chunk, current_start))
-            
+
         return chunks
     
     # Fallback to simple overlapping chunks

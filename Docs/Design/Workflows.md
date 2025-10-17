@@ -53,6 +53,21 @@ Base prefix: `/api/v1/workflows`
   - `GET /templates/{name}` → Fetch a specific template by name
   - `GET /templates/tags` → List aggregated tags across templates
 
+## Control Semantics
+
+- Pause sets run status to `paused` and emits `run_paused`; engine cooperatively idles and maintains step leases. Resume sets `running` and emits `run_resumed`.
+- Cancel sets a cancel flag, attempts to terminate recorded subprocesses, updates status to `cancelled`, and emits `run_cancelled`. Adapters should consult `ctx.is_cancelled()`.
+- Control endpoints are idempotent; repeated calls do not duplicate state transitions.
+
+## Webhook Lifecycle & Signing
+
+- Completion webhooks are configured via `on_completion_webhook` on the definition. Delivery outcomes are recorded as `webhook_delivery` events with status `delivered|failed|blocked`.
+- Egress is policy‑controlled (global + per‑tenant allow/deny; private IPs blocked by default).
+- Signing (v1): the server computes HMAC‑SHA256 over `f"{ts}.{body}"` using `WORKFLOWS_WEBHOOK_SECRET` and sets headers:
+  - `X-Workflows-Signature-Version: v1`, `X-Workflows-Signature`, `X-Hub-Signature-256`
+  - `X-Signature-Timestamp`, `X-Webhook-ID`, `X-Workflow-Id`, `X-Run-Id`
+- DLQ worker retries failed deliveries with exponential backoff when enabled.
+
 ## Definition Schema (v0.1)
 
 Minimal JSON body for `WorkflowDefinitionCreate`:

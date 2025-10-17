@@ -13,6 +13,7 @@ class APIClient {
         this.preferApiKeyInMultiUser = false; // prefer X-API-KEY in multi-user when supported
         this.websockets = new Map(); // Store active WebSocket connections
         this.activeRequests = new Map(); // Track active fetch requests
+        this.csrfToken = null; // Cached CSRF token (double-submit pattern)
         this.init();
     }
     
@@ -202,6 +203,57 @@ class APIClient {
         });
     }
 
+    _determineCredentialsMode() {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+        try {
+            const resolved = new URL(this.baseUrl, window.location.origin);
+            return resolved.origin === window.location.origin ? 'include' : 'omit';
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    _readCsrfFromCookie() {
+        if (typeof document === 'undefined') {
+            return null;
+        }
+        try {
+            const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+            if (match) {
+                return decodeURIComponent(match[1]);
+            }
+        } catch (e) {
+            console.warn('Failed to read CSRF cookie:', e);
+        }
+        return null;
+    }
+
+    _getCsrfToken() {
+        const fromCookie = this._readCsrfFromCookie();
+        if (fromCookie) {
+            this.csrfToken = fromCookie;
+            return fromCookie;
+        }
+        return this.csrfToken;
+    }
+
+    _syncCsrfFromResponse(response) {
+        try {
+            const headerToken = response.headers.get('X-CSRF-Token');
+            if (headerToken) {
+                this.csrfToken = headerToken;
+            }
+        } catch (e) {
+            console.warn('Failed to read CSRF header:', e);
+        }
+        const cookieToken = this._readCsrfFromCookie();
+        if (cookieToken) {
+            this.csrfToken = cookieToken;
+        }
+    }
+
     setPreferApiKeyInMultiUser(val) {
         this.preferApiKeyInMultiUser = !!val;
         Utils.saveToStorage('api-auth-prefs', {
@@ -267,6 +319,11 @@ class APIClient {
                 ...headers
             }
         };
+
+        const credsMode = this._determineCredentialsMode();
+        if (credsMode) {
+            fetchOptions.credentials = credsMode;
+        }
         
         // Add appropriate authentication header based on mode
         if (this.token) {
@@ -281,6 +338,15 @@ class APIClient {
             } else {
                 // Unknown mode - try X-API-KEY first (common for manual setup)
                 fetchOptions.headers['X-API-KEY'] = this.token;
+            }
+        }
+
+        const upperMethod = method.toUpperCase();
+        const needsCsrf = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(upperMethod);
+        if (needsCsrf) {
+            const csrfToken = this._getCsrfToken();
+            if (csrfToken) {
+                fetchOptions.headers['X-CSRF-Token'] = csrfToken;
             }
         }
 
@@ -315,6 +381,8 @@ class APIClient {
             this.activeRequests.delete(requestKey);
             
             const duration = Date.now() - startTime;
+
+            this._syncCsrfFromResponse(response);
 
             // Save to history
             this.addToHistory({
@@ -372,6 +440,23 @@ class APIClient {
                     console.warn('Failed to parse error response:', e);
                 }
                 
+                if (response.status === 403) {
+                    const notifyCsrfReset = () => {
+                        if (typeof Toast !== 'undefined') {
+                            Toast.warning('Your session security token expired. A new one was issued—please retry the action.');
+                        }
+                    };
+                    try {
+                        if (errorDetails && (errorDetails.detail === 'CSRF token validation failed' || errorDetails.error === 'CSRF token validation failed')) {
+                            this.csrfToken = null;
+                            notifyCsrfReset();
+                        }
+                    } catch (e) {
+                        this.csrfToken = null;
+                        notifyCsrfReset();
+                    }
+                }
+
                 const error = new Error(errorMessage);
                 error.status = response.status;
                 error.statusText = response.statusText;

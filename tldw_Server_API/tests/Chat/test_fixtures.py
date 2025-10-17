@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
 @pytest.fixture(scope="function")
@@ -26,11 +27,11 @@ def real_test_db():
     
     # Add default character
     char_id = db.add_character_card({
-        "name": "Default Character",
+        "name": DEFAULT_CHARACTER_NAME,
         "description": "A helpful AI assistant for testing",
         "personality": "Helpful and friendly",
         "scenario": "Testing environment",
-        "system_prompt": "You are a helpful test assistant",
+        "system_prompt": "You are a helpful AI assistant.",
         "first_message": "Hello! I'm here to help with testing.",
         "creator_notes": "Created for integration testing"
     })

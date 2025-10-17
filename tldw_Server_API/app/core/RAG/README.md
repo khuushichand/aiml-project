@@ -178,6 +178,7 @@ The unified pipeline includes lightweight generation guardrails you can enable p
   - Request fields: `require_hard_citations` (default false)
   - Metadata: `metadata.hard_citations = { sentences: [ { text, citations[ {doc_id,start,end} ] } ], coverage, total, supported }`
   - Metric: `rag_missing_hard_citations_total`
+  - Gauge: `rag_hard_citation_coverage{strategy}` (0.0–1.0)
 
 - Numeric fidelity (post-generation): extracts numeric tokens in the answer and verifies presence in sources. On mismatch, you can retry targeted retrieval or ask/decline.
   - Request fields: `enable_numeric_fidelity` (default false), `numeric_fidelity_behavior` in `[continue|ask|decline|retry]`
@@ -222,12 +223,15 @@ Adoption criteria:
 Response metadata:
 - `metadata.post_verification`: `{ unsupported_ratio, total_claims, unsupported_count, fixed, reason }`
 - `metadata.adaptive_rerun`: `{ performed, duration, old_ratio, new_ratio, adopted, bypass_cache, old_nf_missing?, new_nf_missing?, old_hard_citation_coverage?, new_hard_citation_coverage?, budget_exhausted? }`
+- `metadata.generation_gate`: present when gated by either hard-citations or NLI; reasons include `missing_hard_citations` and `nli_low_confidence`.
 
 Metrics:
 - `rag_adaptive_rerun_performed_total` (counter)
 - `rag_adaptive_rerun_adopted_total` (counter)
 - `rag_adaptive_rerun_duration_seconds{adopted}` (histogram)
 - `rag_phase_budget_exhausted_total{phase="adaptive_rerun"}` (counter)
+- `rag_nli_unsupported_ratio{strategy}` (gauge)
+- `rag_nli_low_confidence_total` (counter)
 
 Example:
 ```python
@@ -255,8 +259,39 @@ Distributed tracing and quality monitoring are integrated for production SLOs:
   - Enable tracing with `ENABLE_TRACING=true` (default) and scrape with OTLP/Prometheus as configured in telemetry.
 
 - Phase timing metrics (existing): `rag_phase_duration_seconds{phase,difficulty}`, `rag_reranking_duration_seconds{strategy}`.
+ - Factuality gauges: `rag_hard_citation_coverage{strategy}`, `rag_nli_unsupported_ratio{strategy}`.
 
 - Payload exemplars: on low-confidence or errors, redacted exemplar lines are sampled to `Databases/observability/rag_payload_exemplars.jsonl` (rate via `RAG_PAYLOAD_EXEMPLAR_SAMPLING`). See `Docs/Deployment/Monitoring/Exemplars/README.md`.
+
+### Gating Metadata Example
+
+When generation is gated (hard-citations or NLI), a compact envelope is added to response metadata:
+
+```json
+{
+  "metadata": {
+    "generation_gate": {
+      "reason": "nli_low_confidence",  // or "missing_hard_citations"
+      "unsupported_ratio": 0.62,        // when NLI gate triggered
+      "threshold": 0.20,                // adaptive_unsupported_threshold
+      "coverage": 0.85,                 // when hard-citation gate triggered
+      "at": 1729100000.123
+    }
+  }
+}
+```
+
+### Reading Gauges (Prometheus / OTEL)
+
+- Hard-citation coverage (0.0–1.0):
+  - Metric: `rag_hard_citation_coverage{strategy="standard|agentic"}`
+  - Prom scrape example: `curl http://localhost:8000/metrics | grep rag_hard_citation_coverage`
+
+- NLI unsupported ratio (0.0–1.0):
+  - Metric: `rag_nli_unsupported_ratio{strategy="standard|agentic"}`
+  - Prom scrape example: `curl http://localhost:8000/metrics | grep rag_nli_unsupported_ratio`
+
+Both gauges are also exported to OTEL when enabled; search for these instrument names in your metrics backend (e.g., Grafana/Tempo/OTLP).
 
 - Nightly quality dashboards: enable `RAG_QUALITY_EVAL_ENABLED=true` to run a small nightly eval set and export:
   - `rag_eval_faithfulness_score{dataset}` and `rag_eval_coverage_score{dataset}`

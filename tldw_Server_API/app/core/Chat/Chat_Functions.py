@@ -543,7 +543,7 @@ def save_chat_history_to_db_wrapper(
                 logging.error(f"DB error looking up specific character '{char_lookup_name}': {e}")
                 return conversation_id, f"DB error finding specific character: {e}"
         else:
-            logging.info("No specific character name for chat. Using Default Character.")
+            logging.info("No specific character name for chat. Using %s.", DEFAULT_CHARACTER_NAME)
             try:
                 default_char = db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
                 if default_char:

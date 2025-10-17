@@ -183,6 +183,24 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
             raise RuntimeError(
                 f"SHA mismatch for model {model_name_or_path}. Expected: {expected_sha}, Got: {actual_sha}")
         logging.info(f"Successfully verified revision SHA {expected_sha} for model {model_name_or_path}.")
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as net_err:
+        logging.warning(
+            f"Skipping Hugging Face revision verification for {model_name_or_path} due to connectivity issue: "
+            f"{net_err}. Proceeding with locally cached artifacts."
+        )
+        return
+    except requests.exceptions.RequestException as http_err:
+        logging.error(
+            f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {http_err}",
+            exc_info=True,
+        )
+        raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {http_err}") from http_err
+    except OSError as os_err:
+        logging.warning(
+            f"Skipping Hugging Face revision verification for {model_name_or_path} due to local environment error: "
+            f"{os_err}. Proceeding without remote validation."
+        )
+        return
     except Exception as e:  # Catch network errors or if model/revision not found
         logging.error(f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {e}", exc_info=True)
         # Decide if this should be a fatal error. For now, we'll raise to prevent using a potentially wrong model.

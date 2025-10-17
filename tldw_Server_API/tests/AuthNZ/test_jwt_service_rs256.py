@@ -84,3 +84,15 @@ class TestJWTServiceRS256:
         assert payload["username"] == "bob"
         assert payload["type"] == "access"
 
+    def test_rs256_issuer_audience_enforced(self):
+        priv, pub = _gen_rsa_keypair_pem()
+        svc = JWTService(settings=self._rs_settings(priv, pub, JWT_ISSUER="tldw.rs", JWT_AUDIENCE="tldw.clients"))
+        token = svc.create_access_token(user_id=5, username="eve", role="user")
+        assert svc.decode_access_token(token)["sub"] == "5"
+
+        # Create mismatched audience token using a separate service
+        svc_bad = JWTService(settings=self._rs_settings(priv, pub, JWT_ISSUER="tldw.rs", JWT_AUDIENCE="wrong.aud"))
+        bad = svc_bad.create_access_token(user_id=5, username="eve", role="user")
+        import pytest
+        with pytest.raises(Exception):
+            svc.decode_access_token(bad)

@@ -14,7 +14,10 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+    DEFAULT_CHARACTER_NAME,
+)
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
@@ -64,11 +67,11 @@ def test_chacha_db(test_user):
     
     # Add default character with the expected name
     char_id = db.add_character_card({
-        "name": "Default Character",
+        "name": DEFAULT_CHARACTER_NAME,
         "description": "A helpful AI assistant",
         "personality": "Helpful",
         "scenario": "General",
-        "system_prompt": "You are a helpful assistant"
+        "system_prompt": "You are a helpful AI assistant."
     })
     print(f"Created default character with ID: {char_id}")
     

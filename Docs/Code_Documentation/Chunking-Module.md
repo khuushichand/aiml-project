@@ -47,8 +47,7 @@ Strategies are discovered and instantiated through the `Chunker`’s internal re
 
 - Registration: `Chunker._register_strategy_factories()` populates a dict mapping method name → factory lambda.
 - Lazy creation: `get_strategy(method)` creates the strategy on first use and caches the instance.
-- Extensible: Add a new strategy by implementing `BaseChunkingStrategy` and registering it in `_register_strategy_factories()` with a unique method key (usually the `ChunkingMethod` enum value).
-  Note: some strategies use string keys (e.g., `structure_aware`) that are not members of `ChunkingMethod`.
+- Extensible: Add a new strategy by implementing `BaseChunkingStrategy` and registering it in `_register_strategy_factories()` with a unique method key (typically the `ChunkingMethod` enum value; a few legacy adapters such as `code_ast` still use string keys).
 
 Example (excerpt):
 

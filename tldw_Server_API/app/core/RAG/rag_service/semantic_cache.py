@@ -271,14 +271,12 @@ class SemanticCache:
         with self._lock:
             # Create cache entry aligned with CacheEntry fields
             entry = SemanticCacheEntry(
-                key=key,
                 value=value,
                 created_at=now,
                 last_accessed=now,
                 ttl=ttl or self.default_ttl,
-                metadata={"query": query},
                 query=query,
-                embedding=embedding
+                embedding=embedding,
             )
             
             # Store entry
@@ -427,13 +425,11 @@ class SemanticCache:
                     created_at = entry_data.get("timestamp", time.time())
                     last_accessed = entry_data.get("last_access", created_at)
                     entry = SemanticCacheEntry(
-                        key=key,
                         value=entry_data["value"],
                         created_at=created_at,
                         last_accessed=last_accessed,
                         ttl=entry_data.get("ttl"),
-                        metadata={},
-                        query=entry_data.get("query", "")
+                        query=entry_data.get("query", ""),
                     )
                     
                     if not entry.is_expired():

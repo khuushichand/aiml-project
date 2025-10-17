@@ -177,9 +177,17 @@ class WorkerOrchestrator:
         self._requeue_rate = float(os.getenv("EMBEDDINGS_REQUEUE_RATE", "50"))  # tokens per second
         self._requeue_burst = float(os.getenv("EMBEDDINGS_REQUEUE_BURST", "200"))  # max tokens
         
-        # Setup signal handlers
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Setup signal handlers only when running on the main thread.
+        # In test contexts (or when embedded), installing signal handlers from
+        # non-main threads raises ValueError and may cause teardown hangs.
+        try:
+            import threading as _thr
+            if _thr.current_thread() is _thr.main_thread():
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+        except Exception:
+            # Best-effort; orchestrator works without direct signal handlers.
+            pass
     
     def _log_signal_notice(self, signum: int):
         try:

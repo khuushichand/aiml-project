@@ -4,19 +4,16 @@ pgvector pytest helpers
 
 This module provides lightweight fixtures to exercise the PGVectorAdapter in tests.
 
-How DSN is resolved
+How DSN is resolved (tests only)
 - The session fixture `pgvector_dsn` resolves a connection string from, in order:
   1) `PG_TEST_DSN`
   2) `PGVECTOR_DSN`
   3) `JOBS_DB_URL`
-  If none are set, tests that depend on pgvector are skipped.
+  If none are set, tests that depend on pgvector are skipped. Tests do NOT read user-facing config files.
 
 Example DSN values
-- Local Docker service (used by CI pgvector-local job):
-  PG_TEST_DSN=postgresql://postgres:postgres@localhost:5432/tldw
-
-- With pgbouncer (optional):
-  PG_TEST_DSN=postgresql://postgres:postgres@localhost:6432/tldw
+- Local Docker service (default in compose):
+  PG_TEST_DSN=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users
 
 What the fixture does
 - Verifies connectivity and ensures the `vector` extension exists via
@@ -27,13 +24,8 @@ What the fixture does
 Troubleshooting
 - Connection refused: ensure Postgres is running and the port matches your DSN.
 - Authentication failed: verify user/password match the database setup.
-- Extension missing: install pgvector in the target database or use the CI
-  job that starts `pgvector/pgvector:pg18`.
-- Tests skipped: export `PG_TEST_DSN` or `PGVECTOR_DSN` before running pytest.
-
-Notes
-- These fixtures use psycopg (v3) if available; if `psycopg` cannot be
-  imported, dependent tests are skipped.
+- Extension missing: install pgvector in the target database or start the pgvector image.
+- Tests skipped: set one of the DSN sources above.
 """
 
 import os
@@ -42,12 +34,8 @@ from typing import Optional
 import pytest
 
 
-# Optional psycopg import; skip fixtures if not installed
-psycopg = pytest.importorskip("psycopg")
-
-
 def _resolve_pgvector_dsn() -> Optional[str]:
-    # Prefer explicit PG_TEST_DSN, then PGVECTOR_DSN, then JOBS_DB_URL
+    # Tests rely on environment variables only; do not read user-facing config.
     return (
         os.getenv("PG_TEST_DSN")
         or os.getenv("PGVECTOR_DSN")
@@ -66,9 +54,14 @@ def _ensure_extension(conn) -> None:
 
 @pytest.fixture(scope="session")
 def pgvector_dsn() -> Optional[str]:
+    # Optional psycopg import here so we don't abort collection if missing
+    try:
+        import psycopg  # type: ignore
+    except Exception:
+        pytest.skip("psycopg not installed; skipping pgvector tests")
     dsn = _resolve_pgvector_dsn()
     if not dsn:
-        pytest.skip("PG_TEST_DSN/PGVECTOR_DSN not set; skipping pgvector tests")
+        pytest.skip("No pgvector DSN found (PG_TEST_DSN/PGVECTOR_DSN/JOBS_DB_URL or config)")
     # Try a quick connectivity check
     try:
         with psycopg.connect(dsn) as conn:
@@ -81,6 +74,10 @@ def pgvector_dsn() -> Optional[str]:
 @pytest.fixture(scope="function")
 def pgvector_temp_table(pgvector_dsn):
     """Create a temporary collection table for tests; cleanup on teardown."""
+    try:
+        import psycopg  # type: ignore
+    except Exception:
+        pytest.skip("psycopg not installed; skipping pgvector tests")
     name = "vs_test_pgvector_pytest"
     try:
         with psycopg.connect(pgvector_dsn) as conn:

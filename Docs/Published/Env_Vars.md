@@ -15,6 +15,8 @@ For the full, frequently updated raw reference, see `Env_Vars.md` in the reposit
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma‑separated or JSON array.
+- `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. The parent directory becomes the config root for auxiliary assets (e.g., `Synonyms/`).
+- `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
 - `ENABLE_SECURITY_HEADERS`: Enable security headers middleware (defaults to true in production).
 - `UVICORN_WORKERS`: Uvicorn worker count (default 4 in Docker).
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).

@@ -2,6 +2,8 @@
 # Description: Admin endpoints for user management, registration codes, and system administration
 #
 # Imports
+from __future__ import annotations
+
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import secrets
@@ -303,7 +305,7 @@ async def list_users(
 #
 # Per-User API Key Management (Admin)
 
-@router.get("/users/{user_id}/api-keys", response_model=list[APIKeyMetadata])
+@router.get("/users/{user_id}/api-keys", response_model=List[APIKeyMetadata])
 async def admin_list_user_api_keys(
     user_id: int,
     include_revoked: bool = False,
@@ -457,7 +459,7 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
         raise HTTPException(status_code=500, detail="Failed to create organization")
 
 
-@router.get("/orgs", response_model=list[OrganizationResponse])
+@router.get("/orgs", response_model=List[OrganizationResponse])
 async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)) -> list[OrganizationResponse]:
     try:
         rows = await list_organizations(limit=limit, offset=offset)
@@ -477,7 +479,7 @@ async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResp
         raise HTTPException(status_code=500, detail="Failed to create team")
 
 
-@router.get("/orgs/{org_id}/teams", response_model=list[TeamResponse])
+@router.get("/orgs/{org_id}/teams", response_model=List[TeamResponse])
 async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), db=Depends(get_db_transaction)) -> list[TeamResponse]:
     try:
         is_pg = await is_postgres_backend()
@@ -543,7 +545,7 @@ async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, req
         raise HTTPException(status_code=500, detail="Failed to add team member")
 
 
-@router.get("/teams/{team_id}/members", response_model=list[TeamMemberResponse])
+@router.get("/teams/{team_id}/members", response_model=List[TeamMemberResponse])
 async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
     try:
         rows = await list_team_members(team_id)
@@ -642,7 +644,7 @@ async def admin_add_org_member(org_id: int, payload: OrgMemberAddRequest, reques
         raise HTTPException(status_code=500, detail="Failed to add org member")
 
 
-@router.get("/orgs/{org_id}/members", response_model=list[OrgMemberListItem])
+@router.get("/orgs/{org_id}/members", response_model=List[OrgMemberListItem])
 async def admin_list_org_members(
     org_id: int,
     limit: int = Query(100, ge=1, le=1000),
@@ -754,7 +756,7 @@ async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMe
         raise HTTPException(status_code=500, detail="Failed to update org member role")
 
 
-@router.get("/users/{user_id}/org-memberships", response_model=list[OrgMembershipItem])
+@router.get("/users/{user_id}/org-memberships", response_model=List[OrgMembershipItem])
 async def admin_list_user_org_memberships(user_id: int) -> list[OrgMembershipItem]:
     try:
         rows = await list_org_memberships_for_user(user_id)
@@ -788,7 +790,7 @@ async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateReques
         raise HTTPException(status_code=500, detail="Failed to create virtual key")
 
 
-@router.get("/users/{user_id}/virtual-keys", response_model=list[APIKeyMetadata])
+@router.get("/users/{user_id}/virtual-keys", response_model=List[APIKeyMetadata])
 async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) -> list[APIKeyMetadata]:
     try:
         wanted = {
@@ -1066,7 +1068,7 @@ async def update_user(
 #
 # RBAC: Roles, Permissions, Assignments, Overrides
 
-@router.get("/roles", response_model=list[RoleResponse])
+@router.get("/roles", response_model=List[RoleResponse])
 async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
     try:
         is_pg = await is_postgres_backend()
@@ -1122,7 +1124,7 @@ async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
         raise HTTPException(status_code=500, detail="Failed to delete role")
 
 
-@router.get("/roles/{role_id}/permissions", response_model=list[PermissionResponse])
+@router.get("/roles/{role_id}/permissions", response_model=List[PermissionResponse])
 async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
     """List permissions granted to a specific role (read-only matrix row)."""
     try:
@@ -1157,7 +1159,7 @@ async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) ->
         raise HTTPException(status_code=500, detail="Failed to list role permissions")
 
 
-@router.get("/permissions/tools", response_model=list[ToolPermissionResponse])
+@router.get("/permissions/tools", response_model=List[ToolPermissionResponse])
 async def list_tool_permissions(db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """List tool execution permissions (name starts with 'tools.execute:')."""
     try:
@@ -1330,7 +1332,7 @@ async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depe
         raise HTTPException(status_code=500, detail="Failed to revoke tool permission")
 
 
-@router.get("/roles/{role_id}/permissions/tools", response_model=list[ToolPermissionResponse])
+@router.get("/roles/{role_id}/permissions/tools", response_model=List[ToolPermissionResponse])
 async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """List tool execution permissions assigned to a role."""
     try:
@@ -1365,7 +1367,7 @@ async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction
         raise HTTPException(status_code=500, detail="Failed to list role tool permissions")
 
 
-@router.post("/roles/{role_id}/permissions/tools/batch", response_model=list[ToolPermissionResponse])
+@router.post("/roles/{role_id}/permissions/tools/batch", response_model=List[ToolPermissionResponse])
 async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatchRequest, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """Grant multiple tool execution permissions to a role in one call."""
     try:
@@ -1447,7 +1449,7 @@ def _normalize_tool_prefix(raw_prefix: str) -> str:
     return px
 
 
-@router.post("/roles/{role_id}/permissions/tools/prefix/grant", response_model=list[ToolPermissionResponse])
+@router.post("/roles/{role_id}/permissions/tools/prefix/grant", response_model=List[ToolPermissionResponse])
 async def grant_tool_permissions_by_prefix(role_id: int, payload: ToolPermissionPrefixRequest, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """Grant all existing tool permissions with names starting with the prefix."""
     try:
@@ -1753,8 +1755,10 @@ async def get_roles_matrix_boolean(
         raise HTTPException(status_code=500, detail="Failed to fetch boolean matrix")
 
 
-@router.get("/permissions/categories", response_model=list[str])
-async def list_permission_categories(db=Depends(get_db_transaction)) -> list[str]:
+from typing import List, Optional as _Optional
+
+@router.get("/permissions/categories", response_model=List[str])
+async def list_permission_categories(db=Depends(get_db_transaction)) -> List[str]:
     """List distinct permission categories (for UI filters)."""
     try:
         is_pg = await is_postgres_backend()
@@ -1770,8 +1774,8 @@ async def list_permission_categories(db=Depends(get_db_transaction)) -> list[str
         return []
 
 
-@router.get("/permissions", response_model=list[PermissionResponse])
-async def list_permissions(category: str | None = None, search: str | None = None, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
+@router.get("/permissions", response_model=List[PermissionResponse])
+async def list_permissions(category: _Optional[str] = None, search: _Optional[str] = None, db=Depends(get_db_transaction)) -> List[PermissionResponse]:
     try:
         is_pg = await is_postgres_backend()
         clauses = []

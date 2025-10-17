@@ -43,8 +43,10 @@ class SQLiteConnectionPool(ConnectionPool):
             config: Database configuration
         """
         # Normalize to absolute path to avoid CWD-related open errors under tests
+        # Detect in-memory databases and avoid path resolution
+        self._is_memory = db_path == ':memory:'
         try:
-            self.db_path = str(Path(db_path).resolve())
+            self.db_path = db_path if self._is_memory else str(Path(db_path).resolve())
         except Exception:
             self.db_path = db_path
         self.config = config
@@ -71,13 +73,14 @@ class SQLiteConnectionPool(ConnectionPool):
     
     def _create_connection(self) -> sqlite3.Connection:
         """Create a new SQLite connection with optimal settings."""
-        # Ensure database directory exists to avoid 'unable to open database file'
-        try:
-            dbp = Path(self.db_path)
-            if dbp.parent and not dbp.parent.exists():
-                dbp.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        # Ensure database directory exists for file-backed DBs
+        if not self._is_memory:
+            try:
+                dbp = Path(self.db_path)
+                if dbp.parent and not dbp.parent.exists():
+                    dbp.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
 
         conn = sqlite3.connect(
             self.db_path,
@@ -89,7 +92,7 @@ class SQLiteConnectionPool(ConnectionPool):
         conn.row_factory = sqlite3.Row
         
         # Apply optimizations
-        if self.config.sqlite_wal_mode:
+        if self.config.sqlite_wal_mode and not self._is_memory:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
 
@@ -169,13 +172,16 @@ class SQLiteBackend(DatabaseBackend):
         """Create a new SQLite connection."""
         if not self.config.sqlite_path:
             raise DatabaseError("SQLite path not configured")
-        
-        # Ensure database directory exists
-        db_path = Path(self.config.sqlite_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+        # Handle in-memory DB distinctly
+        is_memory = self.config.sqlite_path == ':memory:'
+
+        # Ensure database directory exists for file-backed DBs
+        if not is_memory:
+            db_path = Path(self.config.sqlite_path)
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+
         conn = sqlite3.connect(
-            str(db_path),
+            self.config.sqlite_path if is_memory else str(db_path),
             check_same_thread=False,
             isolation_level=None
         )
@@ -183,7 +189,7 @@ class SQLiteBackend(DatabaseBackend):
         conn.row_factory = sqlite3.Row
 
         # Apply configuration
-        if self.config.sqlite_wal_mode:
+        if self.config.sqlite_wal_mode and not is_memory:
             conn.execute("PRAGMA journal_mode = WAL")
 
         if self.config.sqlite_foreign_keys:
@@ -412,11 +418,13 @@ class SQLiteBackend(DatabaseBackend):
             query_parts.append(f"AND {self.escape_identifier(key)} = ?")
             params.append(value)
         
-        # Add ORDER BY rank
+        # Add ORDER BY using bm25() by default for better relevance
         if fts_query.rank_expression:
             query_parts.append(f"ORDER BY {fts_query.rank_expression}")
         else:
-            query_parts.append("ORDER BY rank")
+            # bm25 returns lower scores for more relevant rows; sort ASC
+            # Use bare table name (consistent with project queries elsewhere)
+            query_parts.append(f"ORDER BY bm25({fts_query.table}) ASC")
         
         # Add LIMIT/OFFSET
         if fts_query.limit:

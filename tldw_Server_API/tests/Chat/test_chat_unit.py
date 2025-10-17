@@ -6,6 +6,8 @@ import pytest
 from fastapi import status
 from unittest.mock import patch, MagicMock
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+
 # Fixtures are automatically discovered from conftest.py
 
 
@@ -75,7 +77,7 @@ class TestChatUnit:
         
         assert response.status_code == status.HTTP_200_OK
         
-        default_character = isolated_db.get_character_card_by_name("Default Character")
+        default_character = isolated_db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
         assert default_character is not None, "Default character not found in test database"
 
         conversations = isolated_db.get_conversations_for_character(default_character["id"])

@@ -203,8 +203,10 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'temp': 'temp',
         'system_message': 'system_message',
         'streaming': 'streaming',
-        'topp': 'topp',
-        'topk': 'topk',
+        # OpenRouter uses top_p/top_k/min_p naming
+        'topp': 'top_p',
+        'topk': 'top_k',
+        'minp': 'min_p',
         'model':'model',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
@@ -295,7 +297,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'stop': 'stop', # list of strings
         'response_format': 'response_format', # if OpenAI compatible endpoint
         'logit_bias': 'logit_bias',
-        'n': 'n_probs', # FIXME: n_probs mapping might not be direct.
+        'n': 'n',
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
     },

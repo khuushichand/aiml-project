@@ -7,6 +7,8 @@ import datetime
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from typing import Dict, Any
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
     get_or_create_character_context,
@@ -41,42 +43,61 @@ class MockMessagePart:
 
 class MockDatabase:
     """Mock database for testing."""
-    def __init__(self):
+
+    def __init__(self, with_default: bool = True):
         self.client_id = "test_client"
-    
+        self._next_id = 2
+        self._characters: Dict[int, Dict[str, Any]] = {
+            1: {"id": 1, "name": "TestChar", "description": "Test character"}
+        }
+        if with_default:
+            self._characters[999] = {
+                "id": 999,
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": "Default character",
+                "system_prompt": "You are a helpful AI assistant.",
+            }
+
     def transaction(self):
         """Mock transaction context manager."""
         from contextlib import contextmanager
+
         @contextmanager
         def mock_transaction():
             yield self
+
         return mock_transaction()
-    
+
     def get_character_card_by_id(self, char_id):
-        if char_id == 1:
-            return {"id": 1, "name": "TestChar", "description": "Test character"}
-        return None
-    
+        return self._characters.get(char_id)
+
     def get_character_card_by_name(self, name):
-        if name == "TestChar":
-            return {"id": 1, "name": "TestChar", "description": "Test character"}
-        elif name == "DefaultChar":
-            return {"id": 999, "name": "DefaultChar", "description": "Default character"}
+        for card in self._characters.values():
+            if card.get("name") == name:
+                return card
         return None
-    
+
+    def add_character_card(self, data):
+        new_id = data.get("id") or self._next_id
+        self._next_id += 1
+        card = dict(data)
+        card["id"] = new_id
+        self._characters[new_id] = card
+        return new_id
+
     def get_conversation_by_id(self, conv_id):
         if conv_id == "existing_conv":
             return {
                 "id": "existing_conv",
                 "character_id": 1,
-                "client_id": "test_client",
+                "client_id": self.client_id,
                 "title": "Test Conversation"
             }
         return None
-    
+
     def add_conversation(self, data):
         return f"new_conv_{data.get('character_id', 0)}"
-    
+
     def get_messages_for_conversation(self, conv_id, limit, offset, order):
         if conv_id == "existing_conv":
             return [
@@ -183,28 +204,34 @@ class TestGetOrCreateCharacterContext:
         """Test fallback to default character."""
         db = MockDatabase()
         loop = asyncio.get_running_loop()
-        
-        with patch.object(db, 'get_character_card_by_name', side_effect=[
-            None,  # First call for requested character
-            {"id": 999, "name": "DefaultChar"}  # Second call for default
-        ]):
-            char_card, char_id = await get_or_create_character_context(db, "NonExistent", loop)
-        
+
+        char_card, char_id = await get_or_create_character_context(db, "NonExistent", loop)
+
         assert char_card is not None
-        assert char_card["name"] == "DefaultChar"
+        assert char_card["name"] == DEFAULT_CHARACTER_NAME
         assert char_id == 999
-    
+
     async def test_no_character_provided(self):
         """Test when no character ID is provided."""
         db = MockDatabase()
         loop = asyncio.get_running_loop()
-        
-        with patch('tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps.DEFAULT_CHARACTER_NAME', 'DefaultChar'):
-            with patch.object(db, 'get_character_card_by_name', return_value={"id": 999, "name": "DefaultChar"}):
-                char_card, char_id = await get_or_create_character_context(db, None, loop)
-        
+
+        char_card, char_id = await get_or_create_character_context(db, None, loop)
+
         assert char_card is not None
+        assert char_card["name"] == DEFAULT_CHARACTER_NAME
         assert char_id == 999
+
+    async def test_default_character_created_when_missing(self):
+        """Ensure default character is created if missing."""
+        db = MockDatabase(with_default=False)
+        loop = asyncio.get_running_loop()
+
+        char_card, char_id = await get_or_create_character_context(db, None, loop)
+
+        assert char_card is not None
+        assert char_card["name"] == DEFAULT_CHARACTER_NAME
+        assert char_id is not None
 
 
 @pytest.mark.asyncio

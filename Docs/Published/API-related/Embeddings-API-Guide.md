@@ -110,7 +110,7 @@ Use the `X-API-KEY` header on every request. The `Authorization` header alone is
 
 #### Multi-User Mode (JWT)
 ```python
-import jwt
+from jose import jwt
 from datetime import datetime, timedelta
 
 # Generate JWT token

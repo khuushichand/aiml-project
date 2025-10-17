@@ -6,6 +6,7 @@ Implements minimal definition CRUD and run lifecycle with a no-op engine.
 
 import asyncio
 import json
+import time
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -305,6 +306,27 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                 # Provide useful diagnostics
                 pretty = " -> ".join(cyc)
                 raise HTTPException(status_code=422, detail=f"Workflow contains an explicit cycle: {pretty}")
+
+
+async def _wait_for_run_completion(
+    db: WorkflowsDatabase,
+    run_id: str,
+    *,
+    timeout_seconds: float = 55 * 60,
+    poll_interval: float = 0.25,
+) -> Any:
+    """Poll the workflows DB until the run reaches a terminal state or times out."""
+    deadline = time.monotonic() + timeout_seconds
+    terminal = {"succeeded", "failed", "cancelled"}
+    while True:
+        run = db.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Workflow run not found")
+        if run.status in terminal:
+            return run
+        if time.monotonic() >= deadline:
+            raise HTTPException(status_code=504, detail="Workflow run did not complete before the timeout window")
+        await asyncio.sleep(poll_interval)
 
 
 def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> Dict[str, str]:
@@ -660,12 +682,17 @@ async def run_saved(
             await engine.start_run(run_id, run_mode)
     except Exception:
         pass
+    if run_mode == RunMode.SYNC:
+        run = await _wait_for_run_completion(db, run_id)
+    else:
+        run = db.get_run(run_id)
     from loguru import logger as _logger
     try:
-        _logger.debug(f"Workflows endpoint: post-submit status={db.get_run(run_id).status if db.get_run(run_id) else 'missing'} run_id={run_id}")
+        _logger.debug(f"Workflows endpoint: post-submit status={run.status if run else 'missing'} run_id={run_id}")
     except Exception:
         pass
-    run = db.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
     # Audit: run created
     try:
         if audit_service:
@@ -991,12 +1018,17 @@ async def run_adhoc(
             await engine.start_run(run_id, run_mode)
     except Exception:
         pass
+    if run_mode == RunMode.SYNC:
+        run = await _wait_for_run_completion(db, run_id)
+    else:
+        run = db.get_run(run_id)
     from loguru import logger as _logger
     try:
-        _logger.debug(f"Workflows endpoint: post-submit (adhoc) status={db.get_run(run_id).status if db.get_run(run_id) else 'missing'} run_id={run_id}")
+        _logger.debug(f"Workflows endpoint: post-submit (adhoc) status={run.status if run else 'missing'} run_id={run_id}")
     except Exception:
         pass
-    run = db.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
     # Audit: ad-hoc run created
     try:
         if audit_service:

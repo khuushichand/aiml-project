@@ -743,7 +743,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
-    # Jobs metrics gauges worker (stale processing)
+    # Jobs metrics gauges worker (SLO percentiles)
     try:
         import os as _os
         import asyncio as _asyncio
@@ -760,6 +760,24 @@ async def lifespan(app: FastAPI):
                 logger.info("Jobs metrics gauge worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
+
+    # Jobs metrics reconcile worker (job_counters/gauges amortized refresh)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_reconcile as _run_jobs_reconcile
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Jobs metrics reconcile worker")
+        else:
+            _enabled_recon = (_os.getenv("JOBS_METRICS_RECONCILE_ENABLE", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled_recon:
+                jobs_metrics_reconcile_stop = _asyncio.Event()
+                _ = _asyncio.create_task(_run_jobs_reconcile(jobs_metrics_reconcile_stop))
+                logger.info("Jobs metrics reconcile worker started with explicit stop_event signal")
+            else:
+                logger.info("Jobs metrics reconcile worker disabled by flag (JOBS_METRICS_RECONCILE_ENABLE)")
+    except Exception as e:
+        logger.warning(f"Failed to start Jobs metrics reconcile worker: {e}")
 
     # Jobs crypto rotate worker (optional staged rotation)
     try:
@@ -1467,6 +1485,17 @@ async def lifespan(app: FastAPI):
                 logger.info("AuthNZ scheduler stopped")
         except Exception as _e:
             logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
+
+        # Shutdown cached audit adapter services (Embeddings adapter)
+        try:
+            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+                shutdown_audit_adapter_services as _shutdown_audit_adapter,
+            )
+            await _shutdown_audit_adapter()
+            logger.info("Embeddings audit adapter services shutdown")
+        except Exception as _e:
+            logger.debug(f"Embeddings audit adapter shutdown skipped: {_e}")
+
         shutdown_telemetry()
         logger.info("App Shutdown: Telemetry shutdown")
     except Exception as e:
@@ -1525,6 +1554,8 @@ OPENAPI_TAGS = [
     {"name": "metrics", "description": "Metrics and monitoring endpoints.",
      "externalDocs": {"description": "Metrics design", "url": _ext_url("/docs-static/Design/Metrics.md")}},
     {"name": "monitoring", "description": "OpenTelemetry/metrics reporting in JSON."},
+    {"name": "audit", "description": "Audit export, count, and tools. Includes /audit/export and /audit/count.",
+     "externalDocs": {"description": "Audit Export & Count API", "url": _ext_url("/docs-static/API/Audit_Export.md")}},
     {"name": "chunking", "description": "Content chunking operations and utilities.",
      "externalDocs": {"description": "Chunking design", "url": _ext_url("/docs-static/Design/Chunking.md")}},
     {"name": "chunking-templates", "description": "Chunking template management (create, list, update).",
@@ -1878,7 +1909,55 @@ _TEST_MODE = (
 )
 
 if _TEST_MODE:
-    logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging, request id)")
+    logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
+    # Provide request id + trace headers even in tests for assertions
+    app.add_middleware(RequestIDMiddleware)
+
+    @app.middleware("http")
+    async def _trace_headers_middleware(request: Request, call_next):
+        from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+        tm = get_tracing_manager()
+        # Ensure request_id is in baggage (RequestIDMiddleware already set it)
+        try:
+            req_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
+            if req_id:
+                tm.set_baggage("request_id", str(req_id))
+        except Exception:
+            pass
+        response = await call_next(request)
+        # Add trace headers to response
+        try:
+            span = tm.get_current_span()
+            if span:
+                ctx = span.get_span_context()
+                if ctx and getattr(ctx, "is_valid", False):
+                    trace_id = f"{ctx.trace_id:032x}"
+                    span_id = f"{ctx.span_id:016x}"
+                    response.headers.setdefault("X-Trace-Id", trace_id)
+                    response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+                else:
+                    # No active span; synthesize a valid W3C traceparent for tests
+                    try:
+                        from secrets import token_hex as _th
+                        trace_id = _th(16)  # 32 hex chars
+                        span_id = _th(8)    # 16 hex chars
+                        response.headers.setdefault("X-Trace-Id", trace_id)
+                        response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+                    except Exception:
+                        pass
+            else:
+                # No span; synthesize trace headers
+                try:
+                    from secrets import token_hex as _th
+                    trace_id = _th(16)
+                    span_id = _th(8)
+                    response.headers.setdefault("X-Trace-Id", trace_id)
+                    response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return response
 else:
     _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
     _enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
@@ -1919,6 +1998,26 @@ else:
                     span_id = f"{ctx.span_id:016x}"
                     response.headers.setdefault("X-Trace-Id", trace_id)
                     response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+                else:
+                    # No active span; synthesize a valid W3C traceparent
+                    try:
+                        from secrets import token_hex as _th
+                        trace_id = _th(16)
+                        span_id = _th(8)
+                        response.headers.setdefault("X-Trace-Id", trace_id)
+                        response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+                    except Exception:
+                        pass
+            else:
+                # No span; synthesize trace headers
+                try:
+                    from secrets import token_hex as _th
+                    trace_id = _th(16)
+                    span_id = _th(8)
+                    response.headers.setdefault("X-Trace-Id", trace_id)
+                    response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+                except Exception:
+                    pass
         except Exception:
             pass
         return response

@@ -11,10 +11,12 @@ from uuid import uuid4
 #
 # 3rd-party imports
 from jose import jwt, JWTError
+from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidTokenError,
     TokenExpiredError,
@@ -215,11 +217,11 @@ class JWTService:
             logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
             return payload
             
-        except jwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
             logger.debug("Token has expired")
             raise TokenExpiredError()
             
-        except jwt.JWTClaimsError as e:
+        except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
             raise InvalidTokenError(f"Invalid token claims: {e}")
             
@@ -233,8 +235,8 @@ class JWTService:
     
     def verify_token(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
         """
-        Verify and decode a JWT token (sync version, no blacklist check)
-        
+        Verify and decode a JWT token (sync, stateless; no blacklist checks)
+
         Args:
             token: JWT token to verify
             token_type: Expected token type ('access' or 'refresh')
@@ -265,19 +267,21 @@ class JWTService:
                         raise primary_err
                 else:
                     raise
-            
+
             # Verify token type if specified
             if token_type and payload.get("type") != token_type:
                 raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {payload.get('type')}")
-            
+
+            # Note: blacklist enforcement is only supported in verify_token_async()
+
             logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
             return payload
             
-        except jwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
             logger.debug("Token has expired")
             raise TokenExpiredError()
             
-        except jwt.JWTClaimsError as e:
+        except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
             raise InvalidTokenError(f"Invalid token claims: {e}")
             
@@ -339,10 +343,8 @@ class JWTService:
         Returns:
             HMAC-SHA256 hash of the token
         """
-        # Prefer API_KEY_PEPPER; fallback to JWT secret; then safe default
-        material = (self.settings.API_KEY_PEPPER or self.settings.JWT_SECRET_KEY or "tldw_default_api_key_hmac")
-        hmac_key = (material[:32]).encode()
-        return hmac.new(hmac_key, token.encode(), hashlib.sha256).hexdigest()
+        key = derive_hmac_key(self.settings)
+        return hmac.new(key, token.encode("utf-8"), hashlib.sha256).hexdigest()
     
     def extract_jti(self, token: str) -> Optional[str]:
         """
@@ -487,27 +489,47 @@ class JWTService:
     
     def refresh_access_token(self, refresh_token: str) -> tuple[str, str]:
         """
-        Create a new access token from a refresh token
-        
+        Create a new access token from a refresh token (helper).
+
         Args:
             refresh_token: Valid refresh token
             
         Returns:
-            Tuple of (new_access_token, original_refresh_token)
+            Tuple of (new_access_token, refresh_token_out)
             
         Raises:
             InvalidTokenError: If refresh token is invalid
         """
-        # Verify the refresh token
+        # NOTE:
+        # This helper performs cryptographic validation and minting only.
+        # It does NOT update session records or reliably enforce blacklist checks.
+        # For production flows, prefer the /auth/refresh endpoint logic which
+        # calls SessionManager.refresh_session() to persist rotation and ensure
+        # revocation of previous refresh tokens.
+
+        # Verify the refresh token (no blacklist by default; see note above)
         payload = self.verify_token(refresh_token, token_type="refresh")
         
         # Extract user information
         user_id = int(payload["sub"])
         username = payload.get("username", "")
         
-        # Note: Role should be fetched from database in production
-        # This is a simplified version
+        # Fetch role from the configured user database for correctness
         role = payload.get("role", "user")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+            user_db = get_configured_user_database(client_id="jwt_service")
+            roles = []
+            try:
+                roles = user_db.get_user_roles(user_id)
+            except Exception:
+                # Fallback to full user fetch if roles accessor differs
+                user = user_db.get_user(user_id=user_id)
+                roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
+            if roles:
+                role = "admin" if "admin" in roles else roles[0]
+        except Exception as e:
+            logger.debug(f"JWTService: failed to fetch user role on refresh; using fallback: {e}")
         
         # Create new access token
         new_access_token = self.create_access_token(
@@ -515,12 +537,63 @@ class JWTService:
             username=username,
             role=role
         )
-        
+
+        # Handle optional refresh rotation based on settings
+        refresh_out = refresh_token
+        try:
+            if getattr(self.settings, "ROTATE_REFRESH_TOKENS", False):
+                refresh_out = self.create_refresh_token(
+                    user_id=user_id,
+                    username=username,
+                    additional_claims={k: v for k, v in (payload.items()) if k in {"session_id"}}
+                )
+                # Best-effort: attempt to blacklist old refresh JTI without breaking sync context
+                try:
+                    old_jti = payload.get("jti")
+                    old_exp = payload.get("exp")
+                    if old_jti and isinstance(old_exp, (int, float)):
+                        from datetime import datetime as _dt
+                        exp_dt = _dt.utcfromtimestamp(old_exp)
+                        import asyncio as _asyncio
+                        from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
+                        try:
+                            loop = _asyncio.get_running_loop()
+                        except RuntimeError:
+                            loop = None
+                        if loop and loop.is_running():
+                            # Schedule blacklist in the current loop to avoid blocking
+                            try:
+                                bl = _get_bl()
+                                loop.create_task(bl.revoke_token(
+                                    jti=old_jti,
+                                    expires_at=exp_dt,
+                                    user_id=user_id,
+                                    token_type="refresh",
+                                    reason="refresh-rotated",
+                                    revoked_by=None,
+                                    ip_address=None
+                                ))
+                            except Exception as _sched_e:
+                                logger.debug(f"Refresh rotation: failed to schedule blacklist task: {_sched_e}")
+                        else:
+                            bl = _get_bl()
+                            # Run async revoke in a temporary loop
+                            _asyncio.run(bl.revoke_token(
+                                jti=old_jti,
+                                expires_at=exp_dt,
+                                user_id=user_id,
+                                token_type="refresh",
+                                reason="refresh-rotated",
+                                revoked_by=None,
+                                ip_address=None
+                            ))
+                except Exception as _e:
+                    logger.debug(f"Refresh rotation: best-effort blacklist failed: {_e}")
+        except Exception as _rot_err:
+            logger.debug(f"Refresh rotation not applied: {_rot_err}")
+
         logger.info(f"Refreshed access token for user {username}")
-        
-        # Return new access token and original refresh token
-        # In production, you might want to rotate refresh tokens too
-        return new_access_token, refresh_token
+        return new_access_token, refresh_out
     
     def get_token_remaining_time(self, token: str) -> Optional[int]:
         """

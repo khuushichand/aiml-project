@@ -2,6 +2,8 @@
 # Description: This file contains the functions that are used for performing queries against various Search Engine APIs
 #
 # Imports
+from __future__ import annotations
+
 import asyncio
 import json
 from html import unescape

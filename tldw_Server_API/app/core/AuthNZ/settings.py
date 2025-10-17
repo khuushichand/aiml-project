@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     )
     
     DATABASE_URL: str = Field(
-        default="sqlite:///../Databases/Users.db",
+        default="sqlite:///./Databases/users.db",
         description="Database URL - PostgreSQL for multi-user: postgresql://user:pass@localhost/tldw"
     )
     
@@ -271,7 +271,7 @@ class Settings(BaseSettings):
 
     # ===== Logging / PII =====
     PII_REDACT_LOGS: bool = Field(
-        default=False,
+        default=True,
         description="Redact usernames/IPs in auth logs (recommended in production)"
     )
 
@@ -579,11 +579,13 @@ class Settings(BaseSettings):
                         "and follow the prompts (option \"Generate secure keys\").\n"
                         "Then set SINGLE_USER_API_KEY in your environment or .env file."
                     )
-            # In test contexts, normalize known placeholder keys to the deterministic test key
-            elif in_test_context and self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}:
+            # In test contexts, normalize known placeholder keys to a deterministic test key
+            elif in_test_context and (
+                self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
+            ):
                 test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
                 self.SINGLE_USER_API_KEY = test_key
-                logger.debug("Normalized placeholder SINGLE_USER_API_KEY to deterministic test key for pytest context")
+                logger.debug("Normalized SINGLE_USER_API_KEY to deterministic test key for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
@@ -591,6 +593,9 @@ class Settings(BaseSettings):
                     "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
                 )
             elif len(self.SINGLE_USER_API_KEY) < 16:
+                # Allow short keys in explicit test contexts to avoid brittle fixtures
+                if in_test_context:
+                    return
                 raise ValueError(
                     "SINGLE_USER_API_KEY must be at least 16 characters.\n"
                     "Set it via environment or .env. Example:\n"
@@ -702,7 +707,10 @@ def _load_overrides_from_config() -> dict:
         maybe_set("JWT_SECRET_KEY", "jwt_secret_key", lambda v: v.strip())
         maybe_set("SINGLE_USER_API_KEY", "single_user_api_key", lambda v: v.strip())
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
+        # Legacy aliases in config.txt
+        maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)
         maybe_set("REQUIRE_REGISTRATION_CODE", "require_registration_code", _bool_from_str)
+        maybe_set("REQUIRE_REGISTRATION_CODE", "registration_require_code", _bool_from_str)
         maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
         maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
         maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
@@ -741,9 +749,22 @@ def _load_overrides_from_config() -> dict:
                     port = cfg.get("AuthNZ", "pg_port", fallback="5432").strip()
                     db   = cfg.get("AuthNZ", "pg_db", fallback="tldw_users").strip()
                     user = cfg.get("AuthNZ", "pg_user", fallback="tldw_user").strip()
-                    pwd  = cfg.get("AuthNZ", "pg_password", fallback="ChangeMeStrong123!").strip()
+                    # Do NOT silently synthesize with a placeholder password.
+                    pwd  = cfg.get("AuthNZ", "pg_password", fallback="").strip()
                     sslm = cfg.get("AuthNZ", "pg_sslmode", fallback="prefer").strip()
-                    overrides["DATABASE_URL"] = f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode={sslm}"
+                    if not pwd:
+                        # In production, require explicit password; outside, skip synthesis to avoid insecure defaults
+                        from os import getenv as _getenv
+                        prod_flag = _getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+                        logger.warning("AuthNZ: pg_password not set in config.txt; not synthesizing DATABASE_URL.")
+                        if prod_flag:
+                            # Leave DATABASE_URL unset to force explicit configuration
+                            pass
+                        else:
+                            # Still avoid insecure default; allow env DATABASE_URL to win if present elsewhere
+                            pass
+                    else:
+                        overrides["DATABASE_URL"] = f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode={sslm}"
                 # else: ignore unknown types
     except Exception as e:
         logger.debug(f"AuthNZ settings: failed to load overrides from config.txt: {e}")
@@ -755,6 +776,19 @@ def get_settings() -> Settings:
     global _settings
     if not _settings:
         overrides = _load_overrides_from_config()
+        # Aliases for legacy names used in some tests/envs
+        try:
+            import os as _os
+            def _alias_bool(env_name: str) -> bool:
+                return str(_os.getenv(env_name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+            # REGISTRATION_ENABLED -> ENABLE_REGISTRATION
+            if _os.getenv("REGISTRATION_ENABLED") is not None and "ENABLE_REGISTRATION" not in overrides:
+                overrides["ENABLE_REGISTRATION"] = _alias_bool("REGISTRATION_ENABLED")
+            # REGISTRATION_REQUIRE_CODE -> REQUIRE_REGISTRATION_CODE
+            if _os.getenv("REGISTRATION_REQUIRE_CODE") is not None and "REQUIRE_REGISTRATION_CODE" not in overrides:
+                overrides["REQUIRE_REGISTRATION_CODE"] = _alias_bool("REGISTRATION_REQUIRE_CODE")
+        except Exception:
+            pass
         _settings = Settings(**overrides)
         try:
             base_dir = None
@@ -802,10 +836,13 @@ def get_database_url() -> str:
 
 
 def get_jwt_secret() -> str:
-    """Get JWT secret key (multi-user mode only)"""
+    """Get JWT secret key (multi-user mode only). Raises if misconfigured."""
     settings = get_settings()
     if settings.AUTH_MODE != "multi_user":
         raise RuntimeError("JWT secret only available in multi-user mode")
+    if not settings.JWT_SECRET_KEY:
+        from tldw_Server_API.app.core.AuthNZ.exceptions import MissingConfigurationError
+        raise MissingConfigurationError("JWT_SECRET_KEY")
     return settings.JWT_SECRET_KEY
 
 

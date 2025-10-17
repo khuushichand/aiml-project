@@ -53,7 +53,7 @@ async def _ensure_admin(db_name: str) -> Tuple[str, str]:
 
 def _admin_headers(client, db_name: str):
     """Login as admin and return Authorization headers."""
-    username, password = asyncio.get_event_loop().run_until_complete(_ensure_admin(db_name))
+    username, password = asyncio.run(_ensure_admin(db_name))
     lr = client.post(
         "/api/v1/auth/login",
         data={"username": username, "password": password},

@@ -306,7 +306,7 @@ Examples:
 
 SQLite (Development):
     export TLDW_USER_DB_BACKEND=sqlite
-    export DATABASE_URL=sqlite:///../Databases/Users.db
+    export DATABASE_URL=sqlite:///./Databases/users.db
 
 PostgreSQL (Production):
     export TLDW_USER_DB_BACKEND=postgresql

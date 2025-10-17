@@ -1,18 +1,14 @@
 import asyncio
-import os
 import pytest
 
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter
 
 
-def test_pg_upsert_idempotent(monkeypatch):
-    dsn = os.getenv('PG_TEST_DSN') or os.getenv('PGVECTOR_DSN')
-    if not dsn:
-        pytest.skip('PG DSN not set')
+def test_pg_upsert_idempotent(pgvector_dsn, monkeypatch):
     coll = 'idempotency_demo'
     dim = 8
-    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': dsn}, embedding_dim=dim, user_id='t'))
+    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': pgvector_dsn}, embedding_dim=dim, user_id='t'))
 
     async def _run():
         await adapter.initialize()
@@ -31,4 +27,3 @@ def test_pg_upsert_idempotent(monkeypatch):
         ids_seen = [it.get('id') for it in items]
         assert ids_seen.count('dup') == 1
     asyncio.run(_run())
-

@@ -31,7 +31,20 @@ from typing import Any, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 import aiosqlite
+from typing import AsyncGenerator
 from loguru import logger
+import os
+try:
+    # Prefer dict-like project settings if available
+    from tldw_Server_API.app.core.config import settings as _app_settings  # type: ignore
+except Exception:
+    _app_settings = {}
+
+# Consistent risk threshold constants (tunable via env var)
+try:
+    HIGH_RISK_SCORE = int(os.getenv("AUDIT_HIGH_RISK_SCORE", "70"))
+except Exception:
+    HIGH_RISK_SCORE = 70
 
 
 # ============================================================================
@@ -194,8 +207,8 @@ class AuditEvent:
             "result_count": self.result_count,
             "risk_score": self.risk_score,
             "pii_detected": self.pii_detected,
-            "compliance_flags": json.dumps(self.compliance_flags) if self.compliance_flags else None,
-            "metadata": json.dumps(self.metadata) if self.metadata else None,
+            "compliance_flags": json.dumps(self.compliance_flags),
+            "metadata": json.dumps(self.metadata),
         }
         
         # Add context fields
@@ -211,68 +224,122 @@ class AuditEvent:
 # ============================================================================
 
 class PIIDetector:
-    """Enhanced PII detection with multiple pattern types"""
-    
-    # Comprehensive PII patterns
-    PII_PATTERNS = {
-        "ssn": re.compile(r'\b\d{3}-\d{2}-\d{4}\b'),
-        "credit_card": re.compile(r'\b(?:\d{4}[\s-]?){3}\d{4}\b'),
-        "email": re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
-        "phone": re.compile(r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'),
-        "ip_address": re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
-        "passport": re.compile(r'\b[A-Z]{1,2}[0-9]{6,9}\b'),
-        "driver_license": re.compile(r'\b[A-Z]{1,2}[\s-]?\d{6,8}\b'),
-        "bank_account": re.compile(r'\b\d{8,17}\b'),
-        "iban": re.compile(r'\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}\b'),
-        "api_key": re.compile(r'\b(sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b', re.IGNORECASE),
-        "jwt_token": re.compile(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'),
+    """Enhanced PII detection with configurable patterns.
+
+    Patterns may be extended/overridden via app settings and, optionally,
+    merged with RAG security_filters patterns for consistency across modules.
+    """
+
+    # Default PII patterns (compiled)
+    DEFAULT_PATTERNS = {
+        "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+        "credit_card": r"\b(?:\d{4}[\s-]?){3}\d{4}\b",
+        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+        "phone": r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
+        "ip_address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+        "passport": r"\b[A-Z]{1,2}[0-9]{6,9}\b",
+        "driver_license": r"\b[A-Z]{1,2}[\s-]?\d{6,8}\b",
+        "bank_account": r"\b\d{8,17}\b",
+        "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}\b",
+        "api_key": r"\b(sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b",
+        "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
     }
-    
+
+    # Back-compat for modules that read PIIDetector.PII_PATTERNS directly
+    PII_PATTERNS = {k: re.compile(v) for k, v in DEFAULT_PATTERNS.items()}
+
+    def __init__(self, *,
+                 overrides: Optional[Dict[str, Union[str, List[str]]]] = None,
+                 use_rag_patterns: bool = False):
+        # Compile patterns
+        pat_map: Dict[str, List[re.Pattern]] = {}
+        for name, raw in self.DEFAULT_PATTERNS.items():
+            try:
+                flags = re.IGNORECASE if name in {"api_key"} else 0
+                pat_map[name] = [re.compile(raw, flags)]
+            except Exception:
+                pass
+
+        # Optional: merge from RAG detector patterns
+        if use_rag_patterns:
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.security_filters import PIIDetector as RAGPII, PIIType
+                rag = RAGPII()
+                # Map known types to our keys
+                mapping = {
+                    "email": PIIType.EMAIL,
+                    "phone": PIIType.PHONE,
+                    "ssn": PIIType.SSN,
+                    "credit_card": PIIType.CREDIT_CARD,
+                    "ip_address": PIIType.IP_ADDRESS,
+                    "passport": PIIType.PASSPORT,
+                    "bank_account": PIIType.BANK_ACCOUNT,
+                }
+                for k, t in mapping.items():
+                    try:
+                        pats = getattr(rag, "patterns", {}).get(t, [])
+                        comp_list = [p for p in pats if isinstance(p, re.Pattern)]
+                        if comp_list:
+                            pat_map.setdefault(k, []).extend(comp_list)
+                    except Exception:
+                        pass
+                logger.debug("Audit PII: merged patterns from RAG detector")
+            except Exception:
+                # Optional dependency; ignore if unavailable
+                pass
+
+        # Optional: overrides from settings
+        if overrides:
+            for name, raw in overrides.items():
+                try:
+                    if isinstance(raw, list):
+                        compiled = [re.compile(r) for r in raw]
+                    else:
+                        compiled = [re.compile(str(raw))]
+                    if compiled:
+                        pat_map[name] = compiled
+                except Exception as e:
+                    logger.debug(f"Audit PII: failed to compile override for {name}: {e}")
+
+        self._patterns: Dict[str, List[re.Pattern]] = pat_map
+
     def detect(self, text: str) -> Dict[str, List[str]]:
         """Detect PII in text"""
         if not text:
             return {}
-        
-        found_pii = {}
-        for pii_type, pattern in self.PII_PATTERNS.items():
-            matches = pattern.findall(text)
-            if matches:
-                found_pii[pii_type] = matches
-        
-        return found_pii
-    
+
+        found: Dict[str, List[str]] = {}
+        for pii_type, patterns in self._patterns.items():
+            for pattern in patterns:
+                matches = pattern.findall(text)
+                if matches:
+                    found.setdefault(pii_type, []).extend(matches if isinstance(matches, list) else [matches])
+        return found
+
     def redact(self, text: str, placeholder_format: str = "[{type}_REDACTED]") -> str:
         """Redact PII from text"""
         if not text:
             return text
-        
         redacted = text
-        for pii_type, pattern in self.PII_PATTERNS.items():
+        for pii_type, patterns in self._patterns.items():
             placeholder = placeholder_format.format(type=pii_type.upper())
-            redacted = pattern.sub(placeholder, redacted)
-        
+            for pattern in patterns:
+                redacted = pattern.sub(placeholder, redacted)
         return redacted
 
     def _redact_value(self, value: Any, placeholder_format: str) -> Any:
         """Redact PII in a single value if it's a string."""
         if isinstance(value, str):
             redacted = value
-            for pii_type, pattern in self.PII_PATTERNS.items():
+            for pii_type, patterns in self._patterns.items():
                 placeholder = placeholder_format.format(type=pii_type.upper())
-                redacted = pattern.sub(placeholder, redacted)
+                for pattern in patterns:
+                    redacted = pattern.sub(placeholder, redacted)
             return redacted
         return value
 
     def redact_obj(self, data: Any, placeholder_format: str = "[{type}_REDACTED]") -> Any:
-        """Recursively redact PII from dict/list structures and strings.
-
-        Args:
-            data: Arbitrary JSON-serializable structure (dict, list, str, numbers, bool, None)
-            placeholder_format: Format for placeholders, includes {type}
-
-        Returns:
-            Redacted object of same structure
-        """
+        """Recursively redact PII from dict/list structures and strings."""
         try:
             if isinstance(data, dict):
                 return {k: self.redact_obj(v, placeholder_format) for k, v in data.items()}
@@ -371,6 +438,14 @@ class UnifiedAuditService:
     """
     Unified audit service with async operations, connection pooling,
     and comprehensive event tracking.
+    
+    Notes:
+    - Timestamps are stored as ISO8601 strings; SQLite filters rely on
+      lexicographic ordering which is correct for ISO8601.
+    - `metadata` and `compliance_flags` are stored as JSON-encoded text
+      and should be decoded by consumers when needed.
+    - PII detection patterns may diverge from other modules; consider
+      centralizing shared PII utilities across the codebase.
     """
     
     def __init__(
@@ -380,7 +455,8 @@ class UnifiedAuditService:
         enable_pii_detection: bool = True,
         enable_risk_scoring: bool = True,
         buffer_size: int = 1000,
-        flush_interval: float = 10.0
+        flush_interval: float = 10.0,
+        max_db_mb: Optional[int] = None,
     ):
         """
         Initialize unified audit service.
@@ -405,9 +481,32 @@ class UnifiedAuditService:
         self.enable_risk_scoring = enable_risk_scoring
         self.buffer_size = buffer_size
         self.flush_interval = flush_interval
+        self.max_db_mb = max_db_mb
         
         # Components
-        self.pii_detector = PIIDetector() if enable_pii_detection else None
+        # Configure PII detector and scan fields
+        if enable_pii_detection:
+            # Settings: AUDIT_PII_USE_RAG_PATTERNS, AUDIT_PII_PATTERNS (dict)
+            use_rag = bool(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower() in {"1","true","yes","on","y"})
+            overrides = _app_settings.get("AUDIT_PII_PATTERNS") if isinstance(_app_settings, dict) else None
+            if overrides is not None and not isinstance(overrides, dict):
+                overrides = None
+            self.pii_detector = PIIDetector(overrides=overrides, use_rag_patterns=use_rag)
+        else:
+            self.pii_detector = None
+
+        # Fields to scan for PII beyond metadata (strings only)
+        default_scan = ["action", "resource_id", "error_message", "context_user_agent"]
+        extra_scan = []
+        try:
+            raw = _app_settings.get("AUDIT_PII_SCAN_FIELDS") if isinstance(_app_settings, dict) else None
+            if isinstance(raw, str):
+                extra_scan = [s.strip() for s in raw.split(",") if s.strip()]
+            elif isinstance(raw, list):
+                extra_scan = [str(s).strip() for s in raw if str(s).strip()]
+        except Exception:
+            pass
+        self._pii_scan_fields: List[str] = list(dict.fromkeys(default_scan + extra_scan))
         self.risk_scorer = RiskScorer() if enable_risk_scoring else None
         
         # Event buffer
@@ -422,6 +521,10 @@ class UnifiedAuditService:
         self._db_pool: Optional[aiosqlite.Connection] = None
         self._pool_lock = asyncio.Lock()
         self._db_lock = asyncio.Lock()
+
+        # Ad-hoc flush tasks created for high-risk/buffer-full conditions
+        # Tracked so they can be awaited during graceful shutdown
+        self._flush_futures: Set[asyncio.Task] = set()
         
         # Statistics
         self.stats = {
@@ -447,6 +550,11 @@ class UnifiedAuditService:
                 await db.execute("PRAGMA synchronous=NORMAL;")
                 await db.execute("PRAGMA temp_store=MEMORY;")
                 await db.execute("PRAGMA foreign_keys=ON;")
+                # Enable incremental vacuum to reclaim space over time
+                try:
+                    await db.execute("PRAGMA auto_vacuum=INCREMENTAL;")
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Failed to apply SQLite PRAGMAs on audit DB: {e}")
             # Main audit table with all fields
@@ -501,6 +609,10 @@ class UnifiedAuditService:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_category ON audit_events(category)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_severity ON audit_events(severity)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_risk_score ON audit_events(risk_score)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_ip ON audit_events(context_ip_address)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_session_id ON audit_events(context_session_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_endpoint ON audit_events(context_endpoint)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_user_agent ON audit_events(context_user_agent)")
             # Additional indexes for common resource/action filters
             await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_type ON audit_events(resource_type)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_id ON audit_events(resource_id)")
@@ -533,6 +645,8 @@ class UnifiedAuditService:
                     await self._db_pool.execute("PRAGMA synchronous=NORMAL;")
                     await self._db_pool.execute("PRAGMA temp_store=MEMORY;")
                     await self._db_pool.execute("PRAGMA foreign_keys=ON;")
+                    # Return rows as mappings consistently across this service
+                    self._db_pool.row_factory = aiosqlite.Row
                     await self._db_pool.commit()
                 except Exception as e:
                     logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
@@ -562,7 +676,14 @@ class UnifiedAuditService:
             except asyncio.CancelledError:
                 pass
         
-        # Final flush
+        # Await any outstanding ad-hoc flushes first to avoid contention
+        if self._flush_futures:
+            try:
+                await asyncio.gather(*list(self._flush_futures), return_exceptions=True)
+            finally:
+                self._flush_futures.clear()
+
+        # Final flush of any remaining buffered events
         await self.flush()
         
         # Close connection pool
@@ -646,30 +767,57 @@ class UnifiedAuditService:
         )
         
         # PII detection
-        if self.enable_pii_detection and metadata:
-            # Detect across JSON string to cover all nested strings
-            try:
-                metadata_str = json.dumps(metadata)
-            except Exception:
-                metadata_str = str(metadata)
-            found_pii = self.pii_detector.detect(metadata_str)
-            if found_pii:
-                event.pii_detected = True
-                event.compliance_flags.append("pii_detected")
-                # Redact PII from metadata preserving structure when possible
-                if isinstance(metadata, (dict, list, str)):
-                    event.metadata = self.pii_detector.redact_obj(metadata)
-                else:
-                    redacted_str = self.pii_detector.redact(metadata_str)
-                    try:
-                        event.metadata = json.loads(redacted_str)
-                    except Exception:
-                        event.metadata = redacted_str
+        if self.enable_pii_detection:
+            # Detect/redact in metadata
+            if metadata:
+                try:
+                    metadata_str = json.dumps(metadata)
+                except Exception:
+                    metadata_str = str(metadata)
+                found_pii = self.pii_detector.detect(metadata_str)
+                if found_pii:
+                    event.pii_detected = True
+                    if "pii_detected" not in event.compliance_flags:
+                        event.compliance_flags.append("pii_detected")
+                    # Redact PII from metadata preserving structure when possible
+                    if isinstance(metadata, (dict, list, str)):
+                        event.metadata = self.pii_detector.redact_obj(metadata)
+                    else:
+                        # For non-JSON-serializable metadata, store a JSON object with redacted text
+                        redacted_str = self.pii_detector.redact(metadata_str)
+                        event.metadata = {"redacted_text": redacted_str}
+            # Detect/redact in configured string fields outside metadata
+            def _redact_if_needed(val: Optional[str]) -> Optional[str]:
+                if isinstance(val, str) and val:
+                    red = self.pii_detector.redact(val)
+                    if red != val:
+                        event.pii_detected = True
+                        if "pii_detected" not in event.compliance_flags:
+                            event.compliance_flags.append("pii_detected")
+                        return red
+                return val
+
+            for field_name in self._pii_scan_fields:
+                try:
+                    if field_name.startswith("context_"):
+                        ctx_attr = field_name[len("context_"):]
+                        cur = getattr(event.context, ctx_attr, None)
+                        new_val = _redact_if_needed(cur)
+                        if new_val is not None and new_val != cur:
+                            setattr(event.context, ctx_attr, new_val)
+                    else:
+                        cur = getattr(event, field_name, None)
+                        new_val = _redact_if_needed(cur)
+                        if new_val is not None and new_val != cur:
+                            setattr(event, field_name, new_val)
+                except Exception:
+                    # Ignore unknown fields
+                    pass
         
         # Risk scoring
         if self.enable_risk_scoring:
             event.risk_score = self.risk_scorer.calculate_risk_score(event)
-            if event.risk_score >= 70:
+            if event.risk_score >= HIGH_RISK_SCORE:
                 self.stats["high_risk_events"] += 1
                 logger.warning(
                     f"High-risk event: {event_type.value} "
@@ -682,8 +830,11 @@ class UnifiedAuditService:
             self.stats["events_logged"] += 1
             
             # Flush if buffer is full or high-risk event
-            if len(self.event_buffer) >= self.buffer_size or event.risk_score >= 80:
-                asyncio.create_task(self.flush())
+            if len(self.event_buffer) >= self.buffer_size or event.risk_score >= HIGH_RISK_SCORE:
+                task = asyncio.create_task(self.flush())
+                # Track and auto-remove on completion
+                self._flush_futures.add(task)
+                task.add_done_callback(lambda t: self._flush_futures.discard(t))
         
         return event.event_id
 
@@ -761,7 +912,24 @@ class UnifiedAuditService:
             # Re-add events to buffer (with limit to prevent memory issues)
             async with self.buffer_lock:
                 max_buffer = self.buffer_size * 2
-                self.event_buffer = (events + self.event_buffer)[:max_buffer]
+                combined = events + self.event_buffer
+                dropped = max(0, len(combined) - max_buffer)
+                if dropped > 0:
+                    # Persist dropped events to a fallback JSONL queue for durability
+                    try:
+                        fb_path = self.db_path.parent / "audit_fallback_queue.jsonl"
+                        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+                        with fb_path.open("a", encoding="utf-8") as fb:
+                            for ev in combined[max_buffer:]:
+                                fb.write(json.dumps(ev.to_dict(), ensure_ascii=False) + "\n")
+                        logger.warning(
+                            f"Audit flush failure: {dropped} events persisted to fallback queue at {fb_path}"
+                        )
+                    except Exception as _fe:
+                        logger.error(f"Failed to write dropped audit events to fallback queue: {_fe}")
+                else:
+                    logger.warning("Audit flush failure: events re-buffered (no drop)")
+                self.event_buffer = combined[:max_buffer]
     
     async def _update_daily_stats(self, db: aiosqlite.Connection, events: List[AuditEvent]):
         """Update daily statistics"""
@@ -824,21 +992,61 @@ class UnifiedAuditService:
         try:
             db = await self._ensure_db_pool()
             async with self._db_lock:
-                # Delete old events
-                cursor = await db.execute(
+                # Count rows to be deleted for reliable logging (SQLite rowcount often -1)
+                old_events_count = 0
+                old_stats_count = 0
+                try:
+                    async with db.execute(
+                        "SELECT COUNT(*) FROM audit_events WHERE timestamp < ?",
+                        (cutoff.isoformat(),),
+                    ) as cur:
+                        row = await cur.fetchone()
+                        old_events_count = int(row[0]) if row else 0
+                except Exception:
+                    pass
+
+                try:
+                    async with db.execute(
+                        "SELECT COUNT(*) FROM audit_daily_stats WHERE date < ?",
+                        (cutoff.date(),),
+                    ) as cur:
+                        row = await cur.fetchone()
+                        old_stats_count = int(row[0]) if row else 0
+                except Exception:
+                    pass
+
+                # Perform deletions
+                await db.execute(
                     "DELETE FROM audit_events WHERE timestamp < ?",
                     (cutoff.isoformat(),)
                 )
-                deleted = cursor.rowcount
-                # Delete old stats
                 await db.execute(
                     "DELETE FROM audit_daily_stats WHERE date < ?",
                     (cutoff.date(),)
                 )
                 await db.commit()
-                
-                if deleted > 0:
-                    logger.info(f"Cleaned up {deleted} audit events older than {self.retention_days} days")
+
+                # Reclaim space from deleted pages using incremental vacuum
+                try:
+                    await db.execute("PRAGMA incremental_vacuum")
+                except Exception:
+                    pass
+
+                if old_events_count or old_stats_count:
+                    logger.info(
+                        "Cleaned up {events} audit events and {stats} daily stat rows older than {days} days".format(
+                            events=old_events_count, stats=old_stats_count, days=self.retention_days
+                        )
+                    )
+
+                # Optional: max DB size policy (warn if exceeded)
+                try:
+                    if hasattr(self, "max_db_mb") and self.max_db_mb:
+                        size_mb = (self.db_path.stat().st_size / (1024 * 1024))
+                        if size_mb > float(self.max_db_mb):
+                            logger.warning(f"Audit DB size {size_mb:.1f}MB exceeds configured limit {self.max_db_mb}MB")
+                except Exception:
+                    pass
                     
         except Exception as e:
             logger.error(f"Failed to cleanup old audit logs: {e}")
@@ -852,6 +1060,10 @@ class UnifiedAuditService:
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        session_id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        method: Optional[str] = None,
         min_risk_score: Optional[int] = None,
         limit: int = 100,
         offset: int = 0
@@ -890,22 +1102,99 @@ class UnifiedAuditService:
             query += " AND context_correlation_id = ?"
             params.append(correlation_id)
         
+        if ip_address:
+            query += " AND context_ip_address = ?"
+            params.append(ip_address)
+        if session_id:
+            query += " AND context_session_id = ?"
+            params.append(session_id)
+        if endpoint:
+            query += " AND context_endpoint = ?"
+            params.append(endpoint)
+        if method:
+            query += " AND context_method = ?"
+            params.append(method)
+        
         if min_risk_score is not None:
             query += " AND risk_score >= ?"
             params.append(min_risk_score)
         
-        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        query += " ORDER BY timestamp DESC, event_id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         
         try:
             db = await self._ensure_db_pool()
-            db.row_factory = aiosqlite.Row
             async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to query audit events: {e}")
             return []
+
+    async def count_events(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        event_types: Optional[List[AuditEventType]] = None,
+        categories: Optional[List[AuditEventCategory]] = None,
+        user_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        session_id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        method: Optional[str] = None,
+        min_risk_score: Optional[int] = None,
+    ) -> int:
+        """Count audit events with filters."""
+        query = "SELECT COUNT(*) as cnt FROM audit_events WHERE 1=1"
+        params: List[Any] = []
+        if start_time:
+            query += " AND timestamp >= ?"
+            params.append(start_time.isoformat())
+        if end_time:
+            query += " AND timestamp <= ?"
+            params.append(end_time.isoformat())
+        if event_types:
+            placeholders = ",".join("?" * len(event_types))
+            query += f" AND event_type IN ({placeholders})"
+            params.extend([et.value for et in event_types])
+        if categories:
+            placeholders = ",".join("?" * len(categories))
+            query += f" AND category IN ({placeholders})"
+            params.extend([c.value for c in categories])
+        if user_id:
+            query += " AND context_user_id = ?"
+            params.append(user_id)
+        if request_id:
+            query += " AND context_request_id = ?"
+            params.append(request_id)
+        if correlation_id:
+            query += " AND context_correlation_id = ?"
+            params.append(correlation_id)
+        if ip_address:
+            query += " AND context_ip_address = ?"
+            params.append(ip_address)
+        if session_id:
+            query += " AND context_session_id = ?"
+            params.append(session_id)
+        if endpoint:
+            query += " AND context_endpoint = ?"
+            params.append(endpoint)
+        if method:
+            query += " AND context_method = ?"
+            params.append(method)
+        if min_risk_score is not None:
+            query += " AND risk_score >= ?"
+            params.append(min_risk_score)
+        try:
+            db = await self._ensure_db_pool()
+            async with db.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error(f"Failed to count audit events: {e}")
+            return 0
 
     async def export_events(
         self,
@@ -917,11 +1206,17 @@ class UnifiedAuditService:
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        session_id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        method: Optional[str] = None,
         min_risk_score: Optional[int] = None,
         format: str = "json",
         file_path: Optional[Union[str, Path]] = None,
         chunk_size: int = 5000,
-    ) -> Union[str, int]:
+        stream: bool = False,
+        max_rows: Optional[int] = None,
+    ) -> Union[str, int, AsyncGenerator[str, None]]:
         """
         Export audit events to JSON or CSV for compliance/reporting.
 
@@ -943,12 +1238,189 @@ class UnifiedAuditService:
             If file_path is provided: the number of rows written
         """
         fmt = (format or "json").lower()
-        if fmt not in {"json", "csv"}:
-            raise ValueError("format must be 'json' or 'csv'")
+        if fmt not in {"json", "csv", "jsonl"}:
+            raise ValueError("format must be 'json', 'csv', or 'jsonl'")
 
-        # Gather rows in chunks to avoid excessive memory use
+        # Fixed CSV header schema for consistency across export paths
+        CSV_HEADERS: List[str] = [
+            "event_id", "timestamp", "category", "event_type", "severity",
+            "context_request_id", "context_correlation_id", "context_session_id",
+            "context_user_id", "context_api_key_hash", "context_ip_address",
+            "context_user_agent", "context_endpoint", "context_method",
+            "resource_type", "resource_id", "action", "result", "error_message",
+            "duration_ms", "tokens_used", "estimated_cost", "result_count",
+            "risk_score", "pii_detected", "compliance_flags", "metadata",
+        ]
+
+        # Streaming CSV export when writing to a file to reduce memory usage
+        if fmt == "csv" and file_path is not None:
+            p = Path(file_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            rows_written = 0
+
+            with p.open("w", encoding="utf-8", newline="") as f:
+                writer = None
+                offset = 0
+                while True:
+                    chunk = await self.query_events(
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_types=event_types,
+                        categories=categories,
+                        user_id=user_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                        ip_address=ip_address,
+                        session_id=session_id,
+                        endpoint=endpoint,
+                        method=method,
+                        min_risk_score=min_risk_score,
+                        limit=chunk_size,
+                        offset=offset,
+                    )
+                    if not chunk:
+                        break
+                    if writer is None:
+                        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
+                        writer.writeheader()
+                    for r in chunk:
+                        writer.writerow(r)
+                        rows_written += 1
+                    if len(chunk) < chunk_size:
+                        break
+                    offset += chunk_size
+            return rows_written
+
+        # Streaming JSON/JSONL response to the caller when requested (no prefetch)
+        if fmt in {"json", "jsonl"} and file_path is None and stream:
+            async def _json_streamer():
+                is_jsonl = (fmt == "jsonl")
+                if not is_jsonl:
+                    yield "["
+                first = True
+                offset = 0
+                written = 0
+                while True:
+                    rows = await self.query_events(
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_types=event_types,
+                        categories=categories,
+                        user_id=user_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                        ip_address=ip_address,
+                        session_id=session_id,
+                        endpoint=endpoint,
+                        method=method,
+                        min_risk_score=min_risk_score,
+                        limit=chunk_size,
+                        offset=offset,
+                    )
+                    if not rows:
+                        break
+                    for r in rows:
+                        if max_rows is not None and written >= max_rows:
+                            break
+                        if is_jsonl:
+                            yield json.dumps(r, ensure_ascii=False) + "\n"
+                        else:
+                            if not first:
+                                yield ","
+                            yield json.dumps(r, ensure_ascii=False)
+                            first = False
+                        written += 1
+                    # backpressure: yield control
+                    await asyncio.sleep(0)
+                    if len(rows) < chunk_size:
+                        break
+                    offset += chunk_size
+                if not is_jsonl:
+                    yield "]"
+            return _json_streamer()
+
+        # JSON file-path export: stream directly to file to avoid prefetch
+        if fmt == "json" and file_path is not None:
+            p = Path(file_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            offset = 0
+            written = 0
+            with p.open("w", encoding="utf-8") as f:
+                f.write("[")
+                first = True
+                while True:
+                    rows = await self.query_events(
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_types=event_types,
+                        categories=categories,
+                        user_id=user_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                        ip_address=ip_address,
+                        session_id=session_id,
+                        endpoint=endpoint,
+                        method=method,
+                        min_risk_score=min_risk_score,
+                        limit=chunk_size,
+                        offset=offset,
+                    )
+                    if not rows:
+                        break
+                    for r in rows:
+                        if max_rows is not None and written >= max_rows:
+                            break
+                        if not first:
+                            f.write(",")
+                        f.write(json.dumps(r, ensure_ascii=False))
+                        written += 1
+                        first = False
+                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                        break
+                    offset += chunk_size
+                f.write("]")
+            return written
+
+        # JSONL file-path export: stream directly to file to avoid prefetch
+        if fmt == "jsonl" and file_path is not None:
+            p = Path(file_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            offset = 0
+            written = 0
+            with p.open("w", encoding="utf-8") as f:
+                while True:
+                    rows = await self.query_events(
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_types=event_types,
+                        categories=categories,
+                        user_id=user_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                        ip_address=ip_address,
+                        session_id=session_id,
+                        endpoint=endpoint,
+                        method=method,
+                        min_risk_score=min_risk_score,
+                        limit=chunk_size,
+                        offset=offset,
+                    )
+                    if not rows:
+                        break
+                    for r in rows:
+                        if max_rows is not None and written >= max_rows:
+                            break
+                        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                        written += 1
+                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                        break
+                    offset += chunk_size
+            return written
+
+        # Otherwise, gather rows in chunks to return content in-memory
         all_rows: List[Dict[str, Any]] = []
         offset = 0
+        written = 0
         while True:
             rows = await self.query_events(
                 start_time=start_time,
@@ -958,51 +1430,57 @@ class UnifiedAuditService:
                 user_id=user_id,
                 request_id=request_id,
                 correlation_id=correlation_id,
+                ip_address=ip_address,
+                session_id=session_id,
+                endpoint=endpoint,
+                method=method,
                 min_risk_score=min_risk_score,
                 limit=chunk_size,
                 offset=offset,
             )
             if not rows:
                 break
-            all_rows.extend(rows)
+            if max_rows is not None:
+                remaining = max_rows - written
+                if remaining <= 0:
+                    break
+                slice_rows = rows[:remaining]
+                all_rows.extend(slice_rows)
+                written += len(slice_rows)
+            else:
+                all_rows.extend(rows)
+                written += len(rows)
             if len(rows) < chunk_size:
                 break
             offset += chunk_size
 
         if fmt == "json":
-            content = json.dumps(all_rows, ensure_ascii=False)
+            # If no file path, return JSON content as a single string
             if file_path is None:
+                content = json.dumps(all_rows, ensure_ascii=False)
                 return content
+            # File-path handled earlier
+            return 0
+        elif fmt == "jsonl":
+            # JSON Lines: one JSON object per line
+            if file_path is None:
+                # Return content as newline-separated JSON objects
+                return "\n".join(json.dumps(r, ensure_ascii=False) for r in all_rows)
             p = Path(file_path)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-            return len(all_rows)
+            rows_written = 0
+            with p.open("w", encoding="utf-8") as f:
+                # Write pre-fetched rows only (avoid duplicate continuation from same offset)
+                for r in all_rows:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                    rows_written += 1
+            return rows_written
 
-        # CSV export
-        # Determine header from union of keys, but keep stable ordering by using keys from first row
-        headers: List[str] = []
-        if all_rows:
-            headers = list(all_rows[0].keys())
-            # Ensure common keys are prioritized if present
-            priority = [
-                "event_id", "timestamp", "category", "event_type", "severity",
-                "context_user_id", "context_request_id", "context_correlation_id",
-                "resource_type", "resource_id", "action", "result", "risk_score",
-            ]
-            seen = set(headers)
-            # Append any missing keys to maintain full coverage
-            union_keys = set().union(*(set(r.keys()) for r in all_rows))
-            for k in priority:
-                if k in union_keys and k not in headers:
-                    headers.insert(0, k)
-            for k in sorted(union_keys):
-                if k not in headers:
-                    headers.append(k)
-
+        # CSV export with fixed header schema
         def _rows_to_csv(rows: List[Dict[str, Any]]) -> str:
             from io import StringIO
             buf = StringIO()
-            writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+            writer = csv.DictWriter(buf, fieldnames=CSV_HEADERS, extrasaction="ignore")
             writer.writeheader()
             for r in rows:
                 writer.writerow(r)
@@ -1025,18 +1503,27 @@ class UnifiedAuditService:
         elif type_name.startswith("user_"):
             return AuditEventCategory.AUTHORIZATION
         elif type_name.startswith("data_"):
+            # Differentiate read vs modification operations
+            if type_name.endswith("write") or type_name.endswith("update") or type_name.endswith("delete") or type_name.endswith("import") or type_name.endswith("export"):
+                return AuditEventCategory.DATA_MODIFICATION
             return AuditEventCategory.DATA_ACCESS
         elif type_name.startswith("rag_"):
             return AuditEventCategory.RAG
         elif type_name.startswith("eval_"):
             return AuditEventCategory.EVALUATION
         elif type_name.startswith("api_"):
+            # Keep API operations under API_CALL consistently (rate limiting, errors)
             return AuditEventCategory.API_CALL
         elif type_name.startswith("security_"):
             return AuditEventCategory.SECURITY
         elif type_name.startswith("system_"):
             return AuditEventCategory.SYSTEM
         else:
+            # Map specific non-prefixed types to appropriate categories
+            if event_type in (AuditEventType.PERMISSION_DENIED, AuditEventType.SUSPICIOUS_ACTIVITY):
+                return AuditEventCategory.SECURITY
+            if event_type is AuditEventType.PII_DETECTED:
+                return AuditEventCategory.COMPLIANCE
             return AuditEventCategory.SYSTEM
     
     def _determine_severity(self, event_type: AuditEventType, result: str) -> AuditSeverity:
@@ -1099,12 +1586,24 @@ class UnifiedAuditService:
         from collections import Counter
 
         start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-        events = await self.query_events(
-            start_time=start_time,
-            categories=[AuditEventCategory.SECURITY],
-            limit=5000,
-        )
-        high_risk = sum(1 for e in events if (e.get("risk_score") or 0) >= 70)
+        # Paginate to avoid undercounting busy windows
+        events: List[Dict[str, Any]] = []
+        offset = 0
+        chunk = 5000
+        while True:
+            rows = await self.query_events(
+                start_time=start_time,
+                categories=[AuditEventCategory.SECURITY],
+                limit=chunk,
+                offset=offset,
+            )
+            if not rows:
+                break
+            events.extend(rows)
+            if len(rows) < chunk:
+                break
+            offset += chunk
+        high_risk = sum(1 for e in events if (e.get("risk_score") or 0) >= HIGH_RISK_SCORE)
         failures = sum(1 for e in events if (e.get("result") or "success") != "success")
         unique_users = len({e.get("context_user_id") for e in events if e.get("context_user_id")})
         ip_counts = Counter([e.get("context_ip_address") for e in events if e.get("context_ip_address")])
@@ -1118,6 +1617,25 @@ class UnifiedAuditService:
             "total_events": len(events),
         }
 
+    def decode_row_fields(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of a row dict with JSON fields decoded.
+
+        Decodes `metadata` and `compliance_flags` if they are JSON strings.
+        Leaves data unchanged on parse errors.
+        """
+        out = dict(row)
+        try:
+            if isinstance(out.get("metadata"), str):
+                out["metadata"] = json.loads(out["metadata"])  # type: ignore[arg-type]
+        except Exception:
+            pass
+        try:
+            if isinstance(out.get("compliance_flags"), str):
+                out["compliance_flags"] = json.loads(out["compliance_flags"])  # type: ignore[arg-type]
+        except Exception:
+            pass
+        return out
+
 
 # ============================================================================
 # Context Manager for Audit Operations
@@ -1128,6 +1646,9 @@ async def audit_operation(
     service: UnifiedAuditService,
     event_type: AuditEventType,
     context: AuditContext,
+    *,
+    start_event_type: Optional[AuditEventType] = None,
+    completed_event_type: Optional[AuditEventType] = None,
     **kwargs
 ):
     """Context manager for auditing operations with automatic timing"""
@@ -1135,13 +1656,13 @@ async def audit_operation(
     event_id = None
     
     try:
-        # Log start event if it's a long operation
-        if "STARTED" in event_type.name:
+        # Log start event when specified explicitly
+        if start_event_type is not None:
             event_id = await service.log_event(
-                event_type=event_type,
+                event_type=start_event_type,
                 context=context,
                 result="started",
-                **kwargs
+                **kwargs,
             )
         
         yield event_id
@@ -1149,7 +1670,7 @@ async def audit_operation(
         # Log success
         duration_ms = (time.perf_counter() - start_time) * 1000
         await service.log_event(
-            event_type=event_type,
+            event_type=(completed_event_type or event_type),
             context=context,
             result="success",
             duration_ms=duration_ms,
@@ -1160,7 +1681,7 @@ async def audit_operation(
         # Log failure
         duration_ms = (time.perf_counter() - start_time) * 1000
         await service.log_event(
-            event_type=event_type,
+            event_type=(completed_event_type or event_type),
             context=context,
             result="failure",
             error_message=str(e),

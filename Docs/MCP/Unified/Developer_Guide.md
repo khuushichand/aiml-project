@@ -557,7 +557,8 @@ asyncio.run(main())
 ```python
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import jwt
+from jose import jwt, JWTError
+from jose.exceptions import ExpiredSignatureError
 from passlib.context import CryptContext
 
 class AuthManager:
@@ -601,9 +602,9 @@ class AuthManager:
                 algorithms=[self.algorithm]
             )
             return payload
-        except jwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
             raise ValueError("Token has expired")
-        except jwt.JWTError:
+        except JWTError:
             raise ValueError("Invalid token")
     
     def hash_password(self, password: str) -> str:

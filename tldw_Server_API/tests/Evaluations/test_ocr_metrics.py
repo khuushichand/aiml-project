@@ -32,7 +32,7 @@ def test_ocr_evaluator_extracted_text_only():
         },
     ]
     ev = OCREvaluator()
-    results = asyncio.get_event_loop().run_until_complete(ev.evaluate(items=items))
+    results = asyncio.run(ev.evaluate(items=items))
     assert results["summary"]["count"] == 2
     # first item perfect
     doc1 = next(r for r in results["results"] if r["id"] == "doc1")
@@ -42,4 +42,3 @@ def test_ocr_evaluator_extracted_text_only():
     doc2 = next(r for r in results["results"] if r["id"] == "doc2")
     assert doc2.get("cer", 0.0) > 0.0
     assert doc2.get("wer", 0.0) >= 0.0
-

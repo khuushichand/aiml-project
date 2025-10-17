@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
+from uuid import uuid4
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
@@ -37,7 +38,7 @@ class JobStatus(str, Enum):
 class JobManager:
     """Manages job queue for Prompt Studio background operations."""
     
-    def __init__(self, db: PromptStudioDatabase):
+    def __init__(self, db: PromptStudioDatabase, *, worker_id: Optional[str] = None):
         """
         Initialize JobManager.
         
@@ -46,10 +47,21 @@ class JobManager:
         """
         self.db = db
         self.client_id = db.client_id
+        self.worker_id = self._normalise_worker_id(worker_id)
         self._job_handlers: Dict[JobType, Callable] = {}
         self._is_processing = False
         self._processing_task = None
         self._metrics = prompt_studio_metrics
+    
+    def _normalise_worker_id(self, explicit: Optional[str]) -> str:
+        """Derive a stable worker identifier for lease ownership."""
+        try:
+            candidate = (explicit or f"{self.client_id or 'prompt-studio'}-worker-{uuid4().hex[:8]}").strip()
+        except Exception:
+            candidate = f"{self.client_id or 'prompt-studio'}-worker"
+        if not candidate:
+            candidate = "prompt-studio-worker"
+        return candidate[:128]
     
     ####################################################################################################################
     # Job Creation and Management
@@ -205,7 +217,7 @@ class JobManager:
         Returns:
             Next job or None
         """
-        job = self.db.acquire_next_job()
+        job = self.db.acquire_next_job(worker_id=self.worker_id)
         normalized = self._normalize_job(job)
         if normalized:
             try:
@@ -318,7 +330,7 @@ class JobManager:
                     while True:
                         await asyncio.sleep(interval)
                         try:
-                            ok = self.db.renew_job_lease(int(job["id"]), seconds=lease_secs)
+                            ok = self.db.renew_job_lease(int(job["id"]), seconds=lease_secs, worker_id=self.worker_id)
                             if ok:
                                 try:
                                     self._metrics.metrics_manager.increment(

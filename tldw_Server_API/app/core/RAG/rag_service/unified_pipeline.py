@@ -154,6 +154,16 @@ try:
 except ImportError:
     PostGenerationVerifier = None
 
+# RAG config helpers for consistent toggles/defaults
+try:
+    from tldw_Server_API.app.core.config import (
+        rag_low_confidence_behavior as _rag_low_conf,
+        rag_require_hard_citations as _rag_req_hc,
+    )
+except Exception:
+    _rag_low_conf = None  # type: ignore
+    _rag_req_hc = None  # type: ignore
+
 try:
     # Guardrails utilities: injection filtering, numeric fidelity, hard citations
     from .guardrails import (
@@ -314,6 +324,7 @@ async def unified_rag_pipeline(
     
     # ========== ANSWER GENERATION ==========
     enable_generation: bool = True,
+    strict_extractive: bool = False,
     generation_model: Optional[str] = None,
     generation_prompt: Optional[str] = None,
     max_generation_tokens: int = 500,
@@ -514,6 +525,20 @@ async def unified_rag_pipeline(
     if enable_monitoring:
         metrics = QueryMetrics(query=query)
         metrics.start_time = start_time
+
+    def _apply_generation_gate(reason: str, *, coverage: Optional[float] = None, unsupported_ratio: Optional[float] = None, threshold: Optional[float] = None) -> None:
+        """Record a gating event in metadata for downstream observability."""
+        gate = result.metadata.setdefault("generation_gate", {})
+        gate.update({
+            "reason": reason,
+            "at": time.time(),
+        })
+        if coverage is not None:
+            gate["coverage"] = coverage
+        if unsupported_ratio is not None:
+            gate["unsupported_ratio"] = unsupported_ratio
+        if threshold is not None:
+            gate["threshold"] = threshold
     
     try:
         # ========== SPELL CHECK ==========
@@ -545,6 +570,30 @@ async def unified_rag_pipeline(
                     _beh = _os.getenv("RAG_NUMERIC_FIDELITY_BEHAVIOR", "ask").strip().lower()
                     if _beh in {"continue", "ask", "decline", "retry"}:
                         numeric_fidelity_behavior = _beh  # type: ignore
+        except Exception:
+            pass
+
+        # Apply config-driven defaults for confidence/citation gates when not explicitly set
+        try:
+            if _rag_low_conf:
+                cfg_lcb = _rag_low_conf()
+                if (low_confidence_behavior or "continue") == "continue" and cfg_lcb != "continue":
+                    low_confidence_behavior = cfg_lcb  # type: ignore[assignment]
+            if _rag_req_hc and not bool(require_hard_citations):
+                if bool(_rag_req_hc(default=False)):
+                    require_hard_citations = True  # type: ignore[assignment]
+        except Exception:
+            pass
+
+        # Apply config-driven default for strict extractive generation
+        try:
+            from tldw_Server_API.app.core.config import rag_strict_extractive as _rag_strict
+        except Exception:
+            _rag_strict = None  # type: ignore
+        try:
+            if _rag_strict and not bool(strict_extractive):
+                if bool(_rag_strict(default=False)):
+                    strict_extractive = True  # type: ignore[assignment]
         except Exception:
             pass
 
@@ -1821,7 +1870,37 @@ async def unified_rag_pipeline(
                     except Exception:
                         _otel_cm_gen = None
                         _otel_span_gen = None
-                if AnswerGenerator:
+                # Strict extractive path: assemble answer from retrieved spans only
+                if bool(strict_extractive):
+                    try:
+                        # Simple extractive assembly: pick top sentences from top documents
+                        max_sents = 6
+                        chosen: List[str] = []
+                        import re as _re
+                        q_terms = [t.lower() for t in _re.findall(r"[A-Za-z0-9_-]{3,}", query or "")][:10]
+                        for doc in (result.documents or [])[: min(5, len(result.documents or []))]:
+                            text = (getattr(doc, 'content', '') or '').strip()
+                            if not text:
+                                continue
+                            sents = [s.strip() for s in _re.split(r"(?<=[\.!?])\s+", text) if s.strip()]
+                            # prefer a sentence containing a query term
+                            hit = None
+                            for s in sents:
+                                low = s.lower()
+                                if any(t in low for t in q_terms):
+                                    hit = s
+                                    break
+                            if not hit and sents:
+                                hit = sents[0]
+                            if hit and hit not in chosen:
+                                chosen.append(hit)
+                                if len(chosen) >= max_sents:
+                                    break
+                        result.generated_answer = " " .join(chosen).strip()
+                    except Exception as _se:
+                        result.errors.append(f"Strict extractive assembly failed: {_se}")
+                        result.generated_answer = None
+                elif AnswerGenerator:
                     generator = AnswerGenerator(model=generation_model)
 
                     # Prepare base context from top documents
@@ -2006,12 +2085,7 @@ async def unified_rag_pipeline(
                     if bool(require_hard_citations):
                         cov = float(hc.get("coverage") or 0.0)
                         if cov < 1.0:
-                            result.metadata.setdefault("generation_gate", {})
-                            result.metadata["generation_gate"].update({
-                                "reason": "missing_hard_citations",
-                                "coverage": cov,
-                                "at": time.time(),
-                            })
+                            _apply_generation_gate("missing_hard_citations", coverage=cov)
                             try:
                                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                                 increment_counter("rag_missing_hard_citations_total", 1)
@@ -2023,6 +2097,12 @@ async def unified_rag_pipeline(
                                 result.generated_answer = (result.generated_answer or "") + note
                             elif low_confidence_behavior == "decline":
                                 result.generated_answer = "Insufficient evidence: missing citations for some statements."
+                        # Gauge for coverage (report once per answer)
+                        try:
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge
+                            set_gauge("rag_hard_citation_coverage", cov, labels={"strategy": "standard"})
+                        except Exception:
+                            pass
         except Exception as e:
             result.errors.append(f"Hard citations mapping failed: {str(e)}")
 
@@ -2335,14 +2415,29 @@ async def unified_rag_pipeline(
                     "fixed": vres.fixed,
                     "reason": vres.reason,
                 })
+                # Gauge for NLI unsupported ratio
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge
+                    set_gauge("rag_nli_unsupported_ratio", float(vres.unsupported_ratio or 0.0), labels={"strategy": "standard"})
+                except Exception:
+                    pass
                 # Optionally override final answer on successful repair
                 if vres.fixed and vres.new_answer:
                     result.generated_answer = vres.new_answer
                 # Behavior toggles on low confidence and not fixed
                 low_confidence = (vres.unsupported_ratio > adaptive_unsupported_threshold) and (not vres.fixed)
                 if low_confidence:
+                    _apply_generation_gate(
+                        "nli_low_confidence",
+                        unsupported_ratio=vres.unsupported_ratio,
+                        threshold=adaptive_unsupported_threshold,
+                    )
+                    try:
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                        increment_counter("rag_nli_low_confidence_total", 1)
+                    except Exception:
+                        pass
                     if low_confidence_behavior == "ask":
-                        # Append clarifying note
                         note = "\n\n[Note] Evidence is insufficient; please clarify or provide more context."
                         result.generated_answer = (result.generated_answer or "") + note
                     elif low_confidence_behavior == "decline":

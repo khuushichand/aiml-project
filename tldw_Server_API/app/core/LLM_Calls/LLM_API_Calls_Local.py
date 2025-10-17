@@ -320,8 +320,7 @@ def chat_with_llama(
         stop: Optional[Union[str, List[str]]] = None, # from map
         response_format: Optional[Dict[str, str]] = None, # from map
         logit_bias: Optional[Dict[str, float]] = None, # from map
-        n_probs: Optional[int] = None, # from map (maps to 'n' in generic, but llama.cpp might use it for top_logprobs count if logprobs enabled)
-                                       # FIXME: n_probs might need specific handling if it's not #completions
+        n: Optional[int] = None, # from map, number of completions to request
         presence_penalty: Optional[float] = None, # from map
         frequency_penalty: Optional[float] = None, # from map
         # api_url is tricky. Your notes say "positional argument".
@@ -352,11 +351,8 @@ def chat_with_llama(
     current_presence_penalty = presence_penalty if presence_penalty is not None else cfg.get('presence_penalty')
     current_frequency_penalty = frequency_penalty if frequency_penalty is not None else cfg.get('frequency_penalty')
 
-    # Handle n_probs: If it's meant to be OpenAI's 'n' (number of choices)
-    # For llama.cpp, if it's mimicking OpenAI, 'n' is the param.
-    # If n_probs is for logprobs count, it's usually top_logprobs.
-    # Assuming n_probs maps to generic 'n' from your map for now.
-    current_n = n_probs if n_probs is not None else cfg.get('n', cfg.get('n_probs'))
+    # Handle multiple completions: llama.cpp's OpenAI-compatible server accepts 'n'.
+    current_n = n if n is not None else cfg.get('n', cfg.get('n_probs'))
 
 
     timeout = int(cfg.get('api_timeout', 120))
@@ -380,7 +376,7 @@ def chat_with_llama(
         top_p=current_top_p,
         top_k=current_top_k,
         min_p=current_min_p,
-        n=current_n, # Pass n (mapped from n_probs)
+        n=current_n,
         stop=current_stop,
         presence_penalty=current_presence_penalty,
         frequency_penalty=current_frequency_penalty,

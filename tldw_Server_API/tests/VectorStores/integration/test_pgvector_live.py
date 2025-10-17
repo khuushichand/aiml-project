@@ -1,34 +1,22 @@
-import os
 import pytest
 
 pytestmark = pytest.mark.pg_integration
 
-try:
-    import psycopg  # type: ignore
-    _HAS_PSYCOPG = True
-except Exception:
-    _HAS_PSYCOPG = False
 
-
-@pytest.fixture(scope="session")
-def pg_dsn():
-    dsn = os.getenv('PG_TEST_DSN')
-    if not dsn:
-        pytest.skip("PG_TEST_DSN not set; skipping live pgvector tests")
-    if not _HAS_PSYCOPG:
-        pytest.skip("psycopg not installed; skipping live pgvector tests")
-    return dsn
-
-
-def test_pgvector_live_smoke(pg_dsn):
+def test_pgvector_live_smoke(pgvector_dsn):
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter
     import asyncio
 
+    try:
+        from pgvector.psycopg import Vector as PgVectorValue  # type: ignore
+    except Exception:
+        PgVectorValue = None
+
     async def run():
         cfg = VectorStoreConfig(
             store_type=VectorStoreType.PGVECTOR,
-            connection_params={'dsn': pg_dsn, 'hnsw_ef_search': 64, 'pool_min_size': 1, 'pool_max_size': 4},
+            connection_params={'dsn': pgvector_dsn, 'hnsw_ef_search': 64, 'pool_min_size': 1, 'pool_max_size': 4},
             embedding_dim=8,
             user_id='it'
         )
@@ -40,6 +28,13 @@ def test_pgvector_live_smoke(pg_dsn):
         assert listed['total'] >= 2
         one = await adapter.get_vector('it_store', 'a')
         assert one and one['id'] == 'a'
+        search_hits = await adapter.search('it_store', query_vector=[0.1]*8, k=2, filter={'i': 1})
+        assert search_hits and any(hit.id == 'a' for hit in search_hits)
+        if PgVectorValue is not None:
+            vec_hits = await adapter.search('it_store', query_vector=PgVectorValue([0.2]*8), k=1, filter={'i': 2})
+            assert vec_hits and vec_hits[0].id == 'b'
+        multi_hits = await adapter.multi_search(['it_*'], query_vector=[0.1]*8, k=2, filter={'i': 2})
+        assert multi_hits and any(hit.id == 'b' for hit in multi_hits)
         await adapter.delete_vectors('it_store', ids=['a','b'])
 
         # Index info and rebuild
@@ -55,4 +50,4 @@ def test_pgvector_live_smoke(pg_dsn):
         except Exception:
             pass
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())

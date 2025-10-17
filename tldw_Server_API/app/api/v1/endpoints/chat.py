@@ -1235,6 +1235,86 @@ async def create_chat_completion(
 # ---------------------------------------------------------------------------
 # Chat Dictionary Endpoints
 # ---------------------------------------------------------------------------
+
+def _coerce_datetime(value: Any) -> datetime.datetime:
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f"):
+            try:
+                return datetime.datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.datetime.fromisoformat(value)
+        except Exception:
+            pass
+    return datetime.datetime.utcnow()
+
+
+def _parse_timed_effects(value: Any) -> Optional[TimedEffects]:
+    if value is None:
+        return None
+    if isinstance(value, TimedEffects):
+        return value
+    if isinstance(value, dict):
+        try:
+            return TimedEffects(**value)
+        except Exception:
+            return None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return TimedEffects(**parsed)
+        except Exception:
+            return None
+    return None
+
+
+def _entry_dict_to_response(entry_data: Dict[str, Any], fallback_dictionary_id: Optional[int] = None) -> DictionaryEntryResponse:
+    dictionary_id = entry_data.get("dictionary_id") or fallback_dictionary_id
+    if dictionary_id is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Dictionary ID missing for entry.")
+
+    pattern = entry_data.get("pattern") or entry_data.get("key") or ""
+    replacement = entry_data.get("replacement") or entry_data.get("content") or ""
+    probability = entry_data.get("probability", 1.0)
+    try:
+        probability = float(probability)
+    except (TypeError, ValueError):
+        probability = 1.0
+
+    max_replacements = entry_data.get("max_replacements", 0)
+    try:
+        max_replacements = int(max_replacements or 0)
+    except (TypeError, ValueError):
+        max_replacements = 0
+
+    entry_type = entry_data.get("type")
+    if not entry_type:
+        entry_type = "regex" if bool(entry_data.get("is_regex")) else "literal"
+
+    enabled = bool(entry_data.get("enabled", entry_data.get("is_enabled", 1)))
+    case_sensitive = bool(entry_data.get("case_sensitive", entry_data.get("is_case_sensitive", 1)))
+
+    return DictionaryEntryResponse(
+        id=int(entry_data.get("id")),
+        dictionary_id=int(dictionary_id),
+        pattern=pattern,
+        replacement=replacement,
+        probability=probability,
+        group=entry_data.get("group") or entry_data.get("group_name"),
+        timed_effects=_parse_timed_effects(entry_data.get("timed_effects")),
+        max_replacements=max_replacements,
+        type=entry_type,
+        enabled=enabled,
+        case_sensitive=case_sensitive,
+        created_at=_coerce_datetime(entry_data.get("created_at")),
+        updated_at=_coerce_datetime(entry_data.get("updated_at")),
+    )
+
+
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     TimedEffects,
     ChatDictionaryCreate,
@@ -1324,7 +1404,7 @@ async def list_chat_dictionaries(
         
         # Add entry counts
         for dict_data in dictionaries:
-            entries = service.get_entries(dictionary_id=dict_data['id'])
+            entries = service.get_entries(dictionary_id=dict_data['id'], active_only=False)
             dict_data['entry_count'] = len(entries)
         
         active_count = sum(1 for d in dictionaries if d.get('is_active', True))
@@ -1363,22 +1443,13 @@ async def get_chat_dictionary(
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
         
-        entries = service.get_entries(dictionary_id=dictionary_id)
+        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
         dict_data['entry_count'] = len(entries)
         
-        entry_responses = [DictionaryEntryResponse(
-            id=e.entry_id,
-            dictionary_id=dictionary_id,
-            key=e.raw_key,
-            content=e.content,
-            probability=e.probability,
-            group=e.group,
-            timed_effects=e.timed_effects,
-            max_replacements=e.max_replacements,
-            is_regex=e.is_regex,
-            created_at=datetime.now(),  # These would come from DB in production
-            updated_at=datetime.now()
-        ) for e in entries]
+        entry_responses = [
+            _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id)
+            for entry_dict in entries
+        ]
         
         return ChatDictionaryWithEntries(
             **dict_data,
@@ -1505,22 +1576,26 @@ async def add_dictionary_entry(
             case_sensitive=entry.case_sensitive,
         )
 
-        # Build response by combining request values and computed type
-        return DictionaryEntryResponse(
-            id=entry_id,
-            dictionary_id=dictionary_id,
-            pattern=entry.pattern,
-            replacement=entry.replacement,
-            probability=entry.probability,
-            group=entry.group,
-            timed_effects=entry.timed_effects,
-            max_replacements=entry.max_replacements,
-            type=entry.type,
-            enabled=entry.enabled,
-            case_sensitive=entry.case_sensitive,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-        )
+        created_entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
+        entry_data = next((item for item in created_entries if item.get("id") == entry_id), None)
+        if not entry_data:
+            entry_data = {
+                "id": entry_id,
+                "dictionary_id": dictionary_id,
+                "pattern": entry.pattern,
+                "replacement": entry.replacement,
+                "probability": entry.probability,
+                "group": entry.group,
+                "timed_effects": entry.timed_effects.model_dump() if entry.timed_effects else None,
+                "max_replacements": entry.max_replacements,
+                "type": entry.type,
+                "enabled": entry.enabled,
+                "case_sensitive": entry.case_sensitive,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+
+        return _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
         
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -1554,32 +1629,10 @@ async def list_dictionary_entries(
         
         entries = service.get_entries(dictionary_id=dictionary_id, group=group, active_only=False)
 
-        entry_responses = []
-        for e in entries:
-            te = e.get("timed_effects")
-            if isinstance(te, str):
-                try:
-                    import json as _json
-                    te = TimedEffects(**(_json.loads(te) if te else {}))
-                except Exception:
-                    te = None
-            entry_responses.append(
-                DictionaryEntryResponse(
-                    id=e.get("id"),
-                    dictionary_id=dictionary_id,
-                    pattern=e.get("pattern"),
-                    replacement=e.get("replacement"),
-                    probability=float(e.get("probability", 1.0)),
-                    group=e.get("group"),
-                    timed_effects=te,
-                    max_replacements=int(e.get("max_replacements", 0) or 0),
-                    type=e.get("type", "literal"),
-                    enabled=bool(e.get("enabled", 1)),
-                    case_sensitive=bool(e.get("case_sensitive", 1)),
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
-                )
-            )
+        entry_responses = [
+            _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id)
+            for entry_dict in entries
+        ]
         
         return EntryListResponse(
             entries=entry_responses,
@@ -1629,23 +1682,16 @@ async def update_dictionary_entry(
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
         
-        # Fetch updated entry (simplified for now)
-        # In production, we'd fetch from DB
-        return DictionaryEntryResponse(
-            id=entry_id,
-            dictionary_id=1,  # Would fetch from DB
-            pattern=update.pattern or "updated",
-            replacement=update.replacement or "updated",
-            probability=update.probability or 1.0,
-            group=update.group,
-            timed_effects=update.timed_effects,
-            max_replacements=update.max_replacements or 0,
-            type=update.type or "literal",
-            enabled=update.enabled if update.enabled is not None else True,
-            case_sensitive=update.case_sensitive if update.case_sensitive is not None else True,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        )
+        dictionary_id_for_entry = service._get_entry_dict_id(entry_id)
+        if dictionary_id_for_entry is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
+
+        refreshed_entries = service.get_entries(dictionary_id=dictionary_id_for_entry, active_only=False)
+        updated_entry = next((item for item in refreshed_entries if item.get("id") == entry_id), None)
+        if not updated_entry:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
+
+        return _entry_dict_to_response(updated_entry, fallback_dictionary_id=dictionary_id_for_entry)
         
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -11,6 +11,12 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
+# Expose httpx at module scope for test monkeypatching
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    httpx = None  # type: ignore
+
 
 def _truthy(v: Optional[str]) -> bool:
     return str(v or "").lower() in {"1","true","yes","y","on"}
@@ -40,9 +46,7 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
     if not (_truthy(os.getenv("JOBS_WEBHOOKS_ENABLED")) and url):
         logger.info("Jobs webhooks worker disabled")
         return
-    try:
-        import httpx
-    except Exception:
+    if httpx is None:
         logger.info("httpx not available; Jobs webhooks worker disabled")
         return
     secrets = [(s.strip()).encode("utf-8") for s in (os.getenv("JOBS_WEBHOOKS_SECRET_KEYS", "").split(",")) if s.strip()]
@@ -51,6 +55,11 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
         return
     interval = float(os.getenv("JOBS_WEBHOOKS_INTERVAL_SEC", "1.0") or "1.0")
     timeout_s = float(os.getenv("JOBS_WEBHOOKS_TIMEOUT_SEC", "5") or "5")
+    # Admin context for reading outbox across domains
+    try:
+        JobManager.set_rls_context(is_admin=True, domain_allowlist=None, owner_user_id=None)
+    except Exception:
+        pass
     jm = JobManager()
     after_id = 0
     # Persistent cursor path (opt-in via env, defaults under Databases/)
@@ -138,3 +147,7 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
                     conn.close()
                 except Exception:
                     pass
+        try:
+            JobManager.clear_rls_context()
+        except Exception:
+            pass

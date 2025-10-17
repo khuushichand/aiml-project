@@ -1,16 +1,64 @@
 import os
 import re
 import json
+from pathlib import Path
 from typing import Optional, Dict, Any
+from loguru import logger
 
 
-def _repo_root() -> str:
-    # Compute repo root from this file location
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+def _api_component_root() -> Path:
+    """Return the path to the API component root (tldw_Server_API).
+
+    Resolves relative to this file by walking up to the package root instead of
+    joining "tldw_Server_API" onto a separately computed repo root. This avoids
+    accidentally double-joining the component name in nested/in-tree installs.
+    """
+    here = Path(__file__).resolve()
+    # .../tldw_Server_API/app/core/Utils/prompt_loader.py -> parents[3] == tldw_Server_API
+    api_root = here.parents[3]
+    if api_root.name != "tldw_Server_API":
+        # Fall back by scanning ancestors for a directory named tldw_Server_API
+        for anc in here.parents:
+            if (anc / "Config_Files").exists() and anc.name == "tldw_Server_API":
+                api_root = anc
+                break
+    logger.debug(f"Prompt loader API root resolved to: {api_root}")
+    return api_root
 
 
 def _prompts_dir() -> str:
-    return os.path.join(_repo_root(), "tldw_Server_API", "Config_Files", "Prompts")
+    """Resolve the Prompts directory.
+
+    Precedence:
+      1) Env override via TLDW_CONFIG_DIR -> <dir>/Prompts (if exists)
+      2) <tldw_Server_API>/Config_Files/Prompts
+      3) <nearest ancestor with Config_Files>/Prompts
+    """
+    # 1) Env override
+    cfg_dir = os.getenv("TLDW_CONFIG_DIR")
+    if cfg_dir:
+        p = Path(cfg_dir).expanduser() / "Prompts"
+        if p.exists():
+            logger.debug(f"Prompt loader using env TLDW_CONFIG_DIR Prompts at: {p}")
+            return str(p)
+
+    # 2) API component default
+    api_root = _api_component_root()
+    p2 = api_root / "Config_Files" / "Prompts"
+    if p2.exists():
+        return str(p2)
+
+    # 3) Fallback: search ancestors for Config_Files/Prompts
+    here = Path(__file__).resolve()
+    for anc in here.parents:
+        maybe = anc / "Config_Files" / "Prompts"
+        if maybe.exists():
+            logger.debug(f"Prompt loader fallback Prompts at: {maybe}")
+            return str(maybe)
+
+    # Last resort: return the API default (even if missing) without creating it
+    logger.debug(f"Prompt loader defaulting to: {p2}")
+    return str(p2)
 
 
 def _module_file_base(module: str) -> str:
@@ -117,4 +165,3 @@ def load_prompt(module: str, key: str) -> Optional[str]:
                 return any_block.group(1).strip()
 
     return None
-

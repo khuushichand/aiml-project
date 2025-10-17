@@ -17,6 +17,7 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.config import settings as global_settings
 
 #######################################################################################################################
@@ -55,9 +56,8 @@ class CSRFTokenManager:
         }
     
     def _hmac_key(self) -> bytes:
-        s = get_settings()
-        material = (s.API_KEY_PEPPER or s.JWT_SECRET_KEY or "tldw_default_csrf_hmac")
-        return (material[:32]).encode()
+        # Use shared derivation to avoid drift
+        return derive_hmac_key(get_settings())
 
     def _bind_suffix(self, user_id: Optional[int]) -> Optional[str]:
         """Return HMAC suffix for user binding if enabled and user_id provided."""

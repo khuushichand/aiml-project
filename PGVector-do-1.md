@@ -1,6 +1,6 @@
 # PGVector-do-1 — Enable pgvector as an embeddings datastore
 
-Status: Draft v0.1 • Owner: Platform • Related: Docs/Design/scale_to_millions.md, docker-compose.pg.yml
+Status: In Progress • Owner: Platform • Related: Docs/Design/scale_to_millions.md, docker-compose.pg.yml
 
 ## Executive Summary
 
@@ -44,7 +44,7 @@ Out of scope (v0)
 
 ## Plan & Deliverables
 
-### Phase 0 — Infra & Config (1 day)
+### Phase 0 — Infra & Config (1 day) ✅ Complete
 Goal: Stand up pgvector locally; verify adapter path via Vector Store API.
 
 - Tasks
@@ -61,7 +61,7 @@ Quick start (local dev)
 - export PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw
 - Set RAG.vector_store_type=pgvector and create/query a store via WebUI or API.
 
-### Phase 1 — Unify Storage Writes via Adapter (0.5–1 day)
+### Phase 1 — Unify Storage Writes via Adapter (0.5–1 day) ✅ Complete
 Goal: Make the embeddings storage worker write through `VectorStoreAdapter` (pgvector or chroma).
 
 - Changes
@@ -76,7 +76,7 @@ Goal: Make the embeddings storage worker write through `VectorStoreAdapter` (pgv
   - Unit test that `StorageWorker` invokes adapter.upsert for batches (to be added).
   - Live smoke (optional): with PG_TEST_DSN, stored vectors are queryable.
 
-### Phase 2 — Soft‑Delete Propagation (0.5 day)
+### Phase 2 — Soft-Delete Propagation (0.5 day) ✅ Complete
 Goal: Ensure deletions propagate to pgvector.
 
 - Changes
@@ -88,14 +88,17 @@ Goal: Ensure deletions propagate to pgvector.
   - Unit: soft‑delete path issues delete calls for matching vectors.
   - Manual: verify table row count drops after soft‑delete event.
 
-### Phase 3 — Migration Tooling (1 day)
+### Phase 3 — Migration Tooling (1 day) ✅ Complete
 Goal: Copy existing Chroma collections to pgvector.
 
+- _Status (2025-10-16): Migration helper executed end‑to‑end against a real Chroma store and local pgvector. Row counts validated; index rebuilt._
+
 - Deliverable: helper script `Helper_Scripts/chroma_to_pgvector_migrate.py` that:
-  - Reads from a Chroma collection (via `ChromaDBManager`) page‑wise.
+  - Reads from a Chroma collection (via `ChromaDBManager`) page-wise.
   - Writes to pgvector via `PGVectorAdapter.upsert_vectors` with dimension checks.
-  - Optionally re‑builds HNSW/ANALYZE.
-  - Optional `--seed-demo` to populate an in‑memory Chroma stub (CHROMADB_FORCE_STUB=true) for quick smoke.
+  - Optionally re-builds HNSW/ANALYZE.
+  - Optional `--seed-demo` to populate an in-memory Chroma stub (CHROMADB_FORCE_STUB=true) for quick smoke.
+  - Emits warnings when embedder metadata differs across batches to flag mixed collections.
 
 - Acceptance
   - Dry‑run and sample migration for a test collection.
@@ -109,6 +112,25 @@ export CHROMADB_FORCE_STUB=true
 python Helper_Scripts/chroma_to_pgvector_migrate.py --user-id 1 --collection demo_cli --seed-demo --page-size 100 --rebuild-index hnsw
 ```
 
+Live run (no seed, no dry‑run)
+```bash
+python3 Helper_Scripts/chroma_to_pgvector_migrate.py \
+  --user-id 1 \
+  --collection user_1_media_embeddings \
+  --dest-collection user_1_media_embeddings \
+  --page-size 500 \
+  --rebuild-index hnsw \
+  --drop-dest \
+  --pgvector-dsn 'postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users'
+```
+
+Observed output
+- Warnings surfaced for embedder metadata mismatches (expected when collection contains mixed sources):
+  - "Warning: multiple embedder_name values detected in metadata: ['mismatch', 'persistent']"
+  - "Warning: multiple embedder_version values detected in metadata: ['v1', 'v9']"
+- Migration summary: `source_count=5`, `written=5` and destination count confirmed `5`.
+- Index rebuild performed with HNSW and `ANALYZE` executed.
+
 Tuning notes
 - Postgres: set `maintenance_work_mem` higher during index build; ensure autovacuum is active.
 - pgvector index
@@ -116,35 +138,60 @@ Tuning notes
   - IVFFLAT: set `lists` according to table size for recall/latency tradeoffs.
 - JSONB queries: prefer equality and `$in` operators; complex predicates may be slower.
 
-### Phase 4 — Retrieval Validation (0.5 day)
+### Phase 4 — Retrieval Validation (0.5 day) ✅ Complete
 Goal: Confirm RAG retriever works with pgvector adapter.
 
-- Tasks
-  - Configure RAG to use pgvector in settings.
-  - Add a small integration test that performs `multi_search` across collections with metadata prefilter.
+- Changes
+  - MediaDBRetriever now routes wildcard/list `index_namespace` to `multi_search` and accepts `metadata_filter`, combining it with `kind` and optional `media_type` via `$and`.
+  - PGVectorAdapter filter builder hardened:
+    - Only uses JSONB containment fast‑path for plain equality maps (no operators/nested values).
+    - `$in` now uses `= ANY(%s)` for safe array parametrization.
+  - New integration test exercises multi‑search with JSONB filters across two collections:
+    - `tldw_Server_API/tests/RAG_NEW/integration/test_retriever_pgvector_multi_search.py`
 
 - Acceptance
-  - Retrievers return expected hits; metadata prefilters work (JSONB `@>`).
+  - Test passes against live pgvector: expected hits are returned with `{ "$or": [{"tag":"b"},{"num":{"$gte":2}}] }`.
 
-### Phase 5 — Observability & Tuning (0.5 day)
+- CI
+  - Added the test to the pgvector local service job in `.github/workflows/embeddings-tests.yml` and updated the change filter to trigger the job when this test or pgvector adapter changes.
+
+### Phase 5 — Observability & Tuning (0.5 day) ✅ Complete
 Goal: Operational knobs and visibility.
 
-- Tasks
-  - Expose/confirm `set_hnsw_ef_search` admin call is no‑op for Chroma and active for pgvector.
-  - Add a note to Deployment Guide for `ANALYZE`, autovacuum, and HNSW/IVFFLAT tradeoffs.
+- Changes
+  - Admin API: Verified `POST /api/v1/vector_stores/admin/hnsw_ef_search` wires to `PGVectorAdapter.set_ef_search`.
+  - PG adapter `get_index_info` now returns `ef_search` along with `backend/index_type/ops/dimension/count`.
+  - Tests:
+    - Unit: admin endpoint set returns value (`test_vector_store_admin_endpoints_pg.py`).
+    - Integration (PG): Added session-persistent ef_search check using a shared adapter instance:
+      - `tldw_Server_API/tests/VectorStores/integration/test_vector_store_admin_ef_search_pg.py`.
+    - Integration (PG): Added JSONB filter edge cases (empty $in; nested $and/$or).
+
+- Operational notes
+  - HNSW ef_search is session-scoped; use the admin endpoint to adjust per worker/session during experimentation. Persist desired defaults via runtime config (RAG.pgvector.hnsw_ef_search).
+  - Post-bulk operations: run `ANALYZE` (adapter already attempts this best-effort after index builds). Ensure autovacuum is enabled.
+  - Index tradeoffs:
+    - HNSW (pgvector >=0.7): lower latency, tunable `m`, `ef_construction`; use higher `ef_search` for recall at the cost of latency.
+    - IVFFLAT: good for large tables; tune `lists` by table size; consider rebuilding as datasets grow.
+  - JSONB filters: equality and `$in` are fastest; complex nested predicates can impact latency — monitor and index hot JSONB keys where appropriate.
 
 - Acceptance
-  - `/vector_stores/admin/hnsw_ef_search` returns the configured session value on pgvector.
+  - `/api/v1/vector_stores/admin/hnsw_ef_search` returns the configured value for pgvector; Chroma path accepts the call but is effectively a no-op.
 
-### Phase 6 — Docs & WebUI polish (0.5 day)
+### Phase 6 — Docs & WebUI polish (0.5 day) ✅ Complete
 Goal: Smooth operator experience.
 
-- Tasks
-  - Update Env docs with `RAG.vector_store_type`, `RAG.pgvector.*` and HNSW knobs.
-  - Add a small hint in WebUI Vector Stores tab indicating backend is pgvector (from index_info).
+- Changes
+  - Env docs updated to clarify pgvector runtime config is sourced from `config.txt` (no env override for server), while tests/scripts may use env DSNs:
+    - `Env_Vars.md` under “Vector Store: pgvector”.
+  - Deployment guide now includes a `config.txt` snippet and notes for pgvector selection and tuning knobs:
+    - `Docs/Published/Deployment/Embeddings-Deployment-Guide.md`.
+  - WebUI Vector Stores tab copy updated to reflect adapter-agnostic backend and ef_search notice for pgvector:
+    - `tldw_Server_API/WebUI/tabs/vector_stores_content.html`.
+  - README mentions pluggable vector backends and how to select pgvector in config.
 
 - Acceptance
-  - Docs compile and link; WebUI shows backend in index info.
+  - WebUI shows backend in badges (`index: … • backend: …`) and ef_search note; docs reflect authoritative config path for pgvector.
 
 ### Phase 7 — CI & Release (0.5–1 day)
 Goal: Ensure ongoing coverage.
@@ -211,10 +258,10 @@ Environment (examples)
 
 ## Acceptance Checklist
 
-- [ ] Vector Store API works against pgvector (create, upsert, query, index info)
-- [ ] Storage worker writes via adapter and passes idempotency + dimension checks
-- [ ] Soft‑delete removes vectors for deleted media
-- [ ] Migration helper copies collections with matching counts
+- [x] Vector Store API works against pgvector (create, upsert, query, index info)
+- [x] Storage worker writes via adapter and passes idempotency + dimension checks
+- [x] Soft-delete removes vectors for deleted media
+- [x] Migration helper copies collections with matching counts
 - [ ] RAG retriever returns results using pgvector
 - [ ] Docs updated; WebUI shows backend info
 - [ ] CI unit + optional live tests pass

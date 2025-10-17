@@ -107,7 +107,7 @@ class Document:
     # Parent document support (for hierarchical chunking)
     parent_id: Optional[str] = None  # ID of parent document if this is a chunk
     children_ids: List[str] = field(default_factory=list)  # IDs of child chunks
-    chunk_index: Optional[int] = None  # Position in parent document (0-based)
+    chunk_index: Optional[int] = None  # Position in parent document (1-based)
     total_chunks: Optional[int] = None  # Total number of chunks in source document
     
     # Character positions for citation tracking
@@ -152,7 +152,7 @@ class Document:
         if self.paragraph_number:
             parts.append(f"Paragraph {self.paragraph_number}")
         if self.chunk_index is not None and self.total_chunks:
-            parts.append(f"Chunk {self.chunk_index + 1}/{self.total_chunks}")
+            parts.append(f"Chunk {self.chunk_index}/{self.total_chunks}")
         return ", ".join(parts) if parts else "Unknown location"
 
 

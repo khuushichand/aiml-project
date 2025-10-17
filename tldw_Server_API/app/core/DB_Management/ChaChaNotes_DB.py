@@ -1175,6 +1175,7 @@ CREATE TABLE IF NOT EXISTS flashcards(
 CREATE INDEX IF NOT EXISTS idx_flashcards_deck_id ON flashcards(deck_id);
 CREATE INDEX IF NOT EXISTS idx_flashcards_due_at ON flashcards(due_at);
 CREATE INDEX IF NOT EXISTS idx_flashcards_deleted ON flashcards(deleted);
+CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_uuid ON flashcards(uuid);
 
 /* FTS for flashcards (front/back/notes) */
@@ -2199,6 +2200,11 @@ UPDATE db_schema_version
 
                 if current_db_version == target_version:
                     logger.debug(f"Database schema '{self._SCHEMA_NAME}' is up to date (Version {target_version}).")
+                    # Ensure helpful indexes that may have been introduced post-creation
+                    try:
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                    except sqlite3.Error:
+                        pass
                     return
                 if current_db_version > target_version:
                     raise SchemaError(
@@ -2220,6 +2226,11 @@ UPDATE db_schema_version
                     if target_version >= 8 and current_db_version == 7:
                         self._migrate_from_v7_to_v8(conn)
                         current_db_version = self._get_db_version(conn)
+                # Ensure helpful indexes that may have been introduced post-creation
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                except sqlite3.Error:
+                    pass
                 # Example for future migrations:
                 # elif current_db_version == 1:
                 #     self._migrate_from_v1_to_v2(conn)
@@ -2227,7 +2238,7 @@ UPDATE db_schema_version
                 #     if current_db_version == 2 and target_version > 2: # Continue if more migrations needed
                 #         self._migrate_from_v2_to_v3(conn)
                 #         # ...and so on
-                elif current_initial_version < target_version:
+                if current_initial_version < target_version:
                     # Handle known migration paths
                     if current_initial_version == 4 and target_version >= 5:
                         self._migrate_from_v4_to_v5(conn)
@@ -2333,6 +2344,14 @@ UPDATE db_schema_version
                     pass
 
                 self._ensure_postgres_fts(conn)
+                # Ensure helpful indexes that may have been introduced post-creation
+                try:
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)",
+                        connection=conn,
+                    )
+                except Exception:
+                    pass
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
 
@@ -2783,6 +2802,12 @@ UPDATE db_schema_version
             self.backend.execute(stmt, connection=conn)
         self._set_schema_version_postgres(conn, expected_version)
         self._sync_postgres_sequences(conn)
+        # Ensure FTS tsvector for flashcards when schema contains flashcards (v5+)
+        try:
+            if expected_version >= 5:
+                self._ensure_postgres_flashcards_tsvector(conn)
+        except Exception as _e:
+            logger.debug(f"Skipping ensure flashcards tsvector after migration to v{expected_version}: {_e}")
 
     def _get_schema_version_postgres(self, conn) -> int:
         result = self.backend.execute(
@@ -3507,7 +3532,7 @@ UPDATE db_schema_version
                          JOIN character_cards cc ON fts.rowid = cc.id
                 WHERE fts.character_cards_fts MATCH ? \
                   AND cc.deleted = 0
-                ORDER BY rank LIMIT ? \
+                ORDER BY bm25(fts) ASC, cc.last_modified DESC LIMIT ? \
                 """
         try:
             cursor = self.execute_query(query, (search_term, limit))
@@ -4128,7 +4153,7 @@ UPDATE db_schema_version
             base_query += " AND c.character_id = ?"
             params_list.append(character_id)
 
-        base_query += " ORDER BY rank LIMIT ?"
+        base_query += " ORDER BY bm25(fts) ASC, c.last_modified DESC LIMIT ?"
         params_list.append(limit)
 
         try:
@@ -4638,7 +4663,7 @@ UPDATE db_schema_version
             base_query += " AND m.conversation_id = ?"
             params_list.append(conversation_id)
 
-        base_query += " ORDER BY rank LIMIT ?"
+        base_query += " ORDER BY bm25(fts) ASC, m.last_modified DESC LIMIT ?"
         params_list.append(limit)
 
         try:
@@ -5879,6 +5904,19 @@ UPDATE db_schema_version
         except CharactersRAGDBError:
             raise
 
+    def get_deck(self, deck_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a single deck row by id."""
+        query = (
+            "SELECT id, name, description, created_at, last_modified, deleted, client_id, version "
+            "FROM decks WHERE id = ?"
+        )
+        try:
+            cursor = self.execute_query(query, (deck_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:
+            raise
+
     def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> Optional[int]:
         row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
         return int(row[0]) if row else None
@@ -5960,59 +5998,84 @@ UPDATE db_schema_version
             raise CharactersRAGDBError(f"Failed to add flashcard: {exc}") from exc
 
     def add_flashcards_bulk(self, cards: List[Dict[str, Any]]) -> List[str]:
-        """Bulk create flashcards; returns list of uuids in same order."""
+        """
+        Bulk create flashcards; returns list of uuids in the same order.
+
+        Supports newer fields: extra, model_type, reverse. If model_type is not
+        provided, it will be inferred from is_cloze/reverse similar to add_flashcard().
+        """
         uuids: List[str] = []
         try:
-            with self.transaction() as conn:
+            with self.transaction() as _:
                 insert_sql = (
                     """
                     INSERT INTO flashcards(
-                        uuid, deck_id, front, back, notes, is_cloze, tags_json,
+                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
                         source_ref_type, source_ref_id, ef, interval_days, repetitions,
                         lapses, due_at, last_reviewed_at, created_at, last_modified,
-                        deleted, client_id, version
+                        deleted, client_id, version, model_type, reverse
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
+                params_list: List[tuple] = []
                 for card_data in cards:
                     uuid_val = self._generate_uuid()
                     uuids.append(uuid_val)
                     now = self._get_current_utc_timestamp_iso()
+
                     deck_id = card_data.get('deck_id')
                     front = card_data['front']
                     back = card_data['back']
                     notes = card_data.get('notes')
+                    extra = card_data.get('extra')
                     is_cloze = bool(card_data.get('is_cloze'))
                     tags_json = card_data.get('tags_json')
                     source_ref_type = card_data.get('source_ref_type', 'manual')
                     source_ref_id = card_data.get('source_ref_id')
+                    model_type = card_data.get('model_type')
+                    reverse_flag = card_data.get('reverse')
+                    if not model_type:
+                        if is_cloze:
+                            model_type = 'cloze'
+                        else:
+                            model_type = 'basic_reverse' if reverse_flag else 'basic'
+                    if model_type not in ('basic', 'basic_reverse', 'cloze'):
+                        raise InputError("Invalid model_type; must be 'basic','basic_reverse','cloze'")
+                    if reverse_flag is None:
+                        reverse_flag = (model_type == 'basic_reverse')
 
-                    params = (
-                        uuid_val,
-                        deck_id,
-                        front,
-                        back,
-                        notes,
-                        is_cloze,
-                        tags_json,
-                        source_ref_type,
-                        source_ref_id,
-                        2.5,
-                        0,
-                        0,
-                        0,
-                        None,
-                        None,
-                        now,
-                        now,
-                        False,
-                        self.client_id,
-                        1,
+                    params_list.append(
+                        (
+                            uuid_val,
+                            deck_id,
+                            front,
+                            back,
+                            notes,
+                            extra,
+                            is_cloze,
+                            tags_json,
+                            source_ref_type,
+                            source_ref_id,
+                            2.5,
+                            0,
+                            0,
+                            0,
+                            None,
+                            None,
+                            now,
+                            now,
+                            False,
+                            self.client_id,
+                            1,
+                            model_type,
+                            bool(reverse_flag),
+                        )
                     )
 
-                    conn.execute(insert_sql, params)
+                # Batch insert for efficiency (supports both SQLite and Postgres backends)
+                self.execute_many(insert_sql, params_list, commit=False)
             return uuids
         except KeyError as e:
             raise InputError(f"Missing required field in bulk flashcard: {e}") from e
@@ -6069,8 +6132,10 @@ UPDATE db_schema_version
                 fts_filter = "AND f.flashcards_fts_tsv @@ to_tsquery('english', ?)"
                 params.append(tsquery)
             else:
+                # Normalize query for SQLite FTS5 (quotes/operators)
+                norm_q = FTSQueryTranslator.normalize_query(q, 'sqlite')
                 fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
-                params.append(q)
+                params.append(norm_q)
 
         # order by
         order_sql = "ORDER BY f.due_at, f.created_at DESC" if order_by == 'due_at' else "ORDER BY f.created_at DESC"
@@ -6093,6 +6158,125 @@ UPDATE db_schema_version
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError:
             raise
+
+    def count_flashcards(self,
+                         deck_id: Optional[int] = None,
+                         tag: Optional[str] = None,
+                         due_status: str = 'all',
+                         q: Optional[str] = None,
+                         include_deleted: bool = False) -> int:
+        """Count flashcards matching filters. Mirrors list_flashcards filters."""
+        where_clauses = ["1=1"]
+        params: List[Any] = []
+        if not include_deleted:
+            if self.backend_type == BackendType.POSTGRESQL:
+                where_clauses.append("f.deleted = FALSE")
+            else:
+                where_clauses.append("f.deleted = 0")
+        if deck_id is not None:
+            where_clauses.append("f.deck_id = ?")
+            params.append(deck_id)
+
+        now_iso = self._get_current_utc_timestamp_iso()
+        if due_status == 'new':
+            where_clauses.append("f.last_reviewed_at IS NULL")
+        elif due_status == 'learning':
+            where_clauses.append("f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1,2)")
+        elif due_status == 'due':
+            where_clauses.append("f.due_at IS NOT NULL AND f.due_at <= ?")
+            params.append(now_iso)
+
+        join_tag = ""
+        if tag:
+            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            where_clauses.append("kw.keyword = ?")
+            params.append(tag)
+
+        fts_filter = ""
+        if q:
+            if self.backend_type == BackendType.POSTGRESQL:
+                tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
+                if not tsquery:
+                    return 0
+                fts_filter = "AND f.flashcards_fts_tsv @@ to_tsquery('english', ?)"
+                params.append(tsquery)
+            else:
+                norm_q = FTSQueryTranslator.normalize_query(q, 'sqlite')
+                fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
+                params.append(norm_q)
+
+        where_sql = " AND ".join(where_clauses)
+        # DISTINCT avoids double-counting when tag join introduces duplicates
+        query = f"""
+            SELECT COUNT(DISTINCT f.id) AS cnt
+              FROM flashcards f
+              {join_tag}
+             WHERE {where_sql} {fts_filter}
+        """
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        except CharactersRAGDBError:
+            raise
+
+    def get_flashcards_by_uuids(self, uuids: List[str]) -> List[Dict[str, Any]]:
+        """Fetch multiple flashcards by UUIDs in one query. Order is not guaranteed; caller can reorder."""
+        if not uuids:
+            return []
+        placeholders = ",".join(["?"] * len(uuids))
+        query = f"""
+            SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+                   f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
+              FROM flashcards f
+              LEFT JOIN decks d ON d.id = f.deck_id
+             WHERE f.uuid IN ({placeholders}) AND f.deleted = 0
+        """
+        try:
+            cursor = self.execute_query(query, tuple(uuids))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:
+            raise
+
+    # --- PostgreSQL helpers for FTS on flashcards ---
+    def _ensure_postgres_flashcards_tsvector(self, conn) -> None:
+        """Ensure flashcards_fts_tsv column, index, and update trigger exist for PostgreSQL."""
+        if self.backend_type != BackendType.POSTGRESQL:
+            return
+        try:
+            # Add tsvector column
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS flashcards_fts_tsv tsvector",
+                connection=conn,
+            )
+            # Backfill existing rows
+            self.backend.execute(
+                (
+                    "UPDATE flashcards "
+                    "SET flashcards_fts_tsv = to_tsvector('english', "
+                    "coalesce(front,'') || ' ' || coalesce(back,'') || ' ' || coalesce(notes,''))"
+                ),
+                connection=conn,
+            )
+            # Index
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcards_fts_tsv ON flashcards USING GIN (flashcards_fts_tsv)",
+                connection=conn,
+            )
+            # Trigger to maintain tsvector
+            self.backend.execute(
+                (
+                    "CREATE TRIGGER flashcards_fts_tsv_update "
+                    "BEFORE INSERT OR UPDATE OF front, back, notes ON flashcards "
+                    "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
+                    "flashcards_fts_tsv, 'pg_catalog.english', front, back, notes)"
+                ),
+                connection=conn,
+            )
+        except Exception as e:
+            # If any statement fails due to existing objects, ignore and proceed
+            logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")
 
     def _srs_sm2_update(self, ef: float, interval_days: int, repetitions: int, lapses: int, rating: int) -> Dict[str, Any]:
         """

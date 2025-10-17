@@ -370,14 +370,27 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
         # HTTP(S) URIs: honor allowed_domains if provided
         if uri.startswith("http://") or uri.startswith("https://"):
             from urllib.parse import urlparse
-            host = urlparse(uri).hostname or ""
-            if allowed_domains and not any(host.endswith(d) for d in allowed_domains):
-                out["metadata"].append({
-                    "source": uri,
-                    "status": "skipped_disallowed_domain",
-                })
-                continue
-
+            host = (urlparse(uri).hostname or "").lower().rstrip(".")
+            if allowed_domains:
+                host_allowed = False
+                for domain in allowed_domains:
+                    try:
+                        if not domain:
+                            continue
+                        dom = str(domain).lower().lstrip(".")
+                        if not dom:
+                            continue
+                        if host == dom or host.endswith(f".{dom}"):
+                            host_allowed = True
+                            break
+                    except Exception:
+                        continue
+                if not host_allowed:
+                    out["metadata"].append({
+                        "source": uri,
+                        "status": "skipped_disallowed_domain",
+                    })
+                    continue
             # Global egress policy: private IPs and allowlist
             try:
                 tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"

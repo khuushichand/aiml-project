@@ -88,7 +88,7 @@ def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user,
         await fake_redis.set(f"embeddings:stage:{stage}:paused", "1")
         await fake_redis.set(f"embeddings:stage:{stage}:drain", "1")
 
-    _asyncio.get_event_loop().run_until_complete(_set_flags())
+    _asyncio.run(_set_flags())
 
     client = TestClient(app)
     resp = client.get("/api/v1/embeddings/orchestrator/summary")
@@ -137,7 +137,7 @@ def test_build_orchestrator_snapshot_age_deterministic(monkeypatch):
     async def _run():
         return await _build_orchestrator_snapshot(fake, now_ts=fixed_now)
 
-    snapshot = _asyncio.get_event_loop().run_until_complete(_run())
+    snapshot = _asyncio.run(_run())
     assert snapshot["ages"]["embeddings:chunking"] == 1.0
     assert snapshot["ages"]["embeddings:embedding"] == 1.0
     assert snapshot["ages"]["embeddings:storage"] == 1.0
@@ -154,7 +154,7 @@ def test_build_orchestrator_snapshot_age_zero_when_empty_xrange():
         await fake.configure_xrange_empty("embeddings:embedding", True)
         return await _build_orchestrator_snapshot(fake, now_ts=1700000001.0)
 
-    snapshot = _asyncio.get_event_loop().run_until_complete(_run())
+    snapshot = _asyncio.run(_run())
     assert snapshot["ages"]["embeddings:embedding"] == 0.0
 
 

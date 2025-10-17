@@ -4,7 +4,8 @@ Secure JWT authentication manager for unified MCP module
 Uses environment-based secrets and implements secure token management.
 """
 
-import jwt
+from jose import jwt, JWTError
+from jose.exceptions import ExpiredSignatureError
 import secrets
 import hashlib
 from typing import Dict, Any, Optional, List, Tuple
@@ -223,13 +224,13 @@ class JWTManager:
             
             return TokenData(**payload)
             
-        except jwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except jwt.InvalidTokenError as e:
+        except JWTError as e:
             logger.warning(f"Invalid token: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

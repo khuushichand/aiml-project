@@ -3,6 +3,7 @@
 #
 # Imports
 import json
+import hmac
 import hashlib
 import secrets
 import base64
@@ -25,6 +26,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     SessionError,
@@ -166,8 +168,9 @@ class SessionManager:
         return Fernet.generate_key()
     
     def hash_token(self, token: str) -> str:
-        """Create SHA256 hash of token for lookup/indexing"""
-        return hashlib.sha256(token.encode()).hexdigest()
+        """Create HMAC-SHA256 of token for lookup/indexing (aligned with AuthNZ)."""
+        key = derive_hmac_key(self.settings)
+        return hmac.new(key, token.encode('utf-8'), hashlib.sha256).hexdigest()
     
     def encrypt_token(self, token: str) -> str:
         """Encrypt a token for secure storage"""
@@ -727,8 +730,8 @@ class SessionManager:
         
         try:
             # Hash tokens for storage
-            access_token_hash = hashlib.sha256(access_token.encode()).hexdigest()
-            refresh_token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+            access_token_hash = self.hash_token(access_token)
+            refresh_token_hash = self.hash_token(refresh_token)
             access_jti, access_exp = self._extract_token_metadata(access_token)
             refresh_jti, refresh_exp = self._extract_token_metadata(refresh_token)
             
@@ -829,7 +832,7 @@ class SessionManager:
                 return True
 
             # Hash the token for storage/comparison
-            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            token_hash = self.hash_token(token)
             
             # Check Redis cache first if available
             if self.redis_client:

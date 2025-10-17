@@ -138,7 +138,7 @@ class TestAuthEndpointsIntegration:
         except Exception:
             payload = {"raw": response.text}
         diag_headers = {k: v for k, v in response.headers.items() if k.startswith("X-TLDW-")}
-        print("register_status:", response.status_code, "headers:", diag_headers, "payload:", payload)
+        # Avoid printing diagnostics in CI; headers are asserted below when present
 
         # Assert diagnostics to ensure correct runtime wiring (conditionally present)
         db_hdr = response.headers.get("X-TLDW-DB")
@@ -265,6 +265,43 @@ class TestAuthEndpointsIntegration:
         )
         
         assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_rotation_enforced(self, isolated_test_environment):
+        """Refresh rotates refresh token when enabled and rejects the old one."""
+        client, db_name = isolated_test_environment
+
+        # Ensure rotation is enabled via default settings (default True), then register/login
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "rotuser",
+                "email": "rot@example.com",
+                "password": "R0t@t10nP@ss!"
+            }
+        )
+
+        login_resp = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "rotuser",
+                "password": "R0t@t10nP@ss!"
+            }
+        )
+        assert login_resp.status_code == 200
+        first_refresh = login_resp.json()["refresh_token"]
+
+        # First refresh
+        r1 = client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh})
+        assert r1.status_code == 200
+        r1_json = r1.json()
+        assert "refresh_token" in r1_json
+        new_refresh = r1_json["refresh_token"]
+        assert new_refresh and new_refresh != first_refresh
+
+        # Old refresh token should now be rejected
+        r_old = client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh})
+        assert r_old.status_code == 401
     
     @pytest.mark.asyncio
     async def test_logout_success(self, isolated_test_environment):

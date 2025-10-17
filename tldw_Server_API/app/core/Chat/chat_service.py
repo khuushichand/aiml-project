@@ -52,6 +52,7 @@ from fastapi.encoders import jsonable_encoder
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 from starlette.responses import StreamingResponse
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
 def parse_provider_model_for_metrics(
@@ -351,7 +352,7 @@ async def build_context_and_messages(
 
     if not character_card:
         logger.warning("No character context found; proceeding with ephemeral default context.")
-        character_card = {"name": "Default Character", "system_prompt": ""}
+        character_card = {"name": DEFAULT_CHARACTER_NAME, "system_prompt": "You are a helpful AI assistant."}
         character_db_id = None
 
     # Persistence decision
@@ -362,6 +363,13 @@ async def build_context_and_messages(
     client_id_from_db = getattr(chat_db, "client_id", None)
     conversation_created = False
     conv_id = final_conversation_id
+    if should_persist and final_character_db_id is None:
+        logger.warning(
+            "Persistence requested but no character ID is available; disabling persistence for conversation %s.",
+            final_conversation_id or "<new>",
+        )
+        should_persist = False
+
     if should_persist:
         conv_id, conversation_created = await get_or_create_conversation(
             chat_db,
@@ -654,7 +662,7 @@ async def execute_streaming_call(
             success=False,
             error_type=type(he).__name__,
         )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected internal server error occurred.")
+        raise
     except Exception as e:
         metrics.track_llm_call(
             selected_provider,

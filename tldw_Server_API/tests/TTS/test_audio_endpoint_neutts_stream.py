@@ -55,9 +55,8 @@ def _is_neutts_streaming_available(client: TestClient) -> bool:
     # Adapter must indicate streaming support (GGUF)
     try:
         from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory, TTSProvider
-        loop = asyncio.get_event_loop()
-        factory = loop.run_until_complete(get_tts_factory())
-        adapter = loop.run_until_complete(factory.registry.get_adapter(TTSProvider.NEUTTS))
+        factory = asyncio.run(get_tts_factory())
+        adapter = asyncio.run(factory.registry.get_adapter(TTSProvider.NEUTTS))
         return bool(adapter) and bool(getattr(adapter, "_supports_streaming", False))
     except Exception:
         return False

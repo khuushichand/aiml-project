@@ -11,7 +11,7 @@ def _search_claims(db_path: str, term: str):
         retr = ClaimsRetriever(db_path)
         retr.config = RetrievalConfig(max_results=10)
         return await retr.retrieve(term)
-    return asyncio.get_event_loop().run_until_complete(_run())
+    return asyncio.run(_run())
 
 
 def test_claims_fts_triggers_insert_update_delete():

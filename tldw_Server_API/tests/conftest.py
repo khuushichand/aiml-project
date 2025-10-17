@@ -4,6 +4,8 @@ import sys
 import types
 from typing import Any, Dict
 
+# Plugin registration moved to top-level conftest.py to satisfy pytest>=8
+
 
 def _install_test_stubs() -> None:
     """Registers lightweight stubs for App_Function_Libraries to satisfy imports during tests."""

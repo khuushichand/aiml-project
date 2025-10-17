@@ -1,5 +1,4 @@
 import asyncio
-import os
 from typing import Any, Dict, List
 
 import pytest
@@ -23,16 +22,14 @@ def _records(dim=8):
 
 
 @pytest.mark.parametrize("backend", ["chroma", "pgvector"])
-def test_parity_basic_search_and_filter(monkeypatch, backend):
+def test_parity_basic_search_and_filter(monkeypatch, backend, request):
     dim = 8
     coll = f"parity_{backend}_demo"
     if backend == "chroma":
         monkeypatch.setenv("CHROMADB_FORCE_STUB", "true")
         adapter = ChromaDBAdapter(VectorStoreConfig(store_type=VectorStoreType.CHROMADB, connection_params={"embedding_config": {}}, embedding_dim=dim, user_id="t"))
     else:
-        dsn = os.getenv("PG_TEST_DSN") or os.getenv("PGVECTOR_DSN")
-        if not dsn:
-            pytest.skip("PG DSN not set")
+        dsn = request.getfixturevalue("pgvector_dsn")
         adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": dsn}, embedding_dim=dim, user_id="t"))
 
     async def _run():
@@ -53,13 +50,10 @@ def test_parity_basic_search_and_filter(monkeypatch, backend):
 
 
 @pytest.mark.parametrize("backend", ["pgvector"])  # $in and numeric bounds parity primarily for pgvector
-def test_parity_in_and_numeric(monkeypatch, backend):
+def test_parity_in_and_numeric(monkeypatch, backend, pgvector_dsn):
     dim = 8
     coll = f"parity_{backend}_ops"
-    dsn = os.getenv("PG_TEST_DSN") or os.getenv("PGVECTOR_DSN")
-    if not dsn:
-        pytest.skip("PG DSN not set")
-    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": dsn}, embedding_dim=dim, user_id="t"))
+    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": pgvector_dsn}, embedding_dim=dim, user_id="t"))
 
     async def _run():
         await adapter.initialize()
@@ -76,12 +70,9 @@ def test_parity_in_and_numeric(monkeypatch, backend):
 
 
 @pytest.mark.parametrize("backend", ["pgvector"])  # boolean ops + multi_search (pg only)
-def test_parity_boolean_and_multi_search(monkeypatch, backend):
+def test_parity_boolean_and_multi_search(monkeypatch, backend, pgvector_dsn):
     dim = 8
-    dsn = os.getenv("PG_TEST_DSN") or os.getenv("PGVECTOR_DSN")
-    if not dsn:
-        pytest.skip("PG DSN not set")
-    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": dsn}, embedding_dim=dim, user_id="t"))
+    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": pgvector_dsn}, embedding_dim=dim, user_id="t"))
 
     async def _run():
         await adapter.initialize()

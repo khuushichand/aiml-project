@@ -9,7 +9,7 @@
 **Tests**:
 - Unit: backoff calculation; `terminate_process` escalation; timeout triggers; orphan reaper logic.
 - Integration: cancel during `media_ingest` (TEST_MODE) → run becomes `cancelled`, `step_cancelled` event present; retry increments `attempt` and eventually fails or succeeds; timeout forces step failure.
-**Status**: Not Started
+**Status**: Completed
 
 ## Stage 2: API & DB Completeness
 **Goal**: Complete CRUD/versioning, idempotency, and failure-resume semantics aligned to PRD.
@@ -22,7 +22,7 @@
 **Tests**:
 - Unit: DB methods for versions, soft delete, idempotency lookup.
 - Integration: create v1 and v2; list reflects latest first; soft-deleted hidden; retry continues from failed step and completes; idempotent run returns same `run_id`.
-**Status**: Not Started
+**Status**: Completed
 
 ## Stage 3: RAG & Media Ingest Integration
 **Goal**: Expand adapters to cover PRD options, surface chunker registry, and persist chunking/indexing metadata.
@@ -34,7 +34,7 @@
 **Tests**:
 - Unit: validate chunker/capabilities payload shape; mapping of rag flags to unified pipeline kwargs.
 - Integration: workflow with rag reranking+citations returns expected keys; chunker discovery endpoint responds and is used by definitions validation path (basic).
-**Status**: Not Started
+**Status**: Completed
 
 ## Stage 4: Security & Observability
 **Goal**: Strengthen egress/SSRF protections, add telemetry/metrics, and finalize WS/run-level authorization behaviors.
@@ -45,7 +45,7 @@
 **Tests**:
 - Unit: IP/domain validation; metrics labels sanity; span nesting smoke.
 - Integration: webhook in TEST_MODE bypass; unauthorized WS connect rejected; authorized streams events.
-**Status**: Not Started
+**Status**: Completed
 
 ## Stage 5: WebUI Minimal
 **Goal**: Provide basic definitions CRUD, runs list/detail with live event timeline, and human-approval panel with CSRF.
@@ -56,7 +56,7 @@
 **Tests**:
 - E2E (Playwright): create definition, run, observe timeline, approve `wait_for_human` step to completion.
 - Security: CSRF token required on POST in UI flows.
-**Status**: Not Started
+**Status**: In Progress (CSRF token wiring underway; CSP still pending)
 
 ---
 
@@ -64,4 +64,3 @@
 - Default DB: `Databases/workflows.db` (SQLite with WAL); Postgres via future `DATABASE_URL_WORKFLOWS`.
 - Ad-hoc runs may be disabled via `WORKFLOWS_DISABLE_ADHOC`; tests set `TEST_MODE=1` to avoid network/egress.
 - Out-of-scope for v0.1 per PRD: branching/parallelism, schedules/triggers, full artifacts, advanced budgets/quotas.
-

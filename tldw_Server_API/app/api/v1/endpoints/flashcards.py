@@ -40,23 +40,21 @@ router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         deck_id = db.add_deck(payload.name, payload.description)
-        # Return deck row
-        decks = db.list_decks(limit=1, offset=0, include_deleted=True)
-        # If there are many decks, fetch the one by id directly
-        deck = next((d for d in decks if d.get("id") == deck_id), None)
-        if not deck:
-            # fallback: refetch
-            deck = {
-                "id": deck_id,
-                "name": payload.name,
-                "description": payload.description,
-                "created_at": None,
-                "last_modified": None,
-                "deleted": False,
-                "client_id": "",
-                "version": 1,
-            }
-        return deck
+        # Return the exact deck row by id
+        deck = db.get_deck(deck_id)
+        if deck:
+            return deck
+        # Fallback: minimal shape if retrieval failed (should not happen)
+        return {
+            "id": deck_id,
+            "name": payload.name,
+            "description": payload.description,
+            "created_at": None,
+            "last_modified": None,
+            "deleted": False,
+            "client_id": "",
+            "version": 1,
+        }
     except ConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except CharactersRAGDBError as e:
@@ -82,33 +80,42 @@ def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get
         tags = data.pop("tags", None)
         if tags is not None:
             data["tags_json"] = json.dumps(tags)
+        # Validate deck_id if provided
+        deck_id = data.get("deck_id")
+        if deck_id is not None:
+            deck = db.get_deck(int(deck_id))
+            if not deck or bool(deck.get("deleted")):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Deck not found",
+                        "invalid_deck_ids": [int(deck_id)],
+                        "message": "Fix or remove invalid deck_id and retry",
+                    },
+                )
+        # Cloze validation if requested
+        eff_is_cloze = (str(data.get("model_type") or "").lower() == "cloze") or bool(data.get("is_cloze"))
+        if eff_is_cloze:
+            if not re.search(r"\{\{c\d+::", data.get("front") or ""):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid cloze",
+                        "invalid_fields": ["front"],
+                        "message": "Front must contain one or more {{cN::...}} patterns",
+                    },
+                )
         card_uuid = db.add_flashcard(data)
-        # Return the created flashcard
-        items = db.list_flashcards(q=None, deck_id=data.get("deck_id"), limit=1, offset=0)
-        card = next((it for it in items if it.get("uuid") == card_uuid), None)
+        # Link keyword tags if provided
+        if tags:
+            try:
+                db.set_flashcard_tags(card_uuid, tags)
+            except Exception as _e:
+                logger.warning(f"Failed to link tags->keywords on create: {_e}")
+        # Return the created flashcard via direct fetch
+        card = db.get_flashcard(card_uuid)
         if not card:
-            # fallback minimal
-            card = {
-                "uuid": card_uuid,
-                "deck_id": data.get("deck_id"),
-                "deck_name": None,
-                "front": data.get("front"),
-                "back": data.get("back"),
-                "notes": data.get("notes"),
-                "is_cloze": bool(data.get("is_cloze")),
-                "tags_json": data.get("tags_json"),
-                "ef": 2.5,
-                "interval_days": 0,
-                "repetitions": 0,
-                "lapses": 0,
-                "due_at": None,
-                "last_reviewed_at": None,
-                "created_at": None,
-                "last_modified": None,
-                "deleted": False,
-                "client_id": "",
-                "version": 1,
-            }
+            raise HTTPException(status_code=500, detail="Failed to fetch created flashcard")
         return card
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create flashcard: {e}")
@@ -120,19 +127,55 @@ def create_flashcards_bulk(payload: List[FlashcardCreate], db: CharactersRAGDB =
     try:
         card_dicts = []
         raw_list = []
+        tag_lists: List[Optional[List[str]]] = []
+        deck_ids_to_validate: set[int] = set()
         for item in payload:
             data = item.model_dump()
             tags = data.pop("tags", None)
             if tags is not None:
                 data["tags_json"] = json.dumps(tags)
+            tag_lists.append(tags)
+            if data.get("deck_id") is not None:
+                try:
+                    deck_ids_to_validate.add(int(data.get("deck_id")))
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid deck_id type")
             raw_list.append(data)
+        # Validate all referenced deck IDs before inserting; collect all invalids
+        invalid_deck_ids: List[int] = []
+        for did in deck_ids_to_validate:
+            d = db.get_deck(did)
+            if not d or bool(d.get("deleted")):
+                invalid_deck_ids.append(did)
+        if invalid_deck_ids:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "One or more decks not found",
+                    "invalid_deck_ids": sorted(invalid_deck_ids),
+                    "message": "Fix or remove invalid deck_id values and retry",
+                },
+            )
         uuids = db.add_flashcards_bulk(raw_list)
-        # Fetch created cards
-        items = db.list_flashcards(limit=len(uuids))
-        index = {c["uuid"]: c for c in items}
-        for u in uuids:
-            if u in index:
-                card_dicts.append(index[u])
+        # Link keyword tags for each created card
+        for u, tags in zip(uuids, tag_lists):
+            if tags:
+                try:
+                    db.set_flashcard_tags(u, tags)
+                except Exception as _e:
+                    logger.warning(f"Failed to link tags for {u}: {_e}")
+        # Fetch created cards precisely by uuid (order-preserving)
+        try:
+            items = db.get_flashcards_by_uuids(uuids)
+            index = {c["uuid"]: c for c in items}
+            for u in uuids:
+                if u in index:
+                    card_dicts.append(index[u])
+        except Exception:
+            for u in uuids:
+                c = db.get_flashcard(u)
+                if c:
+                    card_dicts.append(c)
         return {"items": card_dicts, "count": len(card_dicts)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed bulk create flashcards: {e}")
@@ -153,7 +196,8 @@ def list_flashcards(
     try:
         items = db.list_flashcards(deck_id=deck_id, tag=tag, due_status=due_status or 'all', q=q,
                                    include_deleted=False, limit=limit, offset=offset, order_by=order_by or 'due_at')
-        return {"items": items, "count": len(items)}
+        total = db.count_flashcards(deck_id=deck_id, tag=tag, due_status=due_status or 'all', q=q, include_deleted=False)
+        return {"items": items, "count": len(items), "total": int(total)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcards")
@@ -180,10 +224,34 @@ def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAG
         data = payload.model_dump()
         expected_version = data.pop("expected_version", None)
         tags = data.pop("tags", None)
-        # Convert tags list to tags_json if provided; also sync to keywords via set_flashcard_tags
+        # Validate cloze if model_type/is_cloze implies cloze
+        current = db.get_flashcard(card_uuid)
+        if not current:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        incoming_model = data.get("model_type")
+        incoming_is_cloze = data.get("is_cloze")
+        # derive effective model type
+        effective_is_cloze = False
+        if incoming_model is not None:
+            effective_is_cloze = (str(incoming_model).lower() == "cloze")
+        elif incoming_is_cloze is not None:
+            effective_is_cloze = bool(incoming_is_cloze)
+        else:
+            effective_is_cloze = (current.get("model_type") == "cloze") or bool(current.get("is_cloze"))
+        if effective_is_cloze:
+            front_text = data.get("front") if data.get("front") is not None else (current.get("front") or "")
+            if not re.search(r"\{\{c\d+::", front_text):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid cloze",
+                        "invalid_fields": ["front"],
+                        "message": "Front must contain one or more {{cN::...}} patterns",
+                    },
+                )
+        # If tags provided, update keyword links and avoid duplicating tags_json update here
         if tags is not None:
             db.set_flashcard_tags(card_uuid, tags)
-            data["tags_json"] = json.dumps(tags)
         ok = db.update_flashcard(card_uuid, data, expected_version)
         if not ok:
             raise HTTPException(status_code=404, detail="Flashcard not found or not updated")
@@ -291,7 +359,8 @@ def import_flashcards(
                 break
             if not raw.strip():
                 continue
-            if len(raw) > MAX_LINE_LENGTH:
+            # Enforce line length in bytes
+            if len(raw.encode('utf-8')) > MAX_LINE_LENGTH:
                 errors.append({'line': (i + 1 if payload.has_header else i), 'error': f'Line too long (>{MAX_LINE_LENGTH} bytes)'})
                 continue
             parts = raw.split(delimiter)
@@ -353,7 +422,8 @@ def import_flashcards(
                 'Extra': extra or '',
                 'DeckDescription': deck_desc or '',
             }
-            too_long = next(((k, v) for k, v in field_lengths.items() if len(v) > MAX_FIELD_LENGTH), None)
+            # Enforce field caps using UTF-8 byte length
+            too_long = next(((k, v) for k, v in field_lengths.items() if len(v.encode('utf-8')) > MAX_FIELD_LENGTH), None)
             if too_long:
                 errors.append({
                     'line': (i + 1 if payload.has_header else i),
@@ -533,7 +603,7 @@ async def import_flashcards_json(
                 'Extra': extra or '',
                 'DeckDescription': deck_desc or ''
             }
-            too_long = next(((k, v) for k, v in fields.items() if len(v) > MAX_FIELD_LENGTH), None)
+            too_long = next(((k, v) for k, v in fields.items() if len((v or '').encode('utf-8')) > MAX_FIELD_LENGTH), None)
             if too_long:
                 errors.append({'index': idx, 'error': f'Field too long: {too_long[0]} (> {MAX_FIELD_LENGTH} bytes)'} )
                 continue

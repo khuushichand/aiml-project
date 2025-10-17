@@ -66,6 +66,12 @@ copyright: |
 
 nav:
   - Home: index.md
+  - Workflows:
+      - Workflows PRD: Workflows_PRD.md
+      - Runbook: Workflows_Runbook.md
+      - Performance: Workflows_Performance.md
+      - Examples & CLI: Workflows_Examples.md
+      - Debugging: Workflows_Debugging.md
   - API:
       - Overview: API-related/index.md
       - API Design: API-related/API_Design.md
@@ -141,6 +147,7 @@ nav:
       - Metrics Cheatsheet: Monitoring/Metrics_Cheatsheet.md
   - User Guides:
       - Overview: User_Guides/index.md
+      - WebUI — Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md
       - Backups using Litestream: User_Guides/Backups_Using_Litestream.md

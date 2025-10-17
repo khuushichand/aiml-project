@@ -45,6 +45,7 @@ from httpx import AsyncClient
 
 # Import actual components for integration tests
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     ChatCompletionUserMessageParam,
@@ -130,12 +131,12 @@ def chacha_db(temp_db_path) -> CharactersRAGDB:
 def populated_chacha_db(chacha_db) -> CharactersRAGDB:
     """Create a CharactersRAGDB with test data."""
     # First, add a character card
-    # Create Default Character that the system expects
+    # Create the default character that the system expects
     character_data = {
-        'name': 'Default Character',
+        'name': DEFAULT_CHARACTER_NAME,
         'description': 'A helpful assistant',
         'personality': 'Helpful and friendly',
-        'system_prompt': 'You are a helpful assistant.',
+        'system_prompt': 'You are a helpful AI assistant.',
         'client_id': 'test_user'
     }
     character_id = chacha_db.add_character_card(character_data)

@@ -42,7 +42,8 @@ def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, fake_red
             "payload_enc": enc,
         })
 
-    _asyncio.get_event_loop().run_until_complete(_write())
+    # Use asyncio.run for Python 3.11+ compatibility
+    _asyncio.run(_write())
 
     client = TestClient(app)
     r = client.get("/api/v1/embeddings/dlq", params={"stage": "embedding", "count": 10})
@@ -104,7 +105,7 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monk
             "payload": json.dumps({"job_id": "job-audit"}),
         })
 
-    _asyncio.get_event_loop().run_until_complete(_seed())
+    _asyncio.run(_seed())
 
     client = TestClient(app)
     # Requeue single
@@ -118,7 +119,7 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monk
     assert any(e.get("action") == "requeue" for e in stub.events)
 
     # Bulk requeue with a second item (not found + success mix)
-    _asyncio.get_event_loop().run_until_complete(_seed())
+    _asyncio.run(_seed())
     resp2 = client.get("/api/v1/embeddings/dlq", params={"stage": "embedding", "count": 10})
     assert resp2.status_code == 200
     entry_ids = [it["entry_id"] for it in resp2.json()["items"]]
@@ -128,4 +129,3 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monk
     )
     assert r3.status_code == 200
     assert any(e.get("action") == "bulk_requeue" for e in stub.events)
-

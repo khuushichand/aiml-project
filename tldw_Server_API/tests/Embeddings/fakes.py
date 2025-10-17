@@ -36,6 +36,8 @@ class FakeAsyncRedisSummary:
         self._xrange_empty = set()
         # Simple in-memory streams storage: name -> list[(id, fields)]
         self._streams = {}
+        # Hash maps for DLQ state etc.
+        self._hashes = {}
 
     # Queue depth
     async def xlen(self, name):
@@ -66,6 +68,14 @@ class FakeAsyncRedisSummary:
         # 1700000000000 ms (~Nov 2023)
         return [("1700000000000-0", {})]
 
+    async def xrevrange(self, name, max="+", min="-", count=None):  # noqa: A002
+        # Return most-recent-first entries from in-memory stream
+        data = list(self._streams.get(name, []))
+        data.reverse()
+        if count is not None and count > 0:
+            data = data[:count]
+        return data
+
     # Scan worker metrics keys
     async def scan(self, cursor, match=None, count=None):
         keys = [f"worker:metrics:{i}" for i in range(len(self._metrics))]
@@ -83,6 +93,16 @@ class FakeAsyncRedisSummary:
         except Exception:
             # Unknown keys (e.g., stage flags) -> None
             return None
+
+    async def hgetall(self, key):
+        return dict(self._hashes.get(key, {}))
+
+    async def hset(self, key, mapping=None, **kwargs):
+        m = dict(mapping or {})
+        m.update(kwargs)
+        cur = self._hashes.setdefault(key, {})
+        cur.update(m)
+        return 1
 
     async def close(self):
         return True

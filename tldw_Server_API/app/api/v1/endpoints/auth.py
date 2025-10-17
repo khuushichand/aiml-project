@@ -275,16 +275,32 @@ async def login(
                 headers=extra_headers
             )
         
-        # Convert to dict if needed
+        # Convert to dict if needed; guard against stray AsyncMock/awaitables in tests
+        import inspect as _inspect
+        if _inspect.isawaitable(user):
+            try:
+                user = await user  # resolve unexpected awaitables from mocks
+            except Exception:
+                pass
         if not isinstance(user, dict):
-            if hasattr(user, 'keys'):
-                user = dict(user)
-            else:
-                # SQLite returns tuple
-                columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role',
-                          'is_active', 'is_verified', 'created_at', 'updated_at',
-                          'last_login', 'storage_quota_mb', 'storage_used_mb']
-                user = dict(zip(columns[:len(user)], user))
+            try:
+                from collections.abc import Mapping as _Mapping
+                if isinstance(user, _Mapping):
+                    user = dict(user)
+                elif hasattr(user, 'keys') and callable(getattr(user, 'keys', None)):
+                    user = dict(user)
+                else:
+                    # SQLite returns tuple
+                    columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role',
+                              'is_active', 'is_verified', 'created_at', 'updated_at',
+                              'last_login', 'storage_quota_mb', 'storage_used_mb']
+                    user = dict(zip(columns[:len(user)], user))
+            except Exception:
+                # As a last resort, wrap in minimal dict to prevent attribute errors downstream
+                try:
+                    user = {"id": user[0], "username": user[2], "email": user[3], "role": user[5], "is_active": user[6], "is_verified": user[7]}
+                except Exception:
+                    user = {}
         
         # Verify password
         is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")

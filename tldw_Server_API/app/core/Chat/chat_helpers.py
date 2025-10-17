@@ -4,11 +4,17 @@
 # Imports
 import asyncio
 import datetime
+import json
 import random
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    InputError,
+    ConflictError,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
@@ -104,8 +110,71 @@ async def get_or_create_character_context(
         if character_card:
             final_character_db_id = character_card['id']
             logger.info(f"Using default character '{DEFAULT_CHARACTER_NAME}' (ID: {final_character_db_id})")
-    
+        else:
+            character_card, final_character_db_id = await _ensure_default_character(db, loop)
+
     return character_card, final_character_db_id
+
+
+async def _ensure_default_character(
+    db: CharactersRAGDB,
+    loop,
+) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+    """
+    Ensure the default character exists for the current client.
+
+    Returns:
+        Tuple of (character_card, character_db_id)
+    """
+
+    def _create_default() -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+        try:
+            existing = db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
+            if existing:
+                return existing, existing.get("id")
+
+            payload = {
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": "Automatically created default assistant persona.",
+                "system_prompt": "You are a helpful AI assistant.",
+                "personality": "Supportive and concise.",
+                "scenario": "General assistance",
+                "first_message": "Hello! I'm your Helpful AI Assistant. How can I help you today?",
+                "creator_notes": "Auto-generated default character.",
+                "creator": "System",
+                "tags": json.dumps(["default", "assistant"]),
+                "client_id": getattr(db, "client_id", None),
+            }
+            if not payload["client_id"]:
+                logger.warning(
+                    "Cannot create default character '%s' because client_id is missing on DB instance.",
+                    DEFAULT_CHARACTER_NAME,
+                )
+                return None, None
+
+            new_id = db.add_character_card(payload)
+            if not new_id:
+                logger.error("add_character_card returned None while creating default character '%s'.", DEFAULT_CHARACTER_NAME)
+                return None, None
+
+            created = db.get_character_card_by_id(new_id)
+            if created:
+                logger.info("Created default character '%s' with ID %s.", DEFAULT_CHARACTER_NAME, new_id)
+                return created, created.get("id")
+
+            # Fallback lookup by name if direct fetch failed
+            fetched = db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
+            if fetched:
+                return fetched, fetched.get("id")
+            return None, None
+        except (CharactersRAGDBError, InputError, ConflictError) as db_error:
+            logger.error("Failed to ensure default character '%s': %s", DEFAULT_CHARACTER_NAME, db_error)
+            return None, None
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error("Unexpected error ensuring default character '%s': %s", DEFAULT_CHARACTER_NAME, exc)
+            return None, None
+
+    return await loop.run_in_executor(None, _create_default)
 
 
 async def get_or_create_conversation(

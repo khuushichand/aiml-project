@@ -716,6 +716,11 @@ class UnifiedRAGRequest(BaseModel):
         description="Generate an answer from retrieved context",
         example=True
     )
+    strict_extractive: bool = Field(
+        default=False,
+        description="Strict extractive mode: assemble the answer only from retrieved spans (no free‑form generation). Intended for sentence‑level grounding with hard citations.",
+        example=False,
+    )
     
     generation_model: Optional[str] = Field(
         default=None,
@@ -1332,6 +1337,7 @@ class UnifiedBatchRequest(BaseModel):
     
     # Answer Generation
     enable_generation: bool = Field(default=False)
+    strict_extractive: bool = Field(default=False)
     generation_model: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
     max_generation_tokens: int = Field(default=500, ge=50, le=2000)

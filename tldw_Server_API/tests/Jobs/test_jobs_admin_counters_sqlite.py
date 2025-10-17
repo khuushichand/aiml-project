@@ -1,0 +1,117 @@
+import os
+from datetime import datetime, timedelta
+
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+
+def _env(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
+    monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
+    # Debounce off for deterministic gauges
+    monkeypatch.setenv("JOBS_GAUGES_DEBOUNCE_MS", "0")
+
+
+def _get_api(app):
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    return {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+
+
+def _stats(client, domain="chatbooks", queue="default", job_type="export"):
+    r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
+    assert r.status_code == 200
+    rows = r.json(); assert len(rows) == 1
+    return rows[0]
+
+
+def test_batch_cancel_updates_counters_and_gauges(monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+    jm = JobManager()
+    domain = "chatbooks"; queue = "default"; jt = "export"
+    # Create one ready, one scheduled, and one processing
+    jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1", available_at=datetime.utcnow() + timedelta(seconds=60))
+    acq_target = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    acq = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
+    assert acq and acq["id"] == acq_target["id"]
+    headers = _get_api(app)
+    with TestClient(app, headers=headers) as client:
+        # Sanity stats before cancel
+        s0 = _stats(client, domain, queue, jt)
+        assert s0["queued"] >= 1 and s0["processing"] == 1
+        r = client.post("/api/v1/jobs/batch/cancel", json={"domain": domain, "queue": queue, "job_type": jt, "dry_run": False}, headers={**headers, "X-Confirm": "true"})
+        assert r.status_code == 200
+        s1 = _stats(client, domain, queue, jt)
+        assert s1["queued"] == 0 and s1["processing"] == 0
+    # Verify counters table reflects zeros
+    conn = jm._connect()
+    try:
+        row = conn.execute("SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?", (domain, queue, jt)).fetchone()
+        assert row is not None
+        assert int(row[0]) == 0 and int(row[1]) == 0 and int(row[2]) == 0
+    finally:
+        conn.close()
+
+
+def test_batch_reschedule_moves_ready_to_scheduled(monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+    jm = JobManager()
+    domain = "chatbooks"; queue = "default"; jt = "export"
+    for _ in range(3):
+        jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    headers = _get_api(app)
+    with TestClient(app, headers=headers) as client:
+        r = client.post("/api/v1/jobs/batch/reschedule", json={"domain": domain, "queue": queue, "job_type": jt, "delay_seconds": 30, "dry_run": False}, headers={**headers, "X-Confirm": "true"})
+        assert r.status_code == 200
+        s = _stats(client, domain, queue, jt)
+        # All moved to scheduled from ready, so queued immediate is 0
+        assert s["queued"] == 0
+    # Check counters scheduled increased
+    conn = jm._connect()
+    try:
+        row = conn.execute("SELECT ready_count, scheduled_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?", (domain, queue, jt)).fetchone()
+        assert row is not None
+        assert int(row[0]) == 0 and int(row[1]) >= 3
+    finally:
+        conn.close()
+
+
+def test_batch_requeue_quarantined_adjusts_counters(monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+    jm = JobManager()
+    domain = "chatbooks"; queue = "default"; jt = "export"
+    # Quarantine one job
+    j = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    acq = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
+    token = str(acq.get("lease_id"))
+    jm.fail_job(int(j["id"]), error="e1", retryable=True, worker_id="w", lease_id=str(acq.get("lease_id")), completion_token=token)
+    acq2 = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
+    token2 = str(acq2.get("lease_id"))
+    jm.fail_job(int(j["id"]), error="e1", retryable=True, worker_id="w", lease_id=str(acq2.get("lease_id")), completion_token=token2)
+    headers = _get_api(app)
+    with TestClient(app, headers=headers) as client:
+        r = client.post("/api/v1/jobs/batch/requeue-quarantined", json={"domain": domain, "queue": queue, "job_type": jt, "dry_run": False}, headers={**headers, "X-Confirm": "true"})
+        assert r.status_code == 200
+        s = _stats(client, domain, queue, jt)
+        assert s["quarantined"] == 0 and s["queued"] >= 1
+    conn = jm._connect()
+    try:
+        row = conn.execute("SELECT ready_count, quarantined_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?", (domain, queue, jt)).fetchone()
+        assert row is not None
+        assert int(row[0]) >= 1 and int(row[1]) == 0
+    finally:
+        conn.close()
+

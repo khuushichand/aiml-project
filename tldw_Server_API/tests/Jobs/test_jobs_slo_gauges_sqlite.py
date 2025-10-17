@@ -41,7 +41,7 @@ def test_slo_gauges_sqlite(monkeypatch, tmp_path):
             jm.complete_job(int(acq["id"]))
 
     # Run one iteration of the metrics loop
-    asyncio.get_event_loop().run_until_complete(_run_once())
+    asyncio.run(_run_once())
 
     reg = get_metrics_registry()
     # Verify percentile gauges were produced (at least one sample)
@@ -60,4 +60,3 @@ def test_slo_gauges_sqlite(monkeypatch, tmp_path):
             seen_any = True
             assert "owner_user_id" in vals[-1].labels
     assert seen_any, "Expected SLO percentile gauges to be set"
-

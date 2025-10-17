@@ -79,9 +79,13 @@ def validate_schema(stage: str, data: Dict[str, Any]) -> None:
 def normalize_message(stage: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and normalize a raw message dict for a given stage.
 
-    - Ensures `msg_version` and `schema` fields exist with current values (if absent)
-    - Validates the payload by instantiating the appropriate Pydantic model
-    - Returns a normalized dict (using model dict) suitable for enqueue/processing
+    Behavior is intentionally permissive at ingress:
+    - Always injects envelope defaults (`msg_version`, `msg_schema`, `schema_url`).
+    - Performs lightweight JSON Schema validation of core fields when available.
+    - Only instantiates the full stage Pydantic model when the stage-defining fields
+      are present (e.g., chunking requires `content` and `content_type`). This allows
+      callers/tests to pass partial payloads with extra fields without raising.
+    - Returns a normalized dict suitable for enqueue/processing.
     """
     stage = (stage or "").strip().lower()
     if not isinstance(data, dict):
@@ -96,19 +100,36 @@ def normalize_message(stage: str, data: Dict[str, Any]) -> Dict[str, Any]:
     if "schema_url" not in data:
         data["schema_url"] = CURRENT_SCHEMA_URL
 
-    # Validate with the appropriate model
+    # Validate basic envelope via bundled JSON schema (non-fatal if dependency missing)
+    try:
+        validate_schema(stage, data)
+    except ValueError:
+        # Surface envelope errors as permanent input issues
+        raise
+    except Exception:
+        # Ignore when jsonschema is not present
+        pass
+
+    # Conditionally validate with the appropriate stage model only when core fields are present
+    def _to_dict(model) -> Dict[str, Any]:
+        return json.loads(model.model_dump_json())  # type: ignore[attr-defined]
+
     if stage == "chunking":
-        model = ChunkingMessage(**data)
+        if "content" in data and "content_type" in data:
+            return _to_dict(ChunkingMessage(**data))
+        return data
     elif stage == "embedding":
-        model = EmbeddingMessage(**data)
+        # embedding messages generally carry a non-empty 'chunks' array
+        if isinstance(data.get("chunks"), list):
+            return _to_dict(EmbeddingMessage(**data))
+        return data
     elif stage == "storage":
-        model = StorageMessage(**data)
+        # storage messages carry an 'embeddings' array
+        if isinstance(data.get("embeddings"), list):
+            return _to_dict(StorageMessage(**data))
+        return data
     else:
         raise ValueError(f"Unknown stage '{stage}' for message normalization")
-
-    # Return normalized dict (preserve field names used by Pydantic model)
-    # We avoid introducing pydantic v1/v2 compat shim here; surrounding code uses a helper.
-    return json.loads(model.model_dump_json())  # type: ignore[attr-defined]
 
 
 def build_dedupe_key(stage: str, data: Dict[str, Any]) -> str:

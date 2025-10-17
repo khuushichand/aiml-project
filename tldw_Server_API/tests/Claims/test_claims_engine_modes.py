@@ -49,7 +49,7 @@ def test_claims_engine_llm_only_labels_supported():
         # Our stub judge always marks supported
         assert any(c.get("label") == "supported" for c in claims)
 
-    asyncio.get_event_loop().run_until_complete(_run())
+    asyncio.run(_run())
 
 
 @pytest.mark.unit
@@ -80,5 +80,4 @@ def test_claims_engine_nli_only_without_model_returns_nei():
         assert claims, "Expected at least one heuristic claim"
         assert all(c.get("label") == "nei" for c in claims)
 
-    asyncio.get_event_loop().run_until_complete(_run())
-
+    asyncio.run(_run())

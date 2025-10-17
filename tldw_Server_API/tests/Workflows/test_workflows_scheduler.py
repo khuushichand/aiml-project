@@ -28,15 +28,14 @@ def client_admin(monkeypatch):
 
     # Ensure scheduler is started for tests that need APScheduler instance
     svc = get_workflows_scheduler()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(svc.start())
+    asyncio.run(svc.start())
 
     with TestClient(fastapi_app) as client:
         yield client, svc
 
     # Teardown
     try:
-        loop.run_until_complete(svc.stop())
+        asyncio.run(svc.stop())
     except Exception:
         pass
     fastapi_app.dependency_overrides.clear()

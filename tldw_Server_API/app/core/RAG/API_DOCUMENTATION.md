@@ -83,6 +83,7 @@ The main RAG endpoint with complete feature access.
   
   // ========== ANSWER GENERATION ==========
   "enable_generation": false,
+  "strict_extractive": false,              // Assemble answer only from retrieved spans (no free-form generation)
   "generation_model": "gpt-4o",     // Model name
   "generation_prompt": "string (optional)",
   "max_generation_tokens": 500,
@@ -101,6 +102,7 @@ The main RAG endpoint with complete feature access.
   "adaptive_max_claims": 20,
   "adaptive_time_budget_sec": 10.0,
   "low_confidence_behavior": "continue",  // "continue" | "ask" | "decline"
+  // Agentic also honors NLI low-confidence gating via the same behavior when claims verification is enabled
 
   // ========== ADAPTIVE RERUN (LOW CONFIDENCE) ==========
   "adaptive_rerun_on_low_confidence": false,      // Trigger a single rerun when post-verification shows low confidence

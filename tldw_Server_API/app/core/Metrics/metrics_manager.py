@@ -270,6 +270,23 @@ class MetricsRegistry:
                 description="Total adaptive post-check repair retries",
             )
         )
+        # RAG factuality gauges (observability)
+        self.register_metric(
+            MetricDefinition(
+                name="rag_hard_citation_coverage",
+                type=MetricType.GAUGE,
+                description="Per-answer hard-citation coverage ratio (0.0–1.0)",
+                labels=["strategy"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_nli_unsupported_ratio",
+                type=MetricType.GAUGE,
+                description="Per-answer NLI unsupported ratio (refuted+NEI)/total",
+                labels=["strategy"],
+            )
+        )
         self.register_metric(
             MetricDefinition(
                 name="rag_unsupported_claims_total",

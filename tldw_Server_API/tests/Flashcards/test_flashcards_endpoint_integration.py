@@ -691,3 +691,101 @@ def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashca
     # No stray tabs/newlines
     for c in cols:
         assert '\n' not in c and '\r' not in c and '\t' not in c
+
+
+def test_bulk_create_modeltype_reverse_and_tag_linkage(client_with_flashcards_db: TestClient):
+    # Create a deck first
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "BulkDeck"}, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    deck_id = r.json()["id"]
+
+    payload = [
+        {
+            "deck_id": deck_id,
+            "front": "F1",
+            "back": "B1",
+            "extra": "E1",
+            "model_type": "basic_reverse",
+            "tags": ["t1", "t2"],
+        },
+        {
+            "deck_id": deck_id,
+            "front": "Cloze {{c1::x}}",
+            "back": "",
+            "is_cloze": True,
+            "tags": ["cz"],
+        },
+    ]
+    r = client_with_flashcards_db.post("/api/v1/flashcards/bulk", json=payload, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("count") == 2
+    items = data.get("items", [])
+    assert len(items) == 2
+    first = next(i for i in items if i.get("front") == "F1")
+    assert first.get("model_type") == "basic_reverse" and first.get("reverse") is True
+    assert first.get("extra") == "E1"
+    uuid1 = first.get("uuid")
+    # Verify keyword linkage for first item
+    r = client_with_flashcards_db.get(f"/api/v1/flashcards/{uuid1}/tags", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    kw_texts = {kw.get("keyword") for kw in r.json().get("items", [])}
+    assert {"t1", "t2"}.issubset(kw_texts)
+
+    second = next(i for i in items if i.get("front", "").startswith("Cloze "))
+    assert second.get("model_type") == "cloze"
+    assert second.get("is_cloze") is True
+
+
+def test_create_single_links_tags_to_keywords(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "SingleDeck"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Tagged Single",
+        "back": "Ans",
+        "tags": ["sx", "sy"],
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    card = r.json()
+    uuid = card.get("uuid")
+    # Verify linkage
+    r = client_with_flashcards_db.get(f"/api/v1/flashcards/{uuid}/tags", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    items = r.json().get("items", [])
+    assert {"sx", "sy"}.issubset({kw.get("keyword") for kw in items})
+
+
+def test_create_with_invalid_deck_returns_400(client_with_flashcards_db: TestClient):
+    # Use a non-existent deck id
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": 999999,
+            "front": "Q",
+            "back": "A"
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 400
+    det = r.json().get("detail") or {}
+    assert det.get("error") == "Deck not found"
+    assert 999999 in (det.get("invalid_deck_ids") or [])
+
+
+def test_bulk_create_with_invalid_deck_returns_400(client_with_flashcards_db: TestClient):
+    # Create a valid deck to mix
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "ValidBulk"}, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    valid_deck_id = r.json()["id"]
+    payload = [
+        {"deck_id": valid_deck_id, "front": "Fok", "back": "Bok"},
+        {"deck_id": 42424242, "front": "Fbad", "back": "Bbad"},
+    ]
+    r = client_with_flashcards_db.post("/api/v1/flashcards/bulk", json=payload, headers=AUTH_HEADERS)
+    assert r.status_code == 400
+    data = r.json()
+    # FastAPI wraps detail dict under top-level 'detail'
+    det = data.get("detail") or {}
+    assert det.get("error")
+    assert 42424242 in det.get("invalid_deck_ids", [])

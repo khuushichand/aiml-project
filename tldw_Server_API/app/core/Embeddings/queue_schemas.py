@@ -44,7 +44,7 @@ class ChunkingConfig(BaseModel):
     upgrades to use the v2 Chunker and/or templates when fields are set.
     """
     # Core sizing
-    chunk_size: int = Field(default=1000, ge=100, le=10000, description="Primary size parameter; interpreted per 'unit' if using v2 Chunker, else characters")
+    chunk_size: int = Field(default=1000, ge=50, le=10000, description="Primary size parameter; interpreted per 'unit' if using v2 Chunker, else characters")
     overlap: int = Field(default=200, ge=0, le=500, description="Overlap amount (interpreted per 'unit' if using v2 Chunker, else characters)")
     separator: str = Field(default="\n", description="Preferred break character for fallback char-based chunking")
 

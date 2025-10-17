@@ -24,8 +24,7 @@ def _fresh_client() -> TestClient:
     reset_settings()
     try:
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(reset_db_pool())
+        asyncio.run(reset_db_pool())
     except Exception:
         pass
 

@@ -14,6 +14,12 @@ import re
 
 from .base import VectorStoreAdapter, VectorStoreConfig, VectorSearchResult
 
+try:
+    from pgvector.psycopg import register_vector as _register_pgvector, Vector as _PgVector
+except Exception:  # pragma: no cover - optional dependency
+    _register_pgvector = None
+    _PgVector = None
+
 
 class PGVectorAdapter(VectorStoreAdapter):
     # Prometheus metrics (module-level singletons per process)
@@ -50,6 +56,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         self._pool = None  # psycopg_pool.ConnectionPool when available
         self._driver = None  # 'psycopg' or 'psycopg2'
         self._ef_search = int(self.config.connection_params.get('hnsw_ef_search', 64))
+        self._vector_cls = None  # pgvector.Vector when available
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -78,6 +85,8 @@ class PGVectorAdapter(VectorStoreAdapter):
                     lambda: psycopg2.connect(dsn)
                 )
                 self._driver = 'psycopg2'
+
+            await self._register_vector_support()
 
             # Ensure pgvector extension
             await self._exec("CREATE EXTENSION IF NOT EXISTS vector")
@@ -117,6 +126,40 @@ class PGVectorAdapter(VectorStoreAdapter):
             return _Ctx(self._conn)
         raise RuntimeError("PGVector connection not initialized")
 
+    async def _register_vector_support(self) -> None:
+        """Register pgvector adapters with psycopg when available."""
+        if self._vector_cls is not None:
+            return
+        if _register_pgvector is None or _PgVector is None:
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            if self._pool is not None:
+                await loop.run_in_executor(None, _register_pgvector, self._pool)
+            elif self._conn is not None:
+                await loop.run_in_executor(None, _register_pgvector, self._conn)
+            else:
+                return
+            self._vector_cls = _PgVector
+            logger.debug("Registered pgvector type with psycopg")
+        except Exception as exc:  # pragma: no cover - registration best-effort
+            logger.debug(f"pgvector registration failed: {exc}")
+            self._vector_cls = None
+
+    def _serialize_vector(self, vector: List[float]) -> str:
+        """Serialize a python list into a pgvector literal."""
+        if self._vector_cls is not None and isinstance(vector, self._vector_cls):  # type: ignore[arg-type]
+            vector = list(vector)
+        if not isinstance(vector, (list, tuple)):
+            raise TypeError("query_vector must be a sequence of floats")
+        parts = []
+        for val in vector:
+            try:
+                parts.append(format(float(val), ".15g"))
+            except Exception as exc:
+                raise TypeError("query_vector must contain numbers") from exc
+        return "[" + ",".join(parts) + "]"
+
     async def _exec(self, sql: str, params: Optional[tuple] = None) -> None:
         def _run(pool, single, ef):
             ctx = pool if pool is not None else single
@@ -129,10 +172,24 @@ class PGVectorAdapter(VectorStoreAdapter):
                         pass
                     cur.execute(sql, params or ())
                     conn.commit()
+                except Exception:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    raise
                 finally:
-                    try: cur.close()
-                    except Exception: pass
-        await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            _run,
+            self._borrow_conn(),
+            None if self._pool else self._borrow_conn(),
+            self._ef_search,
+        )
 
     async def _query(self, sql: str, params: Optional[tuple] = None) -> List[tuple]:
         def _run(pool, single, ef):
@@ -147,10 +204,24 @@ class PGVectorAdapter(VectorStoreAdapter):
                     cur.execute(sql, params or ())
                     rows = cur.fetchall()
                     return rows
+                except Exception:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    raise
                 finally:
-                    try: cur.close()
-                    except Exception: pass
-        return await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+        return await asyncio.get_event_loop().run_in_executor(
+            None,
+            _run,
+            self._borrow_conn(),
+            None if self._pool else self._borrow_conn(),
+            self._ef_search,
+        )
 
     async def create_collection(self, collection_name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         tbl = self._sanitize_collection(collection_name)
@@ -191,9 +262,15 @@ class PGVectorAdapter(VectorStoreAdapter):
         await self._exec(f"DROP TABLE IF EXISTS {tbl}")
 
     async def list_collections(self) -> List[str]:
-        sql = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'vs_%'"
-        rows = await self._query(sql)
-        return [r[0] for r in rows]
+        sql = "SELECT tablename FROM pg_tables WHERE tablename LIKE %s"
+        rows = await self._query(sql, ('vs_%',))
+        collections = []
+        for (name,) in rows:
+            if isinstance(name, str) and name.startswith("vs_"):
+                collections.append(name[3:])
+            else:
+                collections.append(str(name))
+        return collections
 
     async def upsert_vectors(
         self,
@@ -236,16 +313,20 @@ class PGVectorAdapter(VectorStoreAdapter):
 
     async def delete_vectors(self, collection_name: str, ids: List[str]) -> None:
         tbl = self._sanitize_collection(collection_name)
-        async def _batch():
-            cur = self._conn.cursor()
-            cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])
-            self._conn.commit()
-            rc = getattr(cur, 'rowcount', 0)
-            try: cur.close()
-            except Exception: pass
-            return int(rc) if rc is not None else 0
+        def _batch(pool, single, ef):
+            ctx = pool if pool is not None else single
+            with ctx as conn:
+                cur = conn.cursor()
+                try:
+                    cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])
+                    conn.commit()
+                    rc = getattr(cur, 'rowcount', 0)
+                    return int(rc) if rc is not None else 0
+                finally:
+                    try: cur.close()
+                    except Exception: pass
         with self._H_DELETE_LAT.labels(collection=tbl).time():
-            rc = await asyncio.get_event_loop().run_in_executor(None, _batch)
+            rc = await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc))
         except Exception:
@@ -288,8 +369,13 @@ class PGVectorAdapter(VectorStoreAdapter):
 
     # Adapter-specific helper: list vectors with pagination
     def _build_where_from_filter(self, filt: Dict[str, Any]) -> Tuple[str, List[Any]]:
-        # Prefer JSON containment for simple equality maps
-        if isinstance(filt, dict) and all(not isinstance(v, dict) for v in filt.values()):
+        # Prefer JSON containment for simple equality maps (no operators, no nested dict/list values)
+        if (
+            isinstance(filt, dict)
+            and len(filt) > 0
+            and all(not isinstance(v, (dict, list, tuple)) for v in filt.values())
+            and all(not str(k).startswith('$') for k in filt.keys())
+        ):
             import json as _json
             return ' WHERE metadata @> %s', [_json.dumps(filt)]
 
@@ -329,8 +415,9 @@ class PGVectorAdapter(VectorStoreAdapter):
                                 local_clauses.append("(metadata->>%s) <> %s")
                                 local_params.extend([field, str(val)])
                             elif op in ('$in', 'in') and isinstance(val, (list, tuple)) and val:
-                                local_clauses.append("(metadata->>%s) IN %s")
-                                local_params.extend([field, tuple(map(str, val))])
+                                # Use ANY(array) to safely parametrize lists
+                                local_clauses.append("(metadata->>%s) = ANY(%s)")
+                                local_params.extend([field, list(map(str, val))])
                             elif op in ('$gt', '$gte', '$lt', '$lte'):
                                 cmp = {'$gt': '>', '$gte': '>=', '$lt': '<', '$lte': '<='}[op]
                                 local_clauses.append(f"(metadata->>%s)::numeric {cmp} %s")
@@ -552,16 +639,27 @@ class PGVectorAdapter(VectorStoreAdapter):
     ) -> List[VectorSearchResult]:
         tbl = self._sanitize_collection(collection_name)
         metric = self.config.distance_metric or 'cosine'
+        use_native_vector = self._vector_cls is not None
         # Build distance expression
         if metric == 'cosine':
-            dist_expr = "embedding <=> %s"
+            op = "<=>"
         elif metric == 'euclidean':
-            dist_expr = "embedding <-> %s"
+            op = "<->"
         else:
-            dist_expr = "embedding <#> %s"  # inner product
+            op = "<#>"
+        placeholder = "%s" if use_native_vector else "%s::vector"
+        dist_expr = f"embedding {op} {placeholder}"
         sql = f"SELECT id, content, metadata, {dist_expr} AS distance FROM {tbl}"
         # Build WHERE using rich filter support (equality, $and/$or, $in, numeric cmp)
-        params: List[Any] = [query_vector]
+        vector_param: Any
+        if use_native_vector:
+            if isinstance(query_vector, self._vector_cls):  # type: ignore[arg-type]
+                vector_param = query_vector
+            else:
+                vector_param = self._vector_cls(query_vector)  # type: ignore[call-arg]
+        else:
+            vector_param = self._serialize_vector(query_vector)
+        params: List[Any] = [vector_param]
         if filter and isinstance(filter, dict) and len(filter) > 0:
             where_sql, where_params = self._build_where_from_filter(filter)
             sql += where_sql
@@ -642,15 +740,26 @@ class PGVectorAdapter(VectorStoreAdapter):
             "dimension": stats.get("dimension", self.config.embedding_dim),
             "count": stats.get("count", 0),
             "ops": "vector_%s_ops" % ((self.config.distance_metric or 'cosine')),
+            "ef_search": self._ef_search,
         }
 
     async def close(self) -> None:
+        # Close pooled connections first (if any), then single connection fallback
+        try:
+            if self._pool is not None:
+                # psycopg_pool.ConnectionPool exposes close(); run in executor to avoid blocking
+                await asyncio.get_event_loop().run_in_executor(None, getattr(self._pool, "close", lambda: None))
+        except Exception:
+            pass
+        finally:
+            self._pool = None
         try:
             if self._conn:
                 await asyncio.get_event_loop().run_in_executor(None, self._conn.close)
         except Exception:
             pass
-        self._conn = None
+        finally:
+            self._conn = None
         await super().close()
 
     async def health(self) -> Dict[str, Any]:

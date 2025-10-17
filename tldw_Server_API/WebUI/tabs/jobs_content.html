@@ -2,6 +2,7 @@
 <div id="tabAdminJobs" class="tab-content" role="tabpanel">
     <div id="adminJobs_topbar" class="text-muted" style="margin: 8px 0; display:flex; align-items:center; gap:10px;">
         <span>No recent actions</span>
+        <a href="/docs-static/Code_Documentation/Jobs_Module.md" target="_blank" rel="noopener" class="btn btn-link btn-sm" style="text-decoration:none;">Jobs Docs</a>
         <button class="btn btn-secondary btn-sm" onclick="adminOpenRotateKeysModal()" title="Rotate encrypted payload/result keys (dry-run or execute)">Rotate Keys…</button>
     </div>
     <div class="endpoint-section" id="adminJobsStats">
@@ -101,6 +102,9 @@
                 <div class="form-group">
                     <label><input type="checkbox" id="adminJobs_dryRun" checked> Dry Run (count only)</label>
                 </div>
+                <div id="adminJobsPrune_warning" style="display:none; margin:4px 0; padding:6px 8px; border:1px solid #b45309; border-radius:6px; color:#7c2d12; background:#fff7ed; font-size:12px;">
+                    Warning: This will permanently delete matching jobs. Ensure filters are correct and include <code>X-Confirm: true</code>.
+                </div>
                 <div class="form-group">
                     <button id="adminJobsPrune_btn" class="btn btn-warning" onclick="adminPruneJobs()" title="Requires X-Confirm: true header when Dry Run is unchecked">Prune Jobs</button>
                 </div>
@@ -163,6 +167,9 @@
             <div class="column">
                 <div class="form-group">
                     <label><input type="checkbox" id="adminJobsRequeue_dryRun" checked> Dry Run (count only)</label>
+                </div>
+                <div id="adminJobsRequeue_warning" style="display:none; margin:4px 0; padding:6px 8px; border:1px solid #2563eb; border-radius:6px; color:#1e3a8a; background:#eff6ff; font-size:12px;">
+                    Heads up: This will move quarantined jobs back to the queue.
                 </div>
                 <div class="form-group">
                     <button id="adminJobsRequeue_btn" class="btn btn-warning" onclick="adminRequeueQuarantined()">Requeue Quarantined</button>
@@ -368,6 +375,30 @@
                 adminJobsTimer = null;
             }
         }
+
+        // Mini warning banners for destructive actions when Dry Run is unchecked
+        function adminInitJobsWarnings() {
+            try {
+                const pruneCb = document.getElementById('adminJobs_dryRun');
+                const pruneWarn = document.getElementById('adminJobsPrune_warning');
+                if (pruneCb && pruneWarn) {
+                    const syncPrune = () => { pruneWarn.style.display = pruneCb.checked ? 'none' : 'block'; };
+                    pruneCb.addEventListener('change', syncPrune);
+                    syncPrune();
+                }
+            } catch (e) { /* no-op */ }
+            try {
+                const rqCb = document.getElementById('adminJobsRequeue_dryRun');
+                const rqWarn = document.getElementById('adminJobsRequeue_warning');
+                if (rqCb && rqWarn) {
+                    const syncRq = () => { rqWarn.style.display = rqCb.checked ? 'none' : 'block'; };
+                    rqCb.addEventListener('change', syncRq);
+                    syncRq();
+                }
+            } catch (e) { /* no-op */ }
+        }
+        // Initialize warnings on tab load
+        adminInitJobsWarnings();
 
         async function adminJobsQueueControl() {
             const domain = document.getElementById('adminJobs_ctrl_domain')?.value?.trim();

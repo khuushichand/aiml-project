@@ -16,6 +16,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 
 #######################################################################################################################
 #
@@ -235,14 +236,9 @@ class APIKeyManager:
         random_part = secrets.token_urlsafe(self.key_length)
         full_key = f"{self.key_prefix}{random_part}"
         
-        # Create HMAC hash for storage (more secure than plain SHA256)
-        # Use a consistent HMAC key derived from settings with safe fallback for single-user mode
-        key_material = (
-            (self.settings.JWT_SECRET_KEY or "")
-            or (self.settings.API_KEY_PEPPER or "")
-        ) or "tldw_default_api_key_hmac"
-        hmac_key = (key_material[:32]).encode()
-        key_hash = hmac.new(hmac_key, full_key.encode(), hashlib.sha256).hexdigest()
+        # Create HMAC hash for storage using centralized derivation
+        hmac_key = derive_hmac_key(self.settings)
+        key_hash = hmac.new(hmac_key, full_key.encode("utf-8"), hashlib.sha256).hexdigest()
         
         return full_key, key_hash
     
@@ -264,13 +260,8 @@ class APIKeyManager:
         Returns:
             HMAC-SHA256 hash of the API key
         """
-        # Use a consistent HMAC key derived from settings with safe fallback for single-user mode
-        key_material = (
-            (self.settings.JWT_SECRET_KEY or "")
-            or (self.settings.API_KEY_PEPPER or "")
-        ) or "tldw_default_api_key_hmac"
-        hmac_key = (key_material[:32]).encode()
-        return hmac.new(hmac_key, api_key.encode(), hashlib.sha256).hexdigest()
+        hmac_key = derive_hmac_key(self.settings)
+        return hmac.new(hmac_key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
     
     async def create_api_key(
         self,

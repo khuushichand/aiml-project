@@ -113,6 +113,31 @@ def test_chat_api_call_routing_and_param_mapping_openai_unit(mock_llm_api_call_h
 
 
 @pytest.mark.unit
+def test_chat_api_call_llamacpp_multiple_completions(mock_llm_api_call_handlers_for_chat_functions_unit):
+    provider = "llama.cpp"
+    mock_llama_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
+    mock_llama_handler.return_value = "llama success"
+
+    args = {
+        "api_endpoint": provider,
+        "messages_payload": [{"role": "user", "content": "Hi llama"}],
+        "api_key": "test_llama_key",
+        "n": 2,
+    }
+
+    result = chat_api_call(**args)
+    assert result == "llama success"
+    mock_llama_handler.assert_called_once()
+    called_kwargs = mock_llama_handler.call_args.kwargs
+
+    param_map = PROVIDER_PARAM_MAP[provider]
+    assert called_kwargs[param_map['messages_payload']] == args["messages_payload"]
+    assert called_kwargs[param_map['api_key']] == args["api_key"]
+    assert called_kwargs[param_map['n']] == args["n"]
+    assert "n_probs" not in called_kwargs
+
+
+@pytest.mark.unit
 def test_chat_api_call_routing_and_param_mapping_anthropic_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
     provider = "anthropic"
     mock_anthropic_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]

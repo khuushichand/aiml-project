@@ -10,6 +10,35 @@ The Jobs module provides a reusable, DB‑backed job queue with leasing, retries
 
 Use these names across domains to keep operations consistent.
 
+## Admin Quick Reference
+
+- Safe reads
+  - `GET /api/v1/jobs/stats` — aggregated counts by `{domain,queue,job_type}` (queued vs scheduled vs processing vs quarantined)
+  - `GET /api/v1/jobs/list` — list jobs with filters (`domain, queue, status, owner_user_id, job_type, limit`, sorting)
+  - `GET /api/v1/jobs/events` — outbox polling (`after_id, limit, domain, queue, job_type`)
+  - `GET /api/v1/jobs/events/stream` — SSE cursor stream (`after_id`)
+  - `GET /api/v1/jobs/queue/status` — `{ paused, drain }` for a queue
+  - `GET /api/v1/jobs/{job_id}/attachments` — list attachments/logs
+  - `GET /api/v1/jobs/sla/policies` — SLA policies (optionally filtered)
+  - `GET /api/v1/jobs/archive/meta` — archive compression metadata for a job (if archived)
+
+- Admin writes (require `X-Confirm: true` unless `dry_run: true`)
+  - `POST /api/v1/jobs/prune` — delete old terminal jobs (supports `dry_run` and `detail_top_k`)
+  - `POST /api/v1/jobs/ttl/sweep` — cancel/fail queued-by-age and processing-by-runtime
+    - RBAC special-case: with `JOBS_DOMAIN_SCOPED_RBAC` + `JOBS_RBAC_FORCE` and domain provided, returns `{affected:0}` without `X-Confirm`
+  - `POST /api/v1/jobs/batch/cancel` — cancel queued/processing (scoped)
+  - `POST /api/v1/jobs/batch/reschedule` — delay or set-now queued jobs (scoped)
+  - `POST /api/v1/jobs/batch/requeue_quarantined` — move quarantined back to queued (scoped)
+  - `POST /api/v1/jobs/{job_id}/attachments` — add attachment/log
+  - `POST /api/v1/jobs/sla/policy` — upsert per-job_type SLA policy
+  - `POST /api/v1/jobs/queue/control` — `{ action: 'pause'|'resume'|'drain' }`
+  - `POST /api/v1/jobs/crypto/rotate` — re-encrypt encrypted fields (supports `dry_run`, requires `X-Confirm` to execute)
+
+> Destructive Ops
+> - Always include `X-Confirm: true` for prune, TTL sweep, batch cancel/reschedule/requeue, and crypto rotate unless running `dry_run`.
+> - Scope operations with `domain` (and optionally `queue`/`job_type`) to avoid wide-impact actions.
+> - With domain-scoped RBAC enabled and forced (`JOBS_DOMAIN_SCOPED_RBAC=true`, `JOBS_RBAC_FORCE=true`), TTL without `X-Confirm` returns a safe no-op `{affected:0}` when a `domain` is provided.
+
 ## Configuration
 
 - `JOBS_DB_URL` (optional): PostgreSQL DSN (e.g., `postgresql://user:pass@host:5432/db`). If not set, SQLite is used at `Databases/jobs.db`.
@@ -45,6 +74,7 @@ Use these names across domains to keep operations consistent.
   - `JOBS_EVENTS_ENABLED` (default false): Emit event hooks for job state changes.
   - `JOBS_EVENTS_OUTBOX` (default false): Persist job events to an append‑only outbox table `job_events` for CDC/streaming.
   - `JOBS_EVENTS_POLL_INTERVAL` (default 1.0): SSE poll interval for `/api/v1/jobs/events/stream`.
+  - `JOBS_EVENTS_RATE_LIMIT_HZ` (default 0 = unlimited): Soft rate limit for event emission; excess writes are dropped.
   - Request/Trace correlation:
     - `X-Request-ID` is propagated from API → job row (request_id) when passed to `create_job` by endpoints (audio jobs wired; others can adopt).
     - A `trace_id` is generated per job when not provided; metrics can attach sampled exemplars with `JOBS_METRICS_EXEMPLARS=true` and `JOBS_METRICS_EXEMPLAR_SAMPLING` (default 0.01).
@@ -54,6 +84,31 @@ Use these names across domains to keep operations consistent.
   - `JOBS_TTL_AGE_SECONDS`: Max age for queued jobs (by `created_at`).
   - `JOBS_TTL_RUNTIME_SECONDS`: Max runtime for processing jobs (by `COALESCE(started_at, acquired_at)`).
   - `JOBS_TTL_ACTION`: `cancel` (default) or `fail`.
+
+### Queue Policies and Allowlists
+
+- Allowed queues
+  - Global: `JOBS_ALLOWED_QUEUES="q1,q2"`
+  - Per-domain: `JOBS_ALLOWED_QUEUES_<DOMAIN>="q3,q4"` (e.g., `JOBS_ALLOWED_QUEUES_CHATBOOKS`)
+  - Standard queues are always permitted: `default, high, low`.
+- Allowed job types
+  - Global: `JOBS_ALLOWED_JOB_TYPES="t1,t2"`
+  - Per-domain: `JOBS_ALLOWED_JOB_TYPES_<DOMAIN>="t3,t4"`
+- Queue controls (admin endpoints)
+  - `POST /api/v1/jobs/queue/control` with `{ domain, queue, action: 'pause'|'resume'|'drain' }`
+    - `pause`: block new acquisitions for the queue
+    - `drain`: allow running jobs to finish, block new acquisitions
+    - `resume`: clear both pause and drain
+  - `GET /api/v1/jobs/queue/status?domain=...&queue=...` → `{ paused: bool, drain: bool }`
+
+### Domain‑Scoped RBAC (Admin)
+
+- Flags:
+  - `JOBS_DOMAIN_SCOPED_RBAC` (default false): Enforce domain scope for admin endpoints
+  - `JOBS_REQUIRE_DOMAIN_FILTER` (default false): Require `domain` query/body field when RBAC is enabled
+  - `JOBS_RBAC_FORCE` (default false): Apply checks even in single‑user mode (useful for tests)
+  - `JOBS_DOMAIN_ALLOWLIST_<USER_ID>`: Comma‑separated domain allowlist for a specific user id
+- TTL special‑case: when RBAC is forced and a `domain` is provided, `POST /api/v1/jobs/ttl/sweep` without `X‑Confirm` returns `{"affected": 0}` (no‑op) instead of 400. This preserves guardrails while enabling RBAC-only validations.
 - Prune & retention (optional):
   - `JOBS_PRUNE_ENFORCE` (default false): Run background prune sweeps.
   - `JOBS_RETENTION_DAYS_TERMINAL` (default 0): Days to retain terminal states (`completed|failed|cancelled|quarantined`).
@@ -137,6 +192,12 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - Lower numeric `priority` means higher priority (default is 5).
   - Acquisition order is explicit and stable: `priority ASC`, then `available_at`/`created_at` ASC, then `id` ASC.
 
+- Ready vs Scheduled semantics:
+  - Ready = `status='queued'` and `available_at IS NULL OR available_at <= now()`
+  - Scheduled = `status='queued'` and `available_at > now()`
+  - Metrics and stats distinguish `queued` (ready) from `scheduled`; backlog = ready + scheduled.
+  - Admin reschedule can move ready → scheduled (`/api/v1/jobs/batch/reschedule`), or scheduled → ready (`set_now=true`).
+
 - Pruning:
   - Manager exposes `prune_jobs(statuses, older_than_days, domain=None, queue=None, job_type=None, dry_run=False)` to delete old `completed/failed/cancelled` jobs based on `completed_at` (fallback to `created_at`).
   - Use `domain`/`queue`/`job_type` to scope deletion; pass `dry_run=True` to preview the count only (no deletes).
@@ -180,6 +241,16 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
     - `prompt_studio.jobs.duration_p50_seconds` / `_p90_` / `_p99_`
   - Structured failure timeline stored on job rows: `failure_timeline` JSON (last ~10 entries) with `{ts, error_code, retry_backoff}` for WebUI analytics.
 
+- Counters vs Reconcile:
+  - `JOBS_COUNTERS_ENABLED` (default false): enable per‑group counters in `job_counters` to avoid frequent COUNT(*) scans
+  - Inline transitions update counters when fully scoped (e.g., create, acquire, finalize, TTL, batch ops)
+  - Gauges use counters when available; otherwise they compute fresh counts
+  - `JOBS_GAUGES_DEBOUNCE_MS` (default 0): debounce gauge updates in high‑churn paths
+  - Background reconcile (optional):
+    - `JOBS_METRICS_GAUGES_ENABLED=true` emits SLO gauges
+    - `JOBS_METRICS_RECONCILE_ENABLE=true` enables periodic reconcile of counters/gauges
+    - `JOBS_METRICS_RECONCILE_GROUPS_PER_TICK` (default 100) caps groups per loop to avoid heavy scans
+
 ### Docker Compose (Postgres)
 
 - The repository ships a `docker-compose.yml` with a `postgres` service. To run Jobs on Postgres when using Compose:
@@ -217,6 +288,11 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 - Worker SDK
   - A lightweight helper lives at `tldw_Server_API/app/core/Jobs/worker_sdk.py`.
   - Provides auto-renew with jitter, optional progress heartbeats, and simple cancellation checks.
+  - WorkerConfig keys:
+    - `domain`, `queue`, `worker_id`
+    - `lease_seconds` (default 30), `renew_threshold_seconds` (default 10), `renew_jitter_seconds` (default 5)
+    - `backoff_base_seconds` (default 2), `backoff_max_seconds` (default 30)
+    - `retry_on_exception` (default true), `retry_backoff_seconds` (default 10)
   - Example usage:
     ```python
     from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -289,6 +365,8 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 - SSE stream:
   - `GET /api/v1/jobs/events/stream?after_id=<cursor>` (admin-only)
   - Emits text/event-stream with incremental IDs; clients can resume by passing `after_id`.
+  - Requires `JOBS_EVENTS_OUTBOX=true` to persist events; otherwise events are process‑local only.
+  - Admin endpoints set per‑request Postgres RLS context automatically when enabled.
   - Response: `{ non_processing_with_lease: int, processing_expired: int, fixed: int }`
   - When `fix=true`, clears stale lease fields on non-processing rows, and re-queues expired processing rows.
 
@@ -333,7 +411,27 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - `JOBS_QUOTA_SUBMITS_PER_MIN` / `..._<DOMAIN>` / `..._USER_<USER_ID>` / `..._<DOMAIN>_USER_<USER_ID>`
   - `JOBS_QUOTA_MAX_INFLIGHT` / `..._<DOMAIN>` / `..._USER_<USER_ID>` / `..._<DOMAIN>_USER_<USER_ID>`
   - Precedence: domain+user > user > domain > global.
-  - Notes: If owner_user_id is not supplied, domain-level inflight checks are skipped; configure workers to pass owner_user_id when needed.
+  - Notes: If `owner_user_id` is not supplied, inflight checks are skipped; configure workers to pass `owner_user_id` when needed.
+
+### Encryption & Rotation
+
+- Enabling encryption
+  - Set `WORKFLOWS_ARTIFACT_ENC_KEY` to a base64‑encoded AES key (16/24/32 bytes)
+  - Enable globally with `JOBS_ENCRYPT=true` or per‑domain with `JOBS_ENCRYPT_<DOMAIN>=true`
+  - When enabled, `payload`/`result` are stored as envelopes: `{ "_encrypted": {"_enc":"aesgcm:v1", ... } }`
+- Reading with dual keys (rotation window)
+  - Set `JOBS_CRYPTO_SECONDARY_KEY` to the previous key to allow reads during rotation
+- Rotating stored rows (admin)
+  - `POST /api/v1/jobs/crypto/rotate` (admin-only)
+    - Body: `{ old_key_b64, new_key_b64, domain?, queue?, job_type?, fields?: ["payload","result"], limit?: 1000, dry_run?: true }`
+    - Dry run counts candidates; execution requires `X-Confirm: true` header
+- After rotation
+  - Update `WORKFLOWS_ARTIFACT_ENC_KEY` to the new key and remove `JOBS_CRYPTO_SECONDARY_KEY`
+
+### Deterministic Clock (Testing)
+
+- `JOBS_TEST_NOW_EPOCH` can freeze time (UTC epoch seconds) for deterministic tests
+- Internals (Postgres/SQLite) plumb this clock through acquisition, renew, TTL, and batch operations to keep behavior reproducible
 
 ### Signed Webhooks (optional)
 
@@ -343,6 +441,7 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - `JOBS_WEBHOOKS_URL=https://example.com/jobs/webhook`
   - `JOBS_WEBHOOKS_SECRET_KEYS=primary,oldkey` (rotating; first key used to sign)
   - `JOBS_WEBHOOKS_INTERVAL_SEC` (default 1.0), `JOBS_WEBHOOKS_TIMEOUT_SEC` (default 5)
+  - `JOBS_WEBHOOKS_CURSOR_PATH` (optional): path to persist the last delivered outbox id across restarts
 - Headers sent:
   - `X-Jobs-Event`: `job.completed` | `job.failed`
   - `X-Jobs-Event-Id`: outbox id (monotonic cursor)

@@ -25,8 +25,7 @@ def _fresh_client() -> TestClient:
     reset_settings()
     try:
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(reset_db_pool())
+        asyncio.run(reset_db_pool())
     except Exception:
         pass
 
@@ -123,4 +122,3 @@ def test_admin_smoke_roles_permissions_sqlite_and_pg():
             assert r_del_role2.status_code == 200, r_del_role2.text
         finally:
             admin_mod._is_postgres_backend = original  # type: ignore[assignment]
-

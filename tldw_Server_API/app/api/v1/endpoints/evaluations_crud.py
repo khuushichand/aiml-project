@@ -27,7 +27,7 @@ crud_router = APIRouter()
 
 
 @crud_router.post(
-    "",
+    "/",
     response_model=EvaluationResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(rbac_rate_limit("evals.create"))]
@@ -81,7 +81,7 @@ async def create_evaluation(
         )
 
 
-@crud_router.get("", response_model=EvaluationListResponse)
+@crud_router.get("/", response_model=EvaluationListResponse)
 async def list_evaluations(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
@@ -146,7 +146,8 @@ async def update_evaluation(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        updates = model_dump_compat(update_request)
+        # Only include explicitly provided fields; avoid overwriting with None
+        updates = model_dump_compat(update_request, exclude_none=True, exclude_unset=True)
         evaluation = await svc.update_evaluation(eval_id, updates)
         if not evaluation:
             raise create_error_response(
@@ -294,4 +295,3 @@ async def cancel_run(
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-

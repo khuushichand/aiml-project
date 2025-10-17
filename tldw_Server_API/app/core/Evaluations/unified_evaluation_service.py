@@ -341,16 +341,30 @@ class UnifiedEvaluationService:
         eval_id: str,
         updates: Dict[str, Any],
         updated_by: str = "system"
-    ) -> bool:
-        """Update evaluation definition"""
+    ) -> Optional[Dict[str, Any]]:
+        """Update evaluation definition and return the updated record.
+
+        The underlying DB method returns a boolean. For API correctness and
+        caller convenience, fetch and return the updated evaluation object
+        when the update succeeds, or None if not found/updated.
+        """
         try:
             success = self.db.update_evaluation(eval_id, updates)
-            
-            if success:
+
+            if not success:
+                return None
+
+            # Audit on success
+            try:
                 log_evaluation_updated(user_id=updated_by, eval_id=eval_id, updates=updates)
-            
-            return success
-            
+            except Exception:
+                # Best-effort audit logging should not break the flow
+                pass
+
+            # Return the updated evaluation
+            updated = self.db.get_evaluation(eval_id)
+            return updated
+
         except Exception as e:
             logger.error(f"Failed to update evaluation {eval_id}: {e}")
             raise

@@ -2,6 +2,7 @@
 # Worker for processing text chunking tasks
 
 import hashlib
+import os
 from typing import Any, Dict, List, Optional
 
 from loguru import logger

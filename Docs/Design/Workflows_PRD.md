@@ -55,3 +55,79 @@ Provide a safe, observable workflow runtime to orchestrate content processing, g
 - UX: WebUI builder MVP; validations from step schemas; example templates library.
 - Operations: migration tooling and safety checks; schema versioning; dark‑launch rollout for new steps.
 
+---
+
+## Validation Modes (Artifacts)
+
+Artifact downloads enforce scope and integrity checks with two validation modes:
+
+- Strict (default):
+  - Path scope: ensures the resolved `file://` path is contained by the recorded `workdir` for the run; 403 on failure.
+  - Integrity: when `checksum_sha256` is present on an artifact, the download verifies checksum; 409 on mismatch.
+- Non‑block (per‑run override):
+  - Allow the download to proceed while logging warnings on scope or integrity failures.
+
+Configuration and resolution order:
+- Per‑run override `validation_mode="non-block"` (stored on run metadata when provided) takes precedence.
+- Otherwise, `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` controls behavior globally (default true).
+- Containment is only enforced when a `workdir` is recorded on the run/step metadata to avoid false positives.
+
+Range requests and limits:
+- Single `Range` header is supported (bytes=START-END or bytes=START-).
+- Responses include `Content-Range` and `206 Partial Content` when honored.
+- Max served bytes per request are capped by `WORKFLOWS_ARTIFACT_MAX_DOWNLOAD_BYTES`.
+
+Artifact manifest verification:
+- `GET /runs/{run_id}/artifacts/manifest?verify=true` recomputes hashes and returns an `integrity_summary`.
+
+## Control: Pause, Resume, Cancel
+
+Runtime control actions are cooperative and observable:
+
+- Pause: sets run status to `paused` and emits `run_paused`. The engine periodically checks and idles, keeping step leases alive. Subsequent `resume` continues from the current step.
+- Resume: sets status back to `running` and emits `run_resumed`. The engine continues execution.
+- Cancel: sets a cancel flag and attempts best‑effort termination of recorded subprocesses for the run, emits `step_cancelled` for each, updates run to `cancelled`, and emits `run_cancelled`. Adapters should cooperatively check `ctx.is_cancelled()`.
+
+Idempotency and retries:
+- Control endpoints are idempotent; repeated pause/resume/cancel return success and emit at most one state‑transition event.
+- Per‑step retry defaults exist (e.g., `prompt`, `webhook`), overridable via `retry` on the step.
+
+## Webhook Lifecycle
+
+Completion webhooks can be configured via `on_completion_webhook` on a definition:
+
+- Configuration:
+  - Inline string or object `{ "url": "https://...", "include_outputs": true }`.
+  - Global disable with `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true`.
+  - Timeouts via `WORKFLOWS_WEBHOOK_TIMEOUT` (seconds).
+  - Egress policy enforced (global and per‑tenant allow/deny, private IP blocking).
+
+- Delivery semantics:
+  - Events: `webhook_delivery` appended with `status=delivered|failed|blocked` and HTTP status code when applicable.
+  - Retries: failures enqueue into DLQ (`workflow_webhook_dlq`) with exponential backoff; worker enabled by `WORKFLOWS_WEBHOOK_DLQ_ENABLED=true`.
+
+- Signing and replay protection (v1):
+  - Headers set on each delivery:
+    - `X-Workflow-Id`, `X-Run-Id`
+    - `X-Webhook-ID`: unique per send (includes timestamp)
+    - `X-Signature-Timestamp`: integer seconds
+    - `X-Workflows-Signature-Version: v1`
+    - `X-Workflows-Signature`: HMAC‑SHA256 hex digest over `"{ts}.{body}"` using `WORKFLOWS_WEBHOOK_SECRET`
+    - `X-Hub-Signature-256: sha256=<hex>` (compat alias)
+  - Receivers should validate timestamp freshness, recompute the HMAC over `f"{ts}.{body}"`, and compare using a constant‑time check.
+
+## Retention & GC
+
+- Artifact retention:
+  - Worker: `WORKFLOWS_ARTIFACT_GC_ENABLED=true` starts a background GC loop.
+  - Settings: `WORKFLOWS_ARTIFACT_RETENTION_DAYS` (default 30), `WORKFLOWS_ARTIFACT_GC_INTERVAL_SEC`.
+  - Behavior: deletes DB entries and `file://` artifacts older than cutoff.
+- Run/event retention:
+  - Not enforced by default; depends on database backup/archival policies. Consider periodic purging by age in high‑volume deployments.
+
+## Debugging
+
+Enable targeted debug logs to aid incident triage:
+- `WORKFLOWS_DEBUG=1` – umbrella flag enabling all Workflows debug logs.
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` – add logs to artifact list/manifest/download endpoints (IDs, paths, range headers).
+- `WORKFLOWS_DLQ_DEBUG=1` – verbose logs for webhook DLQ listing and replay endpoints/workers.

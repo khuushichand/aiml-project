@@ -141,3 +141,24 @@ async def emit_memory_limit_exceeded_async(
     model_id: str, memory_usage_gb: Optional[float], current_usage_gb: Optional[float], limit_gb: Optional[float]
 ) -> None:
     await _emit(None, UEvent.SYSTEM_ERROR, action="embeddings_memory_limit_exceeded", resource_type="embedding_model", resource_id=model_id, result="failure", metadata={"memory_usage_gb": memory_usage_gb, "current_usage_gb": current_usage_gb, "limit_gb": limit_gb})
+
+
+async def shutdown_audit_adapter_services() -> None:
+    """Shutdown and clear cached UnifiedAuditService instances used by this adapter.
+
+    Ensures pooled connections are closed and background tasks are stopped.
+    Safe to call multiple times.
+    """
+    # Snapshot and clear cache under lock
+    async with _cache_lock:
+        services = list(_service_cache.values())
+        _service_cache.clear()
+
+    if not services:
+        return
+
+    try:
+        await asyncio.gather(*[s.stop() for s in services], return_exceptions=True)
+    except Exception:
+        # Best-effort shutdown; ignore errors
+        pass

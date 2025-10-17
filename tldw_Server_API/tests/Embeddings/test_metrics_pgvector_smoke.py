@@ -1,6 +1,5 @@
 from fastapi.testclient import TestClient
 import asyncio
-import os
 import pytest
 
 from tldw_Server_API.app.main import app
@@ -8,15 +7,12 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorSt
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter
 
 
-def test_metrics_contains_pgvector_after_ops():
-    dsn = os.getenv('PG_TEST_DSN') or os.getenv('PGVECTOR_DSN')
-    if not dsn:
-        pytest.skip('PG DSN not set')
+def test_metrics_contains_pgvector_after_ops(pgvector_dsn):
 
     client = TestClient(app)
     dim = 8
     coll = 'metrics_demo'
-    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': dsn}, embedding_dim=dim, user_id='t'))
+    adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': pgvector_dsn}, embedding_dim=dim, user_id='t'))
 
     async def _run():
         await adapter.initialize()
@@ -33,4 +29,3 @@ def test_metrics_contains_pgvector_after_ops():
     assert 'pgvector_upsert_latency_seconds' in text
     assert 'pgvector_query_latency_seconds' in text
     assert 'pgvector_delete_latency_seconds' in text
-

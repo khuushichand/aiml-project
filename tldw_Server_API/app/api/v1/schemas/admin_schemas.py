@@ -1,8 +1,9 @@
 # admin_schemas.py
 # Description: Pydantic schemas for admin endpoints
-#
+from __future__ import annotations
+
 # Imports
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from datetime import date
@@ -227,12 +228,12 @@ class BatchOperationResponse(BaseModel):
 class UsageDailyRow(BaseModel):
     """Single usage_daily record."""
     user_id: int
-    day: date | str
+    day: Union[date, str]
     requests: int
     errors: int
     bytes_total: int
-    bytes_in_total: int | None = None
-    latency_avg_ms: float | None = None
+    bytes_in_total: Optional[int] = None
+    latency_avg_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -253,8 +254,8 @@ class UsageTopRow(BaseModel):
     requests: int
     errors: int
     bytes_total: int
-    bytes_in_total: int | None = None
-    latency_avg_ms: float | None = None
+    bytes_in_total: Optional[int] = None
+    latency_avg_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 

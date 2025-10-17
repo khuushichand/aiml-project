@@ -11,6 +11,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     ChatCompletionUserMessageParam
 )
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
 def test_chat_completion_basic(authenticated_client, mock_chacha_db, setup_dependencies):
@@ -185,7 +186,7 @@ def test_chat_completion_with_conversation_history(authenticated_client, mock_ch
     
     # Get the actual default character ID (it's usually 2 based on our tests)
     # First check what character exists
-    default_char = mock_chacha_db.get_character_card_by_name("Default Character")
+    default_char = mock_chacha_db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
     char_id = default_char['id'] if default_char else 2
     
     # Create a conversation with the correct client_id

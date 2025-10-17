@@ -25,6 +25,7 @@ class ChunkingMethod(Enum):
     ROLLING_SUMMARIZE = "rolling_summarize"
     FIXED_SIZE = "fixed_size"
     CODE = "code"
+    STRUCTURE_AWARE = "structure_aware"
 
 
 @dataclass

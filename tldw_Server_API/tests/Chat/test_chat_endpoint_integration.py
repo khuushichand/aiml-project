@@ -15,7 +15,10 @@ from httpx import AsyncClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+    DEFAULT_CHARACTER_NAME,
+)
 
 
 @pytest.fixture
@@ -37,7 +40,7 @@ def test_db():
     
     # Add default character (required by the chat endpoint)
     db.add_character_card({
-        "name": "Default Character",
+        "name": DEFAULT_CHARACTER_NAME,
         "description": "A test character",
         "personality": "Helpful and friendly",
         "scenario": "Testing",

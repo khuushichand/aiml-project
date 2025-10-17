@@ -12,6 +12,7 @@ import re
 import hashlib
 
 from loguru import logger
+from contextvars import ContextVar
 
 from .migrations import ensure_jobs_tables
 from .pg_migrations import ensure_jobs_tables_pg
@@ -78,6 +79,13 @@ class JobManager:
                 return datetime.fromtimestamp(self._fixed_epoch, tz=_tz.utc)
             return datetime.now(tz=_tz.utc)
 
+    # In-process debounce map for gauge updates
+    _GAUGE_LAST_TS: Dict[Tuple[str, str, Optional[str]], float] = {}
+    # RLS context (per-task via contextvars). Defaults are non-admin, unset filters.
+    _RLS_IS_ADMIN: ContextVar[bool] = ContextVar("jobs_rls_is_admin", default=False)
+    _RLS_DOMAIN_ALLOWLIST: ContextVar[Optional[str]] = ContextVar("jobs_rls_domain_allowlist", default=None)
+    _RLS_OWNER_USER_ID: ContextVar[Optional[str]] = ContextVar("jobs_rls_owner_user_id", default=None)
+
     def __init__(self, db_path: Optional[Path] = None, *, backend: Optional[str] = None, db_url: Optional[str] = None, clock: Optional["JobManager.Clock"] = None):
         """Initialize JobManager.
 
@@ -118,6 +126,8 @@ class JobManager:
                 else:
                     self.db_path = ensure_jobs_tables(db_path)
         self._conn = None  # Lazily opened per operation
+
+    
         try:
             ensure_jobs_metrics_registered()
         except Exception:
@@ -173,14 +183,57 @@ class JobManager:
     def _connect(self):
         if self.backend == "postgres":
             import psycopg
-            return psycopg.connect(self.db_url)
+            conn = psycopg.connect(self.db_url)
+            return conn
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _pg_cursor(self, conn):
         from psycopg.rows import dict_row  # type: ignore
-        return conn.cursor(row_factory=dict_row)
+        cur = conn.cursor(row_factory=dict_row)
+        # Apply per-transaction RLS via SET LOCAL to avoid cross-request leakage
+        try:
+            is_admin = bool(JobManager._RLS_IS_ADMIN.get())
+            cur.execute("SET LOCAL app.is_admin = %s", ("true" if is_admin else "false",))
+            dom = JobManager._RLS_DOMAIN_ALLOWLIST.get()
+            if dom:
+                cur.execute("SET LOCAL app.domain_allowlist = %s", (str(dom),))
+            else:
+                try:
+                    cur.execute("RESET LOCAL app.domain_allowlist")
+                except Exception:
+                    pass
+            owner = JobManager._RLS_OWNER_USER_ID.get()
+            if owner:
+                cur.execute("SET LOCAL app.owner_user_id = %s", (str(owner),))
+            else:
+                try:
+                    cur.execute("RESET LOCAL app.owner_user_id")
+                except Exception:
+                    pass
+        except Exception:
+            # Non-fatal: continue without RLS context if GUCs unavailable
+            pass
+        return cur
+
+    @classmethod
+    def set_rls_context(cls, *, is_admin: bool, domain_allowlist: Optional[str], owner_user_id: Optional[str]) -> None:
+        try:
+            cls._RLS_IS_ADMIN.set(bool(is_admin))
+            cls._RLS_DOMAIN_ALLOWLIST.set(domain_allowlist if (domain_allowlist or "").strip() else None)
+            cls._RLS_OWNER_USER_ID.set(owner_user_id if (owner_user_id or "").strip() else None)
+        except Exception:
+            pass
+
+    @classmethod
+    def clear_rls_context(cls) -> None:
+        try:
+            cls._RLS_IS_ADMIN.set(False)
+            cls._RLS_DOMAIN_ALLOWLIST.set(None)
+            cls._RLS_OWNER_USER_ID.set(None)
+        except Exception:
+            pass
 
     # --- Queue controls (pause/drain) ---
     def _get_queue_flags(self, domain: str, queue: str) -> Dict[str, bool]:
@@ -251,6 +304,18 @@ class JobManager:
             conn.close()
 
     def _update_gauges(self, *, domain: str, queue: str, job_type: Optional[str] = None) -> None:
+        # Optional lightweight debounce to reduce high-churn writes
+        try:
+            debounce_ms = int(os.getenv("JOBS_GAUGES_DEBOUNCE_MS", "0") or "0")
+        except Exception:
+            debounce_ms = 0
+        if debounce_ms > 0:
+            key = (str(domain), str(queue), str(job_type) if job_type is not None else None)
+            now = time.time()
+            last = JobManager._GAUGE_LAST_TS.get(key)
+            if last is not None and (now - last) < (debounce_ms / 1000.0):
+                return
+            JobManager._GAUGE_LAST_TS[key] = now
         try:
             conn = self._connect()
             try:
@@ -936,12 +1001,21 @@ class JobManager:
                     try:
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
                             is_sched = bool(available_at)
+                            # Upsert counters: initialize ready/scheduled appropriately, then increment on conflict
                             conn.execute(
                                 (
-                                    "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,0,0,0) "
+                                    "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,?,0,0) "
                                     "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ready_count + ?, scheduled_count = scheduled_count + ?, updated_at = DATETIME('now')"
                                 ),
-                                (domain, queue, job_type, 0 if is_sched else 1, 1 if is_sched else 0, 0 if is_sched else 1, 1 if is_sched else 0),
+                                (
+                                    domain,
+                                    queue,
+                                    job_type,
+                                    0 if is_sched else 1,
+                                    1 if is_sched else 0,
+                                    0 if is_sched else 1,
+                                    1 if is_sched else 0,
+                                ),
                             )
                     except Exception:
                         pass
@@ -1060,7 +1134,7 @@ class JobManager:
                 params.append(limit)
                 with self._pg_cursor(conn) as cur:
                     cur.execute(query, params)
-                rows = cur.fetchall()
+                    rows = cur.fetchall()
                 out = [dict(r) for r in rows]
                 for d in out:
                     try:
@@ -1319,8 +1393,11 @@ class JobManager:
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
-                        # Stable ordering mirrors Postgres path
-                        sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
+                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        else:
+                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1389,8 +1466,11 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Stable ordering mirrors Postgres path
-                        base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        # Ordering: FIFO by default; when counters are enabled, prefer most recent
+                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        else:
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         row = conn.execute(base, params).fetchone()
                         if not row:
                             return None
@@ -1809,6 +1889,13 @@ class JobManager:
                     except Exception:
                         pass
                     res_ok = ok
+                # Best-effort: emit outbox event even if prior metrics/gauges errors occurred
+                try:
+                    if res_ok and rowm:
+                        ev = {"id": int(job_id), "domain": rowm[2], "queue": rowm[3], "job_type": rowm[4]}
+                        emit_job_event("job.completed", job=ev)
+                except Exception:
+                    pass
         finally:
             conn.close()
         return bool(res_ok)
@@ -1896,22 +1983,23 @@ class JobManager:
                         secs = max(1, min(int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600"), int(it.get("seconds") or 0)))
                         now_str = self._clock.now_utc().astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
                         if enforce:
-                            conn.execute(
+                            cur = conn.execute(
                                 (
                                     "UPDATE jobs SET leased_until = MAX(COALESCE(leased_until, DATETIME(?)), DATETIME(?, ?)) "
                                     "WHERE id = ? AND status='processing' AND worker_id = ? AND lease_id = ?"
                                 ),
                                 (now_str, now_str, f"+{secs} seconds", int(it.get("job_id")), it.get("worker_id"), it.get("lease_id")),
                             )
+                            affected += int(cur.rowcount or 0)
                         else:
-                            conn.execute(
+                            cur = conn.execute(
                                 (
                                     "UPDATE jobs SET leased_until = MAX(COALESCE(leased_until, DATETIME(?)), DATETIME(?, ?)) "
                                     "WHERE id = ? AND status='processing'"
                                 ),
                                 (now_str, now_str, f"+{secs} seconds", int(it.get("job_id"))),
                             )
-                        affected += conn.total_changes or 0
+                            affected += int(cur.rowcount or 0)
             return int(affected)
         finally:
             try:
@@ -1948,16 +2036,17 @@ class JobManager:
                         res_obj = it.get("result")
                         ctok = it.get("completion_token")
                         if enforce:
-                            conn.execute(
+                            cur = conn.execute(
                                 "UPDATE jobs SET status='completed', result=?, completed_at = DATETIME('now'), completion_token = ?, leased_until = NULL WHERE id = ? AND status='processing' AND worker_id = ? AND lease_id = ? AND (completion_token IS NULL OR completion_token = ?)",
                                 (json.dumps(res_obj) if res_obj is not None else None, ctok, int(it.get("job_id")), it.get("worker_id"), it.get("lease_id"), ctok),
                             )
+                            done += int(cur.rowcount or 0)
                         else:
-                            conn.execute(
+                            cur = conn.execute(
                                 "UPDATE jobs SET status='completed', result=?, completed_at = DATETIME('now'), completion_token = COALESCE(completion_token, ?), leased_until = NULL WHERE id = ? AND status='processing' AND (completion_token IS NULL OR completion_token = ?)",
                                 (json.dumps(res_obj) if res_obj is not None else None, ctok, int(it.get("job_id")), ctok),
                             )
-                        done += conn.total_changes or 0
+                            done += int(cur.rowcount or 0)
             return int(done)
         finally:
             try:
@@ -1994,16 +2083,17 @@ class JobManager:
                 with conn:
                     for it in items:
                         if enforce:
-                            conn.execute(
+                            cur = conn.execute(
                                 "UPDATE jobs SET status='failed', last_error=?, error_message=?, error_code=?, completed_at=DATETIME('now'), leased_until=NULL, completion_token=? WHERE id=? AND status='processing' AND worker_id=? AND lease_id=? AND (completion_token IS NULL OR completion_token=?)",
                                 (it.get("error_code") or it.get("error"), it.get("error"), it.get("error_code"), it.get("completion_token"), int(it.get("job_id")), it.get("worker_id"), it.get("lease_id"), it.get("completion_token")),
                             )
+                            cnt += int(cur.rowcount or 0)
                         else:
-                            conn.execute(
+                            cur = conn.execute(
                                 "UPDATE jobs SET status='failed', last_error=?, error_message=?, error_code=?, completed_at=DATETIME('now'), leased_until=NULL, completion_token=COALESCE(completion_token,?) WHERE id=? AND status='processing' AND (completion_token IS NULL OR completion_token=?)",
                                 (it.get("error_code") or it.get("error"), it.get("error"), it.get("error_code"), it.get("completion_token"), int(it.get("job_id")), it.get("completion_token")),
                             )
-                        cnt += conn.total_changes or 0
+                            cnt += int(cur.rowcount or 0)
             return int(cnt)
         finally:
             try:
@@ -2017,7 +2107,7 @@ class JobManager:
         *,
         error: str,
         retryable: bool = True,
-        backoff_seconds: int = 10,
+        backoff_seconds: int = 0,
         worker_id: Optional[str] = None,
         lease_id: Optional[str] = None,
         enforce: Optional[bool] = None,
@@ -2385,10 +2475,20 @@ class JobManager:
                                                     add_ready = 1
                                             conn.execute(
                                                 (
-                                                    "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,0,0,0) "
+                                                    "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?, ?, ?, 0, ?) "
                                                     "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ready_count + ?, scheduled_count = scheduled_count + ?, processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, quarantined_count = quarantined_count + ?, updated_at = DATETIME('now')"
                                                 ),
-                                                (dtmp.get("domain"), dtmp.get("queue"), dtmp.get("job_type"), int(add_ready), int(add_sched), int(add_quar)),
+                                                (
+                                                    dtmp.get("domain"),
+                                                    dtmp.get("queue"),
+                                                    dtmp.get("job_type"),
+                                                    int(add_ready),
+                                                    int(add_sched),
+                                                    int(add_quar),
+                                                    int(add_ready),
+                                                    int(add_sched),
+                                                    int(add_quar),
+                                                ),
                                             )
                                     except Exception:
                                         pass
@@ -2973,14 +3073,15 @@ class JobManager:
                             if job_type:
                                 where.append("job_type = %s")
                                 params.append(job_type)
-                            # Counters: queued (ready/scheduled) -> cancelled/failed
+                            # Counters: queued (ready/scheduled) -> cancelled/failed, and metrics increments
                             try:
                                 if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
                                     cur.execute(
                                         f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= %s) GROUP BY domain,queue,job_type",
                                         tuple(params + [now_ts]),
                                     )
-                                    for r in (cur.fetchall() or []):
+                                    grp_ready_rows = cur.fetchall() or []
+                                    for r in grp_ready_rows:
                                         cur.execute(
                                             "UPDATE job_counters SET ready_count = GREATEST(ready_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                             (int(r["c"]), r["domain"], r["queue"], r["job_type"]),
@@ -2989,11 +3090,35 @@ class JobManager:
                                         f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type",
                                         tuple(params + [now_ts]),
                                     )
-                                    for r in (cur.fetchall() or []):
+                                    grp_sched_rows = cur.fetchall() or []
+                                    for r in grp_sched_rows:
                                         cur.execute(
                                             "UPDATE job_counters SET scheduled_count = GREATEST(scheduled_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                             (int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                         )
+                                    # Metrics increments for age TTL
+                                    try:
+                                        from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                                        reg = get_metrics_registry()
+                                        if reg:
+                                            # Ready subset
+                                            for r in grp_ready_rows:
+                                                labels = {"domain": r["domain"], "queue": r["queue"], "job_type": r["job_type"]}
+                                                cval = float(int(r["c"]))
+                                                if action == "cancel":
+                                                    reg.increment("prompt_studio.jobs.cancelled_total", cval, labels)
+                                                else:
+                                                    labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", cval, labs)
+                                            # Scheduled subset
+                                            for r in grp_sched_rows:
+                                                labels = {"domain": r["domain"], "queue": r["queue"], "job_type": r["job_type"]}
+                                                cval = float(int(r["c"]))
+                                                if action == "cancel":
+                                                    reg.increment("prompt_studio.jobs.cancelled_total", cval, labels)
+                                                else:
+                                                    labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", cval, labs)
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                             if action == "cancel":
@@ -3020,18 +3145,33 @@ class JobManager:
                             if job_type:
                                 where.append("job_type = %s")
                                 params2.append(job_type)
-                            # Counters: processing -> cancelled/failed
+                            # Counters: processing -> cancelled/failed, and metrics increments
                             try:
                                 if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
                                     cur.execute(
                                         f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
                                         tuple(params2),
                                     )
-                                    for r in (cur.fetchall() or []):
+                                    grp_proc_rows = cur.fetchall() or []
+                                    for r in grp_proc_rows:
                                         cur.execute(
                                             "UPDATE job_counters SET processing_count = GREATEST(processing_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                             (int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                         )
+                                    # Metrics for runtime TTL
+                                    try:
+                                        from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                                        reg = get_metrics_registry()
+                                        if reg:
+                                            for r in grp_proc_rows:
+                                                labels = {"domain": r["domain"], "queue": r["queue"], "job_type": r["job_type"]}
+                                                cval = float(int(r["c"]))
+                                                if action == "cancel":
+                                                    reg.increment("prompt_studio.jobs.cancelled_total", cval, labels)
+                                                else:
+                                                    labs = dict(labels); labs["reason"] = "ttl_runtime"; reg.increment("prompt_studio.jobs.failures_total", cval, labs)
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                             if action == "cancel":
@@ -3079,6 +3219,50 @@ class JobManager:
                         if job_type:
                             where.append("job_type = ?")
                             params3.append(job_type)
+                        # Counters adjustments (ready/scheduled) before status change
+                        try:
+                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                # ready subset (available_at <= now)
+                                ready_rows = conn.execute(
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",
+                                    tuple(params3),
+                                ).fetchall() or []
+                                for d, q, jt, c in ready_rows:
+                                    conn.execute(
+                                        "UPDATE job_counters SET ready_count = CASE WHEN (ready_count - ?) < 0 THEN 0 ELSE ready_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                        (int(c), int(c), d, q, jt),
+                                    )
+                                # scheduled subset (available_at > now)
+                                sched_rows = conn.execute(
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",
+                                    tuple(params3),
+                                ).fetchall() or []
+                                for d, q, jt, c in sched_rows:
+                                    conn.execute(
+                                        "UPDATE job_counters SET scheduled_count = CASE WHEN (scheduled_count - ?) < 0 THEN 0 ELSE scheduled_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                        (int(c), int(c), d, q, jt),
+                                    )
+                                # Metrics increments
+                                try:
+                                    from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                                    reg = get_metrics_registry()
+                                    if reg:
+                                        for d, q, jt, c in ready_rows:
+                                            labels = {"domain": d, "queue": q, "job_type": jt}
+                                            if action == "cancel":
+                                                reg.increment("prompt_studio.jobs.cancelled_total", float(int(c)), labels)
+                                            else:
+                                                labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", float(int(c)), labs)
+                                        for d, q, jt, c in sched_rows:
+                                            labels = {"domain": d, "queue": q, "job_type": jt}
+                                            if action == "cancel":
+                                                reg.increment("prompt_studio.jobs.cancelled_total", float(int(c)), labels)
+                                            else:
+                                                labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", float(int(c)), labs)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                         sql = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_age'" if action == "cancel" else "status='failed', error_message='ttl_age', completed_at = DATETIME('now')") + f" WHERE {' AND '.join(where)}"
                         cur = conn.execute(sql, tuple(params3))
                         try:
@@ -3098,6 +3282,32 @@ class JobManager:
                         if job_type:
                             where.append("job_type = ?")
                             params4.append(job_type)
+                        # Counters adjustments for processing and metrics
+                        try:
+                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                proc_rows = conn.execute(
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
+                                    tuple(params4),
+                                ).fetchall() or []
+                                for d, q, jt, c in proc_rows:
+                                    conn.execute(
+                                        "UPDATE job_counters SET processing_count = CASE WHEN (processing_count - ?) < 0 THEN 0 ELSE processing_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                        (int(c), int(c), d, q, jt),
+                                    )
+                                try:
+                                    from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                                    reg = get_metrics_registry()
+                                    if reg:
+                                        for d, q, jt, c in proc_rows:
+                                            labels = {"domain": d, "queue": q, "job_type": jt}
+                                            if action == "cancel":
+                                                reg.increment("prompt_studio.jobs.cancelled_total", float(int(c)), labels)
+                                            else:
+                                                labs = dict(labels); labs["reason"] = "ttl_runtime"; reg.increment("prompt_studio.jobs.failures_total", float(int(c)), labs)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                         sql2 = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_runtime', leased_until = NULL" if action == "cancel" else "status='failed', error_message='ttl_runtime', completed_at = DATETIME('now'), leased_until = NULL") + f" WHERE {' AND '.join(where)}"
                         cur2 = conn.execute(sql2, tuple(params4))
                         try:

@@ -91,10 +91,9 @@ def test_drainer_moves_due_items_to_live_queue(monkeypatch):
         except Exception:
             pass
 
-    asyncio.get_event_loop().run_until_complete(_run_once())
+    asyncio.run(_run_once())
 
     # Verify items were moved to live stream and removed from zset
     live_items = fake._streams.get('embeddings:embedding', [])
     assert len(live_items) >= 2
     assert delayed_key not in fake._zsets or len(fake._zsets.get(delayed_key, [])) == 0
-

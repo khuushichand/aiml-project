@@ -57,7 +57,7 @@ async def test_event_seq_monotonic_under_contention():
     # Concurrently append events
     async def _append_many(n: int, label: str) -> List[int]:
         seqs: List[int] = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for i in range(n):
             # Offload to threadpool to exercise backend pool concurrency
             seq = await loop.run_in_executor(None, db.append_event, "default", run_id, f"evt_{label}", {"i": i})
@@ -79,4 +79,3 @@ async def test_event_seq_monotonic_under_contention():
     events = db.get_events(run_id)
     seqs_db = [int(e["event_seq"]) for e in events]
     assert seqs_db == sorted(seqs_db)
-

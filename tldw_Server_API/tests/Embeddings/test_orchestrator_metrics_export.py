@@ -77,7 +77,7 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, fake_redis, mo
         except Exception:
             pass
 
-    _asyncio.get_event_loop().run_until_complete(_run_once_and_close())
+    _asyncio.run(_run_once_and_close())
 
     client = TestClient(app)
     r2 = client.get("/api/v1/metrics/text")

@@ -7,6 +7,7 @@ term -> [aliases]. Used to enrich both FTS (where integrated) and query rewrites
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
@@ -23,21 +24,83 @@ def _find_project_root(start: Optional[Path] = None) -> Path:
     return p.parents[-1]
 
 
+def _get_config_root() -> Path:
+    """Return the directory that holds the primary configuration files."""
+    # Highest priority: explicit environment variables
+    env_config_path = os.getenv("TLDW_CONFIG_PATH")
+    if env_config_path:
+        cfg_path = Path(env_config_path).expanduser()
+        if cfg_path.is_file():
+            root = cfg_path.parent
+            logger.debug(f"Synonyms config root via TLDW_CONFIG_PATH file parent: {root}")
+            return root
+        if cfg_path.is_dir():
+            logger.debug(f"Synonyms config root via TLDW_CONFIG_PATH dir: {cfg_path}")
+            return cfg_path
+
+    env_config_dir = os.getenv("TLDW_CONFIG_DIR")
+    if env_config_dir:
+        cfg_dir = Path(env_config_dir).expanduser()
+        if cfg_dir.exists():
+            logger.debug(f"Synonyms config root via TLDW_CONFIG_DIR: {cfg_dir}")
+            return cfg_dir
+
+    # Fallback to repo defaults
+    base = _find_project_root()
+    candidates = [
+        base / "tldw_Server_API" / "Config_Files",
+        base / "Config_Files",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            logger.debug(f"Synonyms config root via repo candidate: {candidate}")
+            return candidate
+
+    # Return the first candidate even if it does not currently exist so callers
+    # have a deterministic location to create.
+    logger.debug(f"Synonyms config root default (non-existent): {candidates[0]}")
+    return candidates[0]
+
+
 def get_corpus_synonyms(corpus: str | None) -> Dict[str, List[str]]:
     if not corpus:
         return {}
-    # Prefer repo root containing tldw_Server_API; fallback to CWD
+
+    config_root = _get_config_root()
+
+    candidates: List[Path] = [
+        config_root / "Synonyms" / f"{corpus}.json",
+        config_root / f"{corpus}.json",
+    ]
+
+    # Back-compatibility: honour historically searched locations in case files
+    # are still mounted there (e.g., legacy deployments).
     base = _find_project_root()
-    candidates = [
+    candidates.extend([
         base / "tldw_Server_API" / "Config_Files" / "Synonyms" / f"{corpus}.json",
         base / "Config_Files" / "Synonyms" / f"{corpus}.json",
-    ]
-    # Also walk ancestors to be resilient to how tests compute roots
+    ])
+
     start = Path(__file__).resolve()
     for anc in start.parents:
         candidates.append(anc / "tldw_Server_API" / "Config_Files" / "Synonyms" / f"{corpus}.json")
         candidates.append(anc / "Config_Files" / "Synonyms" / f"{corpus}.json")
-    path = next((c for c in candidates if c.exists()), candidates[0])
+
+    # Deduplicate while preserving order
+    seen: set[Path] = set()
+    ordered_candidates: List[Path] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            ordered_candidates.append(candidate)
+            seen.add(candidate)
+
+    path = next((c for c in ordered_candidates if c.exists()), ordered_candidates[0])
+    logger.debug(
+        "Synonyms file selection: path='{}' exists={} corpus='{}'",
+        path,
+        path.exists(),
+        corpus,
+    )
     try:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:

@@ -3,10 +3,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-from tldw_Server_API.app.core.Chat.chat_service import execute_non_stream_call
+from tldw_Server_API.app.core.Chat.chat_service import execute_non_stream_call, execute_streaming_call
 
 
 class _DummyMetrics:

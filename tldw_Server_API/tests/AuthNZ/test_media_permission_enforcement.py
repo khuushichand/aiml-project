@@ -65,7 +65,7 @@ def test_media_add_requires_media_create(isolated_test_environment):
         finally:
             await conn.close()
 
-    user_id, api_key = asyncio.get_event_loop().run_until_complete(_setup_user_and_key())
+    user_id, api_key = asyncio.run(_setup_user_and_key())
 
     # Attempt to call media add without media.create permission -> expect 403
     headers = {"X-API-KEY": api_key}

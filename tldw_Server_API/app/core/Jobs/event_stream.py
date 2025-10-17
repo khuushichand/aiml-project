@@ -51,6 +51,11 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
                     return
                 _rate_state["last_ts"] = now
             from tldw_Server_API.app.core.Jobs.manager import JobManager
+            # Admin context for outbox writes (RLS bypass)
+            try:
+                JobManager.set_rls_context(is_admin=True, domain_allowlist=None, owner_user_id=None)
+            except Exception:
+                pass
             jm = JobManager()
             conn = jm._connect()
             try:
@@ -96,6 +101,10 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
             finally:
                 try:
                     conn.close()
+                except Exception:
+                    pass
+                try:
+                    JobManager.clear_rls_context()
                 except Exception:
                     pass
     except Exception:

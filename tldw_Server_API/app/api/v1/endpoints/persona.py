@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect, Query, status
 from loguru import logger
@@ -57,8 +57,8 @@ async def persona_session(req: PersonaSessionRequest = Body(...)) -> PersonaSess
 @router.websocket("/stream")
 async def persona_stream(
     ws: WebSocket,
-    token: str | None = Query(default=None),
-    api_key: str | None = Query(default=None),
+    token: Optional[str] = Query(default=None),
+    api_key: Optional[str] = Query(default=None),
 ):
     """Bi-directional placeholder stream.
 
@@ -72,7 +72,7 @@ async def persona_stream(
     try:
         await ws.send_text(json.dumps({"event": "notice", "message": "persona stream connected (scaffold)"}))
         # Resolve user_id from token/api_key similar to MCP ws
-        user_id: str | None = None
+        user_id: Optional[str] = None
         try:
             if api_key and is_single_user_mode():
                 s = get_settings()

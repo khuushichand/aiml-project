@@ -299,8 +299,8 @@ class MediaDBRetriever(BaseRetriever):
             sql += f" AND m.id IN ({placeholders})"
             params.extend(list(allowed_media_ids))
         
-        # Add ordering and limit
-        sql += " ORDER BY rank DESC LIMIT ?"
+        # Add ordering and limit (bm25: lower is better on SQLite)
+        sql += " ORDER BY rank ASC LIMIT ?"
         params.append(self.config.max_results)
         
         # Execute query
@@ -408,7 +408,11 @@ class MediaDBRetriever(BaseRetriever):
             sql += " AND m.ingestion_date BETWEEN ? AND ?"
             params.extend([start_date.isoformat(), end_date.isoformat()])
 
-        sql += " ORDER BY rank DESC LIMIT ?"
+        # Order by relevance: SQLite bm25 prefers ASC; Postgres ts_rank prefers DESC
+        if backend_type == BackendType.SQLITE:
+            sql += " ORDER BY rank ASC LIMIT ?"
+        else:
+            sql += " ORDER BY rank DESC LIMIT ?"
         params.append(self.config.max_results)
 
         try:
@@ -419,9 +423,10 @@ class MediaDBRetriever(BaseRetriever):
 
         docs: List[Document] = []
         min_score = float(self.config.min_score or 0.0)
-        for row in rows or []:
+        for raw_row in rows or []:
+            row = raw_row if isinstance(raw_row, dict) else dict(raw_row)
             try:
-                raw_rank = row.get('rank') if isinstance(row, dict) else row["rank"]
+                raw_rank = row.get('rank')
             except Exception:
                 raw_rank = 0.0
             try:
@@ -437,19 +442,43 @@ class MediaDBRetriever(BaseRetriever):
             md: Dict[str, Any] = {}
             if self.config.include_metadata:
                 md = {
-                    'title': (row.get('title') if isinstance(row, dict) else None),
-                    'media_type': (row.get('media_type') if isinstance(row, dict) else None),
-                    'url': (row.get('url') if isinstance(row, dict) else None),
-                    'media_id': str(row.get('media_id') if isinstance(row, dict) else None),
-                    'chunk_type': (row.get('chunk_type') if isinstance(row, dict) else None),
-                    'chunk_index': int(row.get('chunk_index') or 0) if isinstance(row, dict) else 0,
-                    'start_char': row.get('start_char') if isinstance(row, dict) else None,
-                    'end_char': row.get('end_char') if isinstance(row, dict) else None,
+                    'title': row.get('title'),
+                    'media_type': row.get('media_type'),
+                    'url': row.get('url'),
+                    'media_id': str(row.get('media_id')) if row.get('media_id') is not None else None,
+                    'chunk_type': row.get('chunk_type'),
+                    'chunk_index': int(row.get('chunk_index') or 0),
+                    'start_char': row.get('start_char'),
+                    'end_char': row.get('end_char'),
                     'source': 'media_db',
                 }
 
-            chunk_uuid = str(row.get('chunk_uuid')) if isinstance(row, dict) else str(row["chunk_uuid"])  # type: ignore[index]
-            content_text = (row.get('chunk_text') if isinstance(row, dict) else row["chunk_text"]) or ""
+                # Optionally enrich with nearest section info from DocumentStructureIndex
+                try:
+                    from tldw_Server_API.app.core.config import rag_enable_structure_index  # lazy import
+                    _enable_si = rag_enable_structure_index()
+                except Exception:
+                    _enable_si = True
+                if _enable_si:
+                    try:
+                        mid_raw = md.get('media_id')
+                        st = md.get('start_char')
+                        if self.media_db and mid_raw is not None and st is not None:
+                            mid = int(str(mid_raw))
+                            st_i = int(st)
+                            sec = self.media_db.lookup_section_for_offset(mid, st_i)  # type: ignore[attr-defined]
+                            if isinstance(sec, dict):
+                                md['section_title'] = sec.get('title')
+                                md['section_start'] = sec.get('start_char')
+                                md['section_end'] = sec.get('end_char')
+                                # Paragraph bounds default to chunk bounds
+                                md.setdefault('paragraph_start', md.get('start_char'))
+                                md.setdefault('paragraph_end', md.get('end_char'))
+                    except Exception:
+                        pass
+
+            chunk_uuid = str(row.get('chunk_uuid'))
+            content_text = (row.get('chunk_text') or "")
 
             docs.append(
                 Document(
@@ -597,17 +626,17 @@ class MediaDBRetriever(BaseRetriever):
             if not self.vector_store._initialized:
                 await self.vector_store.initialize()
             
-            # Generate query embedding
-            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-                create_embeddings_batch,
-                get_embedding_config,
-            )
-            
             # Get embedding for query (or use provided)
             if provided_vector is not None:
                 query_vector = provided_vector
             else:
                 try:
+                    # Import only when we actually need to generate embeddings to avoid
+                    # side effects (e.g., duplicate Prometheus collectors in tests)
+                    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+                        create_embeddings_batch,
+                        get_embedding_config,
+                    )
                     user_app_config = get_embedding_config()
                     embeddings = await asyncio.get_event_loop().run_in_executor(
                         None,
@@ -629,15 +658,34 @@ class MediaDBRetriever(BaseRetriever):
                     return []
             
             # Build filter for vector search
-            filter_dict: Dict[str, Any] = {}
+            base_filter: Dict[str, Any] = {}
             if media_type:
-                filter_dict["media_type"] = media_type
-            
-            # Search in collection; allow override via ephemeral index namespace
+                base_filter["media_type"] = media_type
+
+            # Optional rich JSONB filter to be combined with base_filter
+            metadata_filter = kwargs.get("metadata_filter")
+            if isinstance(metadata_filter, dict) and metadata_filter:
+                if base_filter:
+                    # Combine via AND to preserve both constraints
+                    base_filter = {"$and": [base_filter, metadata_filter]}
+                else:
+                    base_filter = metadata_filter
+
+            # Search collection selection; support multi-search via wildcard/list namespace
             index_namespace = kwargs.get("index_namespace")
+            multi_namespace: Optional[List[str]] = None
             if index_namespace:
-                # Use provided namespace directly (already includes user prefix if desired)
-                collection_name = str(index_namespace)
+                # If a list/tuple of patterns provided, use multi_search
+                if isinstance(index_namespace, (list, tuple)):
+                    multi_namespace = [str(x) for x in index_namespace]
+                    collection_name = None  # type: ignore[assignment]
+                # If a single string contains a wildcard, treat as pattern
+                elif isinstance(index_namespace, str) and ("*" in index_namespace or "?" in index_namespace):
+                    multi_namespace = [index_namespace]
+                    collection_name = None  # type: ignore[assignment]
+                else:
+                    # Use provided namespace directly (already includes user prefix if desired)
+                    collection_name = str(index_namespace)
             else:
                 # Default: user-specific media collection
                 collection_name = f"user_{self.user_id}_media_embeddings"
@@ -660,15 +708,31 @@ class MediaDBRetriever(BaseRetriever):
             k = int(self.config.max_results or 10)
 
             async def _search_with_filter(kind_filter: Optional[str], k_: int):
-                f = dict(filter_dict)
+                # Merge kind filter with base_filter
+                f: Optional[Dict[str, Any]]
                 if kind_filter:
-                    f["kind"] = kind_filter
+                    if base_filter:
+                        f = {"$and": [base_filter, {"kind": kind_filter}]}
+                    else:
+                        f = {"kind": kind_filter}
+                else:
+                    f = base_filter if base_filter else None
+
                 try:
+                    # Multi-namespace search when patterns provided
+                    if multi_namespace:
+                        return await self.vector_store.multi_search(
+                            collection_patterns=multi_namespace,
+                            query_vector=query_vector,
+                            k=k_,
+                            filter=f,
+                        )
+                    # Single collection search
                     return await self.vector_store.search(
-                        collection_name=collection_name,
+                        collection_name=collection_name,  # type: ignore[arg-type]
                         query_vector=query_vector,
                         k=k_,
-                        filter=f if f else None,
+                        filter=f,
                         include_metadata=True,
                     )
                 except Exception as exc:
@@ -780,27 +844,26 @@ class MediaDBRetriever(BaseRetriever):
                 return documents
 
             # Chunk-level merge (by parent_chunk_id)
-            # Build base-by-chunk map
-            base_by_chunk: Dict[str, Tuple[float, Any]] = {}
+            # Build best-per-parent maps for base and HYDE
+            base_by_parent: Dict[str, Tuple[float, Any]] = {}
             for r in base_results:
-                chunk_key = r.id  # chunk vector id
+                parent = str(r.metadata.get("parent_chunk_id") or r.id)
                 sc = float(r.score)
-                if chunk_key not in base_by_chunk or sc > base_by_chunk[chunk_key][0]:
-                    base_by_chunk[chunk_key] = (sc, r)
+                if parent not in base_by_parent or sc > base_by_parent[parent][0]:
+                    base_by_parent[parent] = (sc, r)
 
-            # Best HYDE per parent chunk
             hyde_by_parent: Dict[str, Tuple[float, Any]] = {}
             for r in hyde_results:
-                parent = r.metadata.get("parent_chunk_id") or r.id
+                parent = str(r.metadata.get("parent_chunk_id") or r.id)
                 sc = min(1.0, float(r.score) + hyde_weight)
                 if parent not in hyde_by_parent or sc > hyde_by_parent[parent][0]:
                     hyde_by_parent[parent] = (sc, r)
 
-            # Combine per chunk key
-            chunk_keys = set(base_by_chunk.keys()) | set(hyde_by_parent.keys())
+            # Combine per parent key
+            chunk_keys = set(base_by_parent.keys()) | set(hyde_by_parent.keys())
             chunk_docs: List[Document] = []
             for ck in chunk_keys:
-                base_tuple = base_by_chunk.get(ck)
+                base_tuple = base_by_parent.get(ck)
                 hyde_tuple = hyde_by_parent.get(ck)
                 base_sc = base_tuple[0] if base_tuple else 0.0
                 hyde_sc = hyde_tuple[0] if hyde_tuple else 0.0

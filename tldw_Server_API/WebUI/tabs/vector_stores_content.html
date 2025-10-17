@@ -5,7 +5,7 @@
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/vector_stores - Vector Stores (OpenAI compatible)</span>
         </h2>
-        <p>Manage OpenAI-compatible vector stores backed by ChromaDB.</p>
+        <p>Manage OpenAI-compatible vector stores backed by the configured adapter (ChromaDB or pgvector).</p>
 
         <div class="columns">
             <div class="column">
@@ -195,6 +195,7 @@
                     <label for="vs_ef_search">ef_search:</label>
                     <input id="vs_ef_search" type="number" value="64" min="1" style="width:120px;">
                     <button class="api-button" onclick="vsAdminSetEfSearch()">Set ef_search</button>
+                    <small style="color: var(--color-text-muted);">Note: ef_search applies to pgvector only; ignored for Chroma.</small>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_index_type">Index Type:</label>

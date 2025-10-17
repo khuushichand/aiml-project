@@ -702,7 +702,16 @@ class ChatDictionaryService:
                 cursor = conn.execute(query, params)
                 result: List[Dict[str, Any]] = []
                 for row in cursor.fetchall():
-                    entry = ChatDictionaryEntry.from_dict(dict(row)).to_dict()
+                    row_dict = dict(row)
+                    entry_obj = ChatDictionaryEntry.from_dict(row_dict)
+                    entry = entry_obj.to_dict()
+                    # Preserve additional metadata from the raw row
+                    entry["dictionary_id"] = row_dict.get("dictionary_id")
+                    entry["created_at"] = row_dict.get("created_at")
+                    entry["updated_at"] = row_dict.get("updated_at")
+                    # Normalize group naming consistency
+                    if not entry.get("group") and row_dict.get("group_name"):
+                        entry["group"] = row_dict.get("group_name")
                     result.append(entry)
                 return result
         except Exception as e:

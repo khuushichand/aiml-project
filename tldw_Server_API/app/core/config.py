@@ -836,7 +836,136 @@ def load_comprehensive_config():
         raise  # Re-raise the parsing error to be caught by load_and_log_configs
 
     logger.info(f"load_comprehensive_config(): Sections found in config: {config_parser.sections()}")
+
+    # Propagate selected RAG rollout flags from config.txt into process env when unset.
+    # This lets modules that consult os.getenv read file-backed defaults.
+    try:
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('RAG'):
+            # Helper to set env only if missing
+            def _env_default(key: str, value: Optional[str]):
+                if value is None:
+                    return
+                if os.getenv(key) is None:
+                    os.environ[key] = str(value)
+
+            # Structure index
+            _env_default(
+                'RAG_ENABLE_STRUCTURE_INDEX',
+                config_parser.get('RAG', 'enable_structure_index', fallback='true')
+            )
+            # Strict extractive mode
+            _env_default(
+                'RAG_STRICT_EXTRACTIVE',
+                config_parser.get('RAG', 'strict_extractive', fallback='false')
+            )
+            # Hard citations requirement
+            _env_default(
+                'RAG_REQUIRE_HARD_CITATIONS',
+                config_parser.get('RAG', 'require_hard_citations', fallback='false')
+            )
+            # Low-confidence behavior
+            _env_default(
+                'RAG_LOW_CONFIDENCE_BEHAVIOR',
+                config_parser.get('RAG', 'low_confidence_behavior', fallback='continue')
+            )
+            # Agentic cache backend + TTL
+            _env_default(
+                'RAG_AGENTIC_CACHE_BACKEND',
+                config_parser.get('RAG', 'agentic_cache_backend', fallback='memory')
+            )
+            _env_default(
+                'RAG_AGENTIC_CACHE_TTL_SEC',
+                config_parser.get('RAG', 'agentic_cache_ttl_sec', fallback='600')
+            )
+    except Exception as _rag_env_err:
+        logger.debug(f"RAG env propagation skipped: {_rag_env_err}")
+
     return config_parser
+
+
+# ----------------------------
+# RAG Toggle Helpers (bool/str/int)
+# ----------------------------
+def _as_bool(val: object, default: bool) -> bool:
+    if val is None:
+        return default
+    s = str(val).strip().lower()
+    if s in ("1", "true", "yes", "on", "y"):  # truthy
+        return True
+    if s in ("0", "false", "no", "off", "n"):
+        return False
+    return default
+
+
+def rag_enable_structure_index(default: bool = True) -> bool:
+    v = os.getenv("RAG_ENABLE_STRUCTURE_INDEX")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "enable_structure_index", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return _as_bool(v, default)
+
+
+def rag_strict_extractive(default: bool = False) -> bool:
+    v = os.getenv("RAG_STRICT_EXTRACTIVE")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "strict_extractive", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return _as_bool(v, default)
+
+
+def rag_require_hard_citations(default: bool = False) -> bool:
+    v = os.getenv("RAG_REQUIRE_HARD_CITATIONS")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "require_hard_citations", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return _as_bool(v, default)
+
+
+def rag_low_confidence_behavior(default: str = "continue") -> str:
+    v = os.getenv("RAG_LOW_CONFIDENCE_BEHAVIOR")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "low_confidence_behavior", fallback=default) if cp else default
+        except Exception:
+            v = default
+    s = str(v).strip().lower()
+    return s if s in ("continue", "ask", "decline") else default
+
+
+def rag_agentic_cache_backend(default: str = "memory") -> str:
+    v = os.getenv("RAG_AGENTIC_CACHE_BACKEND")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "agentic_cache_backend", fallback=default) if cp else default
+        except Exception:
+            v = default
+    s = str(v).strip().lower()
+    return s if s in ("memory", "sqlite") else default
+
+
+def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
+    v = os.getenv("RAG_AGENTIC_CACHE_TTL_SEC")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "agentic_cache_ttl_sec", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    try:
+        return max(1, int(str(v)))
+    except Exception:
+        return default
 
 
 @lru_cache(maxsize=1)
@@ -2096,19 +2225,19 @@ def load_and_log_configs():
                 rag_section['collection_prefix'] = config_parser_object.get('RAG', 'collection_prefix', fallback='unified')
                 # PGVector connection params under [RAG]
                 rag_section['pgvector'] = {
-                    'host': config_parser_object.get('RAG', 'pgvector_host', fallback=os.getenv('PGVECTOR_HOST', 'localhost')),
-                    'port': config_parser_object.getint('RAG', 'pgvector_port', fallback=int(os.getenv('PGVECTOR_PORT', '5432'))),
-                    'database': config_parser_object.get('RAG', 'pgvector_database', fallback=os.getenv('PGVECTOR_DATABASE', 'postgres')),
-                    'user': config_parser_object.get('RAG', 'pgvector_user', fallback=os.getenv('PGVECTOR_USER', 'postgres')),
-                    'password': config_parser_object.get('RAG', 'pgvector_password', fallback=os.getenv('PGVECTOR_PASSWORD', '')),
-                    'sslmode': config_parser_object.get('RAG', 'pgvector_sslmode', fallback=os.getenv('PGVECTOR_SSLMODE', 'prefer')),
-                    'dsn': config_parser_object.get('RAG', 'pgvector_dsn', fallback=os.getenv('PGVECTOR_DSN', '')) or None,
+                    'host': config_parser_object.get('RAG', 'pgvector_host', fallback='localhost'),
+                    'port': config_parser_object.getint('RAG', 'pgvector_port', fallback=5432),
+                    'database': config_parser_object.get('RAG', 'pgvector_database', fallback='postgres'),
+                    'user': config_parser_object.get('RAG', 'pgvector_user', fallback='postgres'),
+                    'password': config_parser_object.get('RAG', 'pgvector_password', fallback=''),
+                    'sslmode': config_parser_object.get('RAG', 'pgvector_sslmode', fallback='prefer'),
+                    'dsn': (config_parser_object.get('RAG', 'pgvector_dsn', fallback='') or None),
                     # Pool configuration (psycopg_pool)
-                    'pool_min_size': config_parser_object.getint('RAG', 'pgvector_pool_min_size', fallback=int(os.getenv('PGVECTOR_POOL_MIN_SIZE', '1'))),
-                    'pool_max_size': config_parser_object.getint('RAG', 'pgvector_pool_max_size', fallback=int(os.getenv('PGVECTOR_POOL_MAX_SIZE', '5'))),
-                    'pool_size': config_parser_object.getint('RAG', 'pgvector_pool_size', fallback=int(os.getenv('PGVECTOR_POOL_SIZE', '5'))),
+                    'pool_min_size': config_parser_object.getint('RAG', 'pgvector_pool_min_size', fallback=1),
+                    'pool_max_size': config_parser_object.getint('RAG', 'pgvector_pool_max_size', fallback=5),
+                    'pool_size': config_parser_object.getint('RAG', 'pgvector_pool_size', fallback=5),
                     # HNSW tuning
-                    'hnsw_ef_search': config_parser_object.getint('RAG', 'pgvector_hnsw_ef_search', fallback=int(os.getenv('PGVECTOR_HNSW_EF_SEARCH', '64'))),
+                    'hnsw_ef_search': config_parser_object.getint('RAG', 'pgvector_hnsw_ef_search', fallback=64),
                 }
             return_dict['RAG'] = rag_section
         except Exception:

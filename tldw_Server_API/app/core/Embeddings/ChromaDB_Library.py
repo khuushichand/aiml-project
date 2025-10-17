@@ -1589,6 +1589,18 @@ class _InMemoryCollection:
                 self._docs.pop(id_, None)
                 self._embs.pop(id_, None)
                 self._meta.pop(id_, None)
+        elif where:
+            # Delete by metadata filter
+            def _match(md: Dict[str, Any]) -> bool:
+                for k, v in (where or {}).items():
+                    if md.get(k) != v:
+                        return False
+                return True
+            to_delete = [k for k, md in list(self._meta.items()) if _match(md)]
+            for id_ in to_delete:
+                self._docs.pop(id_, None)
+                self._embs.pop(id_, None)
+                self._meta.pop(id_, None)
         return None
 
     def get(self, ids: Optional[List[str]] = None, where: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:

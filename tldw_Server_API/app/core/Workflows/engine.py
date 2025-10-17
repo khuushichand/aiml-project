@@ -78,6 +78,7 @@ class WorkflowEngine:
     def __init__(self, db: Optional[WorkflowsDatabase] = None, config: Optional[EngineConfig] = None):
         self.db = self._resolve_database(db)
         self.config = config or EngineConfig()
+        self._tenant_cache: Dict[str, str] = {}
 
     @classmethod
     def set_run_secrets(cls, run_id: str, secrets: Optional[dict[str, str]]) -> None:
@@ -118,6 +119,37 @@ class WorkflowEngine:
         except Exception:
             pass
 
+    def _tenant_for_run(self, run_id: Optional[str]) -> str:
+        """Resolve tenant id for a given run with simple caching."""
+        if not run_id:
+            return self.config.tenant_id
+        if run_id in self._tenant_cache:
+            return self._tenant_cache[run_id]
+        tenant = self.config.tenant_id
+        try:
+            run = self.db.get_run(run_id)
+            if run and getattr(run, "tenant_id", None):
+                tenant = str(run.tenant_id)
+        except Exception:
+            pass
+        self._tenant_cache[run_id] = tenant
+        return tenant
+
+    def _clear_tenant_cache(self, run_id: Optional[str]) -> None:
+        if not run_id:
+            return
+        try:
+            self._tenant_cache.pop(run_id, None)
+        except Exception:
+            pass
+
+    def _append_event(self, run_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None, step_run_id: Optional[str] = None) -> None:
+        try:
+            tenant = self._tenant_for_run(run_id)
+            self.db.append_event(tenant, run_id, event_type, payload or {}, step_run_id=step_run_id)
+        except Exception:
+            pass
+
     @staticmethod
     def _resolve_database(db: Optional[WorkflowsDatabase]) -> WorkflowsDatabase:
         if db is not None:
@@ -153,16 +185,34 @@ class WorkflowEngine:
         _r = self.db.get_run(run_id)
         _tenant_for_notify = _r.tenant_id if _r else self.config.tenant_id
         _wf_for_notify = _r.workflow_id if _r else None
+
+        def _finalize(keep: bool = False) -> None:
+            try:
+                if not keep:
+                    self._pop_run_secrets(run_id)
+            except Exception:
+                pass
+            self._clear_tenant_cache(run_id)
+            try:
+                WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
+            except Exception:
+                pass
+
+        keep_secrets = False
+        finalized = False
+
         self.db.update_run_status(run_id, status="running", started_at=self._now_iso())
-        self.db.append_event(self.config.tenant_id, run_id, "run_started", {"mode": mode})
+        self._append_event(run_id, "run_started", {"mode": mode})
         try:
-            increment_counter("workflows_runs_started", labels={"tenant": self.config.tenant_id, "mode": str(mode)})
+            increment_counter("workflows_runs_started", labels={"tenant": self._tenant_for_run(run_id), "mode": str(mode)})
         except Exception:
             pass
 
         run = self.db.get_run(run_id)
         if not run:
             self.db.update_run_status(run_id, status="failed", status_reason="run_not_found", ended_at=self._now_iso())
+            _finalize(False)
+            finalized = True
             return
 
         # Load definition snapshot (always stored on run creation)
@@ -230,7 +280,7 @@ class WorkflowEngine:
                     step_type = (step.get("type") or "").strip()
                     step_cfg = step.get("config") or {}
 
-                    self.db.append_event(self.config.tenant_id, run_id, "step_started", {"step_id": step_id, "type": step_type})
+                    self._append_event(run_id, "step_started", {"step_id": step_id, "type": step_type})
                     step_run_id = f"{run_id}:{step_id}:{int(time.time()*1000)}"
                     try:
                         self.db.create_step_run(
@@ -255,7 +305,7 @@ class WorkflowEngine:
                     # Cancel check before running
                     if self.db.is_cancel_requested(run_id):
                         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
-                        self.db.append_event(self.config.tenant_id, run_id, "run_cancelled", {"by": "user", "before_step": step_id})
+                        self._append_event(run_id, "run_cancelled", {"by": "user", "before_step": step_id})
                         return
 
                     # Execute with retries + timeout (trace nested span per step)
@@ -323,7 +373,7 @@ class WorkflowEngine:
                             break
                         except asyncio.TimeoutError as te:
                             err = te
-                            self.db.append_event(self.config.tenant_id, run_id, "step_timeout", {"step_id": step_id, "attempt": attempt})
+                            self._append_event(run_id, "step_timeout", {"step_id": step_id, "attempt": attempt})
                             try:
                                 record_span_exception(te)
                             except Exception:
@@ -348,7 +398,7 @@ class WorkflowEngine:
                     # Final outcome
                     if err:
                         # Failed step
-                        self.db.append_event(self.config.tenant_id, run_id, "step_failed", {"step_id": step_id, "error": str(err)})
+                        self._append_event(run_id, "step_failed", {"step_id": step_id, "error": str(err)})
                         try:
                             increment_counter("workflows_steps_failed", labels={"type": step_type})
                         except Exception:
@@ -372,10 +422,9 @@ class WorkflowEngine:
                             continue  # proceed to next selected step
                         # Otherwise, fail the run
                         self.db.update_run_status(run_id, status="failed", status_reason=str(err), ended_at=self._now_iso(), error=str(err))
-                        self.db.append_event(self.config.tenant_id, run_id, "run_failed", {"error": str(err)})
-                        # Run failure metrics
+                        self._append_event(run_id, "run_failed", {"error": str(err)})
                         try:
-                            increment_counter("workflows_runs_failed", labels={"tenant": self.config.tenant_id})
+                            increment_counter("workflows_runs_failed", labels={"tenant": self._tenant_for_run(run_id)})
                         except Exception:
                             pass
                         # Completion webhook on failure
@@ -383,9 +432,6 @@ class WorkflowEngine:
                             await self._maybe_send_completion_webhook(definition, run_id, status="failed")
                         except Exception:
                             pass
-                        finally:
-                            # Clear ephemeral secrets after terminal state
-                            self._pop_run_secrets(run_id)
                         return
 
                     # Success path or waiting handled inside adapter helper
@@ -398,6 +444,7 @@ class WorkflowEngine:
                             self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last_outputs)
                         except Exception:
                             pass
+                        keep_secrets = True
                         return
                     if status_flag == "cancelled":
                         try:
@@ -405,12 +452,12 @@ class WorkflowEngine:
                         except Exception:
                             pass
                         # Emit a step_cancelled event for observability
-                        self.db.append_event(self.config.tenant_id, run_id, "step_cancelled", {"step_id": step_id})
+                        self._append_event(run_id, "step_cancelled", {"step_id": step_id})
                         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
-                        self.db.append_event(self.config.tenant_id, run_id, "run_cancelled", {"by": "user", "during_step": step_id})
+                        self._append_event(run_id, "run_cancelled", {"by": "user", "during_step": step_id})
                         return
 
-                    self.db.append_event(self.config.tenant_id, run_id, "step_completed", {"step_id": step_id, "type": step_type})
+                    self._append_event(run_id, "step_completed", {"step_id": step_id, "type": step_type})
                     try:
                         increment_counter("workflows_steps_succeeded", labels={"type": step_type})
                     except Exception:
@@ -419,7 +466,7 @@ class WorkflowEngine:
                         observe_histogram(
                             "workflows_step_duration_ms",
                             int((time.time() - step_start_ts) * 1000),
-                            labels={"type": step_type, "tenant": self.config.tenant_id},
+                            labels={"type": step_type, "tenant": self._tenant_for_run(run_id)},
                         )
                     except Exception:
                         pass
@@ -459,11 +506,12 @@ class WorkflowEngine:
             except Exception:
                 duration_ms = None
             self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last_outputs)
-            self.db.append_event(self.config.tenant_id, run_id, "run_completed", {"success": True})
+            self._append_event(run_id, "run_completed", {"success": True})
             try:
-                increment_counter("workflows_runs_completed", labels={"tenant": self.config.tenant_id})
+                tenant_label = self._tenant_for_run(run_id)
+                increment_counter("workflows_runs_completed", labels={"tenant": tenant_label})
                 if duration_ms is not None:
-                    observe_histogram("workflows_run_duration_ms", duration_ms, labels={"tenant": self.config.tenant_id})
+                    observe_histogram("workflows_run_duration_ms", duration_ms, labels={"tenant": tenant_label})
             except Exception:
                 pass
             logger.info(f"WorkflowEngine: run {run_id} completed")
@@ -474,18 +522,42 @@ class WorkflowEngine:
                 pass
         except Exception as e:
             self.db.update_run_status(run_id, status="failed", status_reason=str(e), ended_at=self._now_iso(), error=str(e))
-            self.db.append_event(self.config.tenant_id, run_id, "run_failed", {"error": str(e)})
+            self._append_event(run_id, "run_failed", {"error": str(e)})
             logger.error(f"WorkflowEngine: run {run_id} failed: {e}")
             # Completion webhook on failure
             try:
                 await self._maybe_send_completion_webhook(definition, run_id, status="failed")
             except Exception:
                 pass
+        finally:
+            if not finalized:
+                _finalize(keep_secrets)
+                finalized = True
 
     async def continue_run(self, run_id: str, after_step_id: str, last_outputs: Optional[dict] = None) -> None:
         """Resume a run starting after the given step id (for human-in-loop)."""
         run = self.db.get_run(run_id)
+        _tenant_for_notify = getattr(run, "tenant_id", None) or self.config.tenant_id
+        _wf_for_notify = getattr(run, "workflow_id", None)
+
+        def _finalize(keep: bool = False) -> None:
+            try:
+                if not keep:
+                    self._pop_run_secrets(run_id)
+            except Exception:
+                pass
+            self._clear_tenant_cache(run_id)
+            try:
+                WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
+            except Exception:
+                pass
+
+        keep_secrets = False
+        finalized = False
+
         if not run:
+            _finalize(False)
+            finalized = True
             return
 
         try:
@@ -512,7 +584,7 @@ class WorkflowEngine:
             context["last"] = last_outputs
         # Mark running
         self.db.update_run_status(run_id, status="running", status_reason=None)
-        self.db.append_event(self.config.tenant_id, run_id, "run_resumed", {"after": after_step_id})
+        self._append_event(run_id, "run_resumed", {"after": after_step_id})
 
         # Execute with branching support
         last = last_outputs or {}
@@ -528,7 +600,7 @@ class WorkflowEngine:
             sname = step.get("name") or sid
             stype = (step.get("type") or "").strip()
             scfg = step.get("config") or {}
-            self.db.append_event(self.config.tenant_id, run_id, "step_started", {"step_id": sid, "type": stype})
+            self._append_event(run_id, "step_started", {"step_id": sid, "type": stype})
             step_run_id = f"{run_id}:{sid}:{int(time.time()*1000)}"
             try:
                 self.db.create_step_run(step_run_id=step_run_id, run_id=run_id, step_id=sid, name=sname, step_type=stype, inputs={"config": scfg})
@@ -543,13 +615,13 @@ class WorkflowEngine:
             # Cancel before running
             if self.db.is_cancel_requested(run_id):
                 self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
-                self.db.append_event(self.config.tenant_id, run_id, "run_cancelled", {"by": "user", "before_step": sid})
+                self._append_event(run_id, "run_cancelled", {"by": "user", "before_step": sid})
                 try:
                     await self._maybe_send_completion_webhook(definition, run_id, status="cancelled")
                 except Exception:
                     pass
-                finally:
-                    self._pop_run_secrets(run_id)
+                _finalize(False)
+                finalized = True
                 return
 
             step_timeout = int(step.get("timeout_seconds") or 300)
@@ -577,7 +649,7 @@ class WorkflowEngine:
                     break
                 except asyncio.TimeoutError as te:
                     err = te
-                    self.db.append_event(self.config.tenant_id, run_id, "step_timeout", {"step_id": sid, "attempt": attempt})
+                    self._append_event(run_id, "step_timeout", {"step_id": sid, "attempt": attempt})
                 except Exception as e:
                     err = e
                 if attempt <= max_retries:
@@ -590,7 +662,7 @@ class WorkflowEngine:
                     await asyncio.sleep(backoff + jitter)
 
             if err:
-                self.db.append_event(self.config.tenant_id, run_id, "step_failed", {"step_id": sid, "error": str(err)})
+                self._append_event(run_id, "step_failed", {"step_id": sid, "error": str(err)})
                 try:
                     self.db.complete_step_run(step_run_id=step_run_id, status="failed", outputs=outputs, error=str(err))
                 except Exception:
@@ -602,11 +674,13 @@ class WorkflowEngine:
                     idx = id_to_idx[failure_next]
                     continue
                 self.db.update_run_status(run_id, status="failed", status_reason=str(err), ended_at=self._now_iso(), error=str(err))
-                self.db.append_event(self.config.tenant_id, run_id, "run_failed", {"error": str(err)})
+                self._append_event(run_id, "run_failed", {"error": str(err)})
                 try:
                     await self._maybe_send_completion_webhook(definition, run_id, status="failed")
                 except Exception:
                     pass
+                _finalize(False)
+                finalized = True
                 return
 
             last = outputs or {}
@@ -616,24 +690,27 @@ class WorkflowEngine:
                     self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last)
                 except Exception:
                     pass
+                keep_secrets = True
+                _finalize(True)
+                finalized = True
                 return
             if last.get("__status__") == "cancelled":
                 try:
                     self.db.complete_step_run(step_run_id=step_run_id, status="cancelled", outputs=last)
                 except Exception:
                     pass
-                self.db.append_event(self.config.tenant_id, run_id, "step_cancelled", {"step_id": sid})
+                self._append_event(run_id, "step_cancelled", {"step_id": sid})
                 self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
-                self.db.append_event(self.config.tenant_id, run_id, "run_cancelled", {"by": "user", "during_step": sid})
+                self._append_event(run_id, "run_cancelled", {"by": "user", "during_step": sid})
                 try:
                     await self._maybe_send_completion_webhook(definition, run_id, status="cancelled")
                 except Exception:
                     pass
-                finally:
-                    self._pop_run_secrets(run_id)
+                _finalize(False)
+                finalized = True
                 return
 
-            self.db.append_event(self.config.tenant_id, run_id, "step_completed", {"step_id": sid, "type": stype})
+            self._append_event(run_id, "step_completed", {"step_id": sid, "type": stype})
             try:
                 self.db.complete_step_run(step_run_id=step_run_id, status="succeeded", outputs=last)
             except Exception:
@@ -683,18 +760,15 @@ class WorkflowEngine:
         except Exception:
             pass
         self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last, tokens_input=tokens_in, tokens_output=tokens_out, cost_usd=cost_usd)
-        self.db.append_event(self.config.tenant_id, run_id, "run_completed", {"success": True})
+        self._append_event(run_id, "run_completed", {"success": True})
         try:
             await self._maybe_send_completion_webhook(definition, run_id, status="succeeded")
         except Exception:
             pass
-        finally:
-            # Clear ephemeral secrets after terminal state
-            self._pop_run_secrets(run_id)
-            try:
-                WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
-            except Exception:
-                pass
+
+        if not finalized:
+            _finalize(keep_secrets)
+            finalized = True
 
     def submit(self, run_id: str, mode: RunMode = RunMode.ASYNC) -> None:
         """Submit a run for execution via scheduler (respects concurrency limits)."""
@@ -706,11 +780,11 @@ class WorkflowEngine:
 
     def pause(self, run_id: str) -> None:
         self.db.update_run_status(run_id, status="paused", status_reason="paused_by_user")
-        self.db.append_event(self.config.tenant_id, run_id, "run_paused", {"by": "user"})
+        self._append_event(run_id, "run_paused", {"by": "user"})
 
     def resume(self, run_id: str) -> None:
         self.db.update_run_status(run_id, status="running", status_reason=None)
-        self.db.append_event(self.config.tenant_id, run_id, "run_resumed", {"by": "user"})
+        self._append_event(run_id, "run_resumed", {"by": "user"})
 
     def cancel(self, run_id: str) -> None:
         try:
@@ -733,11 +807,12 @@ class WorkflowEngine:
                     terminated, forced = terminate_process(task)  # type: ignore[arg-type]
                 except Exception:
                     terminated, forced = (False, False)
-                self.db.append_event(self.config.tenant_id, run_id, "step_cancelled", {"step_run_id": r.get("step_run_id"), "forced_kill": bool(forced)})
+                self._append_event(run_id, "step_cancelled", {"step_run_id": r.get("step_run_id"), "forced_kill": bool(forced)})
         except Exception:
             pass
         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user")
-        self.db.append_event(self.config.tenant_id, run_id, "run_cancelled", {"by": "user"})
+        self._append_event(run_id, "run_cancelled", {"by": "user"})
+        self._clear_tenant_cache(run_id)
 
     @staticmethod
     def _now_iso() -> str:
@@ -819,7 +894,7 @@ class WorkflowEngine:
                 stdout_path=str(stdout_path) if stdout_path is not None else None,
                 stderr_path=str(stderr_path) if stderr_path is not None else None,
             )
-            ctx["append_event"] = lambda etype, payload=None: self.db.append_event(self.config.tenant_id, run_id, etype, payload or {}, step_run_id=step_run_id)
+            ctx["append_event"] = lambda etype, payload=None: self._append_event(run_id, etype, payload or {}, step_run_id=step_run_id)
             # Add artifact helper
             def _add_artifact(type: str, uri: str, size_bytes: Optional[int] = None, mime_type: Optional[str] = None, checksum_sha256: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, artifact_id: Optional[str] = None) -> None:
                 try:
@@ -909,7 +984,7 @@ class WorkflowEngine:
             # Mark run waiting, signal caller via special status
             wait_status = "waiting_human" if step_type == "wait_for_human" else "waiting_approval"
             self.db.update_run_status(run_id, status=wait_status, status_reason="awaiting_review")
-            self.db.append_event(self.config.tenant_id, run_id, wait_status, {})
+            self._append_event(run_id, wait_status, {})
             return {"__status__": wait_status}
         # Avoid f-string here to prevent any quoting issues across Python versions
         raise RuntimeError("Unsupported step type: {}".format(step_type))
@@ -928,7 +1003,8 @@ class WorkflowEngine:
                 except Exception:
                     pass
                 self.db.update_run_status(str(rid), status="failed", status_reason="orphan_reaped", ended_at=self._now_iso())
-                self.db.append_event(self.config.tenant_id, str(rid), "run_failed", {"status_reason": "orphan_reaped", "step_run_id": sid})
+                if rid:
+                    self._append_event(str(rid), "run_failed", {"status_reason": "orphan_reaped", "step_run_id": sid})
         except Exception as e:
             logger.warning(f"Orphan reaper failed: {e}")
 
@@ -985,7 +1061,7 @@ class WorkflowEngine:
                     try:
                         from urllib.parse import urlparse as _urlparse
                         host = _urlparse(url).hostname or ""
-                        self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "blocked"})
+                        self._append_event(run_id, "webhook_delivery", {"host": host, "status": "blocked"})
                         try:
                             from tldw_Server_API.app.core.Metrics import increment_counter as _inc
                             _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": host})
@@ -1063,7 +1139,7 @@ class WorkflowEngine:
                 # Record delivery event (mask full URL)
                 try:
                     host = _urlparse(url).hostname or ""
-                    self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "delivered", "code": int(resp.status_code)})
+                    self._append_event(run_id, "webhook_delivery", {"host": host, "status": "delivered", "code": int(resp.status_code)})
                     try:
                         from tldw_Server_API.app.core.Metrics import increment_counter as _inc
                         _inc("workflows_webhook_deliveries_total", labels={"status": "delivered", "host": host})
@@ -1076,7 +1152,7 @@ class WorkflowEngine:
                 try:
                     from urllib.parse import urlparse as _urlparse
                     host = _urlparse(url).hostname or ""
-                    self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "failed"})
+                    self._append_event(run_id, "webhook_delivery", {"host": host, "status": "failed"})
                     try:
                         from tldw_Server_API.app.core.Metrics import increment_counter as _inc
                         _inc("workflows_webhook_deliveries_total", labels={"status": "failed", "host": host})
@@ -1088,7 +1164,7 @@ class WorkflowEngine:
                     except Exception:
                         body_data = None
                     try:
-                        self.db.enqueue_webhook_dlq(tenant_id=self.config.tenant_id, run_id=run_id, url=url, body=body_data, last_error=str(_e))
+                        self.db.enqueue_webhook_dlq(tenant_id=self._tenant_for_run(run_id), run_id=run_id, url=url, body=body_data, last_error=str(_e))
                     except Exception:
                         pass
                 except Exception:
@@ -1117,76 +1193,89 @@ class WorkflowScheduler:
         self._active_workflow: Dict[Optional[int], int] = {}
         self.tenant_limit = int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2"))
         self.workflow_limit = int(os.getenv("WORKFLOWS_WORKFLOW_CONCURRENCY", "1"))
+        self._lock = threading.Lock()
+        self._set_queue_gauge(0)
+
+    @staticmethod
+    def _set_queue_gauge(value: float) -> None:
         try:
             from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
-            _set_gauge("workflows_engine_queue_depth", 0)
+            _set_gauge("workflows_engine_queue_depth", float(value))
         except Exception:
             pass
 
     def schedule(self, engine: "WorkflowEngine", run_id: str, mode: RunMode) -> None:
-        run = engine.db.get_run(run_id)
-        if not run:
-            self._spawn(engine.start_run(run_id, mode))
-            return
-        tenant = run.tenant_id
-        wf = run.workflow_id
-        if self._can_start(tenant, wf):
-            self._start(engine, run_id, mode, tenant, wf)
-        else:
-            self._queue.append((engine, run_id, mode, tenant, wf))
-        # Update queue depth gauge
-        try:
-            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
-            _set_gauge("workflows_engine_queue_depth", float(len(self._queue)))
-        except Exception:
-            pass
+        queue_depth = 0.0
+        with self._lock:
+            run = engine.db.get_run(run_id)
+            if not run:
+                self._spawn(engine.start_run(run_id, mode))
+            else:
+                tenant = run.tenant_id
+                wf = run.workflow_id
+                if self._can_start(tenant, wf):
+                    self._start_locked(engine, run_id, mode, tenant, wf)
+                else:
+                    self._queue.append((engine, run_id, mode, tenant, wf))
+            queue_depth = float(len(self._queue))
+        self._set_queue_gauge(queue_depth)
 
     def notify_finished(self, tenant: str, workflow_id: Optional[int]) -> None:
-        if tenant:
-            self._active_tenant[tenant] = max(0, self._active_tenant.get(tenant, 0) - 1)
-        if workflow_id is not None:
-            self._active_workflow[workflow_id] = max(0, self._active_workflow.get(workflow_id, 0) - 1)
-        # Try to launch next admissible queued item (fair FIFO scan)
-        for _ in range(len(self._queue)):
-            engine, run_id, mode, t, wf = self._queue[0]
-            if self._can_start(t, wf):
-                self._queue.popleft()
-                self._start(engine, run_id, mode, t, wf)
-                break
-            else:
-                self._queue.rotate(-1)
-        # Update queue depth gauge
-        try:
-            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
-            _set_gauge("workflows_engine_queue_depth", float(len(self._queue)))
-        except Exception:
-            pass
+        queue_depth = 0.0
+        with self._lock:
+            if tenant:
+                self._active_tenant[tenant] = max(0, self._active_tenant.get(tenant, 0) - 1)
+            if workflow_id is not None:
+                self._active_workflow[workflow_id] = max(0, self._active_workflow.get(workflow_id, 0) - 1)
+            # Try to launch next admissible queued item (fair FIFO scan)
+            for _ in range(len(self._queue)):
+                engine, run_id, mode, t, wf = self._queue[0]
+                if self._can_start(t, wf):
+                    self._queue.popleft()
+                    self._start_locked(engine, run_id, mode, t, wf)
+                    break
+                else:
+                    self._queue.rotate(-1)
+            queue_depth = float(len(self._queue))
+        self._set_queue_gauge(queue_depth)
 
     def _can_start(self, tenant: str, workflow_id: Optional[int]) -> bool:
         return self._active_tenant.get(tenant, 0) < self.tenant_limit and self._active_workflow.get(workflow_id, 0) < self.workflow_limit
 
-    def _start(self, engine: "WorkflowEngine", run_id: str, mode: RunMode, tenant: str, workflow_id: Optional[int]) -> None:
+    def _start_locked(self, engine: "WorkflowEngine", run_id: str, mode: RunMode, tenant: str, workflow_id: Optional[int]) -> None:
         self._active_tenant[tenant] = self._active_tenant.get(tenant, 0) + 1
         if workflow_id is not None:
             self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1
         self._spawn(engine.start_run(run_id, mode))
-        # Update queue depth gauge (start removed one only when from queue)
-        try:
-            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
-            _set_gauge("workflows_engine_queue_depth", float(len(self._queue)))
-        except Exception:
-            pass
 
     # Health/metrics helpers
     def queue_depth(self) -> int:
-        return len(self._queue)
+        with self._lock:
+            return len(self._queue)
 
     def stats(self) -> Dict[str, int]:
-        return {
-            "queue_depth": len(self._queue),
-            "active_tenants": sum(self._active_tenant.values()) if self._active_tenant else 0,
-            "active_workflows": sum(self._active_workflow.values()) if self._active_workflow else 0,
-        }
+        with self._lock:
+            return {
+                "queue_depth": len(self._queue),
+                "active_tenants": sum(self._active_tenant.values()) if self._active_tenant else 0,
+                "active_workflows": sum(self._active_workflow.values()) if self._active_workflow else 0,
+            }
+
+    def drain_pending(self, run_id: str) -> bool:
+        """Remove a pending run from the queue if present (to allow inline execution)."""
+        queue_depth = 0.0
+        removed = False
+        with self._lock:
+            for _ in range(len(self._queue)):
+                engine, rid, mode, tenant, wf = self._queue.popleft()
+                if rid == run_id and not removed:
+                    removed = True
+                    continue
+                self._queue.append((engine, rid, mode, tenant, wf))
+            queue_depth = float(len(self._queue))
+        if removed:
+            self._set_queue_gauge(queue_depth)
+        return removed
 
     @staticmethod
     def _spawn(coro):

@@ -24,14 +24,8 @@ def _fresh_client() -> TestClient:
     reset_settings()
     # Reset DB pool (async); tests using TestClient will run lifespan and initialize anew
     try:
-        # Best-effort reset if event loop present; ignore errors in sync context
         import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # In case of already running loop (rare here), schedule and wait
-            loop.run_until_complete(reset_db_pool())  # type: ignore[arg-type]
-        else:
-            loop.run_until_complete(reset_db_pool())
+        asyncio.run(reset_db_pool())
     except Exception:
         pass
 

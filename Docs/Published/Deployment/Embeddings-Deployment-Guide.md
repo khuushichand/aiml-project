@@ -239,6 +239,30 @@ Most runtime behavior is configured via code defaults or YAML, not environment v
 
 Advanced constants like batch size, cache TTL, and connection pool are code-level defaults in `embeddings_v5_production_enhanced.py`.
 
+### Vector Store Backend Selection (config.txt)
+For production, vector store configuration is read from `config.txt` and determines whether ChromaDB (default) or pgvector is used.
+
+Example `config.txt` snippet (RAG section):
+
+```
+[RAG]
+vector_store_type = pgvector
+pgvector_host = localhost
+pgvector_port = 5432
+pgvector_database = tldw_content
+pgvector_user = tldw_user
+pgvector_password = <your_password>
+pgvector_sslmode = prefer
+# Optional knobs
+pgvector_pool_min_size = 1
+pgvector_pool_max_size = 5
+pgvector_hnsw_ef_search = 64
+```
+
+Notes:
+- For normal server operation, the pgvector values above are authoritative; environment variables do not override them.
+- Admin ef_search controls apply to pgvector only; Chroma treats them as no-ops.
+
 ### HYDE Retrieval Flags (optional)
 If you enable HYDE/doc2query vector generation, you can tune retrieval fusion behavior via env flags:
 

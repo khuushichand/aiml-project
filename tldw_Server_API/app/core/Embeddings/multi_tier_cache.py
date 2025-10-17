@@ -105,6 +105,10 @@ class L1MemoryCache:
         with self._lock:
             # Calculate size
             size_bytes = self._estimate_size(value)
+            if key in self.cache:
+                existing_entry = self.cache[key]
+                self.current_size_bytes = max(0, self.current_size_bytes - existing_entry.size_bytes)
+                del self.cache[key]
             
             # Check if we need to evict entries
             while self.current_size_bytes + size_bytes > self.max_size_bytes:

@@ -31,6 +31,7 @@ Notes
 - The function is intentionally simple and language-agnostic. For large synonym sets, consider batching or limiting updates.
 - This feature is independent of SQLite FTS synonym expansion, which uses index-time content augmentation during insert/update.
 - If you already maintain a server-level text search configuration/dictionary, you can disable this (`PG_FTS_ENABLE_SYNONYMS=false`) and keep your DBA-managed approach.
+- The server looks for JSON files under `Config_Files/Synonyms/`. You can override the root via `TLDW_CONFIG_PATH` (path to `config.txt`) or `TLDW_CONFIG_DIR` (directory containing `config.txt`).
 
 Troubleshooting
 - Ensure the DB user has permission to create functions and tables in the `public` schema.

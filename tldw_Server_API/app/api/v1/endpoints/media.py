@@ -2179,7 +2179,7 @@ async def _save_uploaded_files(
     validator: FileValidator,
     expected_media_type_key: Optional[str] = None,
     allowed_extensions: Optional[List[str]] = None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+) -> Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """
     Saves uploaded files to a temporary directory, validating them.
     Requires a FileValidator instance.

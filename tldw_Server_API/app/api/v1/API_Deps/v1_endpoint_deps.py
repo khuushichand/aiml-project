@@ -55,6 +55,8 @@ async def verify_token(
                 logger.warning("Invalid X-API-KEY provided in single-user mode.")
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token.")
         else:
+            if Token:
+                logger.warning("Deprecated header 'Token' used; switch to 'Authorization: Bearer' or 'X-API-KEY'.")
             # Legacy path: Token header is compared against core config dict (older tests patch this)
             expected_token = settings.get("SINGLE_USER_API_KEY")
             if not expected_token:
@@ -69,6 +71,7 @@ async def verify_token(
     else:
         # Multi-user mode: accept either a JWT token (Token header) or an X-API-KEY validated against the DB
         if Token:
+            logger.warning("Deprecated header 'Token' used; switch to 'Authorization: Bearer'.")
             jwt_service = get_jwt_service()
             try:
                 payload = jwt_service.decode_access_token(Token)

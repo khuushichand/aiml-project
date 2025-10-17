@@ -34,6 +34,12 @@ from .agentic_tools import make_default_registry
 from .unified_pipeline import UnifiedSearchResult
 from .database_retrievers import MultiDatabaseRetriever, RetrievalConfig
 
+# Expose AnswerGenerator at module level for tests/patching parity with unified pipeline
+try:
+    from .generation import AnswerGenerator  # type: ignore
+except Exception:
+    AnswerGenerator = None  # type: ignore
+
 
 @dataclass
 class AgenticConfig:
@@ -89,6 +95,33 @@ class AgenticConfig:
 
 # Simple in-process caches (namespaced via adapter)
 _INTRA_DOC_VEC_CACHE: Dict[str, Any] = {}
+# Back-compat ephemeral cache dict used by older tests
+_EPHEMERAL_CACHE: Dict[str, Any] = {}
+
+# Lazy DB handle for structure index lookups
+_STRUCT_DB: Any = None
+
+def _get_media_db_for_structure() -> Any:
+    """Return a MediaDatabase instance bound to the configured content backend.
+
+    Uses a singleton to avoid repeated initialization. Returns None on failure.
+    """
+    global _STRUCT_DB
+    if _STRUCT_DB is not None:
+        return _STRUCT_DB
+    try:
+        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MDB
+        from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend as _get_cb
+        from tldw_Server_API.app.core.config import load_comprehensive_config as _load_cfg
+        cfg = _load_cfg()
+        backend = _get_cb(cfg) if cfg else None
+        if backend is None:
+            return None
+        # Use in-memory path; backend drives the actual connection
+        _STRUCT_DB = _MDB(db_path=":memory:", client_id="agentic_toolbox", backend=backend)
+        return _STRUCT_DB
+    except Exception:
+        return None
 
 
 def _now() -> float:
@@ -97,11 +130,17 @@ def _now() -> float:
 
 def _cache_get(key: str) -> Optional[Dict[str, Any]]:
     v = AGENTIC_CACHE.get("ephemeral_chunk", key)
-    return v if isinstance(v, dict) else None
+    if isinstance(v, dict):
+        return v
+    # Fallback to legacy dict
+    v2 = _EPHEMERAL_CACHE.get(key)
+    return v2 if isinstance(v2, dict) else None
 
 
 def _cache_set(key: str, value: Dict[str, Any], ttl: int) -> None:
     AGENTIC_CACHE.set("ephemeral_chunk", key, value, ttl)
+    # Mirror into legacy dict for test visibility
+    _EPHEMERAL_CACHE[key] = value
 
 
 def invalidate_intra_doc_vectors(media_id: str) -> int:
@@ -130,6 +169,10 @@ def clear_agentic_caches() -> None:
         pass
     try:
         _INTRA_DOC_VEC_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        _EPHEMERAL_CACHE.clear()
     except Exception:
         pass
 
@@ -409,6 +452,23 @@ class AgenticToolbox:
 
     def open_section(self, doc: Document, heading: str) -> Optional[Tuple[int, int]]:
         """Find a section by heuristic heading match; returns [start,end) char range."""
+        # Prefer DB-backed structure index when available
+        try:
+            from tldw_Server_API.app.core.config import rag_enable_structure_index
+            _enable_si = rag_enable_structure_index()
+        except Exception:
+            _enable_si = True
+        if _enable_si:
+            try:
+                mid_raw = (doc.metadata or {}).get('media_id') if isinstance(doc.metadata, dict) else None
+                if mid_raw is not None:
+                    db = _get_media_db_for_structure()
+                    if db is not None:
+                        res = db.lookup_section_by_heading(int(str(mid_raw)), heading)
+                        if isinstance(res, tuple):
+                            return (int(res[0]), int(res[1]))
+            except Exception:
+                pass
         if self.cfg.enable_section_index and doc.id in self._sections:
             secs = self._sections.get(doc.id) or []
             for title, s, e in secs:
@@ -708,6 +768,9 @@ async def agentic_rag_pipeline(
     claims_max: int = 25,
     nli_model: Optional[str] = None,
     claims_concurrency: int = 8,
+    # NLI/low-confidence gate
+    adaptive_unsupported_threshold: float = 0.15,
+    low_confidence_behavior: str = "continue",
 ) -> UnifiedSearchResult:
     """Agentic RAG: coarse retrieve, assemble ephemeral chunk, optional answer.
 
@@ -715,6 +778,14 @@ async def agentic_rag_pipeline(
     """
     t0 = time.time()
     cfg = agentic or AgenticConfig()
+
+    # Config-driven default: require_hard_citations toggle
+    try:
+        from tldw_Server_API.app.core.config import rag_require_hard_citations as _rag_req_hc
+        if not bool(require_hard_citations) and bool(_rag_req_hc(default=False)):
+            require_hard_citations = True  # type: ignore[assignment]
+    except Exception:
+        pass
 
     # 1) Build retriever
     db_paths: Dict[str, str] = {}
@@ -1047,7 +1118,7 @@ async def agentic_rag_pipeline(
         except Exception as _ec:
             result.errors.append(f"Hard citations failed: {str(_ec)}")
 
-        # Numeric fidelity check and optional mitigation
+    # Numeric fidelity check and optional mitigation
         try:
             from .guardrails import check_numeric_fidelity
             if enable_numeric_fidelity and check_numeric_fidelity:
@@ -1087,6 +1158,62 @@ async def agentic_rag_pipeline(
                                 pass
         except Exception as _enf:
             result.errors.append(f"Numeric fidelity check failed: {str(_enf)}")
+
+        # NLI low-confidence gate (lightweight, optional)
+        try:
+            if enable_claims and result.generated_answer:
+                from .post_generation_verifier import PostGenerationVerifier as _PGV
+                verifier = _PGV(max_retries=0, unsupported_threshold=float(adaptive_unsupported_threshold or 0.15), max_claims=min(10, int(claims_max or 25)))
+                vres = await verifier.verify_and_maybe_fix(
+                    query=query,
+                    answer=result.generated_answer,
+                    base_documents=result.documents or [],
+                    media_db_path=media_db_path,
+                    notes_db_path=notes_db_path,
+                    character_db_path=character_db_path,
+                    user_id="rag_agentic",
+                    generation_model=generation_model,
+                    existing_claims=None,
+                    existing_summary=None,
+                    search_mode=search_mode,
+                    hybrid_alpha=hybrid_alpha,
+                    top_k=top_k,
+                )
+                result.metadata.setdefault("post_verification", {})
+                result.metadata["post_verification"].update({
+                    "unsupported_ratio": vres.unsupported_ratio,
+                    "total_claims": vres.total_claims,
+                    "unsupported_count": vres.unsupported_count,
+                    "fixed": vres.fixed,
+                    "reason": vres.reason,
+                })
+                # Gauge and gate behavior
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge, increment_counter
+                    set_gauge("rag_nli_unsupported_ratio", float(vres.unsupported_ratio or 0.0), labels={"strategy": "agentic"})
+                except Exception:
+                    pass
+                low_conf = (vres.unsupported_ratio > float(adaptive_unsupported_threshold or 0.15)) and (not vres.fixed)
+                if low_conf:
+                    result.metadata.setdefault("generation_gate", {})
+                    result.metadata["generation_gate"].update({
+                        "reason": "nli_low_confidence",
+                        "unsupported_ratio": float(vres.unsupported_ratio or 0.0),
+                        "threshold": float(adaptive_unsupported_threshold or 0.15),
+                        "at": time.time(),
+                    })
+                    try:
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                        increment_counter("rag_nli_low_confidence_total", 1)
+                    except Exception:
+                        pass
+                    if low_confidence_behavior == "ask":
+                        note = "\n\n[Note] Evidence is insufficient; please clarify or provide more context."
+                        result.generated_answer = (result.generated_answer or "") + note
+                    elif low_confidence_behavior == "decline":
+                        result.generated_answer = "Insufficient evidence found to answer confidently."
+        except Exception as _enlv:
+            result.errors.append(f"NLI verification failed: {str(_enlv)}")
 
     # Include tool trace on debug
     if (debug_mode or cfg.debug_trace) and (not cached_hit) and cfg.enable_tools:

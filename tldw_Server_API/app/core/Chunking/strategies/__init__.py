@@ -13,6 +13,7 @@ from .tokens import TokenChunkingStrategy
 from .structure_aware import StructureAwareChunkingStrategy
 from .semantic import SemanticChunkingStrategy
 from .json_xml import JSONChunkingStrategy, XMLChunkingStrategy
+from .fixed_size import FixedSizeChunkingStrategy
 
 # Strategy registry will be populated as strategies are implemented
 STRATEGY_REGISTRY: Dict[str, Type[ChunkingStrategy]] = {
@@ -23,6 +24,7 @@ STRATEGY_REGISTRY: Dict[str, Type[ChunkingStrategy]] = {
     'semantic': SemanticChunkingStrategy,
     'json': JSONChunkingStrategy,
     'xml': XMLChunkingStrategy,
+    'fixed_size': FixedSizeChunkingStrategy,
 }
 
 def get_strategy(name: str) -> Type[ChunkingStrategy]:

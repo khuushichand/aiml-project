@@ -9,6 +9,8 @@ import pytest
 import os
 from fastapi import status
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+
 # ========================================================================
 # Basic Endpoint Tests
 # ========================================================================
@@ -202,9 +204,9 @@ class TestDatabaseIntegration:
             assert response.status_code == status.HTTP_200_OK
             
             # Check database for saved conversation
-            # Get the Default Character first
+            # Get the default character first
             characters = populated_chacha_db.list_character_cards()
-            default_char = next((c for c in characters if c['name'] == 'Default Character'), None)
+            default_char = next((c for c in characters if c['name'] == DEFAULT_CHARACTER_NAME), None)
             assert default_char is not None
             
             # Get conversations for the character
@@ -230,9 +232,9 @@ class TestDatabaseIntegration:
             characters = populated_chacha_db.list_character_cards()
             assert len(characters) > 0
             
-            # Find the character we created in the fixture (Default Character with client_id test_user)
-            test_char = next((c for c in characters if c['name'] == 'Default Character' and c['client_id'] == 'test_user'), None)
-            assert test_char is not None, "Could not find test character 'Default Character'"
+            # Find the character we created in the fixture (default character with client_id test_user)
+            test_char = next((c for c in characters if c['name'] == DEFAULT_CHARACTER_NAME and c['client_id'] == 'test_user'), None)
+            assert test_char is not None, f"Could not find test character '{DEFAULT_CHARACTER_NAME}'"
             
             conversations = populated_chacha_db.get_conversations_for_character(test_char["id"])
             assert len(conversations) > 0

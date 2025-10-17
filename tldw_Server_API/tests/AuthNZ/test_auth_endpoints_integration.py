@@ -144,10 +144,20 @@ class TestAuthEndpointsIntegration:
     @pytest.mark.asyncio
     async def test_login_invalid_credentials(self, mock_db_pool):
         """Test login with invalid credentials."""
-        mock_db_pool.fetchrow = AsyncMock(return_value=None)
-        
+        # Provide an override that matches the endpoint's usage pattern
+        # (await db.execute(...); await cursor.fetchone()) and returns no user.
+        class _StubCursor:
+            async def fetchone(self):
+                return None
+
+        class _StubConn:
+            async def execute(self, *args, **kwargs):
+                return _StubCursor()
+
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_db_transaction
-        app.dependency_overrides[get_db_transaction] = lambda: mock_db_pool
+        async def _override_db_tx():
+            return _StubConn()
+        app.dependency_overrides[get_db_transaction] = _override_db_tx
         
         async with AsyncClient(
             transport=ASGITransport(app=app),

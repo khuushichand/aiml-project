@@ -3,7 +3,7 @@ Unit tests for JWT service.
 """
 
 import pytest
-import jwt
+from jose import jwt
 from datetime import datetime, timedelta
 from hypothesis import given, strategies as st, assume, settings as hypothesis_settings, HealthCheck
 from hypothesis.strategies import text, integers
@@ -134,6 +134,69 @@ class TestJWTServiceUnit:
         
         assert payload["session_id"] == "session-123"
         assert payload["custom_claim"] == "custom_value"
+
+    def test_issuer_audience_enforced(self):
+        """Ensure tokens with wrong/missing iss/aud fail and correct ones pass (HS)."""
+        settings = Settings(
+            AUTH_MODE="multi_user",
+            JWT_SECRET_KEY="test-key-that-is-at-least-32-characters-long",
+            JWT_ALGORITHM="HS256",
+            JWT_ISSUER="tldw.test",
+            JWT_AUDIENCE="tldw.clients",
+            ACCESS_TOKEN_EXPIRE_MINUTES=5,
+            REFRESH_TOKEN_EXPIRE_DAYS=7,
+            SESSION_CLEANUP_INTERVAL_HOURS=24,
+            SESSION_MAX_AGE_DAYS=30,
+            RATE_LIMIT_ENABLED=False,
+            PASSWORD_MIN_LENGTH=8,
+            PASSWORD_REQUIRE_UPPERCASE=True,
+            PASSWORD_REQUIRE_LOWERCASE=True,
+            PASSWORD_REQUIRE_DIGIT=True,
+            PASSWORD_REQUIRE_SPECIAL=False,
+            REGISTRATION_ENABLED=True,
+            REGISTRATION_REQUIRE_CODE=False,
+            REGISTRATION_CODES=[],
+            DEFAULT_USER_ROLE="user",
+            DEFAULT_STORAGE_QUOTA_MB=1000,
+            EMAIL_VERIFICATION_REQUIRED=False,
+            CORS_ORIGINS=["*"],
+            API_PREFIX="/api/v1",
+        )
+        svc = JWTService(settings=settings)
+        good = svc.create_access_token(1, "good", "user")
+        # Verify good token passes
+        assert svc.decode_access_token(good)["sub"] == "1"
+        # Mint a token with wrong audience by temporarily overriding settings
+        bad_settings = Settings(
+            AUTH_MODE="multi_user",
+            JWT_SECRET_KEY=settings.JWT_SECRET_KEY,
+            JWT_ALGORITHM="HS256",
+            JWT_ISSUER="tldw.test",
+            JWT_AUDIENCE="wrong.aud",
+            ACCESS_TOKEN_EXPIRE_MINUTES=5,
+            REFRESH_TOKEN_EXPIRE_DAYS=7,
+            SESSION_CLEANUP_INTERVAL_HOURS=24,
+            SESSION_MAX_AGE_DAYS=30,
+            RATE_LIMIT_ENABLED=False,
+            PASSWORD_MIN_LENGTH=8,
+            PASSWORD_REQUIRE_UPPERCASE=True,
+            PASSWORD_REQUIRE_LOWERCASE=True,
+            PASSWORD_REQUIRE_DIGIT=True,
+            PASSWORD_REQUIRE_SPECIAL=False,
+            REGISTRATION_ENABLED=True,
+            REGISTRATION_REQUIRE_CODE=False,
+            REGISTRATION_CODES=[],
+            DEFAULT_USER_ROLE="user",
+            DEFAULT_STORAGE_QUOTA_MB=1000,
+            EMAIL_VERIFICATION_REQUIRED=False,
+            CORS_ORIGINS=["*"],
+            API_PREFIX="/api/v1",
+        )
+        svc_bad = JWTService(settings=bad_settings)
+        bad = svc_bad.create_access_token(1, "bad", "user")
+        import pytest
+        with pytest.raises(InvalidTokenError):
+            svc.decode_access_token(bad)
 
 
 class TestJWTServiceProperty:

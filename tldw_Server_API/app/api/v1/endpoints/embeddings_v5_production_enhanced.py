@@ -10,6 +10,8 @@ Key enhancements over v5:
 - Enhanced monitoring and observability
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import base64
@@ -389,24 +391,61 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
 
     # Per-tenant quotas in multi-user mode
     try:
-        if not is_single_user_mode() and TENANT_RPS > 0:
+        def _is_multi_user_runtime() -> bool:
+            try:
+                am = os.getenv("AUTH_MODE")
+                if am:
+                    return am.strip().lower() == "multi_user"
+            except Exception:
+                pass
+            try:
+                return not is_single_user_mode()
+            except Exception:
+                return False
+
+        # Read tenant RPS dynamically so tests can monkeypatch env at runtime
+        def _tenant_rps_runtime() -> int:
+            try:
+                # Prefer env var when set during tests; fall back to settings
+                env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
+                if env_val is not None and str(env_val).strip() != "":
+                    return int(env_val)
+            except Exception:
+                pass
+            try:
+                v = settings.get("EMBEDDINGS_TENANT_RPS", 0)
+                if isinstance(v, (int, float)):
+                    return int(v)
+            except Exception:
+                pass
+            # Fallback to module default
+            return TENANT_RPS
+
+        tenant_rps = _tenant_rps_runtime()
+
+        if _is_multi_user_runtime() and tenant_rps > 0:
             client2 = await _get_redis_client()
-            ts = int(time.time())
-            key = f"embeddings:tenant:rps:{getattr(user, 'id', 'anon')}:{ts}"
-            current = await client2.incr(key)
-            await client2.expire(key, 2)
-            remaining = max(0, TENANT_RPS - int(current or 0))
-            if current > TENANT_RPS:
-                headers = {"Retry-After": "1", "X-RateLimit-Limit": str(TENANT_RPS), "X-RateLimit-Remaining": str(0)}
-                return HTTPException(status_code=429, detail="Tenant quota exceeded", headers=headers)
-            else:
-                if hasattr(request, 'state'):
-                    try:
-                        request.state.rate_limit_limit = TENANT_RPS
-                        request.state.rate_limit_remaining = remaining
-                    except Exception:
-                        pass
-            await client2.close()
+            try:
+                ts = int(time.time())
+                key = f"embeddings:tenant:rps:{getattr(user, 'id', 'anon')}:{ts}"
+                current = await client2.incr(key)
+                await client2.expire(key, 2)
+                remaining = max(0, tenant_rps - int(current or 0))
+                if current > tenant_rps:
+                    headers = {"Retry-After": "1", "X-RateLimit-Limit": str(tenant_rps), "X-RateLimit-Remaining": str(0)}
+                    return HTTPException(status_code=429, detail="Tenant quota exceeded", headers=headers)
+                else:
+                    if hasattr(request, 'state'):
+                        try:
+                            request.state.rate_limit_limit = tenant_rps
+                            request.state.rate_limit_remaining = remaining
+                        except Exception:
+                            pass
+            finally:
+                try:
+                    await client2.close()
+                except Exception:
+                    pass
     except Exception:
         pass
     return None
@@ -526,23 +565,67 @@ class TTLCache:
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.lock = Lock()
         self.cleanup_task = None
+        # Optional daemon-thread cleanup to decouple from app loop
+        import threading
+        self._cleanup_thread: Optional[threading.Thread] = None
+        self._cleanup_stop: Optional[threading.Event] = None
+        try:
+            self._use_thread = str(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true")).lower() in ("1", "true", "yes", "on")
+        except Exception:
+            self._use_thread = True
         self.hits = 0
         self.misses = 0
         
     async def start_cleanup_task(self):
         """Start background cleanup task"""
-        if self.cleanup_task is None:
-            self.cleanup_task = asyncio.create_task(self._cleanup_loop())
+        if self._use_thread:
+            # Start daemon thread once
+            if self._cleanup_thread is None or not self._cleanup_thread.is_alive():
+                import threading
+                self._cleanup_stop = threading.Event()
+                def _runner():
+                    # Periodically run async cleanup in a fresh loop; decouples from app loop
+                    try:
+                        while self._cleanup_stop and not self._cleanup_stop.is_set():
+                            try:
+                                asyncio.run(self.cleanup_expired())
+                            except Exception:
+                                pass
+                            # Wait with wake-up on stop signal
+                            if self._cleanup_stop:
+                                self._cleanup_stop.wait(CACHE_CLEANUP_INTERVAL)
+                            else:
+                                time.sleep(CACHE_CLEANUP_INTERVAL)
+                    except Exception:
+                        pass
+                self._cleanup_thread = threading.Thread(target=_runner, name="embeddings-ttlcache", daemon=True)
+                self._cleanup_thread.start()
+        else:
+            if self.cleanup_task is None:
+                self.cleanup_task = asyncio.create_task(self._cleanup_loop())
             
     async def stop_cleanup_task(self):
         """Stop background cleanup task"""
-        if self.cleanup_task:
-            self.cleanup_task.cancel()
+        if self._use_thread:
             try:
-                await self.cleanup_task
-            except asyncio.CancelledError:
+                if self._cleanup_stop:
+                    self._cleanup_stop.set()
+                # No need to join daemon thread during interpreter teardown, but attempt a brief join
+                if self._cleanup_thread and self._cleanup_thread.is_alive():
+                    self._cleanup_thread.join(timeout=0.5)
+            except Exception:
                 pass
-            self.cleanup_task = None
+            finally:
+                self._cleanup_thread = None
+                self._cleanup_stop = None
+        else:
+            if self.cleanup_task:
+                self.cleanup_task.cancel()
+                try:
+                    await self.cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                self.cleanup_task = None
             
     async def _cleanup_loop(self):
         """Background task to clean up expired entries"""
@@ -809,21 +892,18 @@ IMPLEMENTED_PROVIDERS = {"openai", "huggingface", "onnx", "local_api", "cohere",
 # Register cleanup on process exit
 def cleanup_on_exit():
     """Synchronous cleanup for process exit"""
-    # Avoid logging in atexit, as sinks may already be closed
+    # Avoid logging in atexit, as sinks may already be closed.
+    # Prefer asyncio.run to avoid relying on a possibly-missing current loop in 3.11+.
     try:
-        loop = asyncio.get_event_loop()
-    except Exception:
-        return
-    try:
-        if loop and not loop.is_closed():
-            try:
-                loop.run_until_complete(embedding_cache.stop_cleanup_task())
-            except Exception:
-                pass
-            try:
-                loop.run_until_complete(connection_manager.close_all())
-            except Exception:
-                pass
+        try:
+            asyncio.run(embedding_cache.stop_cleanup_task())
+        except RuntimeError:
+            # If a running loop prevents asyncio.run, fall back to best-effort
+            pass
+        try:
+            asyncio.run(connection_manager.close_all())
+        except RuntimeError:
+            pass
     except Exception:
         # Swallow any errors during interpreter teardown
         pass
@@ -990,24 +1070,27 @@ def adjust_dimensions(
     return adjusted
 
 def _should_enforce_policy(user: Optional[User] = None) -> bool:
-    # Admin bypass unless strict enforcement requested
-    try:
-        if user and getattr(user, 'is_admin', False) and os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false").lower() not in ("true", "1", "yes"):
-            return False
-    except Exception:
-        pass
+    # 1) Explicit env override takes highest precedence
+    env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
+    if env_val is not None:
+        return env_val.lower() in ("true", "1", "yes")
+    # 2) In TESTING, always enforce (even for admin) for deterministic behavior
+    if os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
+        return True
+    # 3) Settings-level boolean if provided
     try:
         cfg_val = settings.get("EMBEDDINGS_ENFORCE_POLICY", None)
         if isinstance(cfg_val, bool):
             return cfg_val
     except Exception:
         pass
-    # If env explicitly set, honor it; otherwise, default to enforcing in TESTING for backward-compatibility
-    env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
-    if env_val is not None:
-        return env_val.lower() in ("true", "1", "yes")
-    if os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
-        return True
+    # 4) Admin bypass unless strict enforcement requested
+    try:
+        if user and getattr(user, 'is_admin', False) and os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false").lower() not in ("true", "1", "yes"):
+            return False
+    except Exception:
+        pass
+    # Default: do not enforce
     return False
 
 def resolve_fallback_chain(primary_provider: str) -> List[str]:
@@ -1330,7 +1413,7 @@ async def create_embeddings_with_circuit_breaker(
                 }
             }
             
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None,
                 create_embeddings_batch,
@@ -1667,8 +1750,14 @@ async def create_embedding_endpoint(
         else:
             # Try provider with fallback chain on failure
             last_error: Optional[Exception] = None
-            # Disable fallback when x-provider header is explicitly set
-            fallback_disabled = x_provider is not None
+            # Fallback policy when explicit provider header is present:
+            # By default we still allow fallback to improve resilience in tests/local usage.
+            # Set EMBEDDINGS_STRICT_PROVIDER_HEADER=true to disable fallback when x-provider is set.
+            try:
+                strict_hdr = os.getenv("EMBEDDINGS_STRICT_PROVIDER_HEADER", "").lower() in ("1", "true", "yes", "on")
+            except Exception:
+                strict_hdr = False
+            fallback_disabled = (x_provider is not None and strict_hdr)
             chain = [provider] if fallback_disabled else resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
@@ -3087,11 +3176,11 @@ async def get_job_skip_status(job_id: str = Query(..., description="Job ID to ch
 
 class LedgerEntry(BaseModel):
     key: str
-    status: str | None = None
-    ts: int | None = None
-    job_id: str | None = None
-    raw: dict | str | None = None
-    ttl_seconds: int | None = None
+    status: Optional[str] = None
+    ts: Optional[int] = None
+    job_id: Optional[str] = None
+    raw: Optional[Union[Dict[str, Any], str]] = None
+    ttl_seconds: Optional[int] = None
 
 
 @router.get(
@@ -3099,8 +3188,8 @@ class LedgerEntry(BaseModel):
     summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)"
 )
 async def get_ledger_status(
-    idempotency_key: str | None = Query(default=None),
-    dedupe_key: str | None = Query(default=None),
+    idempotency_key: Optional[str] = Query(default=None),
+    dedupe_key: Optional[str] = Query(default=None),
     current_user: User = Depends(get_request_user),
 ):
     """Return current ledger values for provided keys.
@@ -3115,7 +3204,7 @@ async def get_ledger_status(
         raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
     client = await _get_redis_client()
     try:
-        out: dict[str, LedgerEntry | None] = {"idempotency": None, "dedupe": None}
+        out: Dict[str, Optional[LedgerEntry]] = {"idempotency": None, "dedupe": None}
         if idempotency_key:
             k = f"embeddings:ledger:idemp:{idempotency_key}"
             raw = await client.get(k)

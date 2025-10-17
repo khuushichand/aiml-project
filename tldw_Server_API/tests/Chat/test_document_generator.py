@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService, DocumentType
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
 @pytest.fixture
@@ -35,11 +36,11 @@ def real_db():
     
     # Add default character
     char_id = db.add_character_card({
-        "name": "Default Character",
+        "name": DEFAULT_CHARACTER_NAME,
         "description": "Test character",
         "personality": "Helpful",
         "scenario": "Testing",
-        "system_prompt": "You are a test assistant"
+        "system_prompt": "You are a helpful AI assistant."
     })
     
     # Create a test conversation with messages

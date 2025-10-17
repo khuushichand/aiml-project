@@ -163,13 +163,19 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             text = text.replace(' ', '').replace('\n', ' ')
             # Split into characters but keep some punctuation as boundaries
             import re
-            pattern = r'[。！？，；：、]'
-            segments = re.split(pattern, text)
+            # Capture punctuation so it can be reinserted when joining tokens
+            punct_pattern = re.compile(r'[。！？，；：、]')
             words = []
-            for segment in segments:
+            last_end = 0
+            for match in punct_pattern.finditer(text):
+                segment = text[last_end:match.start()]
                 if segment:
-                    # Add characters as individual "words"
                     words.extend(list(segment))
+                words.append(match.group())
+                last_end = match.end()
+            tail = text[last_end:]
+            if tail:
+                words.extend(list(tail))
             return words
     
     def _tokenize_japanese(self, text: str) -> List[str]:
@@ -193,12 +199,18 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             # Similar to Chinese fallback
             text = text.replace(' ', '').replace('\n', ' ')
             import re
-            pattern = r'[。！？、]'
-            segments = re.split(pattern, text)
+            punct_pattern = re.compile(r'[。！？、]')
             words = []
-            for segment in segments:
+            last_end = 0
+            for match in punct_pattern.finditer(text):
+                segment = text[last_end:match.start()]
                 if segment:
                     words.extend(list(segment))
+                words.append(match.group())
+                last_end = match.end()
+            tail = text[last_end:]
+            if tail:
+                words.extend(list(tail))
             return words
     
     def _tokenize_korean(self, text: str) -> List[str]:

@@ -579,6 +579,20 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         }
         self._initialize_schema_postgres()
 
+    def _cursor_exec(self, conn: Any, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+        """Execute a query using the backend's parameter style.
+
+        Converts SQLite-style placeholders to PostgreSQL, then executes using the
+        provided psycopg connection. Returns a native cursor with description set.
+        """
+        q, p = self._prepare_backend_statement(query, params)
+        cur = conn.cursor()
+        if p is not None:
+            cur.execute(q, p)
+        else:
+            cur.execute(q)
+        return cur
+
     # --- Schema management ---
     def _initialize_schema_postgres(self) -> None:
         with self.backend.transaction() as conn:
@@ -890,8 +904,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     INSERT INTO sync_log (entity, entity_uuid, operation, client_id, version, payload, timestamp)
                     VALUES (?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
@@ -944,8 +958,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
                     project = self._row_to_dict(row)
             self._log_sync_event(
@@ -964,6 +977,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             if 'duplicate' in message.lower() and 'prompt_studio_projects_name_user_id_deleted_key' in message:
                 raise ConflictError(f"Project with name '{name}' already exists for this user") from exc
             raise DatabaseError(f"Failed to create prompt studio project: {exc}") from exc
+        except Exception as exc:
+            # Psycopg unique violations, etc.
+            msg = str(exc).lower()
+            if 'duplicate' in msg or 'unique constraint' in msg or 'unique violation' in msg:
+                raise ConflictError(f"Project with name '{name}' already exists for this user") from exc
+            raise
 
     def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         clauses = ["id = ?"]
@@ -1093,8 +1112,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
                     prompt = self._row_to_dict(row)
             self._log_sync_event(
@@ -1115,6 +1133,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     f"Prompt with name '{name}' already exists in project {project_id}"
                 ) from exc
             raise DatabaseError(f"Failed to create prompt studio prompt: {exc}") from exc
+        except Exception as exc:
+            msg = str(exc).lower()
+            if 'duplicate' in msg or 'unique constraint' in msg or 'unique violation' in msg:
+                raise ConflictError(
+                    f"Prompt with name '{name}' already exists in project {project_id}"
+                ) from exc
+            raise
 
     def update_project(self, project_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
         allowed_fields = {"name", "description", "status", "metadata"}
@@ -1148,8 +1173,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(update_sql, params)
+                    cursor = self._cursor_exec(conn, update_sql, params)
                     row = cursor.fetchone()
                     if not row:
                         raise InputError(f"Project {project_id} not found or already deleted")
@@ -1169,14 +1193,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
                     if hard_delete:
-                        cursor.execute(
+                        cursor = self._cursor_exec(
+                            conn,
                             "DELETE FROM prompt_studio_projects WHERE id = ? RETURNING uuid",
                             (project_id,),
                         )
                     else:
-                        cursor.execute(
+                        cursor = self._cursor_exec(
+                            conn,
                             """
                             UPDATE prompt_studio_projects
                             SET deleted = TRUE, deleted_at = CURRENT_TIMESTAMP
@@ -1237,8 +1262,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
                     signature = self._row_to_dict(row)
 
@@ -1385,8 +1409,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(update_sql, params)
+                    cursor = self._cursor_exec(conn, update_sql, params)
                     row = cursor.fetchone()
                     if not row:
                         raise InputError(f"Signature {signature_id} not found or already deleted")
@@ -1410,14 +1433,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
                     if hard_delete:
-                        cursor.execute(
+                        cursor = self._cursor_exec(
+                            conn,
                             "DELETE FROM prompt_studio_signatures WHERE id = ? RETURNING uuid",
                             (signature_id,),
                         )
                     else:
-                        cursor.execute(
+                        cursor = self._cursor_exec(
+                            conn,
                             """
                             UPDATE prompt_studio_signatures
                             SET deleted = TRUE, deleted_at = CURRENT_TIMESTAMP
@@ -1491,8 +1515,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
@@ -1556,8 +1579,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
@@ -1593,8 +1615,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(update_sql, params)
+                    cursor = self._cursor_exec(conn, update_sql, params)
                     row = cursor.fetchone()
                     if not row:
                         raise InputError(f"Evaluation {evaluation_id} not found")
@@ -1728,8 +1749,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
             optimization = self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
@@ -1870,8 +1890,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(update_sql, params)
+                    cursor = self._cursor_exec(conn, update_sql, params)
                     row = cursor.fetchone()
                     if not row:
                         raise InputError(f"Optimization {optimization_id} not found")
@@ -1983,8 +2002,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(insert_sql, payload)
+                cursor = self._cursor_exec(conn, insert_sql, payload)
                 row = cursor.fetchone()
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to record optimization iteration: {exc}") from exc
@@ -2243,8 +2261,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, params)
+                    _ = self._cursor_exec(conn, insert_sql, params)
         except BackendDatabaseError as exc:
             raise DatabaseError(
                 f"Failed to create placeholder prompt {prompt_id}: {exc}"
@@ -2269,8 +2286,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         with self._write_lock:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     INSERT INTO prompt_studio_job_queue (
                         uuid, job_type, entity_id, project_id, priority, status,
@@ -2391,8 +2408,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, params)
+                cursor = self._cursor_exec(conn, query, params)
                 row = cursor.fetchone()
                 record = self._row_to_dict(cursor, row) if row else None
                 # Release advisory lock on terminal states
@@ -2405,10 +2421,18 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc
 
-    def acquire_next_job(self) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with self._write_lock:
             with self.transaction() as conn:
                 cursor = conn.cursor()
+                owner_value: Optional[str] = None
+                if worker_id:
+                    try:
+                        owner_value = str(worker_id).strip()[:128]
+                        if not owner_value:
+                            owner_value = None
+                    except Exception:
+                        owner_value = None
                 if self.backend_type == BackendType.POSTGRESQL:
                     import os as _os
                     try:
@@ -2441,11 +2465,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         UPDATE prompt_studio_job_queue AS q
                         SET status = 'processing',
                             started_at = CURRENT_TIMESTAMP,
-                            leased_until = NOW() + INTERVAL '{_lease_secs} seconds'
+                            leased_until = NOW() + INTERVAL '{_lease_secs} seconds',
+                            lease_owner = COALESCE(%s, lease_owner)
                         FROM locked
                         WHERE q.id = locked.id
                         RETURNING q.*, locked.was_reclaim
                         """,
+                        (owner_value,),
                     )
                     row = cursor.fetchone()
                     if not row:
@@ -2462,7 +2488,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             job_id_val = row["id"]
                         except Exception:
                             job_id_val = row[0]
-                        cursor.execute("SELECT pg_advisory_unlock(?)", (job_id_val,))
+                        cursor.execute("SELECT pg_advisory_unlock(%s)", (job_id_val,))
                         try:
                             _psm.metrics_manager.increment("prompt_studio.pg_advisory.unlocks_total")
                         except Exception:
@@ -2520,6 +2546,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         ORDER BY priority DESC, created_at ASC
                         LIMIT 1
                         """,
+                        (owner_value,),
                     )
                     job_row = cursor.fetchone()
                     if not job_row:
@@ -2535,7 +2562,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         UPDATE prompt_studio_job_queue
                         SET status = 'processing',
                             started_at = CURRENT_TIMESTAMP,
-                            leased_until = DATETIME('now', '+{_lease_secs2} seconds')
+                            leased_until = DATETIME('now', '+{_lease_secs2} seconds'),
+                            lease_owner = COALESCE(?, lease_owner)
                         WHERE id = ?
                           AND (
                               status = 'queued'
@@ -2543,7 +2571,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                           )
                         RETURNING *
                         """,
-                        (job_id,),
+                        (owner_value, job_id),
                     )
 
                 row = cursor.fetchone()
@@ -2584,8 +2612,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def retry_job_record(self, job_id: int) -> bool:
         with self._write_lock:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     UPDATE prompt_studio_job_queue
                     SET status = 'queued',
@@ -2831,8 +2859,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         with self._write_lock:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     SELECT *
                     FROM prompt_studio_prompts
@@ -2932,8 +2960,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         with self._write_lock:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     SELECT *
                     FROM prompt_studio_prompts
@@ -2947,7 +2975,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     raise InputError(f"Prompt {prompt_id} not found or already deleted")
                 current_prompt = self._row_to_dict(cursor, current_row) or {}
 
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     SELECT *
                     FROM prompt_studio_prompts
@@ -2967,7 +2996,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     )
                 target_prompt = self._row_to_dict(cursor, target_row) or {}
 
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     """
                     SELECT COALESCE(MAX(version_number), 0)
                     FROM prompt_studio_prompts
@@ -3145,8 +3175,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
                     test_case = self._format_test_case(row)
             return test_case or {}
@@ -3290,8 +3319,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(update_sql, params)
+                cursor = self._cursor_exec(conn, update_sql, params)
                 row = cursor.fetchone()
                 if not row:
                     raise InputError(f"Test case {test_case_id} not found or already deleted")
@@ -3302,14 +3330,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def delete_test_case(self, test_case_id: int, *, hard_delete: bool = False) -> bool:
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
                 if hard_delete:
-                    cursor.execute(
+                    cursor = self._cursor_exec(
+                        conn,
                         "DELETE FROM prompt_studio_test_cases WHERE id = ? RETURNING id",
                         (test_case_id,),
                     )
                 else:
-                    cursor.execute(
+                    cursor = self._cursor_exec(
+                        conn,
                         """
                         UPDATE prompt_studio_test_cases
                         SET deleted = 1,
@@ -3379,7 +3408,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 WHERE tc.project_id = ?
                   AND tc.deleted = 0
                   AND fts.prompt_studio_test_cases_fts MATCH ?
-                ORDER BY rank
+                ORDER BY bm25(fts)
                 LIMIT ?
             """
             params = [project_id, backend_query, limit]
@@ -3581,6 +3610,15 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         except Exception as e:
             logger.error(f"Error initializing Prompt Studio schema: {e}")
             raise SchemaError(f"Failed to initialize Prompt Studio schema: {e}")
+
+    # Keep parity with backend helper: local execute that returns a cursor
+    def _cursor_exec(self, conn: sqlite3.Connection, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+        cursor = conn.cursor()
+        if params is not None:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+        return cursor
     
     def _apply_prompt_studio_migrations(self, conn: sqlite3.Connection):
         """Apply Prompt Studio migration scripts."""
@@ -5623,12 +5661,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         raise DatabaseError("Failed to update job status due to database locks")
 
-    def acquire_next_job(self) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         import random
         import time
 
         conn = self.get_connection()
         base_delay = 0.05
+        owner_value: Optional[str] = None
+        if worker_id:
+            try:
+                owner_value = str(worker_id).strip()[:128]
+                if not owner_value:
+                    owner_value = None
+            except Exception:
+                owner_value = None
 
         for attempt in range(5):
             should_retry = False
@@ -5659,11 +5705,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         "UPDATE prompt_studio_job_queue "
                         "SET status = 'processing', "
                         "    started_at = CURRENT_TIMESTAMP, "
-                        f"    leased_until = DATETIME('now', '+{_lease_secs_sqlite} seconds') "
+                        f"    leased_until = DATETIME('now', '+{_lease_secs_sqlite} seconds'), "
+                        "    lease_owner = COALESCE(?, lease_owner) "
                         "WHERE id = ? "
                         "  AND (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)))"
                     )
-                    cursor.execute(query, (job_id,))
+                    cursor.execute(query, (owner_value, job_id))
 
                     if cursor.rowcount > 0:
                         conn.commit()
@@ -5743,7 +5790,22 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     success = cursor.rowcount > 0
                     if success:
                         conn.commit()
-                    return success
+                        return True
+                    # Fallback: if guard matched and row already had identical values, treat as success
+                    try:
+                        cursor.execute(
+                            "SELECT status, lease_owner, leased_until FROM prompt_studio_job_queue WHERE id = ?",
+                            (job_id,),
+                        )
+                        row2 = cursor.fetchone()
+                        if row2:
+                            st = str(row2[0]) if row2[0] is not None else ""
+                            owner = str(row2[1]) if row2[1] is not None else None
+                            if st.lower() == "processing" and (owner_value is None or owner == owner_value):
+                                return True
+                    except Exception:
+                        pass
+                    return False
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < 4:
                         should_retry = True
@@ -5949,13 +6011,21 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 f"Failed listing jobs for entity {entity_id}: {exc}"
             ) from exc
 
-    def renew_job_lease(self, job_id: int, seconds: int = 60) -> bool:
+    def renew_job_lease(self, job_id: int, seconds: int = 60, worker_id: Optional[str] = None) -> bool:
         import random
         import time
         try:
             seconds = max(5, min(3600, int(seconds)))
         except Exception:
             seconds = 60
+        owner_value: Optional[str] = None
+        if worker_id:
+            try:
+                owner_value = str(worker_id).strip()[:128]
+                if not owner_value:
+                    owner_value = None
+            except Exception:
+                owner_value = None
 
         conn = self.get_connection()
         base_delay = 0.05
@@ -5964,13 +6034,18 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             with self._write_lock:
                 try:
                     cursor = conn.cursor()
+                    set_owner_sql = ", lease_owner = COALESCE(?, lease_owner)" if owner_value is not None else ""
+                    owner_guard_sql = " AND (lease_owner IS NULL OR lease_owner = ?)" if owner_value is not None else ""
+                    params = (owner_value, job_id, owner_value) if owner_value is not None else (job_id,)
                     cursor.execute(
                         f"""
                         UPDATE prompt_studio_job_queue
-                        SET leased_until = DATETIME('now', '+{seconds} seconds')
-                        WHERE id = ? AND status = 'processing'
+                        SET leased_until = DATETIME('now', '+{seconds} seconds'){set_owner_sql}
+                        WHERE id = ?
+                          AND status = 'processing'
+                          {owner_guard_sql}
                         """,
-                        (job_id,),
+                        params,
                     )
                     success = cursor.rowcount > 0
                     if success:
@@ -6488,7 +6563,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             WHERE tc.project_id = ?
               AND tc.deleted = 0
               AND fts.prompt_studio_test_cases_fts MATCH ?
-            ORDER BY rank
+            ORDER BY bm25(fts)
             LIMIT ?
             """,
             (project_id, query, limit),
@@ -6578,22 +6653,38 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         stats["top_tags"] = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:10]
         return stats
 
-    def renew_job_lease(self, job_id: int, seconds: int = 60) -> bool:
+    def renew_job_lease(self, job_id: int, seconds: int = 60, worker_id: Optional[str] = None) -> bool:
         try:
             seconds = max(5, min(3600, int(seconds)))
         except Exception:
             seconds = 60
+        owner_value: Optional[str] = None
+        if worker_id:
+            try:
+                owner_value = str(worker_id).strip()[:128]
+                if not owner_value:
+                    owner_value = None
+            except Exception:
+                owner_value = None
+        set_owner_sql = ", lease_owner = COALESCE(%s, lease_owner)"
+        owner_guard_sql = ""
+        params: List[Any] = [owner_value, job_id]
+        if owner_value is not None:
+            owner_guard_sql = " AND (lease_owner IS NULL OR lease_owner = %s)"
+            params.append(owner_value)
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                cursor = self._cursor_exec(
+                    conn,
                     f"""
                     UPDATE prompt_studio_job_queue
                     SET leased_until = NOW() + INTERVAL '{seconds} seconds'
-                    WHERE id = ? AND status = 'processing'
+                        {set_owner_sql}
+                    WHERE id = %s AND status = 'processing'
+                      {owner_guard_sql}
                     RETURNING id
                     """,
-                    (job_id,),
+                    tuple(params),
                 )
                 row = cursor.fetchone()
                 return bool(row)
@@ -6684,8 +6775,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         try:
             with self._write_lock:
                 with self.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(insert_sql, payload)
+                    cursor = self._cursor_exec(conn, insert_sql, payload)
                     row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except Exception as exc:
@@ -6830,17 +6920,17 @@ class PromptStudioDatabase:
             result=result,
         )
 
-    def acquire_next_job(self) -> Optional[Dict[str, Any]]:
-        return self._impl.acquire_next_job()
+    def acquire_next_job(self, *, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return self._impl.acquire_next_job(worker_id=worker_id)
 
     def retry_job_record(self, job_id: int) -> bool:
         return self._impl.retry_job_record(job_id)
 
     # Optional: renew job lease
-    def renew_job_lease(self, job_id: int, seconds: int = 60) -> bool:
+    def renew_job_lease(self, job_id: int, seconds: int = 60, *, worker_id: Optional[str] = None) -> bool:
         if hasattr(self._impl, 'renew_job_lease'):
             try:
-                return bool(self._impl.renew_job_lease(job_id, seconds))  # type: ignore[attr-defined]
+                return bool(self._impl.renew_job_lease(job_id, seconds, worker_id=worker_id))  # type: ignore[attr-defined]
             except Exception:
                 return False
         return False

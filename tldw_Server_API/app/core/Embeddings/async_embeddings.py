@@ -3,6 +3,7 @@
 
 import asyncio
 import aiohttp
+import hashlib
 import time
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +14,7 @@ from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics, track_embedding_request
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
-from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache, cached
+from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 
@@ -246,7 +247,6 @@ class AsyncEmbeddingService:
             
             logger.info(f"Initialized provider: {provider_config.name}")
     
-    @cached(ttl=3600, cache_tier="multi")
     async def create_embedding(
         self,
         text: str,
@@ -274,8 +274,9 @@ class AsyncEmbeddingService:
         provider = provider or self.config.default_provider
         model = model or self.config.default_model
         
-        # Create cache key
-        cache_key = f"{provider}:{model}:{hash(text)}"
+        # Create deterministic cache key across processes
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        cache_key = f"{provider}:{model}:{text_hash}"
         
         # Check cache
         if use_cache:
@@ -378,11 +379,28 @@ class AsyncEmbeddingService:
                 
                 try:
                     provider_instance = self.providers[fallback]
-                    return await provider_instance.create_embedding(
-                        text=text,
-                        model=model,
-                        user_id=user_id
-                    )
+                    fallback_model = model
+                    fallback_config = self.config.get_provider(fallback)
+                    if fallback_config:
+                        if fallback_config.fallback_model:
+                            fallback_model = fallback_config.fallback_model
+                        else:
+                            available_models = fallback_config.models or []
+                            if available_models:
+                                if model not in available_models:
+                                    fallback_model = available_models[0]
+                                    logger.debug(
+                                    f"Substituting fallback model '{fallback_model}' for provider '{fallback}' "
+                                    f"(original model '{model}' not available)."
+                                )
+                        else:
+                            fallback_model = None
+                    else:
+                        fallback_model = None
+                    call_kwargs = {"text": text, "user_id": user_id}
+                    if fallback_model:
+                        call_kwargs["model"] = fallback_model
+                    return await provider_instance.create_embedding(**call_kwargs)
                 except Exception as e:
                     logger.error(f"Fallback provider {fallback} also failed: {e}")
         

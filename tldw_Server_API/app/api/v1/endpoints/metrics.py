@@ -34,10 +34,62 @@ async def get_prometheus_metrics() -> Response:
     """
     try:
         registry = get_metrics_registry()
+        # Ensure core embeddings histograms are registered in the default Prometheus REGISTRY
+        try:
+            # Importing the module defines histograms at import time and pre-creates label children
+            from tldw_Server_API.app.core.Embeddings.workers import base_worker as _bw  # noqa: F401
+            # Also ensure embeddings endpoint module (with gauges) is imported so collectors exist
+            import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as _emb  # noqa: F401
+            # Best-effort: refresh stage flag gauges from Redis so they appear in metrics
+            try:
+                client = await _emb._get_redis_client()
+                for _st in ("chunking", "embedding", "storage"):
+                    try:
+                        p = await client.get(f"embeddings:stage:{_st}:paused")
+                        d = await client.get(f"embeddings:stage:{_st}:drain")
+                        _emb.embedding_stage_flag.labels(stage=_st, flag="paused").set(1.0 if str(p).lower() in ("1","true","yes") else 0.0)
+                        _emb.embedding_stage_flag.labels(stage=_st, flag="drain").set(1.0 if str(d).lower() in ("1","true","yes") else 0.0)
+                    except Exception:
+                        pass
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        except Exception:
+            pass
         prometheus_text = registry.export_prometheus_format() or ""
         try:
             from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
             prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
+        except Exception:
+            pass
+        # Append explicit stage flag gauge lines (best-effort) to satisfy text scrapers
+        try:
+            import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as _emb
+            # Read current values via gauge collectors if present; otherwise fetch from Redis directly
+            lines = ["# HELP embedding_stage_flag Per-stage control flags as gauges (1=true,0=false)",
+                     "# TYPE embedding_stage_flag gauge"]
+            try:
+                # Prefer Redis source for authoritative values
+                client = await _emb._get_redis_client()
+                for _st in ("chunking", "embedding", "storage"):
+                    p = await client.get(f"embeddings:stage:{_st}:paused")
+                    d = await client.get(f"embeddings:stage:{_st}:drain")
+                    pv = 1.0 if str(p).lower() in ("1","true","yes") else 0.0
+                    dv = 1.0 if str(d).lower() in ("1","true","yes") else 0.0
+                    lines.append(f"embedding_stage_flag{{stage=\"{_st}\",flag=\"paused\"}} {pv}")
+                    lines.append(f"embedding_stage_flag{{stage=\"{_st}\",flag=\"drain\"}} {dv}")
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+            except Exception:
+                # Fallback: if Redis unavailable, skip explicit lines
+                lines = []
+            if lines:
+                prometheus_text = (prometheus_text.rstrip("\n") + "\n" + "\n".join(lines) + "\n")
         except Exception:
             pass
         return Response(

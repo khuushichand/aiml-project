@@ -26,6 +26,32 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "integration: Integration tests with real components")
 
 # =====================================================================
+# Cross-suite fixtures (mirrors Embeddings fixtures used by RAG tests)
+# =====================================================================
+
+@pytest.fixture
+def disable_heavy_startup(monkeypatch):
+    """Disable heavy startup paths (DBs, services) for faster test collection."""
+    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
+    yield
+
+
+@pytest.fixture
+def admin_user():
+    """Provide an admin user override for routes that require it."""
+    from tldw_Server_API.app.main import app  # lazy import to avoid startup costs
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+    async def _admin():
+        return User(id=42, username="admin", email="a@x", is_active=True, is_admin=True)
+
+    app.dependency_overrides[get_request_user] = _admin
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_request_user, None)
+
+# =====================================================================
 # Database Fixtures
 # =====================================================================
 

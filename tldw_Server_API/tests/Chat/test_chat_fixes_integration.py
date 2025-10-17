@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.main import app
 import asyncio
 import json
-import jwt
+from jose import jwt
 import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import HTTPException, status
@@ -89,8 +89,6 @@ class TestEmptyMessageFix:
         # Process the message
         with patch('tldw_Server_API.app.api.v1.endpoints.chat.validate_image_url') as mock_validate:
             mock_validate.return_value = (False, None, None)  # Invalid image
-            
-            loop = asyncio.get_event_loop()
             result = await _save_message_turn_to_db(
                 mock_db,
                 "conv_123",
@@ -117,7 +115,6 @@ class TestEmptyMessageFix:
             "content": ""
         }
         
-        loop = asyncio.get_event_loop()
         result = await _save_message_turn_to_db(
             mock_db,
             "conv_123",
@@ -238,7 +235,7 @@ class TestConversationRaceCondition:
         # The actual implementation doesn't use db_transaction, just test the logic directly
         with patch.object(mock_db, 'add_conversation', side_effect=add_conversation_side_effect):
             
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             conv_id, was_created = await get_or_create_conversation(
                 mock_db,
                 None,  # No existing conversation
@@ -273,7 +270,7 @@ class TestConversationRaceCondition:
         
         # Create multiple parallel requests
         async def create_conversation_task(task_id):
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await get_or_create_conversation(
                 mock_db,
                 None,
@@ -310,7 +307,6 @@ class TestTransactionConsistency:
         # The actual implementation doesn't use transaction_utils, just test the logic directly
         # Test that the function works with the database
         
-        loop = asyncio.get_event_loop()
         result = await _save_message_turn_to_db(
             mock_db,
             "conv_123",

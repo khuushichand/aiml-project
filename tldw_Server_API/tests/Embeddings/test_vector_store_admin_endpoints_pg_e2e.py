@@ -1,4 +1,3 @@
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,15 +6,13 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorSt
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
 
 
-@pytest.mark.skipif(not (os.getenv('PG_TEST_DSN') or os.getenv('PGVECTOR_DSN')), reason='PG DSN not set')
-def test_admin_endpoints_e2e_pg(monkeypatch):
-    dsn = os.getenv('PG_TEST_DSN') or os.getenv('PGVECTOR_DSN')
+def test_admin_endpoints_e2e_pg(pgvector_dsn, monkeypatch):
 
     # Patch factory to return a real PG adapter using DSN
     def _create_from_settings(_settings, user_id: str = '0'):
         cfg = VectorStoreConfig(
             store_type=VectorStoreType.PGVECTOR,
-            connection_params={'dsn': dsn},
+            connection_params={'dsn': pgvector_dsn},
             embedding_dim=8,
             user_id=user_id,
         )
@@ -44,4 +41,3 @@ def test_admin_endpoints_e2e_pg(monkeypatch):
     # ef_search set (session-level)
     r4 = client.post('/api/v1/vector_stores/admin/hnsw_ef_search', json={'ef_search': 64})
     assert r4.status_code == 200
-

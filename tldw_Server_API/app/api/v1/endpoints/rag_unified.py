@@ -801,6 +801,8 @@ async def unified_search_endpoint(
                 claims_max=int(getattr(request, 'claims_max', 25) or 25),
                 nli_model=getattr(request, 'nli_model', None),
                 claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
+                adaptive_unsupported_threshold=float(getattr(request, 'adaptive_unsupported_threshold', 0.15) or 0.15),
+                low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
             )
         else:
             # Execute unified pipeline with all parameters from request
@@ -888,6 +890,7 @@ async def unified_search_endpoint(
             
             # Generation
             enable_generation=request.enable_generation,
+            strict_extractive=getattr(request, 'strict_extractive', False),
             generation_model=request.generation_model,
             generation_prompt=request.generation_prompt,
             max_generation_tokens=request.max_generation_tokens,

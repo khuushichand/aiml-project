@@ -1,174 +1,568 @@
 #!/usr/bin/env python3
 """
-Chroma → pgvector migration helper (paged, optional seed/demo, optional rebuild).
+Chroma → pgvector migration helper.
 
-Usage examples:
-  # Use local pgvector (see CI job), seed 10 demo vectors in stub Chroma, migrate to 'demo'
-  CHROMADB_FORCE_STUB=true \
-  PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw \
-  python Helper_Scripts/chroma_to_pgvector_migrate.py --user-id 1 --collection demo --seed-demo --page-size 100 --rebuild-index hnsw
+Example usage:
 
-Notes:
-  - When CHROMADB_FORCE_STUB=true, an in-memory Chroma stub is used; data exists only within this process.
-  - For real Chroma, ensure USER_DB_BASE_DIR points to the correct storage root in your config.
+    export PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw
+    python Helper_Scripts/chroma_to_pgvector_migrate.py \
+        --user-id 1 \
+        --collection user_1_media_embeddings \
+        --dest-collection user_1_media_embeddings \
+        --page-size 500 \
+        --rebuild-index hnsw
+
+For quick smoke tests without a real Chroma store:
+
+    export PGVECTOR_DSN=postgresql://postgres:postgres@localhost:5432/tldw
+    CHROMADB_FORCE_STUB=true python Helper_Scripts/chroma_to_pgvector_migrate.py \
+        --user-id stub \
+        --collection demo_cli \
+        --seed-demo \
+        --page-size 50
 """
+
+from __future__ import annotations
+
 import argparse
+import asyncio
 import os
 import random
-import string
-from typing import Any, Dict, List
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-def _seed_stub_chroma(user_id: str, collection: str, dim: int = 8, n: int = 10):
-    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+Vector = Any  # Replaced with pgvector.Vector when available
+
+
+@dataclass
+class MigrationResult:
+    source_count: int
+    written: int
+    collection_metadata: Dict[str, Any]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "source_count": self.source_count,
+            "written": self.written,
+            "collection_metadata": self.collection_metadata,
+        }
+
+
+def _vector_to_list(vec: Any) -> List[float]:
+    if hasattr(vec, "tolist"):
+        vec = vec.tolist()
+    return [float(x) for x in vec]
+
+
+async def migrate_collection(
+    *,
+    user_id: str,
+    source_collection: str,
+    dest_collection: Optional[str],
+    dsn: str,
+    page_size: int,
+    drop_dest: bool,
+    rebuild_index: str,
+    hnsw_m: int,
+    hnsw_ef_construction: int,
+    ivfflat_lists: int,
+    embedding_dim_override: Optional[int],
+    seed_demo: bool,
+    dry_run: bool,
+) -> MigrationResult:
+    # Lazy imports to honour environment flags (--seed-demo etc.)
     from tldw_Server_API.app.core.config import settings
-    mgr = ChromaDBManager(user_id=user_id, user_embedding_config=settings)
-    col = mgr.get_or_create_collection(collection_name=collection, collection_metadata={"embedding_dimension": dim})
-    ids = ["seed_" + ''.join(random.choices(string.ascii_lowercase+string.digits, k=6)) for _ in range(n)]
-    vecs = [[random.random() for _ in range(dim)] for _ in range(n)]
-    docs = [f"demo content {i}" for i in range(n)]
-    metas = [{"media_id": str(100+i), "kind": "chunk"} for i in range(n)]
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+    from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
+        VectorStoreConfig,
+        VectorStoreType,
+    )
+    from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import (
+        PGVectorAdapter,
+    )
+
+    dest_name = dest_collection or source_collection
+
+    manager = ChromaDBManager(user_id=user_id, user_embedding_config=settings)
     try:
-        upsert = getattr(col, 'upsert', None)
-        if callable(upsert):
-            upsert(ids=ids, embeddings=vecs, documents=docs, metadatas=metas)
-        else:
-            col.add(ids=ids, embeddings=vecs, documents=docs, metadatas=metas)
-    except Exception:
-        col.add(ids=ids, embeddings=vecs, documents=docs, metadatas=metas)
+        client = getattr(manager, "client", None)
+        if client is None:
+            raise RuntimeError("ChromaDB manager did not expose a client")
 
+        if seed_demo:
+            _ensure_seed_demo(
+                manager=manager,
+                collection_name=source_collection,
+                embedding_dim=embedding_dim_override or 8,
+            )
 
-def migrate(collection: str, user_id: str, page_size: int, dry_run: bool, rebuild: str|None, state_file: str|None):
-    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
-    from tldw_Server_API.app.core.config import settings
-    from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
-    from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter
+        # Attempt to fetch existing collection without creating a new one accidentally.
+        collection = _get_existing_collection(manager, client, source_collection)
+        total = _safe_count(collection)
 
-    dim_hint = int(os.getenv('MIGRATE_DIM', '8'))
-    mgr = ChromaDBManager(user_id=user_id, user_embedding_config=settings)
-    src = mgr.get_or_create_collection(collection_name=collection)
-    # PG adapter
-    dsn = os.getenv('PGVECTOR_DSN') or os.getenv('PG_TEST_DSN')
-    if not dsn:
-        raise SystemExit('PGVECTOR_DSN or PG_TEST_DSN is required')
-    cfg = VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': dsn}, embedding_dim=dim_hint, user_id=user_id)
-    pg = PGVectorAdapter(cfg)
-    
-    # Prepare resume state (id-based)
-    migrated_ids: set[str] = set()
-    if state_file:
-        try:
-            if os.path.exists(state_file):
-                with open(state_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            import json as _json
-                            rec = _json.loads(line)
-                            if rec.get('user_id') == str(user_id) and rec.get('collection') == collection:
-                                mid = str(rec.get('id') or '')
-                                if mid:
-                                    migrated_ids.add(mid)
-                        except Exception:
-                            # tolerate partially written lines
-                            continue
-        except Exception:
-            pass
+        if total == 0 and not seed_demo:
+            raise RuntimeError(
+                f"Source collection '{source_collection}' contains no vectors; aborting."
+            )
 
-    import asyncio
-    async def _run():
-        await pg.initialize()
-        await pg.create_collection(collection, metadata={"embedding_dimension": dim_hint})
-        offset = 0
-        total = 0
-        # Open state file for append if enabled and not dry-run
-        sfh = None
-        if state_file and not dry_run:
+        sample_vec, source_meta = _sample_collection(collection)
+        embedding_dim = (
+            embedding_dim_override
+            or _extract_embedding_dimension(source_meta)
+            or (len(sample_vec) if sample_vec is not None else None)
+        )
+        if not embedding_dim:
+            raise RuntimeError(
+                "Unable to determine embedding dimension; provide --embedding-dim."
+            )
+        embedding_dim = int(embedding_dim)
+
+        dest_meta = {
+            "embedding_dimension": embedding_dim,
+        }
+        if isinstance(source_meta, dict):
+            for key in ("embedder_name", "embedder_version"):
+                if source_meta.get(key):
+                    dest_meta[key] = source_meta[key]
+
+        if dry_run:
+            print(
+                f"[DRY RUN] Would migrate {total} vectors "
+                f"from '{source_collection}' → '{dest_name}' (dim={embedding_dim})."
+            )
+            return MigrationResult(total, 0, dest_meta)
+
+        cfg = VectorStoreConfig(
+            store_type=VectorStoreType.PGVECTOR,
+            connection_params={"dsn": dsn},
+            embedding_dim=embedding_dim,
+            user_id=user_id,
+        )
+        adapter = PGVectorAdapter(cfg)
+        await adapter.initialize()
+
+        if drop_dest:
             try:
-                sfh = open(state_file, 'a', encoding='utf-8')
-            except Exception:
-                sfh = None
-
-        while True:
-            try:
-                batch = src.get(limit=page_size, offset=offset, include=["embeddings","documents","metadatas"])  # type: ignore
-            except Exception:
-                batch = src.get(limit=page_size, offset=offset, include=["embeddings","documents","metadatas"])  # type: ignore
-            ids: List[str] = list(batch.get('ids') or [])
-            if not ids:
-                break
-            # Filter out ids already migrated (resume)
-            todo_mask = [i for i, _id in enumerate(ids) if _id not in migrated_ids]
-            if not todo_mask:
-                # Advance and continue
-                offset += len(ids)
-                continue
-            embs = batch.get('embeddings') or []
-            docs = batch.get('documents') or []
-            metas = batch.get('metadatas') or []
-            # normalize numpy -> list
-            try:
-                if hasattr(embs, 'tolist'):
-                    embs = embs.tolist()
+                await adapter.delete_collection(dest_name)
             except Exception:
                 pass
-            # Slice by todo_mask
-            ids_t = [ids[i] for i in todo_mask]
-            embs_t = [embs[i] for i in todo_mask]
-            docs_t = [docs[i] for i in todo_mask]
-            metas_t = [metas[i] for i in todo_mask]
-            if not dry_run and ids_t:
-                await pg.upsert_vectors(collection, ids=ids_t, vectors=embs_t, documents=docs_t, metadatas=metas_t)
-                # Append to state file
-                if sfh:
-                    try:
-                        import json as _json
-                        for _id in ids_t:
-                            sfh.write(_json.dumps({"user_id": str(user_id), "collection": collection, "id": _id}) + "\n")
-                        sfh.flush()
-                    except Exception:
-                        pass
-                # Update in-memory set
-                for _id in ids_t:
-                    migrated_ids.add(_id)
-            total += len(ids_t)
-            if len(ids) < page_size:
+
+        await adapter.create_collection(dest_name, metadata=dest_meta)
+
+        written = 0
+        offset = 0
+        seen_names: set[str] = set()
+        seen_versions: set[str] = set()
+        while True:
+            batch = _fetch_batch(collection, limit=page_size, offset=offset)
+            if not batch.ids:
                 break
-            offset += len(ids)
-        if rebuild and not dry_run:
-            await pg.rebuild_index(collection, index_type=rebuild)
-        print({"collection": collection, "migrated": total, "dry_run": dry_run, "rebuild": rebuild or "none"})
+            _maybe_warn_embedder_metadata(
+                batch.metadatas,
+                dest_meta,
+                seen_names,
+                seen_versions,
+            )
+            await adapter.upsert_vectors(
+                collection_name=dest_name,
+                ids=batch.ids,
+                vectors=batch.embeddings,
+                documents=batch.documents,
+                metadatas=batch.metadatas,
+            )
+            written += len(batch.ids)
+            offset += len(batch.ids)
+            print(
+                f"Migrated {written}/{total} vectors "
+                f"({min(100.0, (written / max(total, 1)) * 100.0):.1f}% complete)"
+            )
+
+        if rebuild_index.lower() in {"hnsw", "ivfflat", "drop"}:
+            await adapter.rebuild_index(
+                dest_name,
+                index_type=rebuild_index,
+                m=hnsw_m,
+                ef_construction=hnsw_ef_construction,
+                lists=ivfflat_lists,
+            )
+
+        stats = await adapter.get_collection_stats(dest_name)
+        print(
+            f"Completed migration: {written} vectors written. "
+            f"Destination count={stats.get('count')}."
+        )
+        return MigrationResult(total, written, dest_meta)
+    finally:
         try:
-            if sfh:
-                sfh.close()
+            manager.close()
         except Exception:
             pass
 
-    asyncio.run(_run())
+
+def _get_existing_collection(manager: Any, client: Any, name: str) -> Any:
+    get_fn = getattr(client, "get_collection", None)
+    if callable(get_fn):
+        try:
+            collection = get_fn(name=name)
+            if _safe_count(collection) > 0:
+                return collection
+        except Exception:
+            pass
+
+    # Attempt persistent client fallback if files exist on disk
+    path = Path(getattr(manager, "user_chroma_path", "") or "")
+    if path.exists():
+        try:
+            import chromadb  # type: ignore
+
+            persistent = chromadb.PersistentClient(path=str(path))
+            collection = persistent.get_collection(name)
+            if _safe_count(collection) > 0:
+                print(f"Using persistent Chroma collection at {path} for '{name}'")
+                return collection
+        except Exception:
+            pass
+
+    # Fall back to manager accessor (which may create if missing)
+    collection = manager.get_or_create_collection(name)
+    if _safe_count(collection) == 0:
+        print(
+            f"Warning: collection '{name}' did not previously exist; continuing with empty collection."
+        )
+    return collection
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Chroma → pgvector migration helper")
-    ap.add_argument('--user-id', default=os.getenv('SINGLE_USER_FIXED_ID', '1'))
-    ap.add_argument('--collection', required=True)
-    ap.add_argument('--page-size', type=int, default=500)
-    ap.add_argument('--dry-run', action='store_true')
-    ap.add_argument('--seed-demo', action='store_true', help='Populate demo vectors in stub Chroma before migration')
-    ap.add_argument('--rebuild-index', choices=['hnsw','ivfflat','drop'], default=None)
-    ap.add_argument('--state-file', default=None, help='Path to JSONL resume file (id-based)')
-    args = ap.parse_args()
+def _ensure_seed_demo(manager: Any, collection_name: str, embedding_dim: int) -> None:
+    collection = manager.get_or_create_collection(
+        collection_name,
+        collection_metadata={
+            "embedding_dimension": embedding_dim,
+            "embedder_name": "demo_embedder",
+            "embedder_version": "demo_v1",
+        },
+    )
+    if _safe_count(collection) > 0:
+        return
+    ids = []
+    embeddings = []
+    metadatas = []
+    documents = []
+    for idx in range(50):
+        ids.append(f"demo-{idx}")
+        embeddings.append(
+            [
+                round(random.random(), 6) for _ in range(embedding_dim)
+            ]
+        )
+        metadatas.append(
+            {
+                "media_id": str(1 + idx // 5),
+                "kind": "chunk",
+                "demo": True,
+            }
+        )
+        documents.append(f"Demo document {idx}")
+    add_fn = getattr(collection, "add", None)
+    if not callable(add_fn):
+        raise RuntimeError("Chroma collection does not support add()")
+    add_fn(
+        ids=ids,
+        embeddings=embeddings,
+        metadatas=metadatas,
+        documents=documents,
+    )
+    if hasattr(collection, "modify"):
+        try:
+            collection.modify(
+                metadata={
+                    "embedding_dimension": embedding_dim,
+                    "embedder_name": "demo_embedder",
+                    "embedder_version": "demo_v1",
+                }
+            )
+        except Exception:
+            pass
+
+
+def _safe_count(collection: Any) -> int:
+    try:
+        count_fn = getattr(collection, "count", None)
+        if callable(count_fn):
+            return int(count_fn())
+    except Exception:
+        pass
+    return 0
+
+
+def _sample_collection(collection: Any) -> Tuple[Optional[List[float]], Dict[str, Any]]:
+    try:
+        meta = getattr(collection, "metadata", None)
+    except Exception:
+        meta = None
+    sample = None
+    try:
+        if hasattr(collection, "get") and callable(getattr(collection, "get")):
+            res = collection.get(include=["embeddings"], limit=1)
+            embs = res.get("embeddings") if isinstance(res, dict) else None
+            if embs is not None:
+                try:
+                    # Normalize to list for length check
+                    if hasattr(embs, "tolist"):
+                        embs_list = embs.tolist()
+                    else:
+                        embs_list = list(embs)
+                    if len(embs_list) > 0:
+                        sample = _vector_to_list(embs_list[0])
+                except Exception:
+                    sample = None
+    except Exception:
+        sample = None
+    return sample, meta if isinstance(meta, dict) else {}
+
+
+def _extract_embedding_dimension(metadata: Dict[str, Any]) -> Optional[int]:
+    if not metadata:
+        return None
+    for key in ("embedding_dimension", "dimensions", "vector_dim"):
+        if metadata.get(key) is not None:
+            try:
+                return int(metadata[key])
+            except Exception:
+                continue
+    return None
+
+
+@dataclass
+class Batch:
+    ids: List[str]
+    embeddings: List[List[float]]
+    documents: List[str]
+    metadatas: List[Dict[str, Any]]
+
+
+def _fetch_batch(collection: Any, *, limit: int, offset: int) -> Batch:
+    if not hasattr(collection, "get") or not callable(getattr(collection, "get")):
+        raise RuntimeError("Collection does not support get() calls for pagination")
+    # Chroma's include does not accept 'ids'; ids are returned by default
+    res = collection.get(
+        include=["embeddings", "metadatas", "documents"],
+        limit=limit,
+        offset=offset,
+    )
+    if not isinstance(res, dict):
+        raise RuntimeError("Unexpected response type from collection.get()")
+    # Avoid boolean evaluation of numpy arrays; handle None explicitly
+    ids_raw = res.get("ids", None)
+    if ids_raw is None:
+        ids_list = []
+    else:
+        try:
+            ids_list = list(ids_raw.tolist())  # type: ignore[attr-defined]
+        except Exception:
+            ids_list = list(ids_raw)
+    ids = [str(i) for i in ids_list]
+
+    emb_raw = res.get("embeddings", None)
+    if emb_raw is None:
+        embeddings_iter = []
+    else:
+        try:
+            embeddings_iter = list(emb_raw.tolist())  # type: ignore[attr-defined]
+        except Exception:
+            embeddings_iter = list(emb_raw)
+    embeddings = [_vector_to_list(vec) for vec in embeddings_iter]
+
+    docs_raw = res.get("documents", None)
+    if docs_raw is None:
+        documents_iter = []
+    else:
+        try:
+            documents_iter = list(docs_raw.tolist())  # type: ignore[attr-defined]
+        except Exception:
+            documents_iter = list(docs_raw)
+    documents = [
+        str(doc) if doc is not None else ""
+        for doc in _pad_sequence(documents_iter, len(ids), default="")
+    ]
+
+    metas_raw = res.get("metadatas", None)
+    if metas_raw is None:
+        metadatas_iter = []
+    else:
+        try:
+            metadatas_iter = list(metas_raw.tolist())  # type: ignore[attr-defined]
+        except Exception:
+            metadatas_iter = list(metas_raw)
+    metadatas = [
+        meta if isinstance(meta, dict) else {}
+        for meta in _pad_sequence(metadatas_iter, len(ids), default={})
+    ]
+    return Batch(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+
+
+def _maybe_warn_embedder_metadata(
+    metadatas: List[Dict[str, Any]],
+    collection_meta: Dict[str, Any],
+    seen_names: set[str],
+    seen_versions: set[str],
+) -> None:
+    if not metadatas:
+        return
+    names = {
+        str(meta.get("embedder_name"))
+        for meta in metadatas
+        if isinstance(meta, dict) and meta.get("embedder_name")
+    }
+    versions = {
+        str(meta.get("embedder_version"))
+        for meta in metadatas
+        if isinstance(meta, dict) and meta.get("embedder_version")
+    }
+    dest_name = collection_meta.get("embedder_name")
+    dest_version = collection_meta.get("embedder_version")
+
+    combined_names = seen_names | names
+    combined_versions = seen_versions | versions
+
+    if combined_names and len(combined_names) > 1 and len(seen_names) <= 1:
+        print(
+            f"Warning: multiple embedder_name values detected in metadata: {sorted(combined_names)}"
+        )
+    elif names and dest_name and dest_name not in names and dest_name not in seen_names:
+        print(
+            f"Warning: destination embedder_name '{dest_name}' does not match source metadata {sorted(names)}"
+        )
+
+    if combined_versions and len(combined_versions) > 1 and len(seen_versions) <= 1:
+        print(
+            f"Warning: multiple embedder_version values detected in metadata: {sorted(combined_versions)}"
+        )
+    elif versions and dest_version and dest_version not in versions and dest_version not in seen_versions:
+        print(
+            f"Warning: destination embedder_version '{dest_version}' does not match source metadata {sorted(versions)}"
+        )
+
+    seen_names.update(names)
+    seen_versions.update(versions)
+
+
+def _pad_sequence(seq: Sequence[Any], target: int, default: Any) -> List[Any]:
+    if len(seq) >= target:
+        return list(seq[:target])
+    padded = list(seq)
+    padded.extend([default] * (target - len(seq)))
+    return padded
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Migrate a Chroma collection to pgvector."
+    )
+    parser.add_argument("--user-id", required=True, help="User ID that owns the source collection")
+    parser.add_argument("--collection", required=True, help="Source Chroma collection name")
+    parser.add_argument("--dest-collection", help="Destination collection name (defaults to source)")
+    parser.add_argument(
+        "--pgvector-dsn",
+        default=os.getenv("PGVECTOR_DSN") or os.getenv("PG_TEST_DSN") or os.getenv("PG_DSN"),
+        help="PostgreSQL DSN for pgvector (env: PGVECTOR_DSN)",
+    )
+    parser.add_argument(
+        "--page-size", type=int, default=500, help="Batch size for reading from Chroma"
+    )
+    parser.add_argument(
+        "--drop-dest",
+        action="store_true",
+        help="Drop destination collection before migrating",
+    )
+    parser.add_argument(
+        "--rebuild-index",
+        default="hnsw",
+        choices=["hnsw", "ivfflat", "drop", "skip"],
+        help="Rebuild ANN index after migration",
+    )
+    parser.add_argument(
+        "--hnsw-m",
+        type=int,
+        default=16,
+        help="HNSW m parameter when rebuilding index",
+    )
+    parser.add_argument(
+        "--hnsw-ef",
+        type=int,
+        default=200,
+        help="HNSW ef_construction parameter when rebuilding index",
+    )
+    parser.add_argument(
+        "--ivfflat-lists",
+        type=int,
+        default=100,
+        help="IVFFLAT list count when rebuilding index",
+    )
+    parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        help="Override embedding dimension if it cannot be inferred",
+    )
+    parser.add_argument(
+        "--seed-demo",
+        action="store_true",
+        help="Populate the Chroma collection with demo data when using the in-memory stub",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not write to pgvector; print planned action instead",
+    )
+    return parser
+
+
+def main(argv: Optional[Iterable[str]] = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.pgvector_dsn:
+        parser.error("Provide pgvector DSN via --pgvector-dsn or PGVECTOR_DSN environment variable")
 
     if args.seed_demo:
-        os.environ.setdefault('CHROMADB_FORCE_STUB', 'true')
-        _seed_stub_chroma(args.user_id, args.collection)
-    # Default state file if not provided
-    state = args.state_file
-    if state is None and not args.dry_run:
-        state = f"Databases/migrate_{args.user_id}_{args.collection}.jsonl"
-    migrate(args.collection, args.user_id, args.page_size, args.dry_run, args.rebuild_index, state)
+        os.environ.setdefault("CHROMADB_FORCE_STUB", "true")
+
+    rebuild = args.rebuild_index.lower()
+    if rebuild == "skip":
+        rebuild = "drop"
+
+    try:
+        result = asyncio.run(
+            migrate_collection(
+                user_id=str(args.user_id),
+                source_collection=str(args.collection),
+                dest_collection=str(args.dest_collection) if args.dest_collection else None,
+                dsn=str(args.pgvector_dsn),
+                page_size=max(1, int(args.page_size)),
+                drop_dest=bool(args.drop_dest),
+                rebuild_index=rebuild,
+                hnsw_m=int(args.hnsw_m),
+                hnsw_ef_construction=int(args.hnsw_ef),
+                ivfflat_lists=int(args.ivfflat_lists),
+                embedding_dim_override=int(args.embedding_dim) if args.embedding_dim else None,
+                seed_demo=bool(args.seed_demo),
+                dry_run=bool(args.dry_run),
+            )
+        )
+    except KeyboardInterrupt:
+        print("Migration cancelled by user.")
+        return 1
+    except Exception as exc:
+        print(f"Migration failed: {exc}")
+        return 1
+
+    if not args.dry_run:
+        summary = result.as_dict()
+        print("Migration summary:", summary)
+    return 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

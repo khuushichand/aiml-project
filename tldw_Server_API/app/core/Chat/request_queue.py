@@ -271,7 +271,8 @@ class RequestQueue:
             )
         except Exception as e:
             # Emit SSE-style error payload to channel to gracefully end downstream streaming
-            err_msg = f"data: {{\"error\": {{\"message\": \"{str(e).replace('\\', ' ').replace('\n', ' ')}\"}}}}\n\n"
+            sanitized = str(e).replace("\\", " ").replace("\n", " ")
+            err_msg = f'data: {{"error": {{"message": "{sanitized}"}}}}\n\n'
             try:
                 await request.stream_channel.put(err_msg)
                 await request.stream_channel.put("data: [DONE]\n\n")
@@ -312,9 +313,10 @@ class RequestQueue:
             return {"status": "stream_completed", "request_id": request.request_id}
         except Exception as e:
             # Best-effort to signal error and completion downstream
+            sanitized_stream_error = str(e).replace("\\", " ").replace("\n", " ")
             try:
                 await request.stream_channel.put(
-                    f"data: {{\"error\": {{\"message\": \"Stream error: {str(e).replace('\\', ' ').replace('\n', ' ')}\"}}}}\n\n"
+                    f'data: {{"error": {{"message": "Stream error: {sanitized_stream_error}"}}}}\n\n'
                 )
                 await request.stream_channel.put("data: [DONE]\n\n")
                 await request.stream_channel.put(None)

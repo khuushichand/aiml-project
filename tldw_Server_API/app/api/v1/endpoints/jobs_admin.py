@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
 #
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio import JobManager
 try:
     from pydantic import field_validator  # Pydantic v2
 except Exception:  # Fallback to v1 naming
@@ -63,6 +62,19 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
     except Exception:
         # Fail-open on unexpected RBAC errors to avoid locking out real admins
         return
+
+
+def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
+    """Set per-request RLS context for Postgres sessions using contextvars.
+
+    This avoids global env and is concurrency-safe within the request task.
+    """
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+        uid = str(user.get("id") or "")
+        _JM.set_rls_context(is_admin=True, domain_allowlist=str(domain) if domain else None, owner_user_id=uid)
+    except Exception:
+        pass
 
 
 class PruneRequest(BaseModel):
@@ -181,6 +193,8 @@ async def prune_jobs_endpoint(
 
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         deleted = jm.prune_jobs(
             statuses=req.statuses,
@@ -250,6 +264,8 @@ async def queue_control_endpoint(req: QueueControlRequest, user=Depends(require_
     _enforce_domain_scope(user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         flags = jm.set_queue_control(req.domain, req.queue, req.action)
@@ -263,6 +279,8 @@ async def queue_status_endpoint(domain: str, queue: str, user=Depends(require_ad
     _enforce_domain_scope(user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     flags = jm._get_queue_flags(domain, queue)
     return QueueFlagsResponse(**flags)
@@ -288,6 +306,8 @@ async def reschedule_jobs_endpoint(req: RescheduleRequest, user=Depends(require_
     _enforce_domain_scope(user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         n = jm.reschedule_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, status=req.status, set_now=req.set_now, delta_seconds=req.delta_seconds, dry_run=req.dry_run)
@@ -309,6 +329,8 @@ async def retry_now_jobs_endpoint(req: RetryNowRequest, user=Depends(require_adm
     _enforce_domain_scope(user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     n = jm.retry_now_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, only_failed=req.only_failed, dry_run=req.dry_run)
     return AffectedResponse(affected=int(n))
@@ -333,6 +355,8 @@ class AttachmentItem(BaseModel):
 async def add_job_attachment_endpoint(job_id: int, req: AttachmentRequest, user=Depends(require_admin)) -> AttachmentItem:
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, None)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         rid = jm.add_job_attachment(job_id, kind=req.kind, content_text=req.content_text, url=req.url)
@@ -349,6 +373,8 @@ async def add_job_attachment_endpoint(job_id: int, req: AttachmentRequest, user=
 async def list_job_attachments_endpoint(job_id: int, user=Depends(require_admin)) -> list[AttachmentItem]:
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, None)
     jm = JobManager(backend=backend, db_url=db_url)
     items = jm.list_job_attachments(job_id, limit=500)
     return [AttachmentItem(**i) for i in items]
@@ -482,33 +508,37 @@ class TTLSweepRequest(BaseModel):
 
 class JobEvent(BaseModel):
     id: int
-    job_id: int | None = None
-    domain: str | None = None
-    queue: str | None = None
-    job_type: str | None = None
+    job_id: Optional[int] = None
+    domain: Optional[str] = None
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
     event_type: str
     attrs: dict = Field(default_factory=dict)
-    owner_user_id: str | None = None
-    request_id: str | None = None
-    trace_id: str | None = None
+    owner_user_id: Optional[str] = None
+    request_id: Optional[str] = None
+    trace_id: Optional[str] = None
     created_at: str
 
 
-@router.get("/jobs/events", response_model=list[JobEvent])
+@router.get("/jobs/events", response_model=List[JobEvent])
 async def list_job_events(
     after_id: int = 0,
     limit: int = 200,
     domain: Optional[str] = None,
     queue: Optional[str] = None,
     job_type: Optional[str] = None,
-    _=Depends(require_admin),
+    user=Depends(require_admin),
 ):
     """Return job events from the append-only outbox with a cursor (after_id).
 
     Intended for reliable polling by dashboards or external sinks.
     """
+    _enforce_domain_scope(user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        # Admin list; allow admin bypass with optional domain filter
+        _set_pg_rls_for_user(user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     conn = jm._connect()
     try:
@@ -579,13 +609,22 @@ async def list_job_events(
 
 
 @router.get("/jobs/events/stream")
-async def stream_job_events(after_id: int = 0, _=Depends(require_admin)):
+async def stream_job_events(
+    after_id: int = 0,
+    domain: Optional[str] = None,
+    queue: Optional[str] = None,
+    job_type: Optional[str] = None,
+    user=Depends(require_admin),
+):
     """Server-Sent Events stream of job events from the outbox.
 
     This is a simple tailer that polls the outbox and emits events without loss.
     """
+    _enforce_domain_scope(user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
 
     async def event_gen():
@@ -596,10 +635,34 @@ async def stream_job_events(after_id: int = 0, _=Depends(require_admin)):
             try:
                 if jm.backend == "postgres":
                     with jm._pg_cursor(conn) as cur:
-                        cur.execute("SELECT id, event_type, attrs_json FROM job_events WHERE id > %s ORDER BY id ASC LIMIT 500", (int(after_id),))
+                        query = "SELECT id, event_type, attrs_json FROM job_events WHERE id > %s"
+                        params: list[Any] = [int(after_id)]
+                        if domain:
+                            query += " AND domain = %s"
+                            params.append(domain)
+                        if queue:
+                            query += " AND queue = %s"
+                            params.append(queue)
+                        if job_type:
+                            query += " AND job_type = %s"
+                            params.append(job_type)
+                        query += " ORDER BY id ASC LIMIT 500"
+                        cur.execute(query, tuple(params))
                         rows = cur.fetchall() or []
                 else:
-                    rows = conn.execute("SELECT id, event_type, attrs_json FROM job_events WHERE id > ? ORDER BY id ASC LIMIT 500", (int(after_id),)).fetchall() or []
+                    query = "SELECT id, event_type, attrs_json FROM job_events WHERE id > ?"
+                    params2: list[Any] = [int(after_id)]
+                    if domain:
+                        query += " AND domain = ?"
+                        params2.append(domain)
+                    if queue:
+                        query += " AND queue = ?"
+                        params2.append(queue)
+                    if job_type:
+                        query += " AND job_type = ?"
+                        params2.append(job_type)
+                    query += " ORDER BY id ASC LIMIT 500"
+                    rows = conn.execute(query, tuple(params2)).fetchall() or []
                 if rows:
                     for r in rows:
                         if isinstance(r, dict):
@@ -698,6 +761,8 @@ async def ttl_sweep_endpoint(
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, (raw or {}).get("domain"))
         jm = JobManager(backend=backend, db_url=db_url)
         # Now validate the request model
         req = TTLSweepRequest(**(raw or {}))
@@ -791,6 +856,8 @@ async def integrity_sweep_endpoint(
         _enforce_domain_scope(user, req.domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         stats = jm.integrity_sweep(fix=req.fix, domain=req.domain, queue=req.queue, job_type=req.job_type)
         return IntegritySweepResponse(**stats)
@@ -834,6 +901,9 @@ async def get_jobs_stats(
         _enforce_domain_scope(user, domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            # Correct RLS scoping for Postgres path
+            _set_pg_rls_for_user(user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         stats = jm.get_queue_stats(domain=domain, queue=queue, job_type=job_type)
         return [QueueStatsResponse(**s) for s in stats]
@@ -930,6 +1000,8 @@ async def list_jobs_endpoint(
         _enforce_domain_scope(user, domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         rows = jm.list_jobs(
             domain=domain,
@@ -985,6 +1057,8 @@ async def stale_processing_endpoint(
         # Use explicit backend/db_url selection for consistency with other admin endpoints
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         out: list[StaleGroup] = []
@@ -1053,6 +1127,8 @@ async def batch_cancel_endpoint(
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         try:
@@ -1184,16 +1260,18 @@ async def batch_cancel_endpoint(
                         f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",
                         tuple(params),
                     ).fetchall() or []
+                before = conn.total_changes or 0
                 conn.execute(
                     f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
                     tuple(params),
                 )
-                affected = conn.total_changes or 0
+                mid = conn.total_changes or 0
                 conn.execute(
                     f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",
                     tuple(params),
                 )
-                affected += conn.total_changes or 0
+                after = conn.total_changes or 0
+                affected = (mid - before) + (after - mid)
                 # Adjust counters
                 try:
                     if counters_enabled:
@@ -1212,6 +1290,11 @@ async def batch_cancel_endpoint(
                                 "UPDATE job_counters SET processing_count = CASE WHEN (processing_count - ?) < 0 THEN 0 ELSE processing_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
                                 (int(c), int(c), d, q, jt),
                             )
+                except Exception:
+                    pass
+                # Ensure changes are persisted for subsequent reads
+                try:
+                    conn.commit()
                 except Exception:
                     pass
                 try:
@@ -1257,6 +1340,8 @@ async def batch_reschedule_endpoint(
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         try:
@@ -1329,10 +1414,13 @@ async def batch_reschedule_endpoint(
                         ),
                         tuple(params),
                     ).fetchall() or []
+                before = conn.total_changes or 0
                 conn.execute(
                     f"UPDATE jobs SET available_at = DATETIME('now', ?) WHERE {' AND '.join(where)}",
                     tuple([f"+{int(req.delay_seconds)} seconds"] + params),
                 )
+                after = conn.total_changes or 0
+                affected = after - before
                 # Update counters
                 try:
                     if counters_enabled and grp_ready2:
@@ -1347,11 +1435,15 @@ async def batch_reschedule_endpoint(
                 except Exception:
                     pass
                 try:
+                    conn.commit()
+                except Exception:
+                    pass
+                try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
                 except Exception:
                     pass
-                return BatchRescheduleResponse(affected=int(conn.total_changes or 0))
+                return BatchRescheduleResponse(affected=int(affected))
         finally:
             try:
                 conn.close()
@@ -1411,6 +1503,32 @@ class BatchRequeueQuarantinedResponse(BaseModel):
         },
     },
 )
+@router.post(
+    "/jobs/batch/requeue-quarantined",
+    response_model=BatchRequeueQuarantinedResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "dryRun": {
+                            "summary": "Dry run requeue for a scoped set",
+                            "value": {"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": True},
+                        },
+                        "requeue": {
+                            "summary": "Requeue quarantined jobs (requires X-Confirm: true)",
+                            "value": {"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": False},
+                        },
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {"content": {"application/json": {"example": {"affected": 12}}}},
+            "400": {"description": "Missing confirmation header for destructive action"},
+        },
+    },
+)
 async def batch_requeue_quarantined_endpoint(
     req: BatchRequeueQuarantinedRequest,
     request: Request,
@@ -1424,6 +1542,8 @@ async def batch_requeue_quarantined_endpoint(
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        if backend == "postgres":
+            _set_pg_rls_for_user(user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         try:
@@ -1509,10 +1629,10 @@ async def batch_requeue_quarantined_endpoint(
                             for d, q, jt, c in grp_rows2:
                                 conn.execute(
                                     (
-                                        "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,0,0,0) "
+                                        "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?, ?, 0,0,0) "
                                         "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ready_count + ?, quarantined_count = CASE WHEN (quarantined_count - ?) < 0 THEN 0 ELSE quarantined_count - ? END, updated_at = DATETIME('now')"
                                     ),
-                                    (d, q, jt, 0, int(c), int(c), int(c)),
+                                    (d, q, jt, int(c), int(c), int(c), int(c)),
                                 )
                     except Exception:
                         pass

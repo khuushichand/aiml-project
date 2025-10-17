@@ -98,3 +98,20 @@ def test_clear_lease_on_completion_dual_backend(prompt_studio_dual_backend_db, m
     db.update_job_status(jid, "completed")
     row_done = _get_job_row(db, jid)
     assert row_done.get("leased_until") in (None, "")
+
+
+def test_lease_owner_enforced_dual_backend(prompt_studio_dual_backend_db):
+    backend_label, db = prompt_studio_dual_backend_db
+
+    job = db.create_job("evaluation", 7, payload={})
+    jm = JobManager(db, worker_id="ps-worker-test")
+
+    acquired = jm.get_next_job()
+    assert acquired is not None
+    jid = int(acquired["id"])
+
+    row = _get_job_row(db, jid)
+    assert row.get("lease_owner") == jm.worker_id
+
+    assert db.renew_job_lease(jid, seconds=10, worker_id=jm.worker_id)
+    assert not db.renew_job_lease(jid, seconds=10, worker_id="other-worker")

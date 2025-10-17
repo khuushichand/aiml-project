@@ -24,6 +24,7 @@ class ProviderConfig:
     timeout_seconds: int = 30
     rate_limit: Optional[str] = None  # e.g., "100/min"
     fallback_provider: Optional[str] = None
+    fallback_model: Optional[str] = None
     
     def __post_init__(self):
         # Load API key from environment if not provided

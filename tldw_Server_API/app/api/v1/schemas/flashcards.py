@@ -60,6 +60,7 @@ class Flashcard(BaseModel):
 class FlashcardListResponse(BaseModel):
     items: List[Flashcard]
     count: int
+    total: int | None = None
 
 
 class FlashcardReviewRequest(BaseModel):

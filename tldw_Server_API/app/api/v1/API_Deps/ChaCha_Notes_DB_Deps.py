@@ -67,8 +67,8 @@ if not SERVER_CLIENT_ID:
 # as each user gets their DB under their own USER_DB_BASE_DIR/user_id/
 
 # +++ Default Character Configuration +++
-DEFAULT_CHARACTER_NAME = "Default Character"
-DEFAULT_CHARACTER_DESCRIPTION = "This is a default character created by the system."
+DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
+DEFAULT_CHARACTER_DESCRIPTION = "A default, friendly assistant created automatically by the system."
 
 # --- Global Cache for ChaChaNotes DB Instances ---
 MAX_CACHED_CHACHA_DB_INSTANCES = settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", 20)
@@ -131,16 +131,16 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
                 'name': DEFAULT_CHARACTER_NAME,
                 'description': DEFAULT_CHARACTER_DESCRIPTION,
                 # All other fields will be None or default in the DB
-                'personality': None,
-                'scenario': None,
-                'system_prompt': None, # Explicitly neutral system prompt
+                'personality': "Supportive, patient, and concise.",
+                'scenario': "General assistance",
+                'system_prompt': "You are a helpful AI assistant.",
                 'image': None,
                 'post_history_instructions': None,
-                'first_message': "Hello! How can I help you today?", # A generic greeting
+                'first_message': "Hello! I'm your Helpful AI Assistant. How can I support you today?",
                 'message_example': None,
-                'creator_notes': "This is an automatically generated default character.",
+                'creator_notes': "This character is automatically generated to provide a reliable default assistant persona.",
                 'alternate_greetings': None,
-                'tags': json.dumps(["default", "neutral"]), # Store as JSON string
+                'tags': json.dumps(["default", "neutral", "assistant"]), # Store as JSON string
                 'creator': "System",
                 'character_version': "1.0",
                 'extensions': None,

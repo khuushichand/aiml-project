@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from loguru import logger
 import warnings
-import jwt
+from jose import jwt, JWTError
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
@@ -440,7 +440,7 @@ class AuthenticationManager:
                     "role": row[3]
                 }
             
-        except jwt.InvalidTokenError:
+        except JWTError:
             pass
         
         return None

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -79,3 +79,94 @@ async def readyz():
     if not ready:
         return JSONResponse(body, status_code=503)
     return JSONResponse(body, status_code=200)
+
+
+# Compatibility health endpoints expected by tests (/api/v1/health, /api/v1/health/live, /api/v1/health/ready, /api/v1/health/metrics)
+
+@router.get("/health", tags=["health"], summary="Aggregate health status")
+async def api_health():
+    """Return aggregate health with a checks map and timestamp."""
+    from datetime import datetime as _dt
+    checks: dict[str, dict] = {}
+    overall = "ok"
+
+    # Database health (AuthNZ pool)
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
+        pool = await _get_pool()
+        dbh = await pool.health_check()
+        checks["database"] = dbh
+        if dbh.get("status") != "healthy":
+            overall = "degraded"
+    except Exception as e:
+        checks["database"] = {"status": "unhealthy", "error": str(e)}
+        overall = "unhealthy"
+
+    # Metrics registry presence
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get_reg
+        reg = _get_reg()
+        metrics_ok = bool(reg)
+        checks["metrics"] = {"status": "healthy" if metrics_ok else "unhealthy"}
+        if not metrics_ok and overall == "ok":
+            overall = "degraded"
+    except Exception as e:
+        checks["metrics"] = {"status": "unhealthy", "error": str(e)}
+        overall = "unhealthy"
+
+    body = {
+        "status": overall,
+        "checks": checks,
+        "timestamp": _dt.utcnow().isoformat(),
+    }
+    code = status.HTTP_200_OK if overall == "ok" else (206 if overall == "degraded" else 503)
+    return JSONResponse(body, status_code=code)
+
+
+@router.get("/health/live", tags=["health"], summary="Liveness probe")
+async def api_liveness():
+    return {"status": "alive"}
+
+
+@router.get("/health/ready", tags=["health"], summary="Readiness probe")
+async def api_readiness():
+    """Return readiness similar to /readyz with standardized shape."""
+    r = await readyz()
+    # readyz returns JSONResponse already; normalize body to include 'status'
+    try:
+        body = r.body  # bytes
+        import json as _json
+        data = _json.loads(body)
+    except Exception:
+        data = {"ready": False}
+    status_txt = "ready" if data.get("ready") else "not_ready"
+    return JSONResponse({"status": status_txt, **data}, status_code=(200 if data.get("ready") else 503))
+
+
+@router.get("/health/metrics", tags=["health"], summary="System metrics (CPU/memory/disk)")
+async def api_health_metrics():
+    """Return basic system metrics for tests/diagnostics."""
+    try:
+        import psutil
+        cpu = {
+            "percent": float(psutil.cpu_percent(interval=0.1)),
+        }
+        vm = psutil.virtual_memory()
+        du = psutil.disk_usage('/')
+        mem = {
+            "total": int(vm.total),
+            "available": int(vm.available),
+            "percent": float(vm.percent),
+            "used": int(vm.used),
+            "free": int(vm.free),
+        }
+        disk = {
+            "total": int(du.total),
+            "used": int(du.used),
+            "free": int(du.free),
+            "percent": float(du.percent),
+        }
+        return {"cpu": cpu, "memory": mem, "disk": disk}
+    except Exception as e:
+        logger.warning(f"health/metrics unavailable: {e}")
+        return {"cpu": {"percent": 0.0}, "memory": {"total": 0, "available": 0, "percent": 0.0, "used": 0, "free": 0}, "disk": {"total": 0, "used": 0, "free": 0, "percent": 0.0}}

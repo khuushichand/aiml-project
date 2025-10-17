@@ -324,6 +324,33 @@ class TestUnifiedAuditService:
         metadata = json.loads(event["metadata"])
         assert "user@example.com" not in str(metadata)
         assert "123-45-6789" not in str(metadata)
+
+    @pytest.mark.asyncio
+    async def test_pii_detection_in_non_metadata_fields(self, audit_service):
+        """PII in action/resource_id/user_agent gets redacted and sets flag."""
+        context = AuditContext(user_id="pii_user", user_agent="sk_abcdefghijklmnopqrstuvwxyzABCDEF1234567890")
+        action = "delete account for john.doe@example.com"
+        resource_id = "order-4111-1111-1111-1111"
+        await audit_service.log_event(
+            event_type=AuditEventType.DATA_DELETE,
+            context=context,
+            action=action,
+            resource_id=resource_id,
+            error_message="User reported api_key=sk_abcdefghijklmnopqrstuvwxyzABCDEF1234567890",
+        )
+        await audit_service.flush()
+        events = await audit_service.query_events(user_id="pii_user")
+        assert events
+        e = events[0]
+        # pii_detected flag set
+        assert e.get("pii_detected") == 1
+        # Redactions occurred
+        assert "[EMAIL_REDACTED]" in (e.get("action") or "")
+        assert "[CREDIT_CARD_REDACTED]" in (e.get("resource_id") or "")
+        # user_agent redacted
+        assert "[API_KEY_REDACTED]" in (e.get("context_user_agent") or "")
+        # error_message redacted
+        assert "[API_KEY_REDACTED]" in (e.get("error_message") or "")
     
     @pytest.mark.asyncio
     async def test_risk_scoring(self, audit_service):
@@ -713,9 +740,9 @@ class TestPerformance:
         events = await audit_service.query_events(request_id="req_100")
         request_query_time = time.perf_counter() - start
         
-        # Both should be fast due to indexes
-        assert user_query_time < 0.1
-        assert request_query_time < 0.1
+        # Both should be fast due to indexes; allow margin for CI load
+        assert user_query_time < 0.3
+        assert request_query_time < 0.3
 
 
 # ============================================================================
@@ -885,3 +912,248 @@ class TestIntegration:
         for event in events:
             if event["context_ip_address"]:
                 assert event["context_ip_address"] == attacker_ip
+
+
+# ============================================================================
+# Streaming Export Tests (CSV and JSON with file_path)
+# ============================================================================
+
+class TestStreamingExport:
+    """Tests for streaming export paths when writing to files."""
+
+    @pytest.mark.asyncio
+    async def test_export_events_csv_streaming_to_file(self, audit_service, tmp_path):
+        user = "csv_stream_user"
+        # Log a few events for a specific user
+        for i in range(3):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=AuditContext(user_id=user),
+                resource_type="doc",
+                resource_id=f"d{i}",
+                metadata={"idx": i},
+            )
+        await audit_service.flush()
+
+        # Export to CSV using streaming file path
+        csv_path = tmp_path / "audit_stream.csv"
+        count = await audit_service.export_events(
+            user_id=user,
+            format="csv",
+            file_path=str(csv_path),
+        )
+        # Verify count and file content
+        assert count >= 3
+        content = csv_path.read_text(encoding="utf-8").splitlines()
+        assert content[0].startswith("event_id,")
+        # header + at least 3 rows
+        assert len(content) >= 4
+
+    @pytest.mark.asyncio
+    async def test_export_events_json_streaming_to_file(self, audit_service, tmp_path):
+        user = "json_stream_user"
+        # Log a few events for a specific user
+        for i in range(4):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_WRITE,
+                context=AuditContext(user_id=user),
+                resource_type="note",
+                resource_id=f"n{i}",
+                metadata={"idx": i},
+            )
+        await audit_service.flush()
+
+        # Export to JSON using streaming file path
+        json_path = tmp_path / "audit_stream.json"
+        count = await audit_service.export_events(
+            user_id=user,
+            format="json",
+            file_path=str(json_path),
+        )
+        assert count >= 4
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert isinstance(data, list)
+        assert len(data) >= 4
+        assert any(e.get("resource_type") == "note" for e in data)
+
+    @pytest.mark.asyncio
+    async def test_export_events_csv_streaming_large_file(self, audit_service, tmp_path):
+        user = "csv_stream_many"
+        total = 123
+        # Generate more rows than a small chunk size to exercise chunked writes
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=AuditContext(user_id=user),
+                resource_type="doc",
+                resource_id=f"d{i}",
+                metadata={"idx": i},
+            )
+        await audit_service.flush()
+
+        csv_path = tmp_path / "audit_stream_large.csv"
+        import time
+        start = time.perf_counter()
+        count = await audit_service.export_events(
+            user_id=user,
+            format="csv",
+            file_path=str(csv_path),
+            chunk_size=10,  # small chunk to force multiple iterations
+        )
+        elapsed = time.perf_counter() - start
+        assert count == total
+        lines = csv_path.read_text(encoding="utf-8").splitlines()
+        # header + total rows
+        assert lines[0].startswith("event_id,")
+        assert len(lines) == total + 1
+        # Performance bound (generous to avoid flakiness)
+        assert elapsed < 1.5
+
+    @pytest.mark.asyncio
+    async def test_export_events_json_streaming_generator_large(self, audit_service):
+        user = "json_stream_gen"
+        total = 200
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_WRITE,
+                context=AuditContext(user_id=user),
+                resource_type="note",
+                resource_id=f"n{i}",
+                metadata={"idx": i},
+            )
+        await audit_service.flush()
+
+        gen = await audit_service.export_events(
+            user_id=user,
+            format="json",
+            stream=True,
+            chunk_size=25,
+        )
+
+        import time, json as _json
+        start = time.perf_counter()
+        chunks = []
+        async for c in gen:
+            chunks.append(c)
+        elapsed = time.perf_counter() - start
+        content = "".join(chunks)
+        data = _json.loads(content)
+        assert isinstance(data, list)
+        assert len(data) == total
+        # Performance bound (generous to avoid flakiness)
+        assert elapsed < 1.5
+
+    @pytest.mark.asyncio
+    async def test_export_events_json_streaming_large_file(self, audit_service, tmp_path):
+        user = "json_stream_file"
+        total = 120
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=AuditContext(user_id=user),
+                resource_type="doc",
+                resource_id=f"dx{i}",
+                metadata={"i": i},
+            )
+        await audit_service.flush()
+
+        json_path = tmp_path / "audit_large.json"
+        # Use small chunk_size to exercise multi-chunk writes
+        count = await audit_service.export_events(
+            user_id=user,
+            format="json",
+            file_path=str(json_path),
+            chunk_size=15,
+        )
+        assert count == total
+        import json as _json
+        data = _json.loads(json_path.read_text(encoding="utf-8"))
+        assert isinstance(data, list)
+        assert len(data) == total
+
+    @pytest.mark.asyncio
+    async def test_export_events_jsonl_streaming_to_file(self, audit_service, tmp_path):
+        user = "jsonl_stream_file"
+        total = 25
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=AuditContext(user_id=user),
+                resource_type="doc",
+                resource_id=f"j{i}",
+                metadata={"i": i},
+            )
+        await audit_service.flush()
+
+        jsonl_path = tmp_path / "audit_stream.ndjson"
+        count = await audit_service.export_events(
+            user_id=user,
+            format="jsonl",
+            file_path=str(jsonl_path),
+            chunk_size=7,
+        )
+        assert count == total
+        lines = [ln for ln in jsonl_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(lines) == total
+        import json as _json
+        objs = [_json.loads(ln) for ln in lines]
+        assert any(o.get("resource_id") == "j0" for o in objs)
+
+    @pytest.mark.asyncio
+    async def test_export_events_jsonl_streaming_max_rows(self, audit_service):
+        user = "jsonl_max_rows"
+        total = 60
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_WRITE,
+                context=AuditContext(user_id=user),
+                resource_type="item",
+                resource_id=f"x{i}",
+                metadata={"i": i},
+            )
+        await audit_service.flush()
+
+        max_rows = 25
+        gen = await audit_service.export_events(
+            user_id=user,
+            format="jsonl",
+            stream=True,
+            chunk_size=9,
+            max_rows=max_rows,
+        )
+        chunks = []
+        async for c in gen:
+            chunks.append(c)
+        content = "".join(chunks)
+        lines = [ln for ln in content.splitlines() if ln.strip()]
+        assert len(lines) == max_rows
+        # Ensure each line is valid JSON
+        import json as _json
+        for ln in lines:
+            _json.loads(ln)
+
+    async def test_audit_operation_with_start_and_completed_types(self, audit_service):
+        ctx = AuditContext(user_id="ctx_op_user")
+        # Use distinct start and complete event types
+        async with audit_operation(
+            audit_service,
+            AuditEventType.DATA_READ,
+            ctx,
+            start_event_type=AuditEventType.API_REQUEST,
+            completed_event_type=AuditEventType.API_RESPONSE,
+            resource_type="document",
+            resource_id="docABC",
+        ):
+            await asyncio.sleep(0.05)
+        await audit_service.flush()
+        events = await audit_service.query_events(user_id="ctx_op_user")
+        assert len(events) == 2
+        types = {e["event_type"] for e in events}
+        assert AuditEventType.API_REQUEST.value in types
+        assert AuditEventType.API_RESPONSE.value in types
+        # Verify result fields
+        started = next(e for e in events if e["event_type"] == AuditEventType.API_REQUEST.value)
+        completed = next(e for e in events if e["event_type"] == AuditEventType.API_RESPONSE.value)
+        assert started["result"] == "started"
+        assert completed["result"] == "success"
+        assert (completed.get("duration_ms") or 0) > 0

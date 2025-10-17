@@ -21,8 +21,7 @@ def _fresh_client() -> TestClient:
     reset_settings()
     try:
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(reset_db_pool())
+        asyncio.run(reset_db_pool())
     except Exception:
         pass
 
@@ -40,7 +39,7 @@ def _fresh_client() -> TestClient:
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
         import asyncio
-        asyncio.get_event_loop().run_until_complete(ensure_single_user_rbac_seed_if_needed())
+        asyncio.run(ensure_single_user_rbac_seed_if_needed())
     except Exception:
         pass
     client._tmp_auth_db_path = tmp_path  # type: ignore[attr-defined]
