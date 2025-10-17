@@ -250,6 +250,13 @@ async def send_message(
         
     except HTTPException:
         raise
+    except ConflictError as e:
+        # Optimistic lock or state conflict during creation
+        logger.warning(f"Conflict sending message to chat {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error sending message to chat {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
         logger.error(f"Error sending message to chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
@@ -637,6 +644,12 @@ async def edit_message(
         
     except HTTPException:
         raise
+    except ConflictError as e:
+        logger.warning(f"Conflict editing message {message_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error editing message {message_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
         logger.error(f"Error editing message {message_id}: {e}", exc_info=True)
         raise HTTPException(
@@ -697,6 +710,12 @@ async def delete_message(
         
     except HTTPException:
         raise
+    except ConflictError as e:
+        logger.warning(f"Conflict deleting message {message_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error deleting message {message_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting message {message_id}: {e}", exc_info=True)
         raise HTTPException(

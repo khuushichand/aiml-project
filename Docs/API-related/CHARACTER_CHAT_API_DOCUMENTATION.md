@@ -569,6 +569,15 @@ Notes:
 - When `save_to_db` is omitted, server default is used (see Chat API `DEFAULT_SAVE_TO_DB`).
 - Set `"stream": true` in the request body to stream the result via `text/event-stream` (SSE). In offline/dev mode without a running provider, streaming is disabled and a non-streaming response is returned.
 
+#### Streaming Behavior
+
+When `stream=true` and the provider supports streaming, the server emits Server‑Sent Events (SSE):
+
+- Each chunk is sent as a line prefixed with `data: `, followed by a blank line (SSE framing).
+- If the upstream provider already emits SSE‑formatted lines (beginning with `data:`), they are forwarded as‑is.
+- Exactly one terminal marker is sent at the end: `data: [DONE]`. Duplicate terminal markers are suppressed.
+- On transform/iteration errors mid‑stream, an error payload is sent and the stream still terminates with `data: [DONE]`.
+
 **Response:** `200 OK`
 ```json
 {

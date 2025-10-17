@@ -3856,6 +3856,129 @@ UPDATE db_schema_version
             logger.error(f"Database error counting conversations for client_id {client_id}: {e}")
             raise
 
+    def get_conversations_for_user(self, client_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted conversations for a given user (client_id), ordered by last_modified DESC.
+
+        Args:
+            client_id: The user/client identifier as string.
+            limit: Max number of rows to return.
+            offset: Number of rows to skip.
+
+        Returns:
+            List of conversation records.
+
+        Raises:
+            CharactersRAGDBError on database failure.
+        """
+        query = (
+            "SELECT * FROM conversations "
+            "WHERE client_id = ? AND deleted = 0 "
+            "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (client_id, limit, offset))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error listing conversations for client_id {client_id}: {e}")
+            raise
+
+    def count_messages_for_conversation(self, conversation_id: str) -> int:
+        """
+        Count non-deleted messages for a conversation, ensuring the parent conversation is active.
+
+        Args:
+            conversation_id: Conversation UUID
+
+        Returns:
+            Integer count of messages.
+
+        Raises:
+            CharactersRAGDBError on database failure.
+        """
+        query = (
+            "SELECT COUNT(1) FROM messages m "
+            "JOIN conversations c ON m.conversation_id = c.id "
+            "WHERE m.conversation_id = ? AND m.deleted = 0 AND c.deleted = 0"
+        )
+        try:
+            cursor = self.execute_query(query, (conversation_id,))
+            row = cursor.fetchone()
+            # row may be tuple or dict depending on connection row factory
+            if row is None:
+                return 0
+            try:
+                return int(row[0])
+            except Exception:
+                return int(row.get("COUNT(1)") or row.get("count") or 0)
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error counting messages for conversation {conversation_id}: {e}")
+            raise
+
+    def count_conversations_for_user_by_character(self, client_id: str, character_id: int) -> int:
+        """
+        Count non-deleted conversations for a given user scoped to a specific character.
+
+        Args:
+            client_id: The user/client identifier as string.
+            character_id: Character ID to scope the count.
+
+        Returns:
+            Integer count of conversations.
+
+        Raises:
+            CharactersRAGDBError on database failure.
+        """
+        query = (
+            "SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND deleted = 0"
+        )
+        try:
+            cursor = self.execute_query(query, (client_id, character_id))
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            try:
+                return int(row[0])
+            except Exception:
+                return int(row.get("COUNT(1)") or row.get("count") or 0)
+        except CharactersRAGDBError as e:
+            logger.error(
+                f"Database error counting conversations for client_id {client_id} and character_id {character_id}: {e}"
+            )
+            raise
+
+    def get_conversations_for_user_and_character(self, client_id: str, character_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted conversations for a given user scoped to a specific character.
+
+        Args:
+            client_id: The user/client identifier as string.
+            character_id: Character ID to scope the list.
+            limit: Max number of rows to return.
+            offset: Number of rows to skip.
+
+        Returns:
+            List of conversation records.
+
+        Raises:
+            CharactersRAGDBError on database failure.
+        """
+        query = (
+            "SELECT * FROM conversations "
+            "WHERE client_id = ? AND character_id = ? AND deleted = 0 "
+            "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (client_id, character_id, limit, offset))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except CharactersRAGDBError as e:
+            logger.error(
+                f"Database error listing conversations for client_id {client_id} and character_id {character_id}: {e}"
+            )
+            raise
+
     def update_conversation(self, conversation_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
         """
         Updates an existing conversation using optimistic locking.

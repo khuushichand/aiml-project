@@ -679,6 +679,9 @@ async def stream_job_events(
                             payload = _json.dumps({"event": et, "attrs": {}})
                         yield f"id: {eid}\nevent: job\ndata: {payload}\n\n"
                         after_id = eid
+                else:
+                    # Heartbeat to keep clients unblocked while waiting for events
+                    yield ": keep-alive\n\n"
                 await asyncio.sleep(poll_interval)
             except Exception:
                 await asyncio.sleep(poll_interval)

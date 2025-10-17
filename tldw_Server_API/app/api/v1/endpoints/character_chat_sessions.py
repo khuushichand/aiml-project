@@ -289,9 +289,12 @@ async def get_chat_session(
                 detail="You don't have access to this chat session"
             )
         
-        # Get message count
-        messages = db.get_messages_for_conversation(chat_id, limit=1000)
-        conversation['message_count'] = len(messages) if messages else 0
+        # Get message count efficiently
+        try:
+            conversation['message_count'] = db.count_messages_for_conversation(chat_id)
+        except Exception:
+            messages = db.get_messages_for_conversation(chat_id, limit=1000)
+            conversation['message_count'] = len(messages) if messages else 0
         
         return _convert_db_conversation_to_response(conversation)
         
@@ -621,19 +624,39 @@ async def character_chat_completion(
         # If streaming requested and we have a generator, stream SSE
         if not offline_sim and bool(body.stream):
             try:
-                if hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list)):
-                    async def _sse_gen():
+                # Support async generators
+                if hasattr(llm_resp, "__aiter__"):
+                    async def _sse_async():
+                        done_sent = False
                         try:
-                            # llm_resp may be a sync generator; iterate in thread if needed
-                            for chunk in llm_resp:  # type: ignore
+                            async for chunk in llm_resp:  # type: ignore
                                 text = str(chunk).rstrip("\n")
-                                # Ensure each line adheres to SSE: prefix 'data: '
-                                if text.startswith("data:"):
-                                    yield text + "\n\n"
-                                else:
-                                    yield f"data: {text}\n\n"
+                                line = text if text.startswith("data:") else f"data: {text}"
+                                if line.strip() == "data: [DONE]":
+                                    done_sent = True
+                                yield line + "\n\n"
                         except Exception as e:
                             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                        finally:
+                            if not done_sent:
+                                yield "data: [DONE]\n\n"
+                    return StreamingResponse(_sse_async(), media_type="text/event-stream")
+                # Support sync generators/iterables that are not plain containers
+                if hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list)):
+                    async def _sse_gen():
+                        done_sent = False
+                        try:
+                            for chunk in llm_resp:  # type: ignore
+                                text = str(chunk).rstrip("\n")
+                                line = text if text.startswith("data:") else f"data: {text}"
+                                if line.strip() == "data: [DONE]":
+                                    done_sent = True
+                                yield line + "\n\n"
+                        except Exception as e:
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                        finally:
+                            if not done_sent:
+                                yield "data: [DONE]\n\n"
                     return StreamingResponse(_sse_gen(), media_type="text/event-stream")
             except Exception:
                 # Fall through to non-streaming response
@@ -746,23 +769,25 @@ async def list_chat_sessions(
         List of chat sessions with pagination info
     """
     try:
+        user_id_str = str(current_user.id)
         if character_id:
-            # Get conversations for specific character
-            conversations = db.get_conversations_for_character(character_id, limit=limit, offset=offset)
+            # Get conversations for specific character scoped to current user
+            conversations = db.get_conversations_for_user_and_character(user_id_str, character_id, limit=limit, offset=offset)
+            try:
+                total_count = db.count_conversations_for_user_by_character(user_id_str, character_id)
+            except Exception:
+                # Fallback: filter by client_id in-memory if efficient count isn't available
+                total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
         else:
-            # Get all user conversations (need to implement this method)
-            # For now, aggregate from all characters
-            conversations = []
-            characters = db.list_character_cards(limit=1000)
-            for char in characters:
-                char_convs = db.get_conversations_for_character(char['id'], limit=limit, offset=offset)
-                conversations.extend(char_convs)
+            # Efficient path: list conversations for this user directly
+            conversations = db.get_conversations_for_user(user_id_str, limit=limit, offset=offset)
+            try:
+                total_count = db.count_conversations_for_user(user_id_str)
+            except Exception:
+                total_count = len(conversations)
         
-        # Filter by client_id for security
-        user_conversations = [
-            conv for conv in conversations 
-            if conv.get('client_id') == str(current_user.id)
-        ]
+        # Filter by client_id for security (redundant in happy path, kept defensively)
+        user_conversations = [conv for conv in conversations if conv.get('client_id') == user_id_str]
         
         # Sort by last_modified descending
         user_conversations.sort(key=lambda x: x.get('last_modified', ''), reverse=True)
@@ -770,14 +795,17 @@ async def list_chat_sessions(
         # Apply pagination after filtering
         paginated = user_conversations[offset:offset+limit]
         
-        # Add message counts
+        # Add message counts using efficient counter
         for conv in paginated:
-            messages = db.get_messages_for_conversation(conv['id'], limit=1)
-            conv['message_count'] = len(messages) if messages else 0
+            try:
+                conv['message_count'] = db.count_messages_for_conversation(conv['id'])
+            except Exception:
+                messages = db.get_messages_for_conversation(conv['id'], limit=1000)
+                conv['message_count'] = len(messages) if messages else 0
         
         return ChatSessionListResponse(
             chats=[_convert_db_conversation_to_response(conv) for conv in paginated],
-            total=len(user_conversations),
+            total=total_count,
             limit=limit,
             offset=offset
         )
@@ -854,6 +882,13 @@ async def update_chat_session(
         
         return _convert_db_conversation_to_response(updated_conv)
         
+    except ConflictError as e:
+        # Optimistic locking or state conflicts
+        logger.warning(f"Conflict updating chat session {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error updating chat session {chat_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -925,6 +960,12 @@ async def delete_chat_session(
         
         logger.info(f"Soft deleted chat session {chat_id} by user {current_user.id}")
         
+    except ConflictError as e:
+        logger.warning(f"Conflict deleting chat session {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error deleting chat session {chat_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
