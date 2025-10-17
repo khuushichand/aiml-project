@@ -812,13 +812,28 @@ def load_comprehensive_config():
     # .parent.parent.parent -> .../tldw_Server_API (This is the project root)
     project_root = current_file_path.parent.parent.parent
 
-    # Load .env file if it exists (API keys should be here)
-    env_path = project_root / 'Config_Files' / '.env'
-    if env_path.exists():
-        logger.info(f"Loading environment variables from: {str(env_path)}")
-        load_dotenv(dotenv_path=str(env_path), override=False)
-    else:
-        logger.info(f"No .env file found at {str(env_path)}, will use config.txt and system environment variables")
+    # Load .env/.ENV files if they exist (API keys should be here)
+    # Support both lowercase and uppercase filenames and both project root and Config_Files directory.
+    candidate_env_paths = [
+        project_root / '.env',
+        project_root / '.ENV',
+        project_root / 'Config_Files' / '.env',
+        project_root / 'Config_Files' / '.ENV',
+    ]
+    loaded_any_env = False
+    for p in candidate_env_paths:
+        try:
+            if p.exists():
+                logger.info(f"Loading environment variables from: {str(p)}")
+                load_dotenv(dotenv_path=str(p), override=False)
+                loaded_any_env = True
+        except Exception:
+            # Continue trying other candidates
+            pass
+    if not loaded_any_env:
+        logger.info(
+            f"No .env/.ENV file found in {project_root} or {project_root / 'Config_Files'}; using config.txt and system env"
+        )
 
     config_path_obj = project_root / 'Config_Files' / 'config.txt'
 

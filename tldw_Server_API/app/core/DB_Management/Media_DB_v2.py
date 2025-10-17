@@ -2664,7 +2664,8 @@ class MediaDatabase:
                 if self.backend_type == BackendType.SQLITE:
                     if not any("media_fts fts" in j_item for j_item in joins):
                         joins.append("JOIN media_fts fts ON fts.rowid = m.id")
-                    conditions.append("fts.media_fts MATCH ?")
+                    # Use table name for MATCH for SQLite FTS5 compatibility
+                    conditions.append("media_fts MATCH ?")
                     params.append(combined_fts_query)
                 elif self.backend_type == BackendType.POSTGRESQL:
                     postgres_tsquery = FTSQueryTranslator.normalize_query(combined_fts_query, 'postgresql')

@@ -4150,9 +4150,9 @@ UPDATE db_schema_version
         safe_search_term = f'"{title_query}"'
         base_query = """
                      SELECT c.*
-                     FROM conversations_fts fts
-                              JOIN conversations c ON fts.rowid = c.rowid
-                     WHERE fts.conversations_fts MATCH ? \
+                     FROM conversations_fts, conversations c
+                     WHERE conversations_fts.rowid = c.rowid \
+                       AND conversations_fts MATCH ? \
                        AND c.deleted = 0 \
                      """
         params_list = [title_query]
@@ -4160,7 +4160,7 @@ UPDATE db_schema_version
             base_query += " AND c.character_id = ?"
             params_list.append(character_id)
 
-        base_query += " ORDER BY bm25(fts) ASC, c.last_modified DESC LIMIT ?"
+        base_query += " ORDER BY bm25(conversations_fts) ASC, c.last_modified DESC LIMIT ?"
         params_list.append(limit)
 
         try:
@@ -4660,9 +4660,9 @@ UPDATE db_schema_version
         safe_search_term = f'"{content_query}"'
         base_query = """
                      SELECT m.*
-                     FROM messages_fts fts
-                              JOIN messages m ON fts.rowid = m.rowid
-                     WHERE fts.messages_fts MATCH ? \
+                     FROM messages_fts, messages m
+                     WHERE messages_fts.rowid = m.rowid \
+                       AND messages_fts MATCH ? \
                        AND m.deleted = 0 \
                      """
         params_list = [content_query]
@@ -4670,7 +4670,7 @@ UPDATE db_schema_version
             base_query += " AND m.conversation_id = ?"
             params_list.append(conversation_id)
 
-        base_query += " ORDER BY bm25(fts) ASC, m.last_modified DESC LIMIT ?"
+        base_query += " ORDER BY bm25(messages_fts) ASC, m.last_modified DESC LIMIT ?"
         params_list.append(limit)
 
         try:
@@ -5189,12 +5189,13 @@ UPDATE db_schema_version
                 logger.error("PostgreSQL FTS search failed for table '%s': %s", main_table_name, exc)
                 raise
 
+        # Use explicit table-name for MATCH and bm25() for SQLite FTS5 compatibility
         query = f"""
             SELECT main.*
-            FROM {fts_table_name} fts
-            JOIN {main_table_name} main ON fts.rowid = main.id
-            WHERE fts.{fts_match_cols_or_table} MATCH ? AND main.deleted = 0
-            ORDER BY bm25(fts)
+            FROM {fts_table_name}, {main_table_name} main
+            WHERE {fts_table_name}.rowid = main.id
+              AND {fts_table_name} MATCH ? AND main.deleted = 0
+            ORDER BY bm25({fts_table_name})
             LIMIT ?
         """
         try:
@@ -5648,11 +5649,11 @@ UPDATE db_schema_version
 
         query = """
                 SELECT main.*
-                FROM notes_fts fts
-                         JOIN notes main ON fts.rowid = main.rowid
-                WHERE fts.notes_fts MATCH ?
+                FROM notes_fts, notes main
+                WHERE notes_fts.rowid = main.rowid
+                  AND notes_fts MATCH ?
                   AND main.deleted = 0
-                ORDER BY bm25(fts) LIMIT ?
+                ORDER BY bm25(notes_fts) LIMIT ?
                 """
         try:
             cursor = self.execute_query(query, (safe_search_term, limit))

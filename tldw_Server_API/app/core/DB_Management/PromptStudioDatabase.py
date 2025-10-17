@@ -3404,11 +3404,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             search_sql = """
                 SELECT tc.*
                 FROM prompt_studio_test_cases tc
-                JOIN prompt_studio_test_cases_fts fts ON tc.id = fts.rowid
+                JOIN prompt_studio_test_cases_fts ON tc.id = prompt_studio_test_cases_fts.rowid
                 WHERE tc.project_id = ?
                   AND tc.deleted = 0
-                  AND fts.prompt_studio_test_cases_fts MATCH ?
-                ORDER BY bm25(fts)
+                  AND prompt_studio_test_cases_fts MATCH ?
+                ORDER BY bm25(prompt_studio_test_cases_fts)
                 LIMIT ?
             """
             params = [project_id, backend_query, limit]
@@ -6559,11 +6559,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             """
             SELECT tc.*
             FROM prompt_studio_test_cases tc
-            JOIN prompt_studio_test_cases_fts fts ON tc.id = fts.rowid
+            JOIN prompt_studio_test_cases_fts ON tc.id = prompt_studio_test_cases_fts.rowid
             WHERE tc.project_id = ?
               AND tc.deleted = 0
-              AND fts.prompt_studio_test_cases_fts MATCH ?
-            ORDER BY bm25(fts)
+              AND prompt_studio_test_cases_fts MATCH ?
+            ORDER BY bm25(prompt_studio_test_cases_fts)
             LIMIT ?
             """,
             (project_id, query, limit),

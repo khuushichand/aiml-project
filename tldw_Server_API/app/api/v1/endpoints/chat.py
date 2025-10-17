@@ -614,7 +614,7 @@ async def create_chat_completion(
                         event_type=AuditEventType.API_RATE_LIMITED,
                         context=context,
                         action="rate_limit_exceeded",
-                        details={"reason": rate_error}
+                        metadata={"reason": rate_error}
                     )
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,

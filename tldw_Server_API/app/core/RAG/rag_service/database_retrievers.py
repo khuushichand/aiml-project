@@ -1936,8 +1936,8 @@ class ClaimsRetriever(BaseRetriever):
             # Try FTS on claims_fts first
             sql = (
                 "SELECT c.id, c.media_id, c.chunk_index, c.claim_text "
-                "FROM claims_fts f JOIN Claims c ON f.rowid = c.id "
-                "WHERE f MATCH ? AND c.deleted = 0 LIMIT ?"
+                "FROM claims_fts JOIN Claims c ON claims_fts.rowid = c.id "
+                "WHERE claims_fts MATCH ? AND c.deleted = 0 LIMIT ?"
             )
             params = (query, int(self.config.max_results))
             rows = self._execute_query(sql, params)

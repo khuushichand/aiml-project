@@ -28,7 +28,14 @@ else:
 model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading
-load_dotenv()
+# Load standard .env, then also try uppercase .ENV for environments that use it.
+try:
+    load_dotenv()
+    # Attempt to load from an uppercase filename as well (non-standard but requested)
+    load_dotenv(dotenv_path=".ENV", override=False)
+except Exception:
+    # Fall back silently if dotenv loading fails; environment may be pre-populated
+    pass
 
 # Use load_and_log_configs which returns a proper dict
 from tldw_Server_API.app.core.config import load_and_log_configs

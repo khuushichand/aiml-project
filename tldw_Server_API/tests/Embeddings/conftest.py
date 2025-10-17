@@ -98,3 +98,52 @@ def _sanitize_jsonschema_module(monkeypatch):
             except Exception:
                 pass
         monkeypatch.setitem(_sys.modules, "jsonschema", wrapper)
+
+
+@pytest.fixture(autouse=True)
+def _patch_hypothesis_local_constants(monkeypatch):
+    """Patch Hypothesis provider constants discovery to tolerate unhashable stubs.
+
+    Some tests insert non-module stubs (e.g., SimpleNamespace) into sys.modules.
+    Hypothesis scans sys.modules and assumes hashable values; guard this by
+    attempting to sanitize and retry when a TypeError arises.
+    """
+    try:
+        from hypothesis.internal.conjecture import providers as _providers  # type: ignore
+    except Exception:
+        return
+
+    orig = getattr(_providers, "_get_local_constants", None)
+    if not callable(orig):
+        return
+
+    def _safe_get_local_constants():  # type: ignore[return-type]
+        try:
+            return orig()
+        except TypeError:
+            # Sanitize sys.modules: wrap unhashable stubs with ModuleType
+            import sys as _sys
+            import types as _types
+            for name, mod in list(_sys.modules.items()):
+                try:
+                    hash(mod)
+                    continue
+                except Exception:
+                    pass
+                if isinstance(mod, _types.SimpleNamespace):
+                    wrapper = _types.ModuleType(name)
+                    for attr in dir(mod):
+                        if attr.startswith("__") and attr.endswith("__"):
+                            continue
+                        try:
+                            setattr(wrapper, attr, getattr(mod, attr))
+                        except Exception:
+                            pass
+                    _sys.modules[name] = wrapper
+            try:
+                return orig()
+            except Exception:
+                # Fallback to existing cached constants if available
+                return getattr(_providers, "_local_constants", None)
+
+    monkeypatch.setattr(_providers, "_get_local_constants", _safe_get_local_constants, raising=False)
