@@ -194,6 +194,7 @@ class TestChatUnit:
         )
         
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
     
     def test_empty_messages(self, unit_test_client):
         """Test that empty messages array returns error."""

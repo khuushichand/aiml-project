@@ -1049,10 +1049,41 @@ class WorkflowEngine:
                 return
             # SSRF/egress control
             try:
-                # Prefer tenant-aware policy when available; fallback to simple is_url_allowed for test shims
+                # Prefer tenant-aware policy when available; fall back to general egress.
                 from tldw_Server_API.app.core.Security import egress as _eg
+                from urllib.parse import urlparse as _urlparse
                 tenant_id_for_policy = (self.db.get_run(run_id).tenant_id if self.db.get_run(run_id) else self.config.tenant_id)
-                allowed = None
+                parsed_host = _urlparse(url).hostname or ""
+
+                # Hard deny if host explicitly present in webhook denylist (global or tenant-specific)
+                try:
+                    import os as _os
+                    t_key = (tenant_id_for_policy or "default").upper().replace("-", "_")
+                    deny_env_t = _os.getenv(f"WORKFLOWS_WEBHOOK_DENYLIST_{t_key}")
+                    deny_env_g = _os.getenv("WORKFLOWS_WEBHOOK_DENYLIST")
+                    def _norm(v: str) -> str:
+                        v = v.strip().lower()
+                        return v[1:] if v.startswith('.') else v
+                    deny_hosts = []
+                    for src in (deny_env_t, deny_env_g):
+                        if not src:
+                            continue
+                        deny_hosts.extend([_norm(p) for p in src.split(',') if p.strip()])
+                    if deny_hosts:
+                        ph = parsed_host.lower().rstrip('.')
+                        if any(ph == d or ph.endswith(f".{d}") for d in deny_hosts if d):
+                            # Record and block immediately
+                            self._append_event(run_id, "webhook_delivery", {"host": parsed_host, "status": "blocked"})
+                            try:
+                                from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                                _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": parsed_host})
+                            except Exception:
+                                pass
+                            return
+                except Exception:
+                    pass
+
+                allowed: Optional[bool] = None
                 if hasattr(_eg, 'is_webhook_url_allowed_for_tenant'):
                     try:
                         allowed = bool(_eg.is_webhook_url_allowed_for_tenant(url, tenant_id_for_policy))
@@ -1060,21 +1091,22 @@ class WorkflowEngine:
                         allowed = None
                 if hasattr(_eg, 'is_url_allowed'):
                     try:
-                        # Favor permissive outcome if either function allows (test shims patch is_url_allowed)
+                        general_allowed = bool(_eg.is_url_allowed(url))
+                        # Combine permissively here; explicit denylist already handled above.
                         if allowed is None:
-                            allowed = bool(_eg.is_url_allowed(url))
+                            allowed = general_allowed
                         else:
-                            allowed = bool(allowed or _eg.is_url_allowed(url))
+                            allowed = bool(allowed or general_allowed)
                     except Exception:
+                        # Keep prior decision (may be None)
                         pass
                 if allowed is None:
-                    # If no policy available, default to block (fail safe)
+                    # If no policy information available, default to block (fail safe)
                     allowed = False
                 if not allowed:
                     # Explicitly record blocked delivery for observability
                     try:
-                        from urllib.parse import urlparse as _urlparse
-                        host = _urlparse(url).hostname or ""
+                        host = parsed_host
                         self._append_event(run_id, "webhook_delivery", {"host": host, "status": "blocked"})
                         try:
                             from tldw_Server_API.app.core.Metrics import increment_counter as _inc
@@ -1084,8 +1116,14 @@ class WorkflowEngine:
                     except Exception:
                         pass
                     return
-            except Exception:
-                # If egress module unavailable, do not send
+            except Exception as _eg_ex:
+                # Conservative: treat policy evaluation errors as blocked and record an event
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    host = _urlparse(url).hostname or ""
+                    self._append_event(run_id, "webhook_delivery", {"host": host, "status": "blocked", "reason": "policy_error"})
+                except Exception:
+                    pass
                 return
 
             # Prepare payload

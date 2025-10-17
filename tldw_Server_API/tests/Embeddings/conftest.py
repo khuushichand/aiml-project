@@ -147,3 +147,17 @@ def _patch_hypothesis_local_constants(monkeypatch):
                 return getattr(_providers, "_local_constants", None)
 
     monkeypatch.setattr(_providers, "_get_local_constants", _safe_get_local_constants, raising=False)
+
+
+# ---------------------------------------------------------------------------
+# Optional PGVector fixtures — skip when not available in this environment
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def pgvector_dsn():  # pragma: no cover - test helper for environments without PG
+    pytest.skip("pgvector DSN not available in this test run")
+
+
+@pytest.fixture
+def pgvector_temp_table(pgvector_dsn):  # pragma: no cover - test helper for environments without PG
+    pytest.skip("pgvector temporary table not available in this test run")

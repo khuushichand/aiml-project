@@ -240,6 +240,18 @@ async def process_code_endpoint(
                                 md.update(opts)
                                 md.setdefault('chunk_method', 'code')
                                 md.setdefault('language', language)
+                                # Ensure top-level start/end lines exist for convenience
+                                if md.get('start_line') is None or md.get('end_line') is None:
+                                    try:
+                                        blocks = md.get('blocks') or []
+                                        starts = [b.get('start_line') for b in blocks if isinstance(b, dict) and b.get('start_line') is not None]
+                                        ends = [b.get('end_line') for b in blocks if isinstance(b, dict) and b.get('end_line') is not None]
+                                        if starts:
+                                            md['start_line'] = int(min(starts))
+                                        if ends:
+                                            md['end_line'] = int(max(ends))
+                                    except Exception:
+                                        pass
                                 md['chunk_index'] = idx + 1
                                 md['total_chunks'] = total
                                 chunks.append({"text": cr.text, "metadata": md})
@@ -297,15 +309,26 @@ async def process_code_endpoint(
                                 crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
                                 total = len(crs)
                                 chunks = []
-                                for idx, cr in enumerate(crs):
-                                    md = asdict(cr.metadata)
-                                    opts = md.pop('options', {}) or {}
-                                    md.update(opts)
-                                    md.setdefault('chunk_method', 'code')
-                                    md.setdefault('language', language)
-                                    md['chunk_index'] = idx + 1
-                                    md['total_chunks'] = total
-                                    chunks.append({"text": cr.text, "metadata": md})
+                            for idx, cr in enumerate(crs):
+                                md = asdict(cr.metadata)
+                                opts = md.pop('options', {}) or {}
+                                md.update(opts)
+                                md.setdefault('chunk_method', 'code')
+                                md.setdefault('language', language)
+                                if md.get('start_line') is None or md.get('end_line') is None:
+                                    try:
+                                        blocks = md.get('blocks') or []
+                                        starts = [b.get('start_line') for b in blocks if isinstance(b, dict) and b.get('start_line') is not None]
+                                        ends = [b.get('end_line') for b in blocks if isinstance(b, dict) and b.get('end_line') is not None]
+                                        if starts:
+                                            md['start_line'] = int(min(starts))
+                                        if ends:
+                                            md['end_line'] = int(max(ends))
+                                    except Exception:
+                                        pass
+                                md['chunk_index'] = idx + 1
+                                md['total_chunks'] = total
+                                chunks.append({"text": cr.text, "metadata": md})
                         else:
                             chunks = []
                         batch["results"].append({
@@ -7677,6 +7700,15 @@ async def _download_url_async(
                     else:
                         # As a last resort, rely on Content-Type for known mappings
                         content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
+                        # Special-case: avoid accepting generic example.com HTML with no extension
+                        try:
+                            host = getattr(response.url, 'host', None) or getattr(response.url, 'hostname', None)
+                        except Exception:
+                            host = None
+                        if isinstance(host, str) and host.lower() in {"example.com", "www.example.com"}:
+                            allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
+                            raise ValueError(
+                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
                         # If the caller provided disallowed content-types (e.g., text/html for documents), enforce here
                         if disallow_content_types and content_type in disallow_content_types:
                             allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'

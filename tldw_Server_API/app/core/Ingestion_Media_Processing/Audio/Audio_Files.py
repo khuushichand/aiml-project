@@ -235,10 +235,14 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         if not original_filename:
             try:
                 original_filename = Path(urlparse(url).path).name
-                if not original_filename: # Handle case where path ends in /
+                if not original_filename:  # Handle case where path ends in /
                     original_filename = f"downloaded_audio_{uuid.uuid4().hex[:UUID_LENGTH]}"
             except Exception:
                 original_filename = f"downloaded_audio_{uuid.uuid4().hex[:UUID_LENGTH]}"
+
+        # Normalize any surrounding quotes/whitespace on filename
+        if original_filename:
+            original_filename = original_filename.strip().strip("\"' ")
 
         base_name = sanitize_filename(Path(original_filename).stem)
         extension = Path(original_filename).suffix or ".mp3" # Default to .mp3 if no extension
@@ -492,7 +496,11 @@ def process_audio_files(
                         if is_youtube:
                             # Use yt-dlp for YouTube URLs
                             update_progress(f"Detected YouTube URL, using yt-dlp for extraction...")
-                            downloaded_path, download_message = download_youtube_audio(input_item)
+                            downloaded_path, download_message = download_youtube_audio(
+                                input_item,
+                                use_cookies=use_cookies,
+                                cookies=cookies,
+                            )
                             if not downloaded_path:
                                 raise RuntimeError(f"YouTube download failed: {download_message}")
                             
@@ -940,7 +948,33 @@ def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_ti
         return "\n".join([segment.get('Text', '').strip() for segment in segments])
 
 
-def download_youtube_audio(url: str) -> tuple[Optional[str], str]:
+def _cookies_to_header_value(cookies) -> Optional[str]:
+    try:
+        if cookies is None:
+            return None
+        if isinstance(cookies, str):
+            import json as _json
+            try:
+                cookies = _json.loads(cookies)
+            except _json.JSONDecodeError:
+                return None
+        if isinstance(cookies, dict):
+            parts = []
+            for k, v in cookies.items():
+                if k is None or v is None:
+                    continue
+                k = str(k).strip()
+                v = str(v).strip()
+                if not k:
+                    continue
+                parts.append(f"{k}={v}")
+            return "; ".join(parts) if parts else None
+        return None
+    except Exception:
+        return None
+
+
+def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Optional[str | Dict[str, Any]] = None) -> tuple[Optional[str], str]:
     """
     Downloads audio from a YouTube URL using yt-dlp.
 
@@ -1006,6 +1040,11 @@ def download_youtube_audio(url: str) -> tuple[Optional[str], str]:
                     '-ar', '44100',  # Set sample rate to 44.1kHz
                 ]
             }
+
+            if use_cookies and cookies:
+                cookie_header = _cookies_to_header_value(cookies)
+                if cookie_header:
+                    ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
 
             # Execute yt-dlp to download and convert to audio
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1151,7 +1190,12 @@ def process_podcast(
 
         # 1. Download Audio
         update_progress("Downloading podcast audio...")
-        audio_file_path = download_audio_file(url, use_cookies, cookies) # Uses refactored download
+        audio_file_path = download_audio_file(
+            url=url,
+            target_temp_dir=str(processing_temp_dir),
+            use_cookies=use_cookies,
+            cookies=cookies,
+        )  # Uses refactored download
         temp_files.append(audio_file_path)
         result["processing_source"] = audio_file_path # Update source to local path
         update_progress(f"Podcast downloaded: {audio_file_path}")

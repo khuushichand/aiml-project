@@ -451,6 +451,8 @@ This endpoint supports:
 - Conversation history
 - Ephemeral or persistent operation (see `save_to_db` below)
 
+Streaming behavior follows the core Chat API: the server sends an initial `event: stream_start`, emits delta chunks as OpenAI‑style `choices[].delta.content`, and terminates with a single `data: [DONE]` (heartbeat comments are sent periodically). Duplicate terminal markers are suppressed.
+
 ### Workflow for Character Chat Completions
 
 1. **Get formatted messages from the chat session:**
@@ -486,6 +488,8 @@ curl -X POST "http://localhost:8000/api/v1/chat/completions" \
 ```
 
 Server default for persistence can be configured via environment variable `CHAT_SAVE_DEFAULT=true` or in `Config_Files/config.txt` under `[Chat-Module]` with `chat_save_default = True`.
+
+Persistence guard: If `save_to_db=true` is set but there is no valid character/chat context (e.g., missing `character_id` and `conversation_id` in the request), the server will disable persistence for that request and continue normally to avoid invalid writes. A warning is logged; no partial records are created. When calling completions for character chats, always include `conversation_id` (the chat ID) or `character_id` in the request body when you want persistence.
 
 3. **Save the AI response as a new message (optional):**
 ```bash
@@ -1162,6 +1166,10 @@ else:
 
 - Core Chat API: `Docs/API-related/Chat_API_Documentation.md`
 - Chatbook features (dictionaries, documents, import/export): `Docs/API-related/Chatbook_Features_API_Documentation.md`
+
+For provider integration testing, see the “Commercial Tests” section in `Docs/API-related/Chat_API_Documentation.md`.
+
+Configuration notes for providers: API keys are read from environment variables and from `.env`/`.ENV` files (project root or `tldw_Server_API/Config_Files/`), falling back to `Config_Files/config.txt` `[API]` entries. See the Chat API doc for precedence and a quick sanity‑check snippet.
 
 ---
 

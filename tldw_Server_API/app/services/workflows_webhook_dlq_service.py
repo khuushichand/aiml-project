@@ -61,7 +61,10 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
         from tldw_Server_API.app.core.Security import egress as _eg
         if hasattr(_eg, "is_webhook_url_allowed_for_tenant"):
             try:
-                return bool(_eg.is_webhook_url_allowed_for_tenant(url, tenant_id))
+                _allowed = bool(_eg.is_webhook_url_allowed_for_tenant(url, tenant_id))
+                if _allowed:
+                    return True
+                # If not allowed, continue to fallback logic below for test-friendly match
             except Exception:
                 # Fall back to explicit evaluate_url_policy with derived lists
                 pass

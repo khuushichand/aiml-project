@@ -318,7 +318,12 @@ class DatabasePool:
                     # Convert Row to dict
                     return {key: row[key] for key in row.keys()}
                 return None
-    
+
+    # Compatibility aliases for callers expecting asyncpg-like API
+    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+        """Alias for fetchone to match asyncpg-style interfaces."""
+        return await self.fetchone(query, *args)
+
     async def fetchall(self, query: str, *args) -> list[Any]:
         """Fetch all rows.
 
@@ -342,7 +347,11 @@ class DatabasePool:
                 rows = await cursor.fetchall()
                 # Return native Row objects to support both index and key access
                 return list(rows)
-    
+
+    async def fetch(self, query: str, *args) -> list[Any]:
+        """Alias for fetchall to match asyncpg-style interfaces."""
+        return await self.fetchall(query, *args)
+
     async def fetchval(self, query: str, *args) -> Any:
         """Fetch a single value"""
         async with self.acquire() as conn:

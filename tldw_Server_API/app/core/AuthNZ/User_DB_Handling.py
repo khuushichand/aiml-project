@@ -56,7 +56,7 @@ class User(BaseModel):
 
 # --- Single User "Dummy" Object ---
 # Created when in single-user mode using values from the settings
-_single_user_instance = None
+_single_user_instance = User(id=1, username="single_user", is_active=True)
 
 def get_single_user_instance() -> User:
     """Get or create the single user instance"""

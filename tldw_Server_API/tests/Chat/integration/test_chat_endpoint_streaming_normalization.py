@@ -117,6 +117,7 @@ def test_endpoint_streaming_normalizes_openai_sse_frames():
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
             pass
+
         _app = app  # type: ignore[assignment]
         try:
             getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)

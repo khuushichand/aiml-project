@@ -2190,7 +2190,7 @@ async def list_step_types():
             },
             "required": [],
             "additionalProperties": True,
-            "example": {"instructions": "Review the summary and approve.", "assigned_to_user_id": null},
+            "example": {"instructions": "Review the summary and approve.", "assigned_to_user_id": None},
             "min_engine_version": "0.1.3"
         },
         "wait_for_approval": {
@@ -2201,7 +2201,7 @@ async def list_step_types():
             },
             "required": [],
             "additionalProperties": True,
-            "example": {"instructions": "Await approval.", "assigned_to_user_id": null},
+            "example": {"instructions": "Await approval.", "assigned_to_user_id": None},
             "min_engine_version": "0.1.3"
         },
     }

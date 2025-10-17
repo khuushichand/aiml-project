@@ -36,6 +36,17 @@ def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path):
     config = _pg_config()
     backend = DatabaseBackendFactory.create_backend(config)
 
+    # Skip gracefully if Postgres is not reachable and not explicitly required
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
+    try:
+        # Probe connectivity with a no-op transaction
+        with backend.transaction() as _conn:
+            pass
+    except Exception as e:
+        if not require_pg:
+            pytest.skip(f"PostgreSQL not available ({e}); skipping Postgres-specific test.")
+        raise
+
     # Fresh schema
     with backend.transaction() as conn:
         backend.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;", connection=conn)

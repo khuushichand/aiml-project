@@ -26,6 +26,9 @@ class WorkflowDefinitionCreate(BaseModel):
     description: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    # Optional completion webhook configuration. Accepts either a URL string or
+    # an object with fields like {"url": str, "include_outputs": bool}.
+    on_completion_webhook: Optional[Dict[str, Any] | str] = None
     steps: List[StepConfig]
     metadata: Dict[str, Any] = Field(default_factory=dict)
     visibility: Literal["private"] = "private"

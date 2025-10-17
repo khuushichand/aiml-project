@@ -277,6 +277,7 @@ def test_create_chat_completion_no_template(
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
+
 # (The rest of the tests in test_chat_endpoint.py remain the same as the corrected version from the previous response)
 # Ensure they use the `default_chat_request_data` fixture where appropriate.
 

@@ -500,8 +500,8 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         pool = await get_db_pool()
         async with pool.transaction() as conn:
-            # Postgres path
-            if hasattr(conn, "execute"):
+            # Postgres path: asyncpg connections expose fetch(), SQLite shims do not
+            if hasattr(conn, "fetch"):
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS roles (
                         id SERIAL PRIMARY KEY,

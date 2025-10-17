@@ -180,14 +180,6 @@ async def login(
     start_time = time.perf_counter()
     log_counter("auth_login_attempt")
     try:
-        # In single-user mode, login via username/password is disabled.
-        if settings.AUTH_MODE == "single_user":
-            # Hide the endpoint to reduce confusion; instruct to use X-API-KEY.
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Endpoint not available in single-user mode; authenticate with X-API-KEY instead."
-            )
-
         # Get client info
         client_ip = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("User-Agent", "Unknown")

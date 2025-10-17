@@ -12,6 +12,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 import datetime
+from httpx import AsyncClient
+try:
+    # httpx >=0.23
+    from httpx import ASGITransport
+except Exception:  # pragma: no cover
+    ASGITransport = None
 
 # Set environment variables BEFORE any tldw imports
 os.environ["OPENAI_API_KEY"] = "sk-mock-key-12345"
@@ -395,6 +401,17 @@ def get_auth_headers(auth_token, csrf_token=""):
     return headers
 
 
+@pytest.fixture
+def auth_headers(auth_token):
+    """Provide default auth headers for requests (works with AsyncClient too)."""
+    settings = get_settings()
+    if settings.AUTH_MODE == "multi_user":
+        token = auth_token if auth_token.startswith("Bearer ") else f"Bearer {auth_token}"
+        return {"Authorization": token, "X-CSRF-Token": ""}
+    else:
+        return {"X-API-KEY": auth_token, "X-CSRF-Token": ""}
+
+
 # Additional fixtures for unit tests
 @pytest.fixture
 def isolated_db():
@@ -524,3 +541,17 @@ def unit_test_client(client, auth_token, isolated_db):
     
     # Cleanup
     app.dependency_overrides.clear()
+
+
+# Async test client for streaming/integration tests
+@pytest.fixture
+async def async_client():
+    """Yield an AsyncClient bound to the FastAPI app for ASGI tests."""
+    transport = ASGITransport(app=app) if ASGITransport else None
+    kwargs = {"base_url": "http://test"}
+    if transport is not None:
+        kwargs["transport"] = transport
+    else:  # Fallback for very old httpx (accepts app kw)
+        kwargs["app"] = app
+    async with AsyncClient(**kwargs) as ac:
+        yield ac

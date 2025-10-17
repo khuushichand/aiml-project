@@ -467,6 +467,7 @@ async def isolated_test_environment(monkeypatch):
 async def setup_test_database():
     """Create and setup the test database for the test session."""
     # Ensure FastAPI + core settings pick Postgres for this test DB
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
     test_dsn = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
     os.environ["DATABASE_URL"] = test_dsn
     try:
@@ -479,13 +480,19 @@ async def setup_test_database():
     except Exception:
         pass
     # Connect to postgres database to create test database
-    conn = await asyncpg.connect(
-        host=TEST_DB_HOST,
-        port=TEST_DB_PORT,
-        user=TEST_DB_USER,
-        password=TEST_DB_PASSWORD,
-        database="postgres"
-    )
+    try:
+        conn = await asyncpg.connect(
+            host=TEST_DB_HOST,
+            port=TEST_DB_PORT,
+            user=TEST_DB_USER,
+            password=TEST_DB_PASSWORD,
+            database="postgres"
+        )
+    except Exception as e:
+        if not require_pg:
+            import pytest as _pytest
+            _pytest.skip(f"PostgreSQL not available ({e}); skipping AuthNZ Postgres-backed tests. Set TLDW_TEST_POSTGRES_REQUIRED=1 to enforce.")
+        raise
     
     try:
         # Drop test database if it exists

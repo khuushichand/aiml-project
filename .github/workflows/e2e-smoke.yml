@@ -1,0 +1,150 @@
+name: E2E Smoke Workflows
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tldw_Server_API/**'
+      - '.github/workflows/e2e-smoke.yml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tldw_Server_API/**'
+      - '.github/workflows/e2e-smoke.yml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-smoke-single-user:
+    name: E2E Smoke (single-user)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      TEST_MODE: "true"
+      DISABLE_HEAVY_STARTUP: "1"
+      AUTH_MODE: "single_user"
+      SINGLE_USER_API_KEY: "test-api-key-12345"
+      E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+      MCP_JWT_SECRET: test_secret_key_for_ci_only_32_chars_minimum
+      MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tldw_Server_API/requirements.txt
+          pip install websockets pytest-timeout pytest-xdist
+
+      - name: Start server (background)
+        run: |
+          nohup python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for API health
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null; then
+              echo "API health OK"; exit 0; fi; sleep 2; done; \
+          echo '===== server.log (tail) ====='; tail -n 200 server.log || true; exit 1
+
+      - name: Run E2E smoke tests (single-user)
+        run: |
+          pytest -v -n 1 -m "critical and not multi_user" --timeout=600 \
+            tldw_Server_API/tests/e2e/test_tts_stream_http.py \
+            tldw_Server_API/tests/e2e/test_prompt_studio_e2e.py \
+            tldw_Server_API/tests/e2e/test_rag_deep_checks.py \
+            tldw_Server_API/tests/e2e/test_mcp_basic.py \
+            tldw_Server_API/tests/e2e/test_rate_limits.py \
+            tldw_Server_API/tests/e2e/test_concurrency_jobs.py
+
+      - name: Print server logs (on failure)
+        if: failure()
+        run: |
+          echo '===== server.log ====='
+          cat server.log || true
+
+      - name: Stop server
+        if: always()
+        run: |
+          kill $(cat server.pid) || true
+
+  e2e-smoke-multi-user:
+    name: E2E Smoke (multi-user onboarding)
+    runs-on: ubuntu-latest
+    needs: e2e-smoke-single-user
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      TEST_MODE: "true"
+      DISABLE_HEAVY_STARTUP: "1"
+      AUTH_MODE: "multi_user"
+      E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+      MCP_JWT_SECRET: test_secret_key_for_ci_only_32_chars_minimum
+      MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tldw_Server_API/requirements.txt
+          pip install websockets pytest-timeout pytest-xdist
+
+      - name: Start server (background)
+        run: |
+          nohup python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for API health
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null; then
+              echo "API health OK"; exit 0; fi; sleep 2; done; \
+          echo '===== server.log (tail) ====='; tail -n 200 server.log || true; exit 1
+
+      - name: Run multi-user onboarding test
+        env:
+          AUTH_MODE: "multi_user"
+        run: |
+          pytest -v -n 1 -m "multi_user" --timeout=600 \
+            tldw_Server_API/tests/e2e/test_multi_user_onboarding.py
+
+      - name: Print server logs (on failure)
+        if: failure()
+        run: |
+          echo '===== server.log ====='
+          cat server.log || true
+
+      - name: Stop server
+        if: always()
+        run: |
+          kill $(cat server.pid) || true

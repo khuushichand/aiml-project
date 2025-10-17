@@ -310,7 +310,13 @@ class TreeSegmenter:
 
     def _embed_blocks_with_retry(self) -> None:
         logger.info("Embedding transcript blocks for TreeSeg")
-        loop = asyncio.get_event_loop()
+        # Python 3.11+ may not have a default loop in the main thread; create one if needed.
+        try:
+            loop = asyncio.get_running_loop()
+            in_running_loop = True
+        except RuntimeError:
+            in_running_loop = False
+            loop = asyncio.new_event_loop()
 
         chunks = [block["convo"] for block in self.blocks]
 
@@ -323,6 +329,14 @@ class TreeSegmenter:
         retries = 2
         for attempt in range(1, retries + 1):
             try:
+                if in_running_loop:
+                    # Cannot block a running loop; advise callers to use create_async() in async contexts.
+                    raise RuntimeError("TreeSegmenter: use create_async() in async contexts")
+                # Run the coroutine to completion on our temporary loop
+                try:
+                    asyncio.set_event_loop(loop)
+                except Exception:
+                    pass
                 embs: List[List[float]] = loop.run_until_complete(run_embed())
                 if len(embs) != len(chunks):
                     raise ValueError(
@@ -338,6 +352,13 @@ class TreeSegmenter:
                     continue
                 logger.error(f"Embedding failed after {retries} attempts: {e}")
                 raise
+            finally:
+                if not in_running_loop:
+                    try:
+                        asyncio.set_event_loop(None)
+                        loop.close()
+                    except Exception:
+                        pass
 
     def segment_meeting(self, K: int) -> List[int]:
         """Segment the meeting into up to K segments.

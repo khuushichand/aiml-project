@@ -77,12 +77,19 @@ def normalize_title(title):
         '<', '').replace('>', '').replace('|', '')
     return title
 
-def get_video_info(url: str) -> dict:
+def get_video_info(url: str, *, use_cookies: bool = False, cookies: Optional[Dict[str, Any] | str] = None) -> dict:
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
     }
+    if use_cookies and cookies:
+        try:
+            cookie_header = _cookies_to_header_value(cookies)
+            if cookie_header:
+                ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
+        except Exception:
+            pass
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info_dict = ydl.extract_info(url, download=False)
@@ -92,13 +99,20 @@ def get_video_info(url: str) -> dict:
             return None
 
 
-def get_youtube(video_url):
+def get_youtube(video_url: str, *, use_cookies: bool = False, cookies: Optional[Dict[str, Any] | str] = None):
     ydl_opts = {
         'format': 'bestaudio[ext=m4a]',
         'noplaylist': False,
         'quiet': True,
         'extract_flat': True
     }
+    if use_cookies and cookies:
+        try:
+            cookie_header = _cookies_to_header_value(cookies)
+            if cookie_header:
+                ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
+        except Exception:
+            pass
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         logging.debug("About to extract youtube info")
         info_dict = ydl.extract_info(video_url, download=False)
@@ -106,12 +120,19 @@ def get_youtube(video_url):
     return info_dict
 
 
-def get_playlist_videos(playlist_url):
+def get_playlist_videos(playlist_url: str, *, use_cookies: bool = False, cookies: Optional[Dict[str, Any] | str] = None):
     ydl_opts = {
         'extract_flat': True,
         'skip_download': True,
         'quiet': True
     }
+    if use_cookies and cookies:
+        try:
+            cookie_header = _cookies_to_header_value(cookies)
+            if cookie_header:
+                ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
+        except Exception:
+            pass
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(playlist_url, download=False)
@@ -125,7 +146,8 @@ def get_playlist_videos(playlist_url):
             return [], None
 
 
-def download_video(video_url, download_path, info_dict, download_video_flag, current_whisper_model=None):
+def download_video(video_url, download_path, info_dict, download_video_flag, current_whisper_model=None,
+                   use_cookies: bool = False, cookies=None):
     """
     Downloads video or audio using yt-dlp with refined option handling.
     """
@@ -262,6 +284,12 @@ def download_video(video_url, download_path, info_dict, download_video_flag, cur
          }
          log_msg = f"yt_dlp: Downloading and extracting audio only (codec: {preferred_codec})..."
 
+    # Attach cookies via HTTP header if requested
+    if use_cookies and cookies:
+        cookie_header = _cookies_to_header_value(cookies)
+        if cookie_header:
+            ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
+
     # --- 4. Execute Download ---
     if ydl_opts is None:
         logging.error("Logic error: ydl_opts was not set.")
@@ -393,6 +421,35 @@ def parse_and_expand_urls(urls):
     return expanded_urls
 
 
+def _cookies_to_header_value(cookies) -> Optional[str]:
+    """Convert JSON string or dict cookies into a Cookie header value.
+    Returns None if input is invalid.
+    """
+    try:
+        if cookies is None:
+            return None
+        if isinstance(cookies, str):
+            try:
+                cookies = json.loads(cookies)
+            except json.JSONDecodeError:
+                # Not a JSON string; ignore
+                return None
+        if isinstance(cookies, dict):
+            parts = []
+            for k, v in cookies.items():
+                if k is None or v is None:
+                    continue
+                k = str(k).strip()
+                v = str(v).strip()
+                if not k:
+                    continue
+                parts.append(f"{k}={v}")
+            return "; ".join(parts) if parts else None
+        return None
+    except Exception:
+        return None
+
+
 def extract_metadata(url, use_cookies=False, cookies=None):
     ydl_opts = {
         'quiet': True,
@@ -402,11 +459,11 @@ def extract_metadata(url, use_cookies=False, cookies=None):
     }
 
     if use_cookies and cookies:
-        try:
-            cookie_dict = json.loads(cookies)
-            ydl_opts['cookiefile'] = cookie_dict
-        except json.JSONDecodeError:
-            logging.warning("Invalid cookie format. Proceeding without cookies.")
+        cookie_header = _cookies_to_header_value(cookies)
+        if cookie_header:
+            ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
+        else:
+            logging.warning("Invalid cookie input provided; continuing without cookies header.")
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -806,6 +863,8 @@ def process_single_video(
                 download_path=download_target_dir_str,
                 info_dict=info_dict,
                 download_video_flag=not download_audio_only_flag,
+                use_cookies=use_cookies,
+                cookies=cookies,
             )
 
             if not downloaded_path or not os.path.exists(downloaded_path):

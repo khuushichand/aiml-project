@@ -8,6 +8,7 @@ from unittest.mock import patch
 async def test_chat_stream_disconnect_no_generatorexit(async_client, auth_headers):
     """Open a streaming chat, read a bit, then disconnect early.
     Ensures no RuntimeError('generator ignored GeneratorExit') surfaces.
+    Consolidated from Chat_NEW.
     """
 
     # Mock provider to return a simple sync generator of text chunks
