@@ -907,6 +907,18 @@ def require_token_scope(
         jwt_service: JWTService = Depends(get_jwt_service_dep),
         db_pool: DatabasePool = Depends(get_db_pool),
     ) -> None:
+        # Allow direct invocation (e.g., pytest unit tests) by resolving Depends defaults manually
+        try:
+            from fastapi.params import Depends as _Depends  # Local import to avoid top-level dependency
+
+            if isinstance(jwt_service, _Depends) or jwt_service is None:
+                jwt_service = await get_jwt_service_dep()
+            if isinstance(db_pool, _Depends) or db_pool is None:
+                db_pool = await get_db_pool()
+        except Exception:
+            # Best effort: if resolution fails, leave as-is; downstream code handles missing services.
+            pass
+
         # If we have Authorization bearer, apply JWT-based checks; otherwise, try X-API-KEY checks
         if credentials:
             token = credentials.credentials

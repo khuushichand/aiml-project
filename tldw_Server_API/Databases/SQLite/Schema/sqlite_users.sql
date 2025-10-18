@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS team_members (
     user_id INTEGER NOT NULL,
     role TEXT DEFAULT 'member',
     status TEXT DEFAULT 'active',
-    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (team_id, user_id),
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

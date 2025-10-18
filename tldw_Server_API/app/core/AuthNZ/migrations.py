@@ -1041,6 +1041,33 @@ def migration_024_ensure_api_keys_status_column(conn: sqlite3.Connection) -> Non
         logger.warning(f"Migration 024: idx_api_keys_status creation skipped ({error})")
     conn.commit()
     logger.info("Migration 024: Ensured api_keys.status column and index")
+
+
+def migration_025_team_members_added_at(conn: sqlite3.Connection) -> None:
+    """Ensure team_members table exposes added_at column and backfill legacy data."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(team_members)")
+        columns = {row[1] for row in cursor.fetchall()}
+    except sqlite3.OperationalError as error:
+        logger.warning(f"Migration 025 skipped: team_members table unavailable ({error})")
+        conn.commit()
+        return
+
+    if "added_at" not in columns:
+        conn.execute(
+            "ALTER TABLE team_members ADD COLUMN added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
+
+    if "joined_at" in columns:
+        conn.execute(
+            """
+            UPDATE team_members
+            SET added_at = COALESCE(added_at, joined_at, CURRENT_TIMESTAMP)
+            """
+        )
+
+    conn.commit()
+    logger.info("Migration 025: Ensured team_members.added_at column with backfill")
 #######################################################################################################################
 #
 # Migration Registry
@@ -1073,6 +1100,7 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(22, "Create tool catalogs tables", migration_022_create_tool_catalogs),
         Migration(23, "Create virtual key counters tables", migration_023_create_virtual_key_counters),
         Migration(24, "Ensure api_keys status column before index", migration_024_ensure_api_keys_status_column),
+        Migration(25, "Backfill team_members added_at column", migration_025_team_members_added_at),
     ]
 
 
