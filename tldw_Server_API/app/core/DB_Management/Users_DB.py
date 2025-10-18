@@ -61,7 +61,8 @@ class UsersDB:
         """Create users and related tables if they don't exist"""
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                is_postgres = getattr(self.db_pool, "pool", None) is not None
+                if is_postgres:
                     # PostgreSQL
                     await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
                     await conn.execute("""

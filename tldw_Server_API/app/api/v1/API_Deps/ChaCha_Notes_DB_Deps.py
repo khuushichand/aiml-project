@@ -283,7 +283,7 @@ def close_all_chacha_db_instances():
         logger.info(f"Closing all cached ChaChaNotesDB instances ({len(_chacha_db_instances)})...")
         for user_id, db_instance in list(_chacha_db_instances.items()):
             try:
-                db_instance.close_connection()
+                db_instance.close_all_connections()
                 logger.info(f"Closed ChaChaNotesDB instance for user {user_id}.")
             except Exception as e:
                 logger.error(f"Error closing ChaChaNotesDB instance for user {user_id}: {e}", exc_info=True)

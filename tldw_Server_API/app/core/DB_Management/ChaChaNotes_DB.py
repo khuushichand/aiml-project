@@ -1773,6 +1773,39 @@ UPDATE db_schema_version
                 except AttributeError:
                     pass
 
+    def close_all_connections(self) -> None:
+        """
+        Force-close all backend connections managed by this instance.
+
+        Primarily used in tests/shutdown to ensure no background SQLite threads remain.
+        """
+        try:
+            pool = self.backend.get_pool()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unable to retrieve backend pool while closing connections: %s", exc)
+            pool = None
+
+        if self.backend_type == BackendType.SQLITE and pool is not None:
+            close_all = getattr(pool, "close_all", None)
+            if callable(close_all):
+                try:
+                    close_all()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Error closing all SQLite connections for %s: %s", self.db_path_str, exc)
+        elif pool is not None:
+            try:
+                pool.close_all()
+            except AttributeError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Error closing all backend connections for %s: %s", self.db_path_str, exc)
+
+        # Reset thread-local reference regardless of backend
+        try:
+            self._local = threading.local()
+        except Exception:
+            pass
+
     def backup_database(self, backup_file_path: str) -> bool:
         """
         Creates a backup of the current database to the specified file path.

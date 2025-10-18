@@ -925,8 +925,9 @@ async def create_chat_completion(
         
         # Request Queue Integration (Admission control / backpressure)
         # ------------------------------------------------------------------------
+        is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
         try:
-            queue = get_request_queue()
+            queue = None if is_test_mode else get_request_queue()
         except Exception:
             queue = None
         if queue is not None and not QUEUED_EXECUTION:

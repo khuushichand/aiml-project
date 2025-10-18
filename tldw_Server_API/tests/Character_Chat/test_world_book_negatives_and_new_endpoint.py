@@ -101,15 +101,18 @@ async def test_world_book_negative_paths_and_duplicate_name():
 async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
     # Ensure limiter picks up env by setting before import and resetting singleton
     tmpdir = tempfile.mkdtemp(prefix="chacha_limits_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    os.environ["MAX_MESSAGES_PER_CHAT"] = "3"
-    os.environ["MAX_CHATS_PER_USER"] = "1"
-    os.environ["MAX_CHAT_COMPLETIONS_PER_MINUTE"] = "1"
+    env_overrides = {
+        "USER_DB_BASE_DIR": tmpdir,
+        "MAX_MESSAGES_PER_CHAT": "3",
+        "MAX_CHATS_PER_USER": "1",
+        "MAX_CHAT_COMPLETIONS_PER_MINUTE": "1",
+    }
+    original_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
+    import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
+    crl._rate_limiter = None
     try:
         from tldw_Server_API.app.main import app
-        # Reset rate limiter singleton to read new env
-        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
-        crl._rate_limiter = None
 
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
@@ -152,6 +155,12 @@ async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
             assert r2.status_code in (429,)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        crl._rate_limiter = None
 
 
 @pytest.mark.asyncio

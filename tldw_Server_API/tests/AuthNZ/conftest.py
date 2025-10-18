@@ -91,6 +91,19 @@ class _StubAuditService:
         return None
 
 
+class _StubPersonalizationDB:
+    """No-op personalization DB used to avoid filesystem writes in tests."""
+
+    def insert_usage_event(self, *args, **kwargs):
+        return None
+
+    def __getattr__(self, item):
+        # Allow any other method calls without side effects
+        def _noop(*_args, **_kwargs):
+            return None
+        return _noop
+
+
 # Mark all tests in this package as integration tests (require PostgreSQL)
 pytestmark = pytest.mark.integration
 
@@ -185,11 +198,14 @@ async def reset_singletons(request):
     from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
     from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import close_all_chacha_db_instances
     
     # Disable CSRF protection for tests
     original_csrf_setting = settings.get('CSRF_ENABLED')
     settings['CSRF_ENABLED'] = False
     
+    close_all_chacha_db_instances()
+
     await reset_db_pool()
     await reset_session_manager()
     await reset_token_blacklist()
@@ -209,12 +225,25 @@ async def reset_singletons(request):
         # In TEST_MODE, stub audit service to avoid background task group errors
         try:
             from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+            from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+                get_personalization_db_for_user,
+                get_usage_event_logger,
+                UsageEventLogger,
+            )
 
             async def _override_audit_dep(current_user=None):
                 return _StubAuditService()
 
+            def _override_personalization_db(current_user=None):
+                return None
+
+            def _override_usage_logger(request=None, user=None, db=None):
+                return UsageEventLogger(user_id=str(getattr(user, "id", "test")), db=_StubPersonalizationDB())
+
             if not request.node.get_closest_marker("real_audit"):
                 _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
+                _app.dependency_overrides[get_personalization_db_for_user] = _override_personalization_db
+                _app.dependency_overrides[get_usage_event_logger] = _override_usage_logger
         except Exception:
             # If import fails here, tests that don't hit audit won't care
             pass
@@ -253,6 +282,10 @@ async def reset_singletons(request):
     await shutdown_audit_service()
     await reset_api_key_manager()
     await reset_users_db()
+    try:
+        close_all_chacha_db_instances()
+    except Exception:
+        pass
     try:
         from tldw_Server_API.app.main import app as _app
         _app.dependency_overrides.clear()
