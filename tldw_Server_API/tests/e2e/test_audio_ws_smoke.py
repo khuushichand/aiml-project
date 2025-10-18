@@ -66,11 +66,10 @@ async def test_audio_ws_transcription_smoke(api_client):
                 raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
                 data = json.loads(raw)
                 assert isinstance(data, dict)
-                assert data.get("type") in {"partial", "transcription", "error", "status"}
+                assert data.get("type") in {"partial", "transcription", "final", "error", "status", "insight"}
             except asyncio.TimeoutError:
                 pytest.skip("No response from WS transcription within timeout; skipping.")
     except Exception as e:
         # Treat setup/config errors as optional in smoke
         pytest.skip(f"Audio WS not available/configured: {e}")
-
 

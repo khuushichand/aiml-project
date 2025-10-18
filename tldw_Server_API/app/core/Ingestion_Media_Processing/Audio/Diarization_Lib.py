@@ -9,6 +9,8 @@ import os
 import sys
 import time
 import threading
+from functools import lru_cache
+import importlib.util
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union, Callable, Tuple, TYPE_CHECKING, TypedDict
 import json
@@ -28,102 +30,75 @@ if TYPE_CHECKING:
     import torch
 
 
-# Check availability of required modules without importing
-def _check_torch_available():
+# Module availability probes (evaluated lazily to avoid heavy imports during test collection)
+
+@lru_cache(maxsize=1)
+def _module_spec_available(module_name: str) -> bool:
+    """Best-effort probe using importlib without importing heavy modules."""
     try:
-        import torch
-        # Test basic functionality to ensure proper loading
-        return True
-    except ImportError as e:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception as exc:  # pragma: no cover - defensive logging
         try:
-            logger.debug(f"PyTorch not installed: {e}")
-        except Exception:
-            pass
-        return False
-    except OSError as e:
-        try:
-            logger.debug(f"PyTorch library loading failed: {e}")
-        except Exception:
-            pass
-        return False
-    except Exception as e:
-        try:
-            logger.debug(f"Unexpected error loading PyTorch: {e}")
+            logger.debug(f"Module spec probe failed for {module_name}: {exc}")
         except Exception:
             pass
         return False
 
 
-def _check_speechbrain_available():
+@lru_cache(maxsize=1)
+def _torch_available() -> bool:
+    if not _module_spec_available("torch"):
+        logger.debug("PyTorch not installed or not discoverable.")
+        return False
     try:
-        import speechbrain
-        # Test if torchaudio loads properly (the actual source of the error)
-        import torchaudio
+        import torch  # type: ignore  # noqa: F401
         return True
-    except (ImportError, OSError) as e:
-        # Reduce noisy stdout during tests; log at debug level
-        try:
-            logger.debug(f"SpeechBrain/torchaudio not available: {e}")
-        except Exception:
-            pass
-        return False
-    except Exception as e:
-        try:
-            logger.debug(f"Unexpected error loading SpeechBrain: {e}")
-        except Exception:
-            pass
+    except Exception as exc:  # pragma: no cover - import error surfaces once
+        logger.debug(f"PyTorch import failed: {exc}")
         return False
 
 
-def _check_sklearn_available():
+@lru_cache(maxsize=1)
+def _torchaudio_available() -> bool:
+    if not _module_spec_available("torchaudio"):
+        logger.debug("TorchAudio not installed or not discoverable.")
+        return False
     try:
-        import sklearn
-        # Test basic import
+        import torchaudio  # type: ignore  # noqa: F401
         return True
-    except ImportError as e:
-        try:
-            logger.debug(f"scikit-learn not installed: {e}")
-        except Exception:
-            pass
-        return False
-    except Exception as e:
-        try:
-            logger.debug(f"Unexpected error loading scikit-learn: {e}")
-        except Exception:
-            pass
+    except Exception as exc:  # pragma: no cover - import error surfaces once
+        logger.debug(f"TorchAudio import failed: {exc}")
         return False
 
 
-def _check_torchaudio_available():
+@lru_cache(maxsize=1)
+def _speechbrain_available() -> bool:
+    # Avoid importing heavy modules if prerequisites are clearly missing.
+    if not _module_spec_available("speechbrain"):
+        logger.debug("SpeechBrain not installed or not discoverable.")
+        return False
+    if not _torchaudio_available():
+        logger.debug("TorchAudio missing; SpeechBrain disabled.")
+        return False
     try:
-        import torchaudio
-        # Test basic functionality
+        import speechbrain  # type: ignore  # noqa: F401
         return True
-    except ImportError as e:
-        try:
-            logger.debug(f"TorchAudio not installed: {e}")
-        except Exception:
-            pass
-        return False
-    except OSError as e:
-        try:
-            logger.debug(f"TorchAudio library loading failed: {e}")
-        except Exception:
-            pass
-        return False
-    except Exception as e:
-        try:
-            logger.debug(f"Unexpected error loading TorchAudio: {e}")
-        except Exception:
-            pass
+    except Exception as exc:  # pragma: no cover - import error surfaces once
+        logger.debug(f"SpeechBrain import failed: {exc}")
         return False
 
 
-# Module availability flags
-TORCH_AVAILABLE = _check_torch_available()
-SPEECHBRAIN_AVAILABLE = _check_speechbrain_available()
-SKLEARN_AVAILABLE = _check_sklearn_available()
-TORCHAUDIO_AVAILABLE = _check_torchaudio_available()
+@lru_cache(maxsize=1)
+def _sklearn_available() -> bool:
+    if not _module_spec_available("sklearn"):
+        logger.debug("scikit-learn not installed or not discoverable.")
+        return False
+    try:
+        import sklearn  # type: ignore  # noqa: F401
+        return True
+    except Exception as exc:  # pragma: no cover - import error surfaces once
+        logger.debug(f"scikit-learn import failed: {exc}")
+        return False
 
 # Lazy-loaded modules (will be imported only when needed)
 _torch = None
@@ -218,7 +193,7 @@ def _sanitize_path_component(name: str) -> str:
 def _lazy_import_torch():
     """Lazy import torch."""
     global _torch
-    if _torch is None and TORCH_AVAILABLE:
+    if _torch is None and _torch_available():
         try:
             import torch
             _torch = torch
@@ -265,7 +240,7 @@ def _lazy_import_silero_vad():
         return _silero_vad_model, _silero_vad_utils
 
     # Check torch availability
-    if not TORCH_AVAILABLE:
+    if not _torch_available():
         logger.warning("PyTorch not available, cannot load Silero VAD")
         return None, None
 
@@ -337,7 +312,7 @@ def _lazy_import_silero_vad():
 def _lazy_import_speechbrain():
     """Lazy import SpeechBrain encoder."""
     global _speechbrain_encoder
-    if _speechbrain_encoder is None and SPEECHBRAIN_AVAILABLE:
+    if _speechbrain_encoder is None and _speechbrain_available():
         try:
             from speechbrain.inference.speaker import EncoderClassifier
             _speechbrain_encoder = EncoderClassifier
@@ -355,7 +330,7 @@ def _lazy_import_speechbrain():
 def _lazy_import_sklearn():
     """Lazy import sklearn modules."""
     global _sklearn_modules
-    if _sklearn_modules is None and SKLEARN_AVAILABLE:
+    if _sklearn_modules is None and _sklearn_available():
         try:
             from sklearn.cluster import SpectralClustering, AgglomerativeClustering
             from sklearn.preprocessing import normalize
@@ -377,7 +352,7 @@ def _lazy_import_sklearn():
 def _lazy_import_torchaudio():
     """Lazy import torchaudio."""
     global _torchaudio
-    if _torchaudio is None and TORCHAUDIO_AVAILABLE:
+    if _torchaudio is None and _torchaudio_available():
         try:
             import torchaudio
             _torchaudio = torchaudio
@@ -509,9 +484,9 @@ class DiarizationService:
     def _check_availability(self) -> bool:
         """Check if all required dependencies are available."""
         required = [
-            (TORCH_AVAILABLE, "PyTorch"),
-            (SPEECHBRAIN_AVAILABLE, "SpeechBrain"),
-            (SKLEARN_AVAILABLE, "scikit-learn"),
+            (_torch_available(), "PyTorch"),
+            (_speechbrain_available(), "SpeechBrain"),
+            (_sklearn_available(), "scikit-learn"),
         ]
 
         missing = [name for available, name in required if not available]
@@ -1634,10 +1609,10 @@ class DiarizationService:
     def get_requirements(self) -> Dict[str, bool]:
         """Get the status of required dependencies."""
         return {
-            'torch': TORCH_AVAILABLE,
-            'speechbrain': SPEECHBRAIN_AVAILABLE,
-            'sklearn': SKLEARN_AVAILABLE,
-            'torchaudio': TORCHAUDIO_AVAILABLE
+            'torch': _torch_available(),
+            'speechbrain': _speechbrain_available(),
+            'sklearn': _sklearn_available(),
+            'torchaudio': _torchaudio_available()
         }
 
 ######################################################################################################################

@@ -250,6 +250,29 @@ class PostgreSQLBackend(DatabaseBackend):
             self._pool = PostgreSQLConnectionPool(self.config)
         return self._pool
     
+    def _prepare_query(
+        self,
+        query: str,
+        params: Optional[Union[Tuple, Dict]]
+    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        """Normalize placeholder style so legacy '?' syntax works with psycopg."""
+        if not params:
+            return query, params
+
+        if isinstance(params, dict):
+            # Named style already explicit; caller must supply %(name)s in SQL
+            return query, params
+
+        if "%s" in query or "%(" in query:
+            return query, params
+
+        if "?" not in query:
+            return query, params
+
+        # Replace bare '?' placeholders with '%s'. Psycopg ignores whitespace.
+        converted = query.replace("?", "%s")
+        return converted, params
+
     def execute(
         self,
         query: str,
@@ -258,6 +281,7 @@ class PostgreSQLBackend(DatabaseBackend):
     ) -> QueryResult:
         """Execute a query and return results."""
         start_time = time.time()
+        query, params = self._prepare_query(query, params)
         
         if connection:
             conn = connection
@@ -335,7 +359,17 @@ class PostgreSQLBackend(DatabaseBackend):
         
         try:
             cursor = conn.cursor()
-            cursor.executemany(query, params_list)
+            normalized_query = query
+            normalized_params: List[Union[Tuple, Dict]] = params_list
+
+            if params_list:
+                sample = params_list[0]
+                if not isinstance(sample, dict):
+                    normalized_query, _ = self._prepare_query(query, sample)
+                else:
+                    normalized_query = query
+
+            cursor.executemany(normalized_query, params_list)
             conn.commit()
             
             execution_time = time.time() - start_time

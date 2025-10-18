@@ -343,6 +343,7 @@ async def isolated_test_environment(monkeypatch):
     )
     
     try:
+        await test_conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         # Create all required tables
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -351,9 +352,13 @@ async def isolated_test_environment(monkeypatch):
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                metadata JSONB DEFAULT '{}'::jsonb,
                 role VARCHAR(50) NOT NULL DEFAULT 'user',
                 is_active BOOLEAN DEFAULT TRUE,
                 is_verified BOOLEAN DEFAULT FALSE,
+                is_superuser BOOLEAN DEFAULT FALSE,
+                failed_login_attempts INTEGER DEFAULT 0,
+                locked_until TIMESTAMP,
                 storage_quota_mb INTEGER DEFAULT 5120,
                 storage_used_mb FLOAT DEFAULT 0.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -400,6 +405,56 @@ async def isolated_test_environment(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS roles (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) UNIQUE NOT NULL,
+                description TEXT,
+                is_system BOOLEAN DEFAULT FALSE
+            )
+        """)
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                key_hash VARCHAR(64) UNIQUE NOT NULL,
+                key_prefix VARCHAR(16) NOT NULL,
+                name VARCHAR(255),
+                description TEXT,
+                scope VARCHAR(50) DEFAULT 'read',
+                status VARCHAR(20) DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                last_used_at TIMESTAMP,
+                last_used_ip VARCHAR(45),
+                usage_count INTEGER DEFAULT 0,
+                rate_limit INTEGER,
+                allowed_ips TEXT,
+                metadata JSONB,
+                rotated_from INTEGER REFERENCES api_keys(id),
+                rotated_to INTEGER REFERENCES api_keys(id),
+                revoked_at TIMESTAMP,
+                revoked_by INTEGER,
+                revoke_reason TEXT,
+                is_virtual BOOLEAN DEFAULT FALSE,
+                parent_key_id INTEGER REFERENCES api_keys(id),
+                org_id INTEGER,
+                team_id INTEGER,
+                llm_budget_day_tokens BIGINT,
+                llm_budget_month_tokens BIGINT,
+                llm_budget_day_usd DOUBLE PRECISION,
+                llm_budget_month_usd DOUBLE PRECISION,
+                llm_allowed_endpoints TEXT,
+                llm_allowed_providers TEXT,
+                llm_allowed_models TEXT
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
         
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS registration_codes (
@@ -412,7 +467,8 @@ async def isolated_test_environment(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 role_to_grant VARCHAR(50) DEFAULT 'user',
                 is_active BOOLEAN DEFAULT TRUE,
-                metadata JSONB
+                metadata JSONB,
+                role_id INTEGER REFERENCES roles(id)
             )
         """)
         
@@ -620,6 +676,7 @@ async def setup_test_database(monkeypatch):
     )
     
     try:
+        await test_conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         # Create tables
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -628,9 +685,13 @@ async def setup_test_database(monkeypatch):
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                metadata JSONB DEFAULT '{}'::jsonb,
                 role VARCHAR(50) NOT NULL DEFAULT 'user',
                 is_active BOOLEAN DEFAULT TRUE,
                 is_verified BOOLEAN DEFAULT FALSE,
+                is_superuser BOOLEAN DEFAULT FALSE,
+                failed_login_attempts INTEGER DEFAULT 0,
+                locked_until TIMESTAMP,
                 storage_quota_mb INTEGER DEFAULT 5120,
                 storage_used_mb FLOAT DEFAULT 0.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -677,6 +738,56 @@ async def setup_test_database(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS roles (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) UNIQUE NOT NULL,
+                description TEXT,
+                is_system BOOLEAN DEFAULT FALSE
+            )
+        """)
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                key_hash VARCHAR(64) UNIQUE NOT NULL,
+                key_prefix VARCHAR(16) NOT NULL,
+                name VARCHAR(255),
+                description TEXT,
+                scope VARCHAR(50) DEFAULT 'read',
+                status VARCHAR(20) DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                last_used_at TIMESTAMP,
+                last_used_ip VARCHAR(45),
+                usage_count INTEGER DEFAULT 0,
+                rate_limit INTEGER,
+                allowed_ips TEXT,
+                metadata JSONB,
+                rotated_from INTEGER REFERENCES api_keys(id),
+                rotated_to INTEGER REFERENCES api_keys(id),
+                revoked_at TIMESTAMP,
+                revoked_by INTEGER,
+                revoke_reason TEXT,
+                is_virtual BOOLEAN DEFAULT FALSE,
+                parent_key_id INTEGER REFERENCES api_keys(id),
+                org_id INTEGER,
+                team_id INTEGER,
+                llm_budget_day_tokens BIGINT,
+                llm_budget_month_tokens BIGINT,
+                llm_budget_day_usd DOUBLE PRECISION,
+                llm_budget_month_usd DOUBLE PRECISION,
+                llm_allowed_endpoints TEXT,
+                llm_allowed_providers TEXT,
+                llm_allowed_models TEXT
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
         
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS registration_codes (
@@ -689,7 +800,8 @@ async def setup_test_database(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 role_to_grant VARCHAR(50) DEFAULT 'user',
                 is_active BOOLEAN DEFAULT TRUE,
-                metadata JSONB
+                metadata JSONB,
+                role_id INTEGER REFERENCES roles(id)
             )
         """)
         

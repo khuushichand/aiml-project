@@ -1,16 +1,16 @@
 import os
 import uuid
 import hmac
-import hashlib
 import asyncio
 
 import asyncpg
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 
 
-def _hash_api_key(secret: str, api_key: str) -> str:
-    key = secret[:32].encode() if len(secret) >= 32 else secret.encode()
-    return hmac.new(key, api_key.encode(), hashlib.sha256).hexdigest()
+def _hash_api_key(api_key: str) -> str:
+    hmac_key = derive_hmac_key()
+    return hmac.new(hmac_key, api_key.encode(), "sha256").hexdigest()
 
 
 def test_media_add_requires_media_create(isolated_test_environment):
@@ -39,8 +39,7 @@ def test_media_add_requires_media_create(isolated_test_environment):
 
             # Generate API key and insert hashed record
             full_key = f"tldw_{uuid.uuid4().hex}"
-            secret = os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only")
-            key_hash = _hash_api_key(secret, full_key)
+            key_hash = _hash_api_key(full_key)
             await conn.execute(
                 """
                 INSERT INTO api_keys (user_id, key_hash, key_prefix, name, scope, status)

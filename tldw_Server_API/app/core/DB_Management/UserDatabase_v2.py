@@ -143,6 +143,7 @@ class UserDatabase:
                 logger.info("Retrying schema initialization with embedded defaults")
                 self._apply_schema_statements(fallback_statements)
 
+        self._ensure_core_columns()
         self._seed_default_data()
 
     ########################################################################################################################
@@ -178,6 +179,10 @@ class UserDatabase:
                 username = username[:255]
             if email is not None and len(email) > 255:
                 email = email[:255]
+            extra_fields = dict(kwargs) if kwargs else {}
+            user_uuid = extra_fields.pop("uuid", str(uuid4()))
+            metadata = json.dumps(extra_fields) if extra_fields else None
+
             with self.backend.transaction() as conn:
                 # Check for duplicates
                 existing = self.backend.execute(
@@ -189,17 +194,21 @@ class UserDatabase:
                     raise DuplicateUserError(f"Username or email already exists")
                 
                 # Insert user
-                metadata = json.dumps(kwargs) if kwargs else None
-                
                 result = self.backend.execute(
                     """
-                    INSERT INTO users (username, email, password_hash, metadata)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO users (uuid, username, email, password_hash, metadata)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (username, email, password_hash, metadata)
+                    (user_uuid, username, email, password_hash, metadata)
                 )
-                
-                user_id = result.lastrowid
+                # Retrieve ID using UUID to support backends without lastrowid
+                user_lookup = self.backend.execute(
+                    "SELECT id FROM users WHERE uuid = ?",
+                    (user_uuid,)
+                )
+                if not user_lookup.rows:
+                    raise UserDatabaseError("Failed to locate newly created user record")
+                user_id = user_lookup.rows[0]['id']
                 
                 # Assign default role
                 role_result = self.backend.execute(
@@ -557,11 +566,11 @@ class UserDatabase:
             FROM registration_codes rc
             LEFT JOIN roles r ON rc.role_id = r.id
             WHERE rc.code = ? 
-            AND rc.is_active = 1
+            AND rc.is_active = ?
             AND rc.expires_at > CURRENT_TIMESTAMP
             AND rc.times_used < rc.max_uses
             """,
-            (code,)
+            (code, True if self.backend.backend_type == BackendType.POSTGRESQL else 1)
         )
         
         return result.rows[0] if result.rows else None
@@ -585,9 +594,9 @@ class UserDatabase:
             code_result = self.backend.execute(
                 """
                 SELECT id, times_used FROM registration_codes
-                WHERE code = ? AND is_active = 1
+                WHERE code = ? AND is_active = ?
                 """,
-                (code,)
+                (code, True if self.backend.backend_type == BackendType.POSTGRESQL else 1)
             )
             
             if not code_result.rows:
@@ -755,6 +764,7 @@ class UserDatabase:
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
                 username TEXT UNIQUE NOT NULL CHECK (length(username) <= 255),
                 email TEXT UNIQUE NOT NULL CHECK (length(email) <= 255),
                 password_hash TEXT NOT NULL,
@@ -865,9 +875,11 @@ class UserDatabase:
     @staticmethod
     def _default_schema_statements_postgres() -> List[str]:
         return [
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
             """
             CREATE TABLE IF NOT EXISTS users (
                 id BIGSERIAL PRIMARY KEY,
+                uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
@@ -1057,3 +1069,76 @@ class UserDatabase:
 #
 # End of UserDatabase_v2.py
 ########################################################################################################################
+    def _ensure_core_columns(self) -> None:
+        """Ensure essential columns and defaults exist across backends."""
+        try:
+            if self.backend.backend_type == BackendType.SQLITE:
+                result = self.backend.execute("PRAGMA table_info(users)")
+                column_names = {row['name'] if isinstance(row, dict) else row[1] for row in result.rows}
+                if 'uuid' not in column_names:
+                    self.backend.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                if 'metadata' not in column_names:
+                    self.backend.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
+                if 'failed_login_attempts' not in column_names:
+                    self.backend.execute("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0")
+                if 'locked_until' not in column_names:
+                    self.backend.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
+                if 'is_superuser' not in column_names:
+                    self.backend.execute("ALTER TABLE users ADD COLUMN is_superuser INTEGER DEFAULT 0")
+                self.backend.execute(
+                    """
+                    UPDATE users
+                    SET uuid = lower(hex(randomblob(4))) || '-' ||
+                               lower(hex(randomblob(2))) || '-' ||
+                               lower(hex(randomblob(2))) || '-' ||
+                               lower(hex(randomblob(2))) || '-' ||
+                               lower(hex(randomblob(6)))
+                    WHERE uuid IS NULL OR uuid = ''
+                    """
+                )
+                self.backend.execute(
+                    "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"
+                )
+                self.backend.execute(
+                    "UPDATE users SET locked_until = NULL WHERE locked_until IS NULL"
+                )
+            elif self.backend.backend_type == BackendType.POSTGRESQL:
+                self.backend.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+                self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
+                self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
+                self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0")
+                self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ")
+                self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser BOOLEAN DEFAULT FALSE")
+                try:
+                    self.backend.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
+                except Exception:
+                    self.backend.execute("UPDATE users SET uuid = gen_random_uuid()::text WHERE uuid IS NULL")
+                self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
+                try:
+                    self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
+                except Exception:
+                    self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT (gen_random_uuid()::text)")
+                self.backend.execute(
+                    "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"
+                )
+                self.backend.execute(
+                    "UPDATE users SET locked_until = NULL WHERE locked_until IS NULL"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to normalize user table core columns: %s", exc)
+
+        try:
+            if self.backend.backend_type == BackendType.SQLITE:
+                reg_info = self.backend.execute("PRAGMA table_info(registration_codes)")
+                reg_columns = {row['name'] if isinstance(row, dict) else row[1] for row in reg_info.rows}
+                if 'role_id' not in reg_columns:
+                    self.backend.execute("ALTER TABLE registration_codes ADD COLUMN role_id INTEGER REFERENCES roles(id)")
+            elif self.backend.backend_type == BackendType.POSTGRESQL:
+                self.backend.execute(
+                    """
+                    ALTER TABLE registration_codes
+                    ADD COLUMN IF NOT EXISTS role_id BIGINT REFERENCES roles(id) ON DELETE SET NULL
+                    """
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to normalize registration_codes table: %s", exc)

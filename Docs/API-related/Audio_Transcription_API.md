@@ -205,11 +205,15 @@ Note: In the current codebase, STT configuration is read from `Config_Files/conf
   - Optional finalize: `{ "type": "commit" }`
   - Server messages include:
     - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
-    - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false }`
-    - `{ "type": "transcription", "text": "...", "timestamp": ..., "is_final": true }`
+    - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false, "segment_id": 3, "segment_start": 12.5, "segment_end": 15.0 }`
+    - `{ "type": "final", "text": "...", "timestamp": ..., "is_final": true, "segment_id": 3, "segment_start": 12.5, "segment_end": 14.0, "overlap": 0.5, "speaker_id": 1, "speaker_label": "SPEAKER_1" }` (speaker fields appear when diarization is enabled)
     - `{ "type": "full_transcript", "text": "..." }`
+    - `{ "type": "insight", "stage": "live|final", "summary": [...], "action_items": [...], ... }` when live meeting notes are enabled
+    - `{ "type": "diarization_summary", "speaker_map": [...], "audio_path": "...", "speakers": [...] }` after `commit` when diarization is enabled
     - `{ "type": "error", "message": "..." }`
     - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes" }` followed by close with code `4003`.
+
+  - Metadata fields (`segment_id`, `segment_start`, `segment_end`, `chunk_start`, `chunk_end`, `overlap`) allow clients to align transcripts on a timeline or build diarization overlays.
 
 Helper endpoints
 - `GET /api/v1/audio/stream/status` → returns availability and supported models/variants
@@ -220,6 +224,71 @@ Examples (wscat)
 wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=$API_KEY"
 wscat -H "Authorization: Bearer $JWT" -c "ws://localhost:8000/api/v1/audio/stream/transcribe"
 ```
+
+#### Live Insights Configuration (Granola-style Notes)
+
+Send an `insights` object inside the initial `{ "type": "config" }` message to enable live meeting summaries, action items, and decision tracking:
+
+```json
+{
+  "type": "config",
+  "model": "parakeet-onnx",
+  "sample_rate": 16000,
+  "insights": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "summary_interval_seconds": 90,
+    "context_window_segments": 6,
+    "live_updates": true,
+    "final_summary": true,
+    "generate_action_items": true,
+    "generate_decisions": true
+  }
+}
+```
+
+- `summary_interval_seconds`: cadence for live summaries (set to `0` for “every segment”).
+- `context_window_segments`: how many recent finalized segments are considered in each update.
+- `live_updates`: toggle real-time `{"type":"insight","stage":"live"}` messages.
+- `final_summary`: emit a final `{"type":"insight","stage":"final"}` after commit.
+- Provider/model values fall back to the server’s default chat provider when omitted.
+
+The insight payload mirrors granola-style UX:
+
+```json
+{
+  "type": "insight",
+  "stage": "live",
+  "summary": ["Key bullet point", "..."],
+  "action_items": [{"description": "Follow up with Alex", "owner": "Alex"}],
+  "decisions": ["Ship v1 this week"],
+  "topics": ["Roadmap"],
+  "source": {"segment_range": [3,4], "start": 45.0, "end": 62.0}
+}
+```
+
+#### Speaker Diarization & Audio Persistence
+
+Add a `diarization` object inside the config message to enable per-segment speaker tagging:
+
+```json
+{
+  "type": "config",
+  "model": "parakeet",
+  "sample_rate": 16000,
+  "diarization": {
+    "enabled": true,
+    "num_speakers": 3,
+    "store_audio": true,
+    "storage_dir": "/tmp/meeting-audio"
+  }
+}
+```
+
+- When enabled, every finalized segment includes `speaker_id`/`speaker_label`.
+- On `commit`, the server emits a `diarization_summary` frame containing `speaker_map`, aggregate speaker stats, and (optionally) the path to the persisted WAV file for replay or offline reprocessing.
+- `store_audio` writes the full session audio to the provided directory (defaults to the system temp directory).
 
 ### Basic Live Transcription (Local Python)
 

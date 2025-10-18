@@ -993,6 +993,25 @@ def require_token_scope(
                 raise
             except Exception:
                 pass
+
+            if require_schedule_match:
+                try:
+                    tok_sid = payload.get("schedule_id")
+                except Exception:
+                    tok_sid = None
+                expected = None
+                try:
+                    expected = request.path_params.get(schedule_path_param)
+                except Exception:
+                    expected = None
+                if expected is None:
+                    try:
+                        expected = request.headers.get(schedule_header)
+                    except Exception:
+                        expected = None
+                if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
+                    raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
+
             return None
 
         # Fallback: X-API-KEY constraints enforcement (if header present and key is valid)
@@ -1075,21 +1094,6 @@ def require_token_scope(
                 # Best-effort: do not block if metadata not available
                 return None
         
-        if require_schedule_match and 'payload' in locals():
-            tok_sid = payload.get("schedule_id")
-            expected = None
-            try:
-                expected = request.path_params.get(schedule_path_param)
-            except Exception:
-                expected = None
-            if not expected:
-                try:
-                    expected = request.headers.get(schedule_header)
-                except Exception:
-                    expected = None
-            if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
-                raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
-
         return None
 
     return _checker

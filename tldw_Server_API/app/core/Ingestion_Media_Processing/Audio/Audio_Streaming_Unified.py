@@ -20,13 +20,14 @@ import base64
 import json
 import time
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, Callable, Awaitable
+from typing import Optional, Dict, Any, List, Callable, Awaitable, Tuple
 from dataclasses import dataclass, field
 import numpy as np
 import tempfile
 from pathlib import Path
 from fastapi import WebSocketDisconnect
 from loguru import logger
+from uuid import uuid4
 
 # Import existing implementations
 from .Audio_Streaming_Parakeet import (
@@ -40,6 +41,16 @@ from .Audio_Transcription_Nemo import (
     load_parakeet_model,
     transcribe_with_parakeet
 )
+from .Audio_Streaming_Insights import LiveInsightSettings, LiveMeetingInsights
+
+try:
+    from .Diarization_Lib import DiarizationService, DiarizationError
+except Exception:  # pragma: no cover - optional dependency probing
+    DiarizationService = None  # type: ignore
+
+    class DiarizationError(Exception):  # type: ignore
+        """Fallback diarization error when service is unavailable."""
+        pass
 
 
 @dataclass
@@ -56,6 +67,210 @@ class UnifiedStreamingConfig(StreamingConfig):
     beam_size: int = 5  # Beam search size
     vad_filter: bool = False  # Use VAD filter for Whisper
     task: str = 'transcribe'  # 'transcribe' or 'translate'
+    # Diarization-specific options
+    diarization_enabled: bool = False
+    diarization_store_audio: bool = False
+    diarization_storage_dir: Optional[str] = None
+    diarization_num_speakers: Optional[int] = None
+
+
+class StreamingDiarizer:
+    """Best-effort wrapper to reuse the offline DiarizationService during streaming."""
+
+    def __init__(
+        self,
+        sample_rate: int,
+        *,
+        store_audio: bool = False,
+        storage_dir: Optional[str] = None,
+        num_speakers: Optional[int] = None,
+    ) -> None:
+        self.sample_rate = int(sample_rate or 16000)
+        self.store_audio = bool(store_audio)
+        self.storage_dir = Path(storage_dir).expanduser() if storage_dir else None
+        self.num_speakers = num_speakers
+        self._audio_chunks: List[np.ndarray] = []
+        self._transcript_segments: List[Dict[str, Any]] = []
+        self._mapping: Dict[int, Dict[str, Any]] = {}
+        self._last_result: Dict[str, Any] = {}
+        self._dirty = False
+        self._persist_path: Optional[Path] = None
+        self._lock = asyncio.Lock()
+        self._service = None
+        self.available = False
+        self._service_checked = False
+        self._service_error: Optional[str] = None
+
+    async def label_segment(self, audio_np: np.ndarray, segment_meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Append audio/transcript and return the speaker for the latest segment."""
+        if not await self._ensure_service():
+            return None
+        async with self._lock:
+            self._audio_chunks.append(np.array(audio_np, copy=True))
+            self._transcript_segments.append({
+                "start": float(segment_meta.get("segment_start") or segment_meta.get("chunk_start") or 0.0),
+                "end": float(segment_meta.get("segment_end") or segment_meta.get("chunk_end") or 0.0),
+                "text": segment_meta.get("text", ""),
+                "segment_id": int(segment_meta.get("segment_id", 0)),
+            })
+            self._dirty = True
+            mapping = await self._ensure_mapping()
+            segment_id = int(segment_meta.get("segment_id", 0))
+            return mapping.get(segment_id)
+
+    async def finalize(self) -> Tuple[Dict[int, Dict[str, Any]], Optional[str], Optional[List[Dict[str, Any]]]]:
+        """Ensure latest mapping is available and optionally persist audio."""
+        if not await self._ensure_service():
+            return {}, None, None
+        async with self._lock:
+            self._dirty = True
+            mapping = await self._ensure_mapping()
+            audio_path = None
+            if self.store_audio and self._audio_chunks:
+                audio_path = await self._persist_audio()
+            speakers = self._last_result.get("speakers")
+            return mapping, audio_path, speakers
+
+    async def reset(self) -> None:
+        """Reset cached audio and transcripts."""
+        async with self._lock:
+            self._audio_chunks.clear()
+            self._transcript_segments.clear()
+            self._mapping.clear()
+            self._last_result = {}
+            self._dirty = False
+            self._persist_path = None
+
+    async def close(self) -> None:
+        await self.reset()
+
+    async def ensure_ready(self) -> bool:
+        """Public helper to eagerly initialize the diarization backend."""
+        return await self._ensure_service()
+
+    async def _ensure_service(self) -> bool:
+        if self._service_checked:
+            return self.available and self._service is not None
+        self._service_checked = True
+        if DiarizationService is None:
+            logger.debug("Streaming diarizer: DiarizationService import unavailable.")
+            self.available = False
+            self._service = None
+            return False
+        loop = asyncio.get_running_loop()
+        try:
+            service = await loop.run_in_executor(None, DiarizationService)
+            is_available = bool(getattr(service, "is_available", True))
+            if not is_available:
+                logger.warning("Streaming diarizer dependencies missing; disabling diarization.")
+                self.available = False
+                self._service = None
+                return False
+            self._service = service
+            self.available = True
+            return True
+        except Exception as exc:
+            logger.warning(f"Streaming diarizer unavailable: {exc}")
+            self.available = False
+            self._service = None
+            self._service_error = str(exc)
+            return False
+
+    async def _ensure_mapping(self) -> Dict[int, Dict[str, Any]]:
+        if not await self._ensure_service():
+            return {}
+        if not self._dirty:
+            return self._mapping
+        loop = asyncio.get_running_loop()
+        mapping = await loop.run_in_executor(None, self._run_alignment_sync)
+        if mapping is not None:
+            self._mapping = mapping
+            self._dirty = False
+        return self._mapping
+
+    def _run_alignment_sync(self) -> Optional[Dict[int, Dict[str, Any]]]:
+        if not self._service or not self._audio_chunks:
+            return {}
+        combined = self._combined_audio()
+        if combined.size == 0:
+            return {}
+        tmp_path = None
+        try:
+            tmp_path = self._write_temp_wav(combined)
+            transcripts = [
+                {
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg.get("text", ""),
+                    "segment_id": seg["segment_id"],
+                }
+                for seg in self._transcript_segments
+            ]
+            result = self._service.diarize(
+                str(tmp_path),
+                transcription_segments=transcripts,
+                num_speakers=self.num_speakers,
+            )
+            self._last_result = result or {}
+            segments = self._last_result.get("segments", []) or transcripts
+            mapping: Dict[int, Dict[str, Any]] = {}
+            for seg in segments:
+                seg_id = seg.get("segment_id") or seg.get("id")
+                if seg_id is None:
+                    continue
+                mapping[int(seg_id)] = {
+                    "speaker_id": seg.get("speaker_id"),
+                    "speaker_label": seg.get("speaker_label"),
+            }
+            return mapping
+        except DiarizationError as err:
+            logger.error(f"Streaming diarizer failed: {err}")
+            self.available = False
+            return {}
+        except Exception as exc:
+            logger.error(f"Streaming diarizer unexpected error: {exc}", exc_info=True)
+            return {}
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    def _combined_audio(self) -> np.ndarray:
+        if not self._audio_chunks:
+            return np.zeros(0, dtype=np.float32)
+        if len(self._audio_chunks) == 1:
+            return np.array(self._audio_chunks[0], copy=True)
+        return np.concatenate(self._audio_chunks)
+
+    def _write_temp_wav(self, audio_np: np.ndarray) -> Path:
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        import soundfile as sf
+        sf.write(str(tmp_path), audio_np, self.sample_rate)
+        return tmp_path
+
+    async def _persist_audio(self) -> Optional[str]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._persist_audio_sync)
+
+    def _persist_audio_sync(self) -> Optional[str]:
+        audio_np = self._combined_audio()
+        if audio_np.size == 0:
+            return None
+        if self.storage_dir:
+            out_dir = self.storage_dir
+        else:
+            out_dir = Path(tempfile.gettempdir())
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not self._persist_path:
+            filename = f"stream_{uuid4().hex}.wav"
+            self._persist_path = out_dir / filename
+        import soundfile as sf
+        sf.write(str(self._persist_path), audio_np, self.sample_rate)
+        return str(self._persist_path)
 
 
 class QuotaExceeded(Exception):
@@ -83,6 +298,8 @@ class BaseStreamingTranscriber(ABC):
         self.is_running = False
         self.transcription_history = []
         self.last_partial_time = 0
+        self.segment_index = 0
+        self.total_processed_seconds = 0.0
     
     @abstractmethod
     def initialize(self):
@@ -103,11 +320,61 @@ class BaseStreamingTranscriber(ABC):
         self.buffer.clear()
         self.transcription_history.clear()
         self.last_partial_time = 0
+        self.segment_index = 0
+        self.total_processed_seconds = 0.0
     
     def cleanup(self):
         """Clean up resources."""
         self.model = None
         self.reset()
+
+    def _prepare_partial_metadata(self, buffer_duration: float) -> Dict[str, float]:
+        """Attach common metadata for partial updates."""
+        buffer_duration = float(buffer_duration)
+        start = float(self.total_processed_seconds)
+        return {
+            "segment_id": self.segment_index + 1,
+            "segment_start": start,
+            "segment_end": start + buffer_duration,
+            "buffer_duration": buffer_duration,
+            "cumulative_audio": float(self.total_processed_seconds),
+        }
+
+    def _prepare_final_metadata(self, chunk_duration: float) -> Dict[str, float]:
+        """Attach metadata for finalized segments and advance the timeline cursor."""
+        chunk_duration = float(chunk_duration)
+        if chunk_duration < 0:
+            chunk_duration = 0.0
+        overlap_cfg = max(float(self.config.overlap_duration or 0.0), 0.0)
+        if self.segment_index == 0:
+            overlap_used = 0.0
+        else:
+            overlap_used = min(overlap_cfg, chunk_duration)
+        new_audio_duration = chunk_duration - overlap_used
+        if self.segment_index == 0:
+            new_audio_duration = chunk_duration
+        if new_audio_duration < 0:
+            new_audio_duration = 0.0
+
+        segment_start = float(self.total_processed_seconds)
+        segment_end = segment_start + new_audio_duration
+        chunk_start = max(segment_start - overlap_used, 0.0)
+        chunk_end = chunk_start + chunk_duration
+
+        self.total_processed_seconds = segment_end
+        self.segment_index += 1
+
+        return {
+            "segment_id": self.segment_index,
+            "segment_start": segment_start,
+            "segment_end": segment_end,
+            "chunk_duration": chunk_duration,
+            "overlap": overlap_used,
+            "chunk_start": chunk_start,
+            "chunk_end": chunk_end,
+            "new_audio_duration": new_audio_duration,
+            "cumulative_audio": float(self.total_processed_seconds),
+        }
 
 
 class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
@@ -204,13 +471,16 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 self.last_partial_time = current_time
                 
                 if text:
-                    return {
+                    metadata = self._prepare_partial_metadata(buffer_duration)
+                    result = {
                         "type": "partial",
                         "text": text,
                         "timestamp": current_time,
                         "is_final": False,
                         "model": f"parakeet-{self.config.model_variant}"
                     }
+                    result.update(metadata)
+                    return result
         
         # Check if we have enough audio for a final chunk
         if buffer_duration >= self.config.chunk_duration:
@@ -241,13 +511,18 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 
                 if text:
                     self.transcription_history.append(text)
-                    return {
+                    chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                    metadata = self._prepare_final_metadata(chunk_duration)
+                    result = {
                         "type": "final",
                         "text": text,
                         "timestamp": current_time,
                         "is_final": True,
                         "model": f"parakeet-{self.config.model_variant}"
                     }
+                    result.update(metadata)
+                    result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                    return result
         
         return None
 
@@ -314,7 +589,8 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                         # Simple heuristic - could be improved with actual language detection
                         detected_language = self._detect_language(text)
                     
-                    return {
+                    metadata = self._prepare_partial_metadata(buffer_duration)
+                    result = {
                         "type": "partial",
                         "text": text,
                         "timestamp": current_time,
@@ -322,6 +598,8 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                         "language": detected_language,
                         "model": "canary-1b"
                     }
+                    result.update(metadata)
+                    return result
         
         # Check if we have enough audio for a final chunk
         if buffer_duration >= self.config.chunk_duration:
@@ -349,7 +627,9 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                         detected_language = self._detect_language(text)
                     
                     self.transcription_history.append(text)
-                    return {
+                    chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                    metadata = self._prepare_final_metadata(chunk_duration)
+                    result = {
                         "type": "final",
                         "text": text,
                         "timestamp": current_time,
@@ -357,6 +637,9 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                         "language": detected_language,
                         "model": "canary-1b"
                     }
+                    result.update(metadata)
+                    result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                    return result
         
         return None
     
@@ -463,13 +746,16 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 self.last_partial_time = current_time
                 
                 if text:
-                    return {
+                    metadata = self._prepare_partial_metadata(buffer_duration)
+                    result = {
                         "type": "partial",
                         "text": text,
                         "timestamp": current_time,
                         "is_final": False,
                         "model": f"whisper-{self.config.whisper_model_size}"
                     }
+                    result.update(metadata)
+                    return result
         
         # Check if we have enough audio for a final chunk
         # Use optimal chunk duration for better accuracy
@@ -489,7 +775,9 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 
                 if text:
                     self.transcription_history.append(text)
-                    return {
+                    chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                    metadata = self._prepare_final_metadata(chunk_duration)
+                    result = {
                         "type": "final",
                         "text": text,
                         "timestamp": current_time,
@@ -497,6 +785,9 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                         "model": f"whisper-{self.config.whisper_model_size}",
                         "language": self.config.language if self.config.language else "auto"
                     }
+                    result.update(metadata)
+                    result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                    return result
         
         return None
     
@@ -620,6 +911,9 @@ async def handle_unified_websocket(
     
     logger.info(f"Initial config: model={config.model}, variant={config.model_variant}")
     transcriber = None  # Initialize transcriber after config is set
+    insights_settings: Optional[LiveInsightSettings] = None
+    insights_engine: Optional[LiveMeetingInsights] = None
+    diarizer: Optional[StreamingDiarizer] = None
     
     try:
         # Always wait for configuration message from client
@@ -662,6 +956,37 @@ async def handle_unified_websocket(
                     config.beam_size = config_data.get("beam_size", 5)
                     config.vad_filter = config_data.get("vad_filter", False)
                     config.task = config_data.get("task", "transcribe")
+
+                insights_payload = config_data.get("insights") or config_data.get("meeting_insights")
+                if insights_payload is not None:
+                    try:
+                        insights_settings = LiveInsightSettings.from_client_payload(insights_payload)
+                    except Exception as insight_err:
+                        logger.error(f"Failed to parse live insights config: {insight_err}")
+                        insights_settings = LiveInsightSettings(enabled=False)
+                elif config_data.get("insights_enabled") is True and insights_settings is None:
+                    insights_settings = LiveInsightSettings(enabled=True)
+                elif config_data.get("insights_enabled") is False:
+                    insights_settings = LiveInsightSettings(enabled=False)
+
+                diarization_payload = config_data.get("diarization")
+                if diarization_payload is not None:
+                    enabled_field = diarization_payload.get("enabled")
+                    config.diarization_enabled = bool(enabled_field) if enabled_field is not None else True
+                    if "store_audio" in diarization_payload:
+                        config.diarization_store_audio = bool(diarization_payload.get("store_audio"))
+                    storage_dir = diarization_payload.get("storage_dir")
+                    if storage_dir:
+                        config.diarization_storage_dir = str(storage_dir)
+                    if "num_speakers" in diarization_payload:
+                        try:
+                            config.diarization_num_speakers = int(diarization_payload.get("num_speakers") or 0) or None
+                        except (TypeError, ValueError):
+                            logger.warning("Invalid diarization.num_speakers value; ignoring.")
+                elif "diarization_enabled" in config_data:
+                    config.diarization_enabled = bool(config_data.get("diarization_enabled"))
+                if "diarization_store_audio" in config_data:
+                    config.diarization_store_audio = bool(config_data.get("diarization_store_audio"))
                 
                 logger.info(f"Config updated: model={config.model}, variant changed from {old_variant} to {config.model_variant}, "
                            f"sample_rate={config.sample_rate}, chunk_duration={config.chunk_duration}")
@@ -793,6 +1118,67 @@ async def handle_unified_websocket(
                 # Close with error code
                 await websocket.close(code=1011, reason=error_msg[:120])  # 1011 = Internal Error
                 return
+
+        if diarizer is None and config.diarization_enabled:
+            try:
+                diarizer = StreamingDiarizer(
+                    sample_rate=config.sample_rate,
+                    store_audio=config.diarization_store_audio,
+                    storage_dir=config.diarization_storage_dir,
+                    num_speakers=config.diarization_num_speakers,
+                )
+                ready = await diarizer.ensure_ready()
+                if not ready:
+                    logger.warning("Streaming diarizer unavailable during initialization; disabling diarization.")
+                    await websocket.send_json({
+                        "type": "warning",
+                        "state": "diarization_unavailable",
+                        "message": "Diarization disabled: dependencies missing or initialization failed",
+                        "details": getattr(diarizer, "_service_error", None),
+                    })
+                    diarizer = None
+                else:
+                    await websocket.send_json({
+                        "type": "status",
+                        "state": "diarization_enabled",
+                        "diarization": {
+                            "store_audio": config.diarization_store_audio,
+                            "storage_dir": config.diarization_storage_dir,
+                            "num_speakers": config.diarization_num_speakers,
+                        },
+                    })
+            except Exception as diar_err:
+                logger.error(f"Failed to initialize streaming diarizer: {diar_err}", exc_info=True)
+                await websocket.send_json({
+                    "type": "warning",
+                    "state": "diarization_unavailable",
+                    "message": "Diarization disabled: initialization failed",
+                    "details": str(diar_err),
+                })
+                diarizer = None
+
+        if insights_engine is None and insights_settings and insights_settings.enabled:
+            try:
+                insights_engine = LiveMeetingInsights(websocket, insights_settings)
+                logger.info(
+                    f"Live insights enabled (provider={insights_engine.provider}, model={insights_engine.model})"
+                )
+                await websocket.send_json({
+                    "type": "status",
+                    "state": "insights_enabled",
+                    "insights": insights_engine.describe()
+                })
+            except Exception as insight_err:
+                logger.error(f"Failed to initialize live insights engine: {insight_err}", exc_info=True)
+                await websocket.send_json({
+                    "type": "warning",
+                    "state": "insights_unavailable",
+                    "message": "Live insights disabled: initialization failed",
+                    "details": str(insight_err)
+                })
+                insights_engine = None
+        elif insights_settings and not insights_settings.enabled:
+            logger.info("Live insights explicitly disabled for this session.")
         
         # Do not send a ready status frame to minimize protocol chatter
         
@@ -816,7 +1202,34 @@ async def handle_unified_websocket(
                     result = await transcriber.process_audio_chunk(audio_bytes)
                     
                     if result:
+                        audio_np = result.pop("_audio_chunk", None)
+                        if audio_np is not None and diarizer:
+                            try:
+                                speaker_info = await diarizer.label_segment(
+                                    audio_np,
+                                    {
+                                        "segment_id": result.get("segment_id"),
+                                        "segment_start": result.get("segment_start"),
+                                        "segment_end": result.get("segment_end"),
+                                        "chunk_start": result.get("chunk_start"),
+                                        "chunk_end": result.get("chunk_end"),
+                                        "text": result.get("text"),
+                                    },
+                                )
+                                if speaker_info:
+                                    if speaker_info.get("speaker_id") is not None:
+                                        result.setdefault("speaker_id", speaker_info["speaker_id"])
+                                    if speaker_info.get("speaker_label"):
+                                        result.setdefault("speaker_label", speaker_info["speaker_label"])
+                            except Exception as diar_err:
+                                logger.error(f"Diarization update failed: {diar_err}", exc_info=True)
+                        
                         await websocket.send_json(result)
+                        if insights_engine and result.get("is_final"):
+                            try:
+                                await insights_engine.on_transcript(result)
+                            except Exception as insight_err:
+                                logger.error(f"Live insights failed to ingest segment: {insight_err}", exc_info=True)
                 
                 elif data.get("type") == "commit":
                     # Get final transcript
@@ -826,10 +1239,45 @@ async def handle_unified_websocket(
                         "text": full_transcript,
                         "timestamp": time.time()
                     })
+                    if insights_engine:
+                        try:
+                            await insights_engine.on_commit(full_transcript)
+                        except Exception as insight_err:
+                            logger.error(f"Live insights final summary failed: {insight_err}", exc_info=True)
+                    if diarizer:
+                        try:
+                            mapping, audio_path, speakers = await diarizer.finalize()
+                            if mapping or audio_path or speakers:
+                                speaker_map = [
+                                    {
+                                        "segment_id": seg_id,
+                                        "speaker_id": info.get("speaker_id"),
+                                        "speaker_label": info.get("speaker_label"),
+                                    }
+                                    for seg_id, info in sorted(mapping.items())
+                                ]
+                                await websocket.send_json({
+                                    "type": "diarization_summary",
+                                    "speaker_map": speaker_map,
+                                    "audio_path": audio_path,
+                                    "speakers": speakers,
+                                })
+                        except Exception as diar_err:
+                            logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
                 
                 elif data.get("type") == "reset":
                     # Reset transcriber
                     transcriber.reset()
+                    if insights_engine:
+                        try:
+                            await insights_engine.reset()
+                        except Exception as insight_err:
+                            logger.error(f"Live insights reset failed: {insight_err}", exc_info=True)
+                    if diarizer:
+                        try:
+                            await diarizer.reset()
+                        except Exception as diar_err:
+                            logger.error(f"Diarization reset failed: {diar_err}", exc_info=True)
                     await websocket.send_json({
                         "type": "status",
                         "state": "reset"
@@ -886,6 +1334,16 @@ async def handle_unified_websocket(
         # Clean up
         if transcriber:
             transcriber.cleanup()
+        if insights_engine:
+            try:
+                await insights_engine.close()
+            except Exception as insight_err:
+                logger.error(f"Failed to close live insights engine: {insight_err}")
+        if diarizer:
+            try:
+                await diarizer.close()
+            except Exception as diar_err:
+                logger.error(f"Failed to close diarizer: {diar_err}")
 
 
 # Export main components

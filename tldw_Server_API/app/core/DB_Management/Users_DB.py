@@ -63,13 +63,15 @@ class UsersDB:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'execute'):
                     # PostgreSQL
+                    await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS users (
                             id SERIAL PRIMARY KEY,
-                            uuid TEXT UNIQUE,
+                            uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
                             username VARCHAR(50) UNIQUE NOT NULL,
                             email VARCHAR(255) UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
+                            metadata JSONB,
                             is_active BOOLEAN DEFAULT TRUE,
                             is_superuser BOOLEAN DEFAULT FALSE,
                             role VARCHAR(50) DEFAULT 'user',
@@ -87,6 +89,17 @@ class UsersDB:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
+                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
+                    try:
+                        await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
+                    except Exception:
+                        await conn.execute("UPDATE users SET uuid = gen_random_uuid()::text WHERE uuid IS NULL")
+                    await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
+                    try:
+                        await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
+                    except Exception:
+                        await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT (gen_random_uuid()::text)")
                     
                 else:
                     # SQLite
@@ -97,6 +110,7 @@ class UsersDB:
                             username TEXT UNIQUE NOT NULL,
                             email TEXT UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
+                            metadata TEXT,
                             is_active INTEGER DEFAULT 1,
                             is_superuser INTEGER DEFAULT 0,
                             role TEXT DEFAULT 'user',
@@ -114,6 +128,10 @@ class UsersDB:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+                    cursor = await conn.execute("PRAGMA table_info(users)")
+                    columns = {row[1] for row in await cursor.fetchall()}
+                    if "metadata" not in columns:
+                        await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
                     
                     await conn.commit()
                     

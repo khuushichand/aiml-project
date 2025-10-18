@@ -1495,7 +1495,12 @@ async def streaming_status():
             "supported_features": {
                 "partial_results": True,
                 "multiple_languages": True,
-                "concurrent_streams": True
+                "concurrent_streams": True,
+                "segment_metadata": True,
+                "live_insights": True,
+                "meeting_notes": True,
+                "speaker_diarization": True,
+                "audio_persistence": True
             }
         })
         
