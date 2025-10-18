@@ -14,6 +14,10 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 #
 # 3rd-Party imports
 from loguru import logger
+from tldw_Server_API.app.core.Utils.executor_registry import (
+    register_executor,
+    shutdown_executor_sync,
+)
 #
 #######################################################################################################################
 #
@@ -34,6 +38,7 @@ CPU_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
 
 # Thread pool for I/O-bound but CPU-heavy operations (safe to create at import time)
 CPU_THREAD_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cpu_worker")
+register_executor("cpu_thread_pool", CPU_THREAD_POOL)
 
 
 def _env_flag_true(name: str) -> bool:
@@ -69,6 +74,7 @@ def get_cpu_process_pool() -> Optional[ProcessPoolExecutor]:
         CPU_PROCESS_POOL = ProcessPoolExecutor(max_workers=workers, max_tasks_per_child=100)
     else:
         CPU_PROCESS_POOL = ProcessPoolExecutor(max_workers=workers)
+    register_executor("cpu_process_pool", CPU_PROCESS_POOL)
     return CPU_PROCESS_POOL
 
 #######################################################################################################################
@@ -363,15 +369,10 @@ def cleanup_pools():
     """Cleanup process and thread pools."""
     global CPU_PROCESS_POOL
     try:
-        if CPU_PROCESS_POOL is not None:
-            CPU_PROCESS_POOL.shutdown(wait=False)
-            CPU_PROCESS_POOL = None
-    except Exception:
-        pass
-    try:
-        CPU_THREAD_POOL.shutdown(wait=False)
-    except Exception:
-        pass
+        shutdown_executor_sync("cpu_process_pool", wait=True, cancel_futures=True)
+    finally:
+        CPU_PROCESS_POOL = None
+    shutdown_executor_sync("cpu_thread_pool", wait=True, cancel_futures=True)
 
 
 # Ensure pools are cleaned up on interpreter shutdown

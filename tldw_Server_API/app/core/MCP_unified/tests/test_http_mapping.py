@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 def _setup_env():
     # Keep the app light for tests
     os.environ["TEST_MODE"] = "true"
-    os.environ["DISABLE_HEAVY_STARTUP"] = "1"
     # Single-user mode with API key for simplicity
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"

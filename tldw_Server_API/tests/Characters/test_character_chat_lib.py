@@ -143,23 +143,19 @@ def db():
 def caplog_handler(caplog):
     """
     Fixture to correctly set up loguru to work with pytest's caplog.
-    It adds a handler that propagates loguru messages to the standard logging system.
+    It wires Loguru directly into pytest's caplog handler, avoiding recursion with
+    the application's stdlib interception.
     """
-
-    # Ensure Loguru's default handler is removed if it exists, to avoid duplicate console output
-    # or configure it not to print to stderr during tests if that's preferred.
-    # For simplicity here, we just add a new handler for caplog.
 
     class PropagateHandler(logging.Handler):
         def emit(self, record):
             logging.getLogger(record.name).handle(record)
 
-    # Add a handler to loguru that propagates to standard logging
-    # Use a unique name for the handler to avoid issues if tests are run multiple times in a session
     handler_id = loguru_logger.add(PropagateHandler(), format="{message}", level="DEBUG")
 
-    caplog.set_level(logging.DEBUG, logger="tldw_Server_API")  # Capture DEBUG from your app's logger namespace
-    caplog.set_level(logging.DEBUG)  # And generally
+    # Capture DEBUG from both the application logger namespace and generally.
+    caplog.set_level(logging.DEBUG, logger="tldw_Server_API")
+    caplog.set_level(logging.DEBUG)
 
     yield caplog  # Test runs here
 

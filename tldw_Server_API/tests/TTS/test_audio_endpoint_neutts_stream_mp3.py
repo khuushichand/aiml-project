@@ -24,7 +24,6 @@ def _small_wav_bytes(duration_sec: float = 0.25, sr: int = 16000) -> bytes:
 
 def _setup_env():
     os.environ["TEST_MODE"] = "true"
-    os.environ["DISABLE_HEAVY_STARTUP"] = "1"
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"
     os.environ["SINGLE_USER_FIXED_ID"] = "1"

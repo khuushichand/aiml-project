@@ -150,10 +150,17 @@ class EmbeddingJobManager:
     
     async def initialize(self):
         """Initialize Redis connection and sub-managers"""
-        self.redis_client = await redis.from_url(
+        conn = redis.from_url(
             self.config.redis_url,
             decode_responses=True
         )
+        try:
+            import inspect as _inspect
+            if _inspect.isawaitable(conn):
+                conn = await conn
+        except Exception:
+            pass
+        self.redis_client = conn
         self.quota_manager = UserQuotaManager(self.redis_client, self.config)
         self.priority_calculator = PriorityCalculator(self.redis_client)
         

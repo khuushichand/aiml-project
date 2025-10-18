@@ -98,17 +98,16 @@ async def test_reset_password_integration_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mfa_setup_verify_disable_integration(tmp_path, monkeypatch):
+async def test_mfa_setup_verify_disable_integration(isolated_test_environment, monkeypatch):
     """Integration test for MFA endpoints using stubbed MFA + email services.
 
     - Stubs MFA service via sys.modules before reload (avoids optional deps)
     - Stubs email service for verify step
     - Overrides get_current_active_user dep to provide a user
     """
-    # Ensure test-mode behavior for DB adapter path and deterministic CSRF
-    monkeypatch.setenv("TEST_MODE", "true")
+    client, _db_name = isolated_test_environment
 
-    # Prepare stub MFA and Email services prior to app import
+    # Prepare stub MFA and Email services
     class _StubMFA:
         def generate_secret(self) -> str:
             return "STUBSECRET"
@@ -134,28 +133,17 @@ async def test_mfa_setup_verify_disable_integration(tmp_path, monkeypatch):
         async def disable_mfa(self, user_id: int) -> bool:
             return True
 
-    mfa_stub_mod = types.ModuleType("mfa_service")
-    setattr(mfa_stub_mod, "get_mfa_service", lambda: _StubMFA())
-    sys.modules['tldw_Server_API.app.core.AuthNZ.mfa_service'] = mfa_stub_mod
-
-    # Preload and reload enhanced auth module so main picks up latest router
-    mod = importlib.import_module('tldw_Server_API.app.api.v1.endpoints.auth_enhanced')
-    auth_enh_pre = importlib.reload(mod)
-
-    # Build a minimal FastAPI app with just the enhanced auth router mounted
-    from fastapi import FastAPI
-    app = FastAPI()
-    app.include_router(auth_enh_pre.router, prefix="/api/v1")
-
     # Patch email service used by verify
     class _StubEmail:
         async def send_mfa_enabled_email(self, to_email: str, username: str, backup_codes, ip_address: str):
             return True
 
     import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as auth_enh
-    # ensure we use the reloaded module reference
-    auth_enh = auth_enh_pre
-    auth_enh.get_email_service = lambda: _StubEmail()  # type: ignore
+
+    # Monkeypatch service resolvers to avoid optional dependencies
+    stub_mfa_instance = _StubMFA()
+    monkeypatch.setattr(auth_enh, "_get_mfa_service", lambda: stub_mfa_instance)
+    monkeypatch.setattr(auth_enh, "_get_email_service", lambda: _StubEmail())
 
     # Override get_current_active_user to bypass authentication
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
@@ -164,37 +152,13 @@ async def test_mfa_setup_verify_disable_integration(tmp_path, monkeypatch):
     async def _active_user():
         return User(id=1, username="alice", email="alice@example.com", is_active=True)
 
+    app = client.app
+    previous_override_main = app.dependency_overrides.get(get_current_active_user)
     app.dependency_overrides[get_current_active_user] = _active_user
-    # Also ensure override binds to the exact reference used in the router
+    # Ensure override binds to the exact reference used in the router
     app.dependency_overrides[auth_enh.get_current_active_user] = _active_user  # type: ignore[attr-defined]
 
-    # Override DB transaction to a minimal stub (route doesn't use it but dependency resolves)
-    async def _override_db_tx():
-        class _Conn:
-            async def execute(self, *args, **kwargs):
-                class _C:
-                    async def fetchone(self):
-                        return None
-                return _C()
-
-            async def fetchrow(self, *args, **kwargs):
-                return None
-
-            async def fetch(self, *args, **kwargs):
-                return []
-
-            async def fetchval(self, *args, **kwargs):
-                return None
-
-            async def commit(self):
-                return True
-
-        return _Conn()
-
-    # Important: Override using the exact function object referenced by the router
-    app.dependency_overrides[auth_enh.get_db_transaction] = _override_db_tx  # type: ignore[attr-defined]
-
-    with TestClient(app) as client:
+    try:
         # Setup
         r = client.post("/api/v1/auth/mfa/setup")
         assert r.status_code == 200, r.text
@@ -222,5 +186,9 @@ async def test_mfa_setup_verify_disable_integration(tmp_path, monkeypatch):
         )
         assert r3.status_code == 200, r3.text
         assert "disabled" in r3.json().get("message", "").lower()
-
-    app.dependency_overrides.clear()
+    finally:
+        if previous_override_main is not None:
+            app.dependency_overrides[get_current_active_user] = previous_override_main
+        else:
+            app.dependency_overrides.pop(get_current_active_user, None)
+        app.dependency_overrides.pop(auth_enh.get_current_active_user, None)  # type: ignore[attr-defined]

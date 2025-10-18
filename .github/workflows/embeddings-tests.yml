@@ -166,7 +166,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest loguru redis==5.* anyio
+          pip install pytest loguru redis==5.* anyio fastapi starlette pydantic httpx prometheus_client
           # PG client for adapter + fixtures
           pip install "psycopg[binary]>=3.1"
 
@@ -179,8 +179,11 @@ jobs:
           PGVECTOR_DSN: ${{ secrets.PG_TEST_DSN }}
         run: |
           pytest -q \
-            tldw_Server_API/tests/Embeddings/test_pgvector_delete_by_filter.py \
-            tldw_Server_API/tests/Embeddings/test_storage_worker_pgvector_upsert.py
+            tldw_Server_API/tests/VectorStores/integration/test_pgvector_live.py \
+            tldw_Server_API/tests/VectorStores/integration/test_pgvector_filter_integration.py \
+            tldw_Server_API/tests/VectorStores/integration/test_vector_store_admin_ef_search_pg.py \
+            tldw_Server_API/tests/RAG_NEW/integration/test_retriever_pgvector_multi_search.py \
+            tldw_Server_API/tests/Helper_Scripts/test_chroma_to_pgvector_migrate.py
 
   pgvector-local:
     needs: [changes]
@@ -218,7 +221,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest loguru redis==5.* anyio chromadb pgvector
+          pip install pytest loguru redis==5.* anyio chromadb pgvector fastapi starlette pydantic httpx prometheus_client
           pip install "psycopg[binary]>=3.1"
 
       - name: Run pgvector adapter tests (local service)
@@ -230,12 +233,8 @@ jobs:
           PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/tldw
         run: |
           pytest -q \
-            tldw_Server_API/tests/Embeddings/test_pgvector_delete_by_filter.py \
-            tldw_Server_API/tests/Embeddings/test_storage_worker_pgvector_upsert.py \
             tldw_Server_API/tests/VectorStores/integration/test_pgvector_live.py \
-            tldw_Server_API/tests/Helper_Scripts/test_chroma_to_pgvector_migrate.py
-            \
-            tldw_Server_API/tests/Embeddings/test_vector_store_admin_endpoints_pg_e2e.py \
+            tldw_Server_API/tests/Helper_Scripts/test_chroma_to_pgvector_migrate.py \
             tldw_Server_API/tests/RAG_NEW/integration/test_retriever_pgvector_multi_search.py \
             tldw_Server_API/tests/VectorStores/integration/test_pgvector_filter_integration.py \
             tldw_Server_API/tests/VectorStores/integration/test_vector_store_admin_ef_search_pg.py \

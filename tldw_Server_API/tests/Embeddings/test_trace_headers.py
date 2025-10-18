@@ -5,7 +5,6 @@ from fastapi.testclient import TestClient
 def test_health_includes_trace_headers(monkeypatch):
     # Reduce startup work
     monkeypatch.setenv("TEST_MODE", "true")
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "true")
 
     from tldw_Server_API.app.main import app
 

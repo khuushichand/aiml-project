@@ -4,6 +4,7 @@
 # Imports
 import logging
 import asyncio
+import os
 #
 # 3rd-party Libraries
 import sys
@@ -95,6 +96,18 @@ def _trace_log_patcher(record):
         record["message"] = msg
     except Exception:
         pass
+    # Normalize extra values for JSON serialization and log safety
+    try:
+        from datetime import datetime as _dt
+        extra = record.get("extra", {})
+        if isinstance(extra, dict):
+            for _k, _v in list(extra.items()):
+                if isinstance(_v, _dt):
+                    extra[_k] = _v.isoformat()
+                elif isinstance(_v, (set, tuple)):
+                    extra[_k] = list(_v)
+    except Exception:
+        pass
 
 def _safe_log_format(record: dict) -> str:
     try:
@@ -139,8 +152,28 @@ _sink = sys.stdout if _sink_choice in {"1","true","yes","on","stdout"} else sys.
 _use_color = _force_color or (_sink.isatty() and _early_os.getenv("LOG_COLOR", "1").lower() not in {"0","false","no","off"})
 # Use synchronous logging during import-time initialization to avoid Loguru's background
 # queue thread taking the import lock while startup modules are still being loaded.
+class _SafeStreamWrapper:
+    def __init__(self, stream):
+        self._stream = stream
+    def write(self, message: str):
+        try:
+            self._stream.write(message)
+        except Exception:
+            # Swallow closed-file or teardown-time errors
+            pass
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+    def isatty(self):
+        try:
+            return bool(getattr(self._stream, "isatty", lambda: False)())
+        except Exception:
+            return False
+
 logger.add(
-    _sink,
+    _SafeStreamWrapper(_sink),
     level=_log_level,
     format=_safe_log_format,
     colorize=_use_color,
@@ -187,22 +220,37 @@ def _reinstall_intercept_handlers():
 
 try:
     import logging.config as _logcfg
-    _orig_basicConfig = logging.basicConfig
-    def _basic_config_wrapper(*args, **kwargs):
-        try:
-            _orig_basicConfig(*args, **kwargs)
-        finally:
-            _reinstall_intercept_handlers()
-    logging.basicConfig = _basic_config_wrapper  # type: ignore[assignment]
 
-    if hasattr(_logcfg, 'dictConfig'):
-        _orig_dictConfig = _logcfg.dictConfig
-        def _dict_config_wrapper(config):
+    if not hasattr(logging, "_tldw_original_basicConfig"):
+        logging._tldw_original_basicConfig = logging.basicConfig  # type: ignore[attr-defined]
+    logging._tldw_reinstall = _reinstall_intercept_handlers  # type: ignore[attr-defined]
+
+    if not getattr(logging, "_tldw_basic_config_wrapped", False):
+        def _basic_config_wrapper(*args, **kwargs):
             try:
-                _orig_dictConfig(config)
+                logging._tldw_original_basicConfig(*args, **kwargs)  # type: ignore[attr-defined]
             finally:
-                _reinstall_intercept_handlers()
-        _logcfg.dictConfig = _dict_config_wrapper  # type: ignore[assignment]
+                _maybe_reinstall = getattr(logging, "_tldw_reinstall", None)
+                if callable(_maybe_reinstall):
+                    _maybe_reinstall()
+        logging.basicConfig = _basic_config_wrapper  # type: ignore[assignment]
+        logging._tldw_basic_config_wrapped = True  # type: ignore[attr-defined]
+
+    if hasattr(_logcfg, "dictConfig"):
+        if not hasattr(_logcfg, "_tldw_original_dictConfig"):
+            _logcfg._tldw_original_dictConfig = _logcfg.dictConfig  # type: ignore[attr-defined]
+        _logcfg._tldw_reinstall = _reinstall_intercept_handlers  # type: ignore[attr-defined]
+
+        if not getattr(_logcfg, "_tldw_dict_config_wrapped", False):
+            def _dict_config_wrapper(config):
+                try:
+                    _logcfg._tldw_original_dictConfig(config)  # type: ignore[attr-defined]
+                finally:
+                    _maybe_reinstall = getattr(_logcfg, "_tldw_reinstall", None)
+                    if callable(_maybe_reinstall):
+                        _maybe_reinstall()
+            _logcfg.dictConfig = _dict_config_wrapper  # type: ignore[assignment]
+            _logcfg._tldw_dict_config_wrapped = True  # type: ignore[attr-defined]
 except Exception:
     pass
 
@@ -421,10 +469,12 @@ Optional JSON-structured logs sink (enable with LOG_JSON=true)
 """
 try:
     import os as _jsonlog_os
-    if (_jsonlog_os.getenv("LOG_JSON", "").lower() in {"1", "true", "yes", "on"} or
-        _jsonlog_os.getenv("ENABLE_JSON_LOGS", "").lower() in {"1", "true", "yes", "on"}):
+    if (
+        _jsonlog_os.getenv("LOG_JSON", "").lower() in {"1", "true", "yes", "on"}
+        or _jsonlog_os.getenv("ENABLE_JSON_LOGS", "").lower() in {"1", "true", "yes", "on"}
+    ):
         logger.add(
-            sys.stdout,
+            _SafeStreamWrapper(sys.stdout),
             level=_log_level,
             serialize=True,
             backtrace=False,
@@ -432,7 +482,10 @@ try:
             filter=None,
             enqueue=True,
         )
-        logger.info("JSON logging enabled (serialize=True)")
+        try:
+            logger.info("JSON logging enabled (serialize=True, async enqueue)")
+        except Exception:
+            pass
 except Exception as _e:
     try:
         logger.debug(f"Failed to enable JSON logs sink: {_e}")
@@ -453,31 +506,12 @@ READINESS_STATE = {"ready": True}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _startup_trace("lifespan: entered")
-    # Test-aware flag to optionally skip heavy startup subsystems in tests
-    import os as _startup_os
-    _is_test_mode = (
-        _startup_os.getenv("PYTEST_CURRENT_TEST", "") != "" or
-        _startup_os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or
-        _startup_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-    )
-    _disable_heavy_startup = _startup_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}
-    _skip_heavy = _is_test_mode or _disable_heavy_startup
-    # In test/CI or when explicitly disabled, skip all heavy startup initialization entirely.
-    # This keeps ASGI lifespan startup under a second for tests that import main.app.
-    if _skip_heavy:
-        try:
-            from loguru import logger as _lg
-            _lg.info("Test mode or DISABLE_HEAVY_STARTUP set: skipping startup initialization")
-        except Exception:
-            pass
-        yield
-        return
-    chat_config = {}
+    chat_config: dict[str, object] = {}
     # Startup: Validate MCP configuration in production (fail fast)
     try:
         if get_mcp_config and validate_mcp_config:
             mcp_cfg = get_mcp_config()
-            if not (mcp_cfg.debug_mode or _is_test_mode):
+            if not mcp_cfg.debug_mode:
                 ok = validate_mcp_config()
                 if not ok:
                     raise RuntimeError(
@@ -557,8 +591,7 @@ async def lifespan(app: FastAPI):
                 logger.info("App Startup: Security alert configuration validated")
         except ValueError as config_error:
             logger.error(f"App Startup: Security alert configuration invalid: {config_error}")
-            if not _is_test_mode:
-                raise
+            raise
         except Exception as exc:
             logger.error(f"App Startup: Security alert validation failed: {exc}")
     except Exception as e:
@@ -566,60 +599,54 @@ async def lifespan(app: FastAPI):
         # Continue startup even if auth services fail (for backward compatibility)
 
     # Initialize MCP Unified Server (secure, production-ready)
-    if _skip_heavy:
-        logger.info("Test mode/heavy-startup disabled: Skipping MCP Unified server initialization")
-    else:
-        logger.info("App Startup: Initializing MCP Unified server...")
-        try:
-            from tldw_Server_API.app.core.MCP_unified import get_mcp_server
-            mcp_server = get_mcp_server()
-            await mcp_server.initialize()
-            logger.info("App Startup: MCP Unified server initialized successfully")
-        except Exception as e:
-            logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
-            logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
-            # Continue startup even if MCP fails (for backward compatibility)
+    logger.info("App Startup: Initializing MCP Unified server...")
+    try:
+        from tldw_Server_API.app.core.MCP_unified import get_mcp_server
+        mcp_server = get_mcp_server()
+        await mcp_server.initialize()
+        logger.info("App Startup: MCP Unified server initialized successfully")
+    except Exception as e:
+        logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
+        logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
+        # Continue startup even if MCP fails (for backward compatibility)
 
     # Initialize Chat Module Components
-    if _skip_heavy:
-        logger.info("Test mode/heavy-startup disabled: Skipping Chat provider manager and request queue initialization")
-    else:
-        logger.info("App Startup: Initializing Chat module components...")
+    logger.info("App Startup: Initializing Chat module components...")
 
-        # Initialize Provider Manager
-        try:
-            from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
-            # Seed from authoritative provider configuration to avoid drift
-            from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
+    # Initialize Provider Manager
+    try:
+        from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
+        # Seed from authoritative provider configuration to avoid drift
+        from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
 
-            # Get list of configured providers (authoritative mapping)
-            providers = list(PROVIDER_API_CALL_HANDLERS.keys())
-            provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
-            await provider_manager.start_health_checks()
-            logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
-        except Exception as e:
-            logger.error(f"App Startup: Failed to initialize provider manager: {e}")
+        # Get list of configured providers (authoritative mapping)
+        providers = list(PROVIDER_API_CALL_HANDLERS.keys())
+        provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
+        await provider_manager.start_health_checks()
+        logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
+    except Exception as e:
+        logger.error(f"App Startup: Failed to initialize provider manager: {e}")
 
-        # Initialize Request Queue
-        try:
-            from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
-            from tldw_Server_API.app.core.config import load_comprehensive_config
+    # Initialize Request Queue
+    try:
+        from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
+        from tldw_Server_API.app.core.config import load_comprehensive_config
 
-            config = load_comprehensive_config()
-            chat_config = {}
-            if config and config.has_section('Chat-Module'):
-                chat_config = dict(config.items('Chat-Module'))
+        config = load_comprehensive_config()
+        chat_config = {}
+        if config and config.has_section('Chat-Module'):
+            chat_config = dict(config.items('Chat-Module'))
 
-            request_queue = initialize_request_queue(
-                max_queue_size=int(chat_config.get('max_queue_size', 100)),
-                max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
-                global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
-                per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
-            )
-            await request_queue.start(num_workers=4)
-            logger.info("App Startup: Request queue initialized with 4 workers")
-        except Exception as e:
-            logger.error(f"App Startup: Failed to initialize request queue: {e}")
+        request_queue = initialize_request_queue(
+            max_queue_size=int(chat_config.get('max_queue_size', 100)),
+            max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
+            global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
+            per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
+        )
+        await request_queue.start(num_workers=4)
+        logger.info("App Startup: Request queue initialized with 4 workers")
+    except Exception as e:
+        logger.error(f"App Startup: Failed to initialize request queue: {e}")
 
     # Initialize Rate Limiter
     try:
@@ -637,41 +664,35 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Startup: Failed to initialize rate limiter: {e}")
 
     # Initialize TTS Service
-    if _skip_heavy:
-        logger.info("Test mode/heavy-startup disabled: Skipping TTS service initialization")
-    else:
-        logger.info("App Startup: Initializing TTS service...")
-        try:
-            from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-            from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
+    logger.info("App Startup: Initializing TTS service...")
+    try:
+        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+        from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
 
-            # Load comprehensive config and extract TTS config dict
-            cfg_obj = load_comprehensive_config_with_tts()
-            tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
+        # Load comprehensive config and extract TTS config dict
+        cfg_obj = load_comprehensive_config_with_tts()
+        tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
 
-            # Initialize the TTS service with configuration (falls back to internal loader if None)
-            await get_tts_service_v2(config=tts_cfg_dict)
-            logger.info("App Startup: TTS service initialized successfully")
-        except Exception as e:
-            logger.error(f"App Startup: Failed to initialize TTS service: {e}")
-            logger.warning("TTS functionality will be unavailable")
-            # Continue startup even if TTS fails (for backward compatibility)
+        # Initialize the TTS service with configuration (falls back to internal loader if None)
+        await get_tts_service_v2(config=tts_cfg_dict)
+        logger.info("App Startup: TTS service initialized successfully")
+    except Exception as e:
+        logger.error(f"App Startup: Failed to initialize TTS service: {e}")
+        logger.warning("TTS functionality will be unavailable")
+        # Continue startup even if TTS fails (for backward compatibility)
 
     # Initialize Chunking Templates
-    if _skip_heavy:
-        logger.info("Test mode/heavy-startup disabled: Skipping chunking template initialization")
-    else:
-        logger.info("App Startup: Initializing chunking templates...")
-        try:
-            from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
+    logger.info("App Startup: Initializing chunking templates...")
+    try:
+        from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
 
-            if ensure_templates_initialized():
-                logger.info("App Startup: Chunking templates initialized successfully")
-            else:
-                logger.warning("App Startup: Chunking templates initialization incomplete")
-        except Exception as e:
-            logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
-            # Continue startup even if template initialization fails
+        if ensure_templates_initialized():
+            logger.info("App Startup: Chunking templates initialized successfully")
+        else:
+            logger.warning("App Startup: Chunking templates initialization incomplete")
+    except Exception as e:
+        logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
+        # Continue startup even if template initialization fails
 
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
@@ -679,9 +700,8 @@ async def lifespan(app: FastAPI):
 
     # Embeddings: optional startup-time dimension sanity check (opt-in)
     try:
-        import os as _os
-        if not _skip_heavy and (_os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}):
-            strict_mode = (_os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}:
+            strict_mode = (os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"})
             logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
             try:
                 import os as _os_mod
@@ -816,13 +836,10 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Ephemeral cleanup loop error: {ce}")
                 await _asyncio.sleep(_interval_dyn)
 
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping ephemeral cleanup worker")
+        if _enabled:
+            cleanup_task = _asyncio.create_task(_ephemeral_cleanup_loop())
         else:
-            if _enabled:
-                cleanup_task = _asyncio.create_task(_ephemeral_cleanup_loop())
-            else:
-                logger.info("Ephemeral cleanup worker disabled by settings")
+            logger.info("Ephemeral cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
 
@@ -834,15 +851,12 @@ async def lifespan(app: FastAPI):
         _backend = (_os.getenv("CHATBOOKS_JOBS_BACKEND") or _os.getenv("TLDW_JOBS_BACKEND") or "").lower()
         _is_core = (_backend == "core") or (not _backend)
         _core_worker_enabled = (_os.getenv("CHATBOOKS_CORE_WORKER_ENABLED", "true").lower() in {"true", "1", "yes", "y", "on"})
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping core Jobs worker (Chatbooks)")
+        if _is_core and _core_worker_enabled:
+            core_jobs_stop_event = _asyncio.Event()
+            core_jobs_task = _asyncio.create_task(_run_cb_jobs(core_jobs_stop_event))
+            logger.info("Core Jobs worker (Chatbooks) started with explicit stop_event signal")
         else:
-            if _is_core and _core_worker_enabled:
-                core_jobs_stop_event = _asyncio.Event()
-                core_jobs_task = _asyncio.create_task(_run_cb_jobs(core_jobs_stop_event))
-                logger.info("Core Jobs worker (Chatbooks) started with explicit stop_event signal")
-            else:
-                logger.info("Core Jobs worker (Chatbooks) disabled by backend selection or flag")
+            logger.info("Core Jobs worker (Chatbooks) disabled by backend selection or flag")
     except Exception as e:
         logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
 
@@ -851,16 +865,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.core.Embeddings.services.vector_compactor import run as _run_vec_compactor
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Embeddings Vector Compactor")
+        _enabled = (_os.getenv("EMBEDDINGS_COMPACTOR_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled:
+            embeddings_compactor_stop_event = _asyncio.Event()
+            embeddings_compactor_task = _asyncio.create_task(_run_vec_compactor(embeddings_compactor_stop_event))
+            logger.info("Embeddings Vector Compactor started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("EMBEDDINGS_COMPACTOR_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled:
-                embeddings_compactor_stop_event = _asyncio.Event()
-                embeddings_compactor_task = _asyncio.create_task(_run_vec_compactor(embeddings_compactor_stop_event))
-                logger.info("Embeddings Vector Compactor started with explicit stop_event signal")
-            else:
-                logger.info("Embeddings Vector Compactor disabled by flag (EMBEDDINGS_COMPACTOR_ENABLED)")
+            logger.info("Embeddings Vector Compactor disabled by flag (EMBEDDINGS_COMPACTOR_ENABLED)")
     except Exception as e:
         logger.warning(f"Failed to start Embeddings Vector Compactor: {e}")
 
@@ -869,16 +880,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Audio Jobs worker")
+        _enabled = (_os.getenv("AUDIO_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled:
+            audio_jobs_stop_event = _asyncio.Event()
+            audio_jobs_task = _asyncio.create_task(_run_audio_jobs(audio_jobs_stop_event))
+            logger.info("Audio Jobs worker started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("AUDIO_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled:
-                audio_jobs_stop_event = _asyncio.Event()
-                audio_jobs_task = _asyncio.create_task(_run_audio_jobs(audio_jobs_stop_event))
-                logger.info("Audio Jobs worker started with explicit stop_event signal")
-            else:
-                logger.info("Audio Jobs worker disabled by flag (AUDIO_JOBS_WORKER_ENABLED)")
+            logger.info("Audio Jobs worker disabled by flag (AUDIO_JOBS_WORKER_ENABLED)")
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
@@ -887,16 +895,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_gauges as _run_jobs_metrics
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Jobs metrics gauge worker")
+        _enabled = (_os.getenv("JOBS_METRICS_GAUGES_ENABLED", "true").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled:
+            jobs_metrics_stop_event = _asyncio.Event()
+            jobs_metrics_task = _asyncio.create_task(_run_jobs_metrics(jobs_metrics_stop_event))
+            logger.info("Jobs metrics gauge worker started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("JOBS_METRICS_GAUGES_ENABLED", "true").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled:
-                jobs_metrics_stop_event = _asyncio.Event()
-                jobs_metrics_task = _asyncio.create_task(_run_jobs_metrics(jobs_metrics_stop_event))
-                logger.info("Jobs metrics gauge worker started with explicit stop_event signal")
-            else:
-                logger.info("Jobs metrics gauge worker disabled by flag")
+            logger.info("Jobs metrics gauge worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
 
@@ -905,16 +910,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_reconcile as _run_jobs_reconcile
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Jobs metrics reconcile worker")
+        _enabled_recon = (_os.getenv("JOBS_METRICS_RECONCILE_ENABLE", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled_recon:
+            jobs_metrics_reconcile_stop = _asyncio.Event()
+            _ = _asyncio.create_task(_run_jobs_reconcile(jobs_metrics_reconcile_stop))
+            logger.info("Jobs metrics reconcile worker started with explicit stop_event signal")
         else:
-            _enabled_recon = (_os.getenv("JOBS_METRICS_RECONCILE_ENABLE", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled_recon:
-                jobs_metrics_reconcile_stop = _asyncio.Event()
-                _ = _asyncio.create_task(_run_jobs_reconcile(jobs_metrics_reconcile_stop))
-                logger.info("Jobs metrics reconcile worker started with explicit stop_event signal")
-            else:
-                logger.info("Jobs metrics reconcile worker disabled by flag (JOBS_METRICS_RECONCILE_ENABLE)")
+            logger.info("Jobs metrics reconcile worker disabled by flag (JOBS_METRICS_RECONCILE_ENABLE)")
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics reconcile worker: {e}")
 
@@ -923,16 +925,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.jobs_crypto_rotate_service import run_jobs_crypto_rotate as _run_jobs_crypto
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Jobs crypto rotate worker")
+        _enabled = (_os.getenv("JOBS_CRYPTO_ROTATE_SERVICE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled:
+            jobs_crypto_rotate_stop_event = _asyncio.Event()
+            jobs_crypto_rotate_task = _asyncio.create_task(_run_jobs_crypto(jobs_crypto_rotate_stop_event))
+            logger.info("Jobs crypto rotate worker started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("JOBS_CRYPTO_ROTATE_SERVICE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled:
-                jobs_crypto_rotate_stop_event = _asyncio.Event()
-                jobs_crypto_rotate_task = _asyncio.create_task(_run_jobs_crypto(jobs_crypto_rotate_stop_event))
-                logger.info("Jobs crypto rotate worker started with explicit stop_event signal")
-            else:
-                logger.info("Jobs crypto rotate worker disabled by flag")
+            logger.info("Jobs crypto rotate worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Jobs crypto rotate worker: {e}")
 
@@ -941,16 +940,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.jobs_webhooks_service import run_jobs_webhooks_worker as _run_jobs_webhooks
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Jobs webhooks worker")
+        _enabled = (_os.getenv("JOBS_WEBHOOKS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}) and bool(_os.getenv("JOBS_WEBHOOKS_URL"))
+        if _enabled:
+            jobs_webhooks_stop_event = _asyncio.Event()
+            jobs_webhooks_task = _asyncio.create_task(_run_jobs_webhooks(jobs_webhooks_stop_event))
+            logger.info("Jobs webhooks worker started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("JOBS_WEBHOOKS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}) and bool(_os.getenv("JOBS_WEBHOOKS_URL"))
-            if _enabled:
-                jobs_webhooks_stop_event = _asyncio.Event()
-                jobs_webhooks_task = _asyncio.create_task(_run_jobs_webhooks(jobs_webhooks_stop_event))
-                logger.info("Jobs webhooks worker started with explicit stop_event signal")
-            else:
-                logger.info("Jobs webhooks worker disabled by flag or missing URL")
+            logger.info("Jobs webhooks worker disabled by flag or missing URL")
     except Exception as e:
         logger.warning(f"Failed to start Jobs webhooks worker: {e}")
 
@@ -959,16 +955,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.workflows_webhook_dlq_service import run_workflows_webhook_dlq_worker as _run_wf_dlq
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Workflows webhook DLQ worker")
+        _wf_enabled = (_os.getenv("WORKFLOWS_WEBHOOK_DLQ_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _wf_enabled:
+            workflows_dlq_stop_event = _asyncio.Event()
+            workflows_dlq_task = _asyncio.create_task(_run_wf_dlq(workflows_dlq_stop_event))
+            logger.info("Workflows webhook DLQ worker started with explicit stop_event signal")
         else:
-            _wf_enabled = (_os.getenv("WORKFLOWS_WEBHOOK_DLQ_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _wf_enabled:
-                workflows_dlq_stop_event = _asyncio.Event()
-                workflows_dlq_task = _asyncio.create_task(_run_wf_dlq(workflows_dlq_stop_event))
-                logger.info("Workflows webhook DLQ worker started with explicit stop_event signal")
-            else:
-                logger.info("Workflows webhook DLQ worker disabled by flag")
+            logger.info("Workflows webhook DLQ worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Workflows webhook DLQ worker: {e}")
 
@@ -977,16 +970,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.workflows_artifact_gc_service import run_workflows_artifact_gc_worker as _run_wf_gc
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Workflows artifact GC worker")
+        _wf_gc_enabled = (_os.getenv("WORKFLOWS_ARTIFACT_GC_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _wf_gc_enabled:
+            workflows_gc_stop_event = _asyncio.Event()
+            workflows_gc_task = _asyncio.create_task(_run_wf_gc(workflows_gc_stop_event))
+            logger.info("Workflows artifact GC worker started with explicit stop_event signal")
         else:
-            _wf_gc_enabled = (_os.getenv("WORKFLOWS_ARTIFACT_GC_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _wf_gc_enabled:
-                workflows_gc_stop_event = _asyncio.Event()
-                workflows_gc_task = _asyncio.create_task(_run_wf_gc(workflows_gc_stop_event))
-                logger.info("Workflows artifact GC worker started with explicit stop_event signal")
-            else:
-                logger.info("Workflows artifact GC worker disabled by flag")
+            logger.info("Workflows artifact GC worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Workflows artifact GC worker: {e}")
 
@@ -995,16 +985,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.workflows_db_maintenance import run_workflows_db_maintenance as _run_wf_maint
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Workflows DB maintenance worker")
+        _wf_maint_enabled = (_os.getenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _wf_maint_enabled:
+            workflows_maint_stop_event = _asyncio.Event()
+            workflows_maint_task = _asyncio.create_task(_run_wf_maint(workflows_maint_stop_event))
+            logger.info("Workflows DB maintenance worker started with explicit stop_event signal")
         else:
-            _wf_maint_enabled = (_os.getenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _wf_maint_enabled:
-                workflows_maint_stop_event = _asyncio.Event()
-                workflows_maint_task = _asyncio.create_task(_run_wf_maint(workflows_maint_stop_event))
-                logger.info("Workflows DB maintenance worker started with explicit stop_event signal")
-            else:
-                logger.info("Workflows DB maintenance worker disabled by flag")
+            logger.info("Workflows DB maintenance worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Workflows DB maintenance worker: {e}")
 
@@ -1013,16 +1000,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.core.Embeddings.services.reembed_worker import run as _run_reembed
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping re-embed expansion worker")
+        _enabled = (_os.getenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled:
+            reembed_stop_event = _asyncio.Event()
+            reembed_task = _asyncio.create_task(_run_reembed(reembed_stop_event))
+            logger.info("Embeddings re-embed expansion worker started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled:
-                reembed_stop_event = _asyncio.Event()
-                reembed_task = _asyncio.create_task(_run_reembed(reembed_stop_event))
-                logger.info("Embeddings re-embed expansion worker started with explicit stop_event signal")
-            else:
-                logger.info("Embeddings re-embed expansion worker disabled by flag (EMBEDDINGS_REEMBED_WORKER_ENABLED)")
+            logger.info("Embeddings re-embed expansion worker disabled by flag (EMBEDDINGS_REEMBED_WORKER_ENABLED)")
     except Exception as e:
         logger.warning(f"Failed to start re-embed expansion worker: {e}")
 
@@ -1031,16 +1015,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.services.jobs_integrity_service import run_jobs_integrity_sweeper as _run_jobs_integrity
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping Jobs integrity sweeper")
+        _enabled = (_os.getenv("JOBS_INTEGRITY_SWEEP_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        if _enabled:
+            jobs_integrity_stop_event = _asyncio.Event()
+            jobs_integrity_task = _asyncio.create_task(_run_jobs_integrity(jobs_integrity_stop_event))
+            logger.info("Jobs integrity sweeper started with explicit stop_event signal")
         else:
-            _enabled = (_os.getenv("JOBS_INTEGRITY_SWEEP_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
-            if _enabled:
-                jobs_integrity_stop_event = _asyncio.Event()
-                jobs_integrity_task = _asyncio.create_task(_run_jobs_integrity(jobs_integrity_stop_event))
-                logger.info("Jobs integrity sweeper started with explicit stop_event signal")
-            else:
-                logger.info("Jobs integrity sweeper disabled by flag")
+            logger.info("Jobs integrity sweeper disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Jobs integrity sweeper: {e}")
 
@@ -1102,18 +1083,18 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Claims rebuild loop error: {e}")
                 await _asyncio.sleep(_claims_interval)
 
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping claims rebuild worker")
-        elif _claims_enabled:
+        if _claims_enabled:
             claims_task = _asyncio.create_task(_claims_rebuild_loop())
+        else:
+            logger.info("Claims rebuild worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
 
     # Start usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
         _disable_usage_agg = _env_os.getenv("DISABLE_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
-        if _skip_heavy or _disable_usage_agg:
-            logger.info("Usage aggregator disabled (test mode/heavy-startup disabled or env flag)")
+        if _disable_usage_agg:
+            logger.info("Usage aggregator disabled via DISABLE_USAGE_AGGREGATOR")
         else:
             from tldw_Server_API.app.services.usage_aggregator import start_usage_aggregator
             usage_task = await start_usage_aggregator()
@@ -1125,8 +1106,8 @@ async def lifespan(app: FastAPI):
     # Start LLM usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
         _disable_llm_usage_agg = _env_os.getenv("DISABLE_LLM_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
-        if _skip_heavy or _disable_llm_usage_agg:
-            logger.info("LLM usage aggregator disabled (test mode/heavy-startup disabled or env flag)")
+        if _disable_llm_usage_agg:
+            logger.info("LLM usage aggregator disabled via DISABLE_LLM_USAGE_AGGREGATOR")
         else:
             from tldw_Server_API.app.services.llm_usage_aggregator import start_llm_usage_aggregator
             llm_usage_task = await start_llm_usage_aggregator()
@@ -1139,9 +1120,7 @@ async def lifespan(app: FastAPI):
     try:
         _personalization_enabled = bool(_app_settings.get("PERSONALIZATION_ENABLED", True))
         _skip_consolidation = _env_os.getenv("DISABLE_PERSONALIZATION_CONSOLIDATION", "").lower() in {"1", "true", "yes", "on"}
-        if _skip_heavy:
-            logger.info("Test mode/heavy-startup disabled: Skipping personalization consolidation service")
-        elif not _personalization_enabled or _skip_consolidation:
+        if not _personalization_enabled or _skip_consolidation:
             logger.info("Personalization consolidation disabled (flag or env)")
         else:
             from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
@@ -1154,7 +1133,7 @@ async def lifespan(app: FastAPI):
     # Ensure PG RLS policies (optional, guarded by env)
     try:
         _ensure_rls = _env_os.getenv("RAG_ENSURE_PG_RLS", "").lower() in {"1", "true", "yes", "on"}
-        if _ensure_rls and not _skip_heavy:
+        if _ensure_rls:
             from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
             from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
             from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
@@ -1176,8 +1155,8 @@ async def lifespan(app: FastAPI):
     # Start RAG quality eval scheduler (nightly dashboards)
     try:
         _disable_quality_eval = _env_os.getenv("RAG_QUALITY_EVAL_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}
-        if _skip_heavy or _disable_quality_eval:
-            logger.info("RAG quality eval scheduler disabled (skip_heavy or RAG_QUALITY_EVAL_ENABLED != true)")
+        if _disable_quality_eval:
+            logger.info("RAG quality eval scheduler disabled (RAG_QUALITY_EVAL_ENABLED != true)")
         else:
             from tldw_Server_API.app.services.quality_eval_scheduler import start_quality_eval_scheduler
             _quality_task = await start_quality_eval_scheduler()
@@ -1189,8 +1168,8 @@ async def lifespan(app: FastAPI):
     # Start Outputs purge scheduler (daily maintenance)
     try:
         _enable_outputs_purge = _env_os.getenv("OUTPUTS_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
-        if _skip_heavy or not _enable_outputs_purge:
-            logger.info("Outputs purge scheduler disabled (skip_heavy or OUTPUTS_PURGE_ENABLED != true)")
+        if not _enable_outputs_purge:
+            logger.info("Outputs purge scheduler disabled (OUTPUTS_PURGE_ENABLED != true)")
         else:
             from tldw_Server_API.app.services.outputs_purge_scheduler import start_outputs_purge_scheduler
             _purge_task = await start_outputs_purge_scheduler()
@@ -1328,7 +1307,6 @@ async def lifespan(app: FastAPI):
                 _test_flags = {
                     "TEST_MODE": _os.getenv("TEST_MODE", ""),
                     "TLDW_TEST_MODE": _os.getenv("TLDW_TEST_MODE", ""),
-                    "DISABLE_HEAVY_STARTUP": _os.getenv("DISABLE_HEAVY_STARTUP", ""),
                     "WORKFLOWS_DISABLE_RATE_LIMITS": _os.getenv("WORKFLOWS_DISABLE_RATE_LIMITS", ""),
                 }
                 _enabled = [k for k, v in _test_flags.items() if str(v).lower() in {"1", "true", "yes", "on"}]
@@ -1626,6 +1604,14 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Unified audit services stopped")
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping unified audit services: {e}")
+
+    # Shutdown registered executors (thread/process pools)
+    try:
+        from tldw_Server_API.app.core.Utils.executor_registry import shutdown_all_registered_executors
+        await shutdown_all_registered_executors(wait=True, cancel_futures=True)
+        logger.info("App Shutdown: Registered executors shutdown")
+    except Exception as e:
+        logger.error(f"App Shutdown: Error shutting down executors: {e}")
 
     # Cleanup CPU pools
     try:
@@ -2021,12 +2007,10 @@ async def _display_startup_info_and_warm():
         logger.info("="*70)
 
     # Optional pre-warm
-    import os as _event_os
-    if _event_os.getenv("TEST_MODE", "").lower() != "true" and _event_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() not in {"1", "true", "yes", "on"}:
-        try:
-            await asyncio.to_thread(get_cached_evaluation_manager)
-        except Exception as exc:
-            logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
+    try:
+        await asyncio.to_thread(get_cached_evaluation_manager)
+    except Exception as exc:
+        logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
     try:
         if needs_setup():
             logger.info("First-time setup is enabled. Open http://localhost:8000/setup to configure the server.")

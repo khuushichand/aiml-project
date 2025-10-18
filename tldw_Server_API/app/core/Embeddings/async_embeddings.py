@@ -59,7 +59,6 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         super().__init__("openai", api_key)
         self.base_url = "https://api.openai.com/v1/embeddings"
     
-    @track_embedding_request("openai", "text-embedding-3-small")
     async def create_embedding(
         self,
         text: str,
@@ -67,6 +66,9 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         user_id: Optional[str] = None
     ) -> List[float]:
         """Create embedding using OpenAI API"""
+        import time as _time
+        t0 = _time.perf_counter()
+        status = "success"
         
         # Check rate limit
         if user_id and not await self.rate_limiter.check_rate_limit_async(user_id):
@@ -93,14 +95,16 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-                    
-                    # Usage is already recorded in check_rate_limit_async
-                    
                     return data["data"][0]["embedding"]
-                    
             except Exception as e:
+                status = "failure"
                 self.metrics.log_error(self.provider_name, str(type(e).__name__))
                 raise
+            finally:
+                # Emit metrics with the actual requested model
+                elapsed = _time.perf_counter() - t0
+                self.metrics.log_request(self.provider_name, model, status=status)
+                self.metrics.log_request_latency(self.provider_name, model, elapsed)
 
 
 class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):

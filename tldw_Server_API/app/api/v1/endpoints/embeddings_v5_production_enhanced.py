@@ -458,7 +458,14 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
 
 async def _get_redis_client() -> aioredis.Redis:
     url = settings.get('REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379'))
-    return await aioredis.from_url(url, decode_responses=True)
+    conn = aioredis.from_url(url, decode_responses=True)
+    try:
+        import inspect as _inspect
+        if _inspect.isawaitable(conn):
+            conn = await conn
+    except Exception:
+        pass
+    return conn
 
 def _dlq_stream_name(stage: str) -> str:
     stage = stage.strip().lower()

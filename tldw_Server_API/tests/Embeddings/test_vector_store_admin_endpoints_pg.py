@@ -26,7 +26,6 @@ class _FakeAdapterNoIndex:
 @pytest.fixture(autouse=True)
 def _env_defaults(monkeypatch):
     monkeypatch.setenv('TEST_MODE','true')
-    monkeypatch.setenv('DISABLE_HEAVY_STARTUP','1')
 
 
 def test_admin_set_ef_search_happy(monkeypatch):
@@ -64,4 +63,3 @@ def test_admin_rebuild_index_not_supported(monkeypatch):
     r = client.post('/api/v1/vector_stores/vs_demo/admin/rebuild_index', json={"index_type":"hnsw"})
     assert r.status_code == 400
     assert 'not supported' in r.json().get('detail','').lower()
-

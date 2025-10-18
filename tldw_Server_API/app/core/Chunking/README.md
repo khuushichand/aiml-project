@@ -3,11 +3,11 @@
 This module provides robust, extensible text chunking for ingestion, RAG, embeddings, analytics, and downstream tasks. It includes a strategy registry, hierarchical chunking, and a template system that now supports learning rules from a “seed” document.
 
 ## Overview
-- Entry point: `Chunker` in `chunker.py` (methods: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, …).
-- Entry point: `Chunker` in `chunker.py` (methods: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `code`, …).
+- Entry point: `Chunker` in `chunker.py` with unified APIs: `process_text`, `chunk_text`, `chunk_text_with_metadata`, `chunk_file_stream`, `chunk_text_hierarchical_tree`, `flatten_hierarchical`, `chunk_text_hierarchical_flat`. Built-in methods include: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `fixed_size`, `structure_aware`, and `code` (Python AST or heuristic).
 - Template pipeline: `TemplateProcessor` and `TemplateManager` in `templates.py`.
 - Built-in templates: JSON files under `template_library/`, seeded into DB by `template_initialization.py`.
-- New: Seed-driven templates via learned “boundary” rules inferred from example (“seed/template”) documents.
+- Seed-driven templates: boundary rules learned from example (“seed/template”) documents via `TemplateLearner`.
+- Where used: API endpoints (`api/v1/endpoints/chunking.py`, `api/v1/endpoints/chunking_templates.py`), media and scraping services (`app/services/document_processing_service.py`, `app/services/enhanced_web_scraping_service.py`, `app/services/xml_processing_service.py`), and RAG pipelines.
 
 ## Layout
 - `base.py` — core types and interfaces (`ChunkingMethod`, `ChunkResult`, `ChunkerConfig`, `BaseChunkingStrategy`)
@@ -16,6 +16,43 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
 - `templates.py` — `TemplateProcessor`, `TemplateManager`, `TemplateClassifier`, `TemplateLearner`
 - `template_initialization.py` — seeds built-in templates to DB
 - `template_library/` — built-in template JSONs (auto-loaded/seeded)
+
+## Public API (Chunker)
+- `process_text(text, options=None, *, tokenizer_name_or_path=None, llm_call_func=None, llm_config=None) -> List[Dict]`
+  - End-to-end path. Returns list items `{"text": str, "metadata": dict}` with normalized fields such as `chunk_index`, `total_chunks`, `chunk_method`, `max_size`, `overlap`, `language`, `start_offset`, `end_offset`, `relative_position`, `paragraph_kind`, and optional `start_time`/`end_time` when `timecode_map` is supplied.
+  - Supports `options` keys (see “Options” below). Handles adaptive sizing, hierarchical paragraph detection, timecode mapping, and content hashing.
+- `chunk_text(text, method=None, max_size=None, overlap=None, language=None, **options) -> List[str]`
+  - Thin wrapper around a single strategy. Returns plain strings.
+- `chunk_text_with_metadata(...) -> List[ChunkResult]`
+  - Strategy-level chunking with `ChunkResult` metadata (indices/offsets, counts).
+- `chunk_text_hierarchical_tree(text, method=None, max_size=None, overlap=None, language=None, template=None) -> Dict`
+  - Computes a section/block tree with paragraph kinds (`header_atx`, `code_fence`, `list_*`, `table_md`, `paragraph`, …) and attaches per-block chunks with offsets.
+- `flatten_hierarchical(tree) -> List[Dict]`
+  - Flattens a tree into `{text, metadata}` items, preserving ancestry (`ancestry_titles`, `section_path`).
+- `chunk_text_hierarchical_flat(...) -> List[Dict]`
+  - Convenience wrapper: `flatten_hierarchical(chunk_text_hierarchical_tree(...))`.
+- `chunk_file_stream(file_path, method=None, max_size=None, overlap=None, language=None, buffer_size=8192, **options) -> Generator[str]`
+  - Memory-efficient streaming for very large files.
+
+Example:
+```
+from tldw_Server_API.app.core.Chunking import Chunker
+
+ck = Chunker()
+chunks = ck.process_text(
+    text,
+    options={
+        "method": "sentences",
+        "max_size": 8,
+        "overlap": 2,
+        "hierarchical": True,
+        "hierarchical_template": {"boundaries": [{"kind": "header_atx", "pattern": "^\\s*#{1,6}\\s+.+$", "flags": "m"}]},
+        "adaptive": True,
+        "adaptive_overlap": True,
+        "timecode_map": [{"start_offset": 0, "end_offset": 120, "start_time": 0.0, "end_time": 10.0}],
+    },
+)
+```
 
 ## Using the Template System
 Two supported template schemas:
@@ -93,6 +130,29 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
    - `tags`, `metadata.seed_source`, etc. for traceability
 3) On startup, `ensure_templates_initialized()` seeds or updates the DB-wide built-ins.
 
+## Integration Points
+- HTTP APIs:
+  - `tldw_Server_API/app/api/v1/endpoints/chunking.py` → chunk text (JSON/multipart); optional template path.
+  - `tldw_Server_API/app/api/v1/endpoints/chunking_templates.py` → list/apply/match/learn templates.
+- Services:
+  - `tldw_Server_API/app/services/document_processing_service.py` → content ingestion + plaintext chunking helpers.
+  - `tldw_Server_API/app/services/enhanced_web_scraping_service.py` and `web_scraping_service.py` → hierarchical flat chunking during scrape.
+  - `tldw_Server_API/app/services/xml_processing_service.py` → XML chunking via improved process.
+
+## Options (process_text)
+- Core: `method`, `max_size`, `overlap`, `language` (defaults from `ChunkerConfig`: `words`, `400`, `200`, `en`).
+- Sizing: `adaptive` (bool), `adaptive_overlap` (bool), `base_adaptive_chunk_size`, `min_adaptive_chunk_size`, `max_adaptive_chunk_size`, `base_overlap`, `max_adaptive_overlap`.
+- Structure: `hierarchical` (bool), `hierarchical_template` (dict of `boundaries`), `multi_level` (paragraph-aware mode for words/sentences).
+- Code: `code_mode` (`auto|ast|heuristic`), `language` (e.g., `python`, `typescript`).
+- JSON/XML: method-specific knobs (see strategies files).
+- Media: `timecode_map` → list of `{start_offset,end_offset,start_time,end_time}` to project times onto chunks.
+- LLM: `tokenizer_name_or_path`, `llm_call_func`, `llm_config` (for strategies like `rolling_summarize`/`propositions`).
+
+## Return Shape and Metadata
+- Each item: `{ "text": str, "metadata": { ... } }`
+- Common metadata keys: `chunk_index`, `total_chunks`, `chunk_method`, `max_size`, `overlap`, `language`, `start_offset`, `end_offset`, `relative_position`, `paragraph_kind`, `ancestry_titles`, `section_path`, `adaptive_chunking_used`, `code_mode_used`, `chunk_content_hash`.
+- Optional: `start_time`, `end_time` when `timecode_map` is provided; `initial_document_json_metadata` and `initial_document_header_text` when detected.
+
 ## Testing
 - API tests: `tldw_Server_API/tests/Chunking/test_chunking_templates.py`
 - Template apply/validate endpoints
@@ -102,6 +162,15 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Do not exceed boundary/regex limits; prefer a few robust patterns over many fragile ones.
 - Use `structure_aware` for code/docs when possible; otherwise seed headers/fences with `hierarchical_template`.
 - Keep templates JSON-only; put operational notes in `metadata` (never secrets).
+
+## Strategies (Built-in)
+- `words`, `sentences`, `paragraphs`, `fixed_size`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `structure_aware`, `code` (Python AST / heuristic based on `code_mode`).
+  - See `strategies/` submodules for implementation and method-specific options.
+
+## Caching and Metrics
+- Config: `ChunkerConfig(enable_cache=True, cache_size=100, min_text_length_to_cache=0, max_text_length_to_cache=2_000_000)`.
+- LRU cache keyed by text + parameters. Cache skips extremely short or very large texts based on thresholds.
+- Metrics hooks are no-ops when Metrics module is unavailable; otherwise counters/histograms are emitted around processing and caching paths.
 
 ## Timecode Mapping for Media Transcripts
 
@@ -121,12 +190,14 @@ segments = [
 ck = Chunker()
 chunks = ck.process_text(
     text,
-    method="sentences",
-    max_size=3,
-    overlap=1,
-    timecode_map=segments,
-    adaptive=True,
-    adaptive_overlap=True,
+    options={
+        "method": "sentences",
+        "max_size": 3,
+        "overlap": 1,
+        "timecode_map": segments,
+        "adaptive": True,
+        "adaptive_overlap": True,
+    },
 )
 for ch in chunks:
     md = ch["metadata"]
@@ -153,6 +224,11 @@ These environment variables harden regex-based detection used by the eBook chapt
 - `CHUNKING_REGEX_SIMPLE_ONLY`
   - Purpose: Restrict custom chapter regex to a safe subset.
   - Effect: When set (`1`/`true`/`yes`), disallows grouping `()`, alternation `|`, wildcard `.`, `?`, `*`. Allows literals, anchors `^`/`$`, character classes `[A-Z]`, escapes `\d`/`\w`, and `+` after safe atoms. Unsafe patterns are rejected during validation.
+
+## Security Hardening (General)
+- Input sanitization removes null bytes, suspicious control characters, and bidi overrides; Unicode is normalized.
+- Hierarchical detection and template boundaries run under safety limits (pattern length, count, optional timeouts); dangerous patterns are rejected.
+- Keep custom regex minimal; prefer boundary anchors and case-insensitive flags.
 ## Code Chunking (Python + JavaScript)
 
 - Method: `code` with optional `code_mode` for routing.
@@ -171,3 +247,18 @@ These environment variables harden regex-based detection used by the eBook chapt
 
 Example:
   chunker.process_text(code, options={"method": "code", "language": "python", "code_mode": "ast", "max_size": 800})
+
+## Extending the Module
+- New strategy:
+  - Implement `BaseChunkingStrategy` in `strategies/<name>.py` with `chunk()` (and optionally `chunk_with_metadata()`).
+  - Add an entry in `Chunker._register_strategy_factories()` to wire it by method name.
+  - If it’s a first-class method, extend `ChunkingMethod` enum in `base.py`.
+  - Add unit tests and brief docs here with method-specific options.
+- New template features:
+  - Extend `templates.py` processors or learners conservatively and update validators/safety in `regex_safety.py` as needed.
+- Performance:
+  - Avoid expensive regex or O(n^2) scans inside hot paths; prefer precomputed spans and streaming.
+  - Keep cache-friendly behavior (stable options, deterministic output).
+  
+## Backwards Compatibility
+- `Chunk_Lib.improved_chunking_process(...)` shims to `Chunker.process_text(...)`. Prefer direct `Chunker` usage and migrate call sites over time.

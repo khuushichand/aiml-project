@@ -32,7 +32,6 @@ Auth headers
 - `TLDW_PS_OPT_COUNT` — override concurrent optimizations (default 3; stress 8).
 - `TLDW_TEST_POSTGRES_REQUIRED=1` — fail fast if Postgres probe fails (otherwise Postgres tests are skipped when unreachable).
 - `TLDW_PS_SQLITE_WAL=1` — opt-in to WAL for per-test SQLite DBs (default: DELETE mode for CI tidiness).
-- `DISABLE_HEAVY_STARTUP=1` — skip unrelated heavy startup (MCP, TTS, chat workers) in tests to reduce startup time; `TEST_MODE=true` also triggers this.
 - `TLDW_PS_JOB_LEASE_SECONDS` — lease window for processing jobs in the Prompt Studio queue (default: 60). Expired processing jobs are reclaimed.
 - `TLDW_PS_HEARTBEAT_SECONDS` — heartbeat interval override for renewing job leases during processing (default: lease/2 up to 30s).
 

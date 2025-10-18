@@ -10,7 +10,6 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manage
 
 def _setup_env():
     os.environ["TEST_MODE"] = "true"
-    os.environ["DISABLE_HEAVY_STARTUP"] = "1"
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"
     os.environ["SINGLE_USER_FIXED_ID"] = "1"
@@ -132,4 +131,3 @@ async def test_prometheus_exports_idempotency_counters(client: TestClient):
     assert 'tool="idemp_write"' in text
     assert "mcp_idempotency_hits_total" in text
     assert 'tool="idemp_write"' in text
-

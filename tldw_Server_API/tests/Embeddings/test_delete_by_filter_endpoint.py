@@ -19,10 +19,8 @@ def test_delete_by_filter_endpoint(monkeypatch):
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterDel()
     monkeypatch.setenv('TEST_MODE','true')
-    monkeypatch.setenv('DISABLE_HEAVY_STARTUP','1')
     monkeypatch.setattr(mod, '_get_adapter_for_user', _fake_get_adapter_for_user)
     client = TestClient(app)
     r = client.post('/api/v1/vector_stores/vs_demo/admin/delete_by_filter', json={"filter": {"media_id":"42"}})
     assert r.status_code == 200
     assert r.json().get('deleted') == 3
-

@@ -136,12 +136,14 @@ def mock_openai_server():
     # Path to mock server
     mock_server_path = Path(__file__).parent.parent.parent.parent / "mock_openai_server"
     
-    # Start the mock server in background
+    # Start the mock server in background. Avoid PIPEs (to prevent blocking if
+    # not consumed) and run in a new session to simplify cleanup.
     process = subprocess.Popen(
         [sys.executable, "run_server.py"],
         cwd=str(mock_server_path),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     
     # Wait for server to start
@@ -161,8 +163,16 @@ def mock_openai_server():
     yield "http://localhost:8080"
     
     # Cleanup
-    process.terminate()
-    process.wait(timeout=5)
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Force kill if graceful termination takes too long
+        process.kill()
+        try:
+            process.wait(timeout=3)
+        except Exception:
+            pass
 
 
 @pytest.fixture(scope="function")

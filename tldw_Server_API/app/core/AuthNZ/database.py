@@ -521,7 +521,14 @@ async def is_postgres_backend() -> bool:
     definitive signal, avoiding fragile attribute checks on per-request
     connections.
     """
-    pool = await get_db_pool()
+    try:
+        pool = await get_db_pool()
+    except DatabaseError as exc:
+        logger.debug("AuthNZ backend detection falling back to SQLite due to pool error: {}", exc)
+        return False
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("AuthNZ backend detection encountered unexpected error: {}", exc)
+        return False
     return getattr(pool, "pool", None) is not None
 
 def _normalize_sqlite_sql(query: str) -> str:

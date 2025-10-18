@@ -1,17 +1,30 @@
-"""Re-export AuthNZ test fixtures for Postgres-specific suite.
+"""Postgres-specific AuthNZ test configuration.
 
-This ensures all tests in this folder use the shared Postgres
-database setup, pool, and optional real audit service.
+Ensures a PostgreSQL DSN is always defined for this suite. We do not skip
+based on environment; instead we provide sane defaults. The shared
+AuthNZ fixtures will attempt to connect and may auto-start a local dockerized
+Postgres if reachable and allowed by environment settings.
 """
 
 import os
 import pytest
 
-# Mark all tests in this folder as postgres and skip when not configured
-pytestmark = [
-    pytest.mark.postgres,
-    pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL not set; skipping Postgres tests"),
-]
+# Always mark as Postgres tests
+pytestmark = [pytest.mark.postgres]
+
+# Ensure a Postgres DSN is defined for this suite (defaults if unset)
+if not (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")):
+    host = os.getenv("TEST_DB_HOST", "localhost")
+    port = os.getenv("TEST_DB_PORT", "5432")
+    user = os.getenv("TEST_DB_USER", "tldw_user")
+    pwd = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
+    db = os.getenv("TEST_DB_NAME", "tldw_test")
+    dsn = f"postgresql://{user}:{pwd}@{host}:{port}/{db}"
+    os.environ["TEST_DATABASE_URL"] = dsn
+    # Don't force DATABASE_URL here; per-test fixtures set it precisely
+
+# Do not force global behavior here; the shared fixtures handle availability
+# (optionally attempting docker) and may skip if PG is not required.
 
 from tldw_Server_API.tests.AuthNZ.conftest import (  # noqa: F401
     setup_test_database,

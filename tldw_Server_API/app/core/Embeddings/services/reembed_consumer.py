@@ -28,7 +28,14 @@ BATCH = int(os.getenv("REEMBED_BATCH", "50") or 50)
 
 async def _get_client() -> aioredis.Redis:
     url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    return await aioredis.from_url(url, decode_responses=True)
+    conn = aioredis.from_url(url, decode_responses=True)
+    try:
+        import inspect as _inspect
+        if _inspect.isawaitable(conn):
+            conn = await conn
+    except Exception:
+        pass
+    return conn
 
 
 async def process_once(client: aioredis.Redis, max_items: int = BATCH) -> int:

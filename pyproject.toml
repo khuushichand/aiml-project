@@ -159,6 +159,13 @@ Repository = "https://github.com/rmusser01/tldw_server"
 "Source Code" = "https://github.com/rmusser01/tldw_server"
 
 [project.optional-dependencies]
+# Multi-User
+multiplayer = [
+    "pyotp",
+    "psycopg",
+    "qrcode",
+]
+
 # Development tools
 dev = [
   "pytest>=7.4.0",

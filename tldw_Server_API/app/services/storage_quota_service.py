@@ -6,7 +6,6 @@ import os
 import asyncio
 from pathlib import Path
 from typing import Dict, Optional, List, Any, Tuple
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 #
 # 3rd-party imports
@@ -38,9 +37,6 @@ class StorageQuotaService:
         """Initialize storage quota service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
-        
-        # Thread pool for file system operations
-        self.executor = ThreadPoolExecutor(max_workers=4)
         
         # TTL cache for quota checks (5 minutes)
         self.quota_cache = TTLCache(maxsize=1000, ttl=300)
@@ -79,9 +75,7 @@ class StorageQuotaService:
         
         # Calculate storage in thread pool
         user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
-        loop = asyncio.get_event_loop()
-        size_bytes = await loop.run_in_executor(
-            self.executor,
+        size_bytes = await asyncio.to_thread(
             self._calculate_directory_size,
             str(user_dir)
         )
@@ -90,8 +84,7 @@ class StorageQuotaService:
         chroma_bytes = 0
         if self.settings.CHROMADB_BASE_PATH:
             chroma_dir = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
-            chroma_bytes = await loop.run_in_executor(
-                self.executor,
+            chroma_bytes = await asyncio.to_thread(
                 self._calculate_directory_size,
                 str(chroma_dir)
             )
@@ -345,9 +338,7 @@ class StorageQuotaService:
         if not self._initialized:
             await self.initialize()
         user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
-        loop = asyncio.get_event_loop()
-        breakdown = await loop.run_in_executor(
-            self.executor,
+        breakdown = await asyncio.to_thread(
             self._calculate_storage_breakdown,
             str(user_dir)
         )
@@ -522,9 +513,8 @@ class StorageQuotaService:
         )
 
     async def shutdown(self):
-        """Shutdown the storage quota service."""
-        self.executor.shutdown(wait=False)
-        logger.info("StorageQuotaService shutdown complete")
+        """Shutdown hook retained for compatibility."""
+        logger.info("StorageQuotaService shutdown complete (no dedicated executor)")
 
 
 # Singleton accessor

@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 from loguru import logger
 
+from tldw_Server_API.app.core.Utils.executor_registry import register_executor
+
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 #######################################################################################################################
@@ -22,6 +24,7 @@ T = TypeVar('T')
 
 # Thread pool for database operations
 DB_THREAD_POOL = ThreadPoolExecutor(max_workers=10, thread_name_prefix="db_worker")
+register_executor("db_thread_pool", DB_THREAD_POOL)
 
 #######################################################################################################################
 #

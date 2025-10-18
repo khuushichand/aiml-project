@@ -15,7 +15,14 @@ import redis.asyncio as aioredis
 
 async def _get_redis_client() -> aioredis.Redis:
     url = settings.get('REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379'))
-    return await aioredis.from_url(url, decode_responses=True)
+    conn = aioredis.from_url(url, decode_responses=True)
+    try:
+        import inspect as _inspect
+        if _inspect.isawaitable(conn):
+            conn = await conn
+    except Exception:
+        pass
+    return conn
 
 
 def _cfg_int(name: str, default_val: int) -> int:
@@ -132,4 +139,3 @@ async def guard_backpressure_and_quota(
 
     # No return value; dependency completes
     return None
-

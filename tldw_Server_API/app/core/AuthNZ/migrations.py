@@ -1004,6 +1004,43 @@ def migration_023_create_virtual_key_counters(conn: sqlite3.Connection) -> None:
         logger.info("Migration 023: Created virtual key counters tables")
     except Exception as e:
         logger.warning(f"Migration 023 skipped/failed: {e}")
+
+
+def migration_024_ensure_api_keys_status_column(conn: sqlite3.Connection) -> None:
+    """Ensure the api_keys table exposes a status column prior to creating status-based indexes."""
+    try:
+        teams_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='teams'"
+        ).fetchone()
+        orgs_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='organizations'"
+        ).fetchone()
+        if not teams_exists or not orgs_exists:
+            migration_016_create_orgs_teams(conn)
+    except Exception as error:
+        logger.warning(f"Migration 024: unable to verify organization/team tables ({error})")
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(api_keys)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "status" not in columns:
+            conn.execute("ALTER TABLE api_keys ADD COLUMN status TEXT DEFAULT 'active'")
+            conn.execute("UPDATE api_keys SET status = 'active' WHERE status IS NULL")
+    except sqlite3.OperationalError as error:
+        logger.warning(f"Migration 024 skipped: api_keys table unavailable ({error})")
+        conn.commit()
+        return
+    except Exception as error:
+        logger.warning(f"Migration 024 encountered an unexpected error inspecting api_keys: {error}")
+        conn.commit()
+        return
+
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+    except sqlite3.OperationalError as error:
+        logger.warning(f"Migration 024: idx_api_keys_status creation skipped ({error})")
+    conn.commit()
+    logger.info("Migration 024: Ensured api_keys.status column and index")
 #######################################################################################################################
 #
 # Migration Registry
@@ -1035,6 +1072,7 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(21, "Add bytes_in_total to usage_daily", migration_021_usage_daily_add_bytes_in_total),
         Migration(22, "Create tool catalogs tables", migration_022_create_tool_catalogs),
         Migration(23, "Create virtual key counters tables", migration_023_create_virtual_key_counters),
+        Migration(24, "Ensure api_keys status column before index", migration_024_ensure_api_keys_status_column),
     ]
 
 

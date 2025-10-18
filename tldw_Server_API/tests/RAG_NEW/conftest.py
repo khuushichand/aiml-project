@@ -30,9 +30,8 @@ def pytest_configure(config):
 # =====================================================================
 
 @pytest.fixture
-def disable_heavy_startup(monkeypatch):
-    """Disable heavy startup paths (DBs, services) for faster test collection."""
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
+def disable_heavy_startup():
+    """Deprecated no-op fixture retained for backward compatibility."""
     yield
 
 

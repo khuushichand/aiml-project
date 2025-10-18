@@ -25,14 +25,16 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 │   │   ├── core/                 # Core business logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
 │   │   ├── services/             # Background services
 │   │   └── main.py               # FastAPI entry point
-│   ├── WebUI/                    # Integrated web UI served at /webui
+│   ├── WebUI/                    # Legacy integrated web UI served at /webui
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
-│   ├── Dockerfiles/              # Docker images and compose files
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
 │   └── requirements.txt          # Python dependencies
+├── Dockerfiles/                  # Docker images and compose files
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
+├── mock_openai_server/           # Mock server for OpenAI-compatible API tests
+├── tldw-frontend/                # Next.js WebUI (current client)
 ├── Databases/                    # Top-level DBs for local dev (e.g., Media_DB_v2.db, users.db)
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration
@@ -68,7 +70,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
    - Chat history management and search
 
 5. **Knowledge Management**
-  - Note-taking system (notebook-style)
+   - Note-taking system (notebook-style)
    - Prompt library with import/export
    - Tagging and categorization
    - Soft delete with recovery options
@@ -201,10 +203,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 - Never log sensitive information (API keys, passwords)
 - Implement rate limiting for API endpoints
 - Validate file uploads (type, size, content)
-- **Input Validation**: Always validate and sanitize user input
-- **File Uploads**: Validate file types and sizes
-- **SQL Injection**: Use parameterized queries
-- **CORS**: Configured in `main.py`, adjust for production
+- Configure CORS in `main.py` for production deployments
 
 ## Configuration
 

@@ -20,7 +20,7 @@ def test_enforce_scope_and_schedule_match(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
-    monkeypatch.setenv("JWT_SECRET_KEY", "secret_for_tests_1234567890")
+    monkeypatch.setenv("JWT_SECRET_KEY", "top_secret_key_for_tests_1234567890")
     reset_settings()
     svc = JWTService(get_settings())
     token = svc.create_virtual_access_token(

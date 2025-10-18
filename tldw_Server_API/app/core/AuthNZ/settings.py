@@ -519,6 +519,15 @@ class Settings(BaseSettings):
         if self.AUTH_MODE == "single_user":
             logger.debug("Single-user mode - skipping JWT secret initialization")
             return
+
+        alg_upper = (self.JWT_ALGORITHM or "").upper()
+        if alg_upper.startswith(("RS", "ES")) and self.JWT_PRIVATE_KEY:
+            # Asymmetric algorithms supply their own key material; a symmetric secret is unnecessary
+            logger.debug(
+                "Asymmetric JWT algorithm %s detected with private key; skipping JWT secret requirement",
+                self.JWT_ALGORITHM,
+            )
+            return
         
         # Environment variable is REQUIRED for JWT secret
         if self.JWT_SECRET_KEY:

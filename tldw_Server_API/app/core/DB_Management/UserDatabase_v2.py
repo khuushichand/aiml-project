@@ -974,19 +974,19 @@ class UserDatabase:
 
         if self.backend.backend_type == BackendType.POSTGRESQL:
             role_sql = (
-                "INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?) "
+                "INSERT INTO roles (name, description, is_system) VALUES (%s, %s, %s) "
                 "ON CONFLICT (name) DO NOTHING"
             )
             perm_sql = (
-                "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?) "
+                "INSERT INTO permissions (name, description, category) VALUES (%s, %s, %s) "
                 "ON CONFLICT (name) DO NOTHING"
             )
             rp_sql = (
-                "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?) "
+                "INSERT INTO role_permissions (role_id, permission_id) VALUES (%s, %s) "
                 "ON CONFLICT DO NOTHING"
             )
-            sel_role_id = "SELECT id FROM roles WHERE name = ?"
-            sel_perm_id = "SELECT id FROM permissions WHERE name = ?"
+            sel_role_id = "SELECT id FROM roles WHERE name = %s"
+            sel_perm_id = "SELECT id FROM permissions WHERE name = %s"
         else:
             role_sql = "INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)"
             perm_sql = "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)"

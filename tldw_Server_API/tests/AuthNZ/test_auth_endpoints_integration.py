@@ -22,7 +22,7 @@ from tldw_Server_API.app.main import app
 
 
 @pytest.fixture(autouse=True)
-def _isolate_app_state_per_test(monkeypatch):
+def _isolate_app_state_per_test(monkeypatch, request):
     """Ensure clean app state per test and disable CSRF/rate limiter.
 
     - Sets TEST_MODE/TESTING env vars so main.py skips global rate limiter.
@@ -50,39 +50,50 @@ def _isolate_app_state_per_test(monkeypatch):
     except Exception:
         pass
 
-    # Reload app.main under the new environment and rebind global `app`
+    global app  # type: ignore
+
+    _should_reload = not getattr(request.node, "_tldw_app_reloaded", False)
+
+    # Ensure overrides are cleared before the test runs regardless of reload
     try:
-        import tldw_Server_API.app.main as _main
-        reloaded = importlib.reload(_main)
-        # Rebind the module-level app reference for this test module
-        global app  # type: ignore
-        app = reloaded.app
-        # Clear any leftover overrides just in case
         app.dependency_overrides.clear()
-        # Remove non-essential middlewares, including CSRF, for stability
-        try:
-            from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware as _HTTPMM
-            from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware as _ULM
-            from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware as _LLMB
-            from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware as _SHM
-            from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware as _RID
-            from tldw_Server_API.app.core.AuthNZ.csrf_protection import CSRFProtectionMiddleware as _CSRF
-            kept = []
-            for m in getattr(app, 'user_middleware', []):
-                if getattr(m, 'cls', None) in (_HTTPMM, _ULM, _LLMB, _SHM, _RID, _CSRF):
-                    continue
-                kept.append(m)
-            if len(kept) != len(getattr(app, 'user_middleware', [])):
-                app.user_middleware = kept
-                app.middleware_stack = app.build_middleware_stack()
-        except Exception:
-            pass
     except Exception:
-        # If reload fails for any reason, at least clear overrides on existing app
+        pass
+
+    if _should_reload:
+        # Reload app.main under the new environment and rebind global `app`
         try:
+            import tldw_Server_API.app.main as _main
+            reloaded = importlib.reload(_main)
+            # Rebind the module-level app reference for this test module
+            app = reloaded.app
+            # Clear any leftover overrides just in case
             app.dependency_overrides.clear()
+            # Remove non-essential middlewares, including CSRF, for stability
+            try:
+                from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware as _HTTPMM
+                from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware as _ULM
+                from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware as _LLMB
+                from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware as _SHM
+                from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware as _RID
+                from tldw_Server_API.app.core.AuthNZ.csrf_protection import CSRFProtectionMiddleware as _CSRF
+                kept = []
+                for m in getattr(app, 'user_middleware', []):
+                    if getattr(m, 'cls', None) in (_HTTPMM, _ULM, _LLMB, _SHM, _RID, _CSRF):
+                        continue
+                    kept.append(m)
+                if len(kept) != len(getattr(app, 'user_middleware', [])):
+                    app.user_middleware = kept
+                    app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
+            setattr(request.node, "_tldw_app_reloaded", True)
         except Exception:
-            pass
+            # If reload fails for any reason, at least clear overrides on existing app
+            try:
+                app.dependency_overrides.clear()
+            except Exception:
+                pass
 
     yield
 

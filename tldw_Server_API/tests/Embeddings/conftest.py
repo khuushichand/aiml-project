@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def disable_heavy_startup(monkeypatch):
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
+def disable_heavy_startup():
+    """Deprecated no-op fixture retained for backward compatibility."""
     yield
 
 

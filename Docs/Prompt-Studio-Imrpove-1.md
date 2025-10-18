@@ -91,7 +91,7 @@ Next
 - Enable PG path in CI to run PG-only tests (`test_pg_advisory_locks.py`, idempotency scoped lookup for PG)
 
 ### Test Results (local)
-- Environment: `DISABLE_HEAVY_STARTUP=1`, `TEST_MODE=true`, `SKIP_PROMPT_STUDIO_FTS=true`
+- Environment: `TEST_MODE=true`, `SKIP_PROMPT_STUDIO_FTS=true`
 - Unit: `tldw_Server_API/tests/prompt_studio/unit` — all tests passed (some skipped), no failures observed
 - Integration (SQLite):
   - Status endpoint: pass (`test_status_endpoint.py`)
@@ -102,7 +102,6 @@ Next
 **Goal**: Reduce startup/test overhead and ensure credible CI coverage.
 
 **Deliverables**
-- Trim heavy app startup for Prompt Studio tests (keep prod‑like behavior via env gates)
 - Reuse DB/session scope where safe to cut migrations churn
 - Run Prompt Studio integration suites (sqlite+pg) in CI without backend mixing
 
@@ -116,7 +115,7 @@ Next
 - `TLDW_PS_BACKEND=sqlite|postgres` — choose a single backend for heavy tests
 - `TLDW_TEST_POSTGRES_REQUIRED=1` — fail fast if PG probe fails
 - `TLDW_PS_SQLITE_WAL=1` — opt‑in WAL for sqlite per‑test DBs
-- `DISABLE_HEAVY_STARTUP=1` or `TEST_MODE=true` — skip unrelated heavy modules in tests
+- `TEST_MODE=true` — enable test-friendly behavior across modules
 - `TLDW_PS_JOB_LEASE_SECONDS` — processing job lease window (default 60)
 - `TLDW_PS_HEARTBEAT_SECONDS` — lease heartbeat interval override
 

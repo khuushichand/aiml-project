@@ -41,7 +41,9 @@ async def _insert_usage_rows_sqlite():
             status INTEGER,
             latency_ms INTEGER,
             bytes INTEGER,
-            meta TEXT
+            bytes_in INTEGER,
+            meta TEXT,
+            request_id TEXT
         )
         """
     )
@@ -53,32 +55,45 @@ async def _insert_usage_rows_sqlite():
             requests INTEGER DEFAULT 0,
             errors INTEGER DEFAULT 0,
             bytes_total INTEGER DEFAULT 0,
+            bytes_in_total INTEGER DEFAULT 0,
             latency_avg_ms REAL,
             PRIMARY KEY (user_id, day)
         )
         """
     )
+    # Backfill legacy tables that may have been created before bytes_in fields existed.
+    usage_log_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(usage_log)")}
+    if "bytes_in" not in usage_log_cols:
+        await pool.execute("ALTER TABLE usage_log ADD COLUMN bytes_in INTEGER")
+    if "request_id" not in usage_log_cols:
+        await pool.execute("ALTER TABLE usage_log ADD COLUMN request_id TEXT")
+
+    usage_daily_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(usage_daily)")}
+    if "bytes_in_total" not in usage_daily_cols:
+        await pool.execute("ALTER TABLE usage_daily ADD COLUMN bytes_in_total INTEGER DEFAULT 0")
 
     # Insert a few rows for today (ts default CURRENT_TIMESTAMP)
     # Use SQLite parameter placeholders
     await pool.execute(
-        "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, meta) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, bytes_in, meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         int(user_id),
         None,
         "/api/v1/chat/completions",
         200,
         50,
         100,
+        25,
         None,
     )
     await pool.execute(
-        "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, meta) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, bytes_in, meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         int(user_id),
         None,
         "/api/v1/embeddings",
         500,
         150,
         300,
+        40,
         None,
     )
     return int(user_id)

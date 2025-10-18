@@ -5,7 +5,6 @@
 import base64
 import secrets
 import json
-import qrcode
 from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, Dict, Any
@@ -13,6 +12,16 @@ from typing import Optional, List, Tuple, Dict, Any
 # 3rd-party imports
 import pyotp
 from loguru import logger
+
+try:
+    import qrcode
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    qrcode = None  # type: ignore[assignment]
+    _FALLBACK_QR_PNG = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+    )
+else:
+    _FALLBACK_QR_PNG = None
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
@@ -117,6 +126,13 @@ class MFAService:
         Returns:
             PNG image bytes
         """
+        if qrcode is None:  # pragma: no cover - optional dependency path
+            logger.warning(
+                "qrcode library unavailable; returning fallback placeholder QR image. "
+                "Install the 'qrcode' extra for generated QR codes."
+            )
+            return _FALLBACK_QR_PNG or b""
+        
         qr = qrcode.QRCode(
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,

@@ -8,7 +8,6 @@ import os as _os
 
 # Minimize startup side-effects for tests
 _os.environ.setdefault("TEST_MODE", "true")
-_os.environ.setdefault("DISABLE_HEAVY_STARTUP", "1")
 _os.environ.setdefault("ENABLE_TRACING", "false")
 _os.environ.setdefault("OTEL_METRICS_EXPORTER", "console")
 from typing import Dict, Any
@@ -74,4 +73,3 @@ def test_deep_argument_sanitization_blocks_nested_patterns():
         asyncio.get_event_loop().run_until_complete(
             mod.execute_tool("echo_sanitize", {"message": "ok", "nested": {"bad": "/* injected */"}})
         )
-

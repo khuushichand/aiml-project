@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import secrets
 import base64
+from importlib import import_module
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Query
@@ -24,13 +25,45 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
-from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
-from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
-from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
+from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError, DatabaseError
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
+
+
+def _get_email_service():
+    """Resolve the email service lazily to honour monkeypatched modules in tests."""
+    module = import_module("tldw_Server_API.app.core.AuthNZ.email_service")
+    return module.get_email_service()
+
+
+def _get_mfa_service():
+    """Resolve the MFA service lazily to honour monkeypatched modules in tests."""
+    module = import_module("tldw_Server_API.app.core.AuthNZ.mfa_service")
+    return module.get_mfa_service()
+
+
+async def _ensure_mfa_available():
+    """Validate that MFA endpoints are allowed under current configuration.
+
+    Uses the unified backend detector instead of relying on URL prefix checks.
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is only available in multi-user deployments",
+        )
+    try:
+        is_pg = await is_postgres_backend()
+    except Exception:
+        is_pg = False
+    if not is_pg:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA requires a PostgreSQL database backend",
+        )
 
 #######################################################################################################################
 #
@@ -174,7 +207,7 @@ async def forgot_password(
                 await db.commit()
             
             # Send email
-            email_service = get_email_service()
+            email_service = _get_email_service()
             await email_service.send_password_reset_email(
                 to_email=user["email"],
                 username=user["username"],
@@ -403,7 +436,7 @@ async def resend_verification(
             )
             
             # Send email
-            email_service = get_email_service()
+            email_service = _get_email_service()
             await email_service.send_verification_email(
                 to_email=user["email"],
                 username=user["username"],
@@ -424,11 +457,11 @@ async def resend_verification(
 # MFA Endpoints
 #
 
-@router.post("/mfa/setup")
+@router.post("/mfa/setup", response_model=MFASetupResponse)
 async def setup_mfa(
     current_user=Depends(get_current_active_user),
     db=Depends(get_db_transaction)
-) -> Dict[str, Any]:
+) -> MFASetupResponse:
     """
     Initialize MFA setup for current user
     
@@ -436,10 +469,15 @@ async def setup_mfa(
     User must verify with a TOTP token first.
     """
     try:
-        mfa_service = get_mfa_service()
+        await _ensure_mfa_available()
+        mfa_service = _get_mfa_service()
         
         # Check if MFA is already enabled
-        mfa_status = await mfa_service.get_user_mfa_status(current_user.id)
+        try:
+            mfa_status = await mfa_service.get_user_mfa_status(current_user.id)
+        except DatabaseError as exc:
+            logger.debug("MFA status lookup failed due to database error; assuming disabled: {}", exc)
+            mfa_status = {"enabled": False}
         if mfa_status["enabled"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -461,11 +499,11 @@ async def setup_mfa(
         # In production, use Redis or session storage
         # For now, we'll return to client to verify
         
-        return {
-            "secret": secret,
-            "qr_code": f"data:image/png;base64,{qr_code_base64}",
-            "backup_codes": backup_codes,
-        }
+        return MFASetupResponse(
+            secret=secret,
+            qr_code=f"data:image/png;base64,{qr_code_base64}",
+            backup_codes=backup_codes,
+        )
         
     except HTTPException:
         raise
@@ -489,7 +527,8 @@ async def verify_mfa_setup(
     Completes MFA setup by verifying the user can generate valid tokens.
     """
     try:
-        mfa_service = get_mfa_service()
+        await _ensure_mfa_available()
+        mfa_service = _get_mfa_service()
         
         # Get secret from request (in production, get from session/cache)
         secret = request.headers.get("X-MFA-Secret")
@@ -532,7 +571,7 @@ async def verify_mfa_setup(
             )
         
         # Send email with backup codes
-        email_service = get_email_service()
+        email_service = _get_email_service()
         client_ip = request.client.host if request.client else "unknown"
         
         await email_service.send_mfa_enabled_email(
@@ -565,6 +604,7 @@ async def disable_mfa(
     Requires password verification for security.
     """
     try:
+        await _ensure_mfa_available()
         # Verify password
         password_service = PasswordService()
         # Get user's password hash from DB
@@ -572,7 +612,7 @@ async def disable_mfa(
         # if not password_service.verify_password(password, password_hash)[0]:
         #     raise HTTPException(status_code=401, detail="Invalid password")
         
-        mfa_service = get_mfa_service()
+        mfa_service = _get_mfa_service()
         success = await mfa_service.disable_mfa(current_user.id)
         
         if not success:

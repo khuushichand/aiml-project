@@ -27,9 +27,10 @@ def test_chat_with_custom_openai_mock(browser):
     mock_port = _find_free_port()
     mock_proc = subprocess.Popen(
         ["python", str(repo_root / 'mock_openai_server' / 'run_server.py'), "--port", str(mock_port)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(repo_root / 'mock_openai_server')
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=str(repo_root / 'mock_openai_server'),
+        start_new_session=True,
     )
 
     # Wait briefly for mock server
@@ -65,9 +66,10 @@ def test_chat_with_custom_openai_mock(browser):
                 "--port", str(port), "--log-level", "warning"
             ],
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(repo_root)
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=str(repo_root),
+            start_new_session=True,
         )
 
         base = f"http://127.0.0.1:{port}"
@@ -102,11 +104,20 @@ def test_chat_with_custom_openai_mock(browser):
             config_path.write_text(backup_path.read_text(encoding='utf-8'), encoding='utf-8')
             backup_path.unlink(missing_ok=True)
         # Stop servers
+        import subprocess as _sub
         try:
             server_proc.terminate()
+            server_proc.wait(timeout=5)
         except Exception:
-            pass
+            try:
+                server_proc.kill()
+            except Exception:
+                pass
         try:
             mock_proc.terminate()
+            mock_proc.wait(timeout=5)
         except Exception:
-            pass
+            try:
+                mock_proc.kill()
+            except Exception:
+                pass

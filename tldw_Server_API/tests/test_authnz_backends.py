@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import argparse
 import json
+from urllib.parse import urlparse, parse_qs
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -50,15 +51,32 @@ class TestConfig:
     def get_postgresql_config() -> DatabaseConfig:
         """Get PostgreSQL test configuration"""
         # Use environment variables or defaults
-        return DatabaseConfig(
+        dsn = (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+        if not dsn:
+            dsn = "postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_test"
+
+        parsed = urlparse(dsn)
+        config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
-            connection_string=os.getenv(
-                "TEST_DATABASE_URL",
-                "postgresql://postgres:postgres@localhost:5432/tldw_test"
-            ),
+            connection_string=dsn,
             pool_size=5,
             echo=os.getenv("TLDW_DB_ECHO", "false").lower() == "true"
         )
+
+        if parsed.scheme.startswith("postgres"):
+            config.pg_host = parsed.hostname or "localhost"
+            try:
+                config.pg_port = int(parsed.port or 5432)
+            except Exception:
+                config.pg_port = 5432
+            config.pg_database = (parsed.path or "/").lstrip("/") or None
+            config.pg_user = parsed.username or None
+            config.pg_password = parsed.password or None
+            query_params = parse_qs(parsed.query or "")
+            if "sslmode" in query_params and query_params["sslmode"]:
+                config.pg_sslmode = query_params["sslmode"][0]
+
+        return config
 
 ########################################################################################################################
 # Test Suite

@@ -58,7 +58,14 @@ def test_pg_concurrency_skip_locked_stress():
     # Run 4 processes concurrently acquiring jobs
     with ProcessPoolExecutor(max_workers=4) as ex:
         futures = [ex.submit(_worker_loop, f"P{i}") for i in range(4)]
-        results = [f.result() for f in futures]
+        try:
+            results = [f.result() for f in futures]
+        except KeyboardInterrupt:
+            # Cancel any pending futures and request fast shutdown
+            for f in futures:
+                f.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
 
     flat = [jid for sub in results for jid in sub]
     # there may be duplicates if a worker reacquires after lease expiry; enforce uniqueness expectation
@@ -85,7 +92,13 @@ def test_pg_concurrency_skip_locked_stress():
 
         with ProcessPoolExecutor(max_workers=4) as ex:
             futures2 = [ex.submit(_worker_loop, f"S{i}", 50, True) for i in range(4)]
-            results2 = [f.result() for f in futures2]
+            try:
+                results2 = [f.result() for f in futures2]
+            except KeyboardInterrupt:
+                for f in futures2:
+                    f.cancel()
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise
 
         flat2 = [jid for sub in results2 for jid in sub]
         unique2 = set(flat2)

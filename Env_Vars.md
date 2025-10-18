@@ -23,11 +23,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 ## Testing & CI Controls
 - `TEST_MODE`: Enables test-friendly behaviors (`true|1|yes`). Used across modules to:
   - Relax or bypass certain rate limiter keys (e.g., client IP) to avoid false positives in tests.
-  - Skip heavy startup hooks when combined with `DISABLE_HEAVY_STARTUP` (see below).
   - Prefer offline/test-safe code paths (e.g., RAG/Chunking avoid network downloads; health endpoints may expose additional diagnostics in tests).
-- `DISABLE_HEAVY_STARTUP`: Skip unrelated heavy startup work (`1|true|yes`).
-  - Skips MCP server, TTS initialization, chat workers, and other background loops in tests/CI.
-  - Also mentioned in README with additional context.
 - `DISABLE_NLTK_DOWNLOADS`: Prevent NLTK dataset downloads (`1|true|yes`).
   - RAG query features and Chunking modules will not attempt to download `punkt`, `wordnet`, or `stopwords` when this is set; they degrade gracefully to local fallbacks.
 - `ALLOW_NLTK_DOWNLOADS`: Force-enable NLTK downloads even when running tests (`1|true|yes`).

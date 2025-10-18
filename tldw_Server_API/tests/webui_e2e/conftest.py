@@ -72,6 +72,7 @@ def server_url():
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
     logger = _ProcLogger(proc)
 

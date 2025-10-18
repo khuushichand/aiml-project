@@ -5,7 +5,6 @@ import pytest
 def _get_client(monkeypatch):
     # Ensure test-friendly startup
     monkeypatch.setenv("TEST_MODE", "true")
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
     from tldw_Server_API.app.main import app
     return TestClient(app)
 

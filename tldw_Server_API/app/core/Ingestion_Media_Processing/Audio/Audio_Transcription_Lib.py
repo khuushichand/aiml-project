@@ -992,7 +992,7 @@ class LiveAudioStreamer:
             stream_callback=self.audio_callback
         )
         self.stream.start_stream()
-        self.listener_thread = threading.Thread(target=self.listen_loop)
+        self.listener_thread = threading.Thread(target=self.listen_loop, daemon=True)
         self.listener_thread.start()
 
     def stop(self):

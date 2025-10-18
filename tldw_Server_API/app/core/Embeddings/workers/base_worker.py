@@ -133,10 +133,18 @@ class BaseWorker(ABC):
     async def _redis_connection(self):
         """Context manager for Redis connection"""
         try:
-            self.redis_client = await redis.from_url(
+            # Support both awaitable and non-awaitable redis.asyncio.from_url across versions/tests
+            conn = redis.from_url(
                 self.config.redis_url,
                 decode_responses=True
             )
+            try:
+                import inspect as _inspect
+                if _inspect.isawaitable(conn):
+                    conn = await conn
+            except Exception:
+                pass
+            self.redis_client = conn
             yield self.redis_client
         finally:
             if self.redis_client:

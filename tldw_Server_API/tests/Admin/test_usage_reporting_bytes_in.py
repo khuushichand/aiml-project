@@ -52,6 +52,12 @@ async def _prepare_tables_and_seed_bytes_in():
         )
         """
     )
+    usage_log_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(usage_log)")}
+    if "bytes_in" not in usage_log_cols:
+        await pool.execute("ALTER TABLE usage_log ADD COLUMN bytes_in INTEGER")
+    if "request_id" not in usage_log_cols:
+        await pool.execute("ALTER TABLE usage_log ADD COLUMN request_id TEXT")
+
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS usage_daily (
@@ -66,6 +72,9 @@ async def _prepare_tables_and_seed_bytes_in():
         )
         """
     )
+    usage_daily_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(usage_daily)")}
+    if "bytes_in_total" not in usage_daily_cols:
+        await pool.execute("ALTER TABLE usage_daily ADD COLUMN bytes_in_total INTEGER DEFAULT 0")
 
     # Seed usage rows for today for each user with distinct inbound/outbound bytes
     await pool.execute(
@@ -127,4 +136,3 @@ async def test_usage_bytes_in_aggregation_and_exports(monkeypatch):
             # We still assert the endpoint is functional.
             first_user_id = int(top_items[0]["user_id"])
             assert first_user_id in {u1, u2}
-

@@ -7,7 +7,6 @@ import pytest
 import os as _os
 
 _os.environ.setdefault("TEST_MODE", "true")
-_os.environ.setdefault("DISABLE_HEAVY_STARTUP", "1")
 _os.environ.setdefault("ENABLE_TRACING", "false")
 _os.environ.setdefault("OTEL_METRICS_EXPORTER", "console")
 _os.environ.setdefault("MCP_WS_AUTH_REQUIRED", "false")
@@ -34,4 +33,3 @@ def test_http_batch_initialize_and_ping():
     for item in data:
         assert item.get("jsonrpc") == "2.0"
         assert item.get("error") is None
-

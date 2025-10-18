@@ -1,12 +1,16 @@
 import os
 import tempfile
 import importlib
+import asyncio
 from uuid import uuid4
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
 
 
 def _fresh_client() -> TestClient:
@@ -20,14 +24,28 @@ def _fresh_client() -> TestClient:
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path}"
+    # Ensure test-mode shortcuts are disabled for this smoke test
+    os.environ["TEST_MODE"] = "0"
+    os.environ["TLDW_TEST_MODE"] = "0"
 
     # Reset singletons so the app picks up new settings/DB
     reset_settings()
     try:
-        import asyncio
         asyncio.run(reset_db_pool())
     except Exception:
         pass
+
+    # Ensure schema migrations and RBAC seed exist on the fresh database
+    ensure_authnz_tables(Path(tmp_path))
+    try:
+        asyncio.run(ensure_single_user_rbac_seed_if_needed())
+    except RuntimeError:
+        # Fallback if an event loop is already running in this context
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(ensure_single_user_rbac_seed_if_needed())
+        finally:
+            loop.close()
 
     from tldw_Server_API.app import main as app_main
     importlib.reload(app_main)

@@ -11,7 +11,6 @@ from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
 
 def _setup_env():
     os.environ["TEST_MODE"] = "true"
-    os.environ["DISABLE_HEAVY_STARTUP"] = "1"
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"
     os.environ["SINGLE_USER_FIXED_ID"] = "1"

@@ -44,7 +44,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 import redis.asyncio as aioredis
-import json
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -68,7 +67,14 @@ EMBEDDING_QUEUE = os.getenv("EMBEDDING_LIVE_QUEUE", "embeddings:embedding")
 
 async def _redis_client() -> aioredis.Redis:
     url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    return await aioredis.from_url(url, decode_responses=True)
+    conn = aioredis.from_url(url, decode_responses=True)
+    try:
+        import inspect as _inspect
+        if _inspect.isawaitable(conn):
+            conn = await conn
+    except Exception:
+        pass
+    return conn
 
 
 def _is_test_env() -> bool:

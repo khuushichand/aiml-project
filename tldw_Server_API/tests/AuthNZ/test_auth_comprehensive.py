@@ -29,12 +29,26 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import get_unified_aud
 #
 # Test Fixtures
 
-# Test database configuration
-TEST_DB_NAME = "tldw_test"
-TEST_DB_HOST = os.getenv("TEST_DB_HOST", "localhost")
-TEST_DB_PORT = int(os.getenv("TEST_DB_PORT", "5432"))
-TEST_DB_USER = os.getenv("TEST_DB_USER", "tldw_user")
-TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
+# Test database configuration: resolve at call time to pick up env changes by fixtures
+def _db_params():
+    dsn = (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+    if dsn:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(dsn)
+            if p.scheme.startswith("postgres"):
+                host = p.hostname or "localhost"
+                port = int(p.port or 5432)
+                user = p.username or "tldw_user"
+                password = p.password or "TestPassword123!"
+                return host, port, user, password
+        except Exception:
+            pass
+    host = os.getenv("TEST_DB_HOST", "localhost")
+    port = int(os.getenv("TEST_DB_PORT", "5432"))
+    user = os.getenv("TEST_DB_USER", "tldw_user")
+    password = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
+    return host, port, user, password
 
 # Note: We now use isolated_test_environment from conftest.py for true DB isolation
 # Each test gets its own unique database that is created and destroyed per test
@@ -49,13 +63,8 @@ async def test_user_data(isolated_test_environment):
     client, db_name = isolated_test_environment
     
     # Connect to the unique test database
-    conn = await asyncpg.connect(
-        host=TEST_DB_HOST,
-        port=TEST_DB_PORT,
-        user=TEST_DB_USER,
-        password=TEST_DB_PASSWORD,
-        database=db_name
-    )
+    host, port, user, pwd = _db_params()
+    conn = await asyncpg.connect(host=host, port=port, user=user, password=pwd, database=db_name)
     
     try:
         password_service = PasswordService()
@@ -94,13 +103,8 @@ async def admin_user_data(isolated_test_environment):
     client, db_name = isolated_test_environment
     
     # Connect to the unique test database
-    conn = await asyncpg.connect(
-        host=TEST_DB_HOST,
-        port=TEST_DB_PORT,
-        user=TEST_DB_USER,
-        password=TEST_DB_PASSWORD,
-        database=db_name
-    )
+    host, port, user, pwd = _db_params()
+    conn = await asyncpg.connect(host=host, port=port, user=user, password=pwd, database=db_name)
     
     try:
         password_service = PasswordService()
@@ -611,13 +615,8 @@ class TestPerformance:
         client, db_name = isolated_test_environment
         
         # Connect to the unique test database
-        conn = await asyncpg.connect(
-            host=TEST_DB_HOST,
-            port=TEST_DB_PORT,
-            user=TEST_DB_USER,
-            password=TEST_DB_PASSWORD,
-            database=db_name
-        )
+        host, port, user, pwd = _db_params()
+        conn = await asyncpg.connect(host=host, port=port, user=user, password=pwd, database=db_name)
         
         try:
             # Create expired session (more than 1 day old to trigger cleanup)
@@ -640,13 +639,8 @@ class TestPerformance:
             await conn.close()
             
             # Run cleanup directly with a new connection
-            cleanup_conn = await asyncpg.connect(
-                host=TEST_DB_HOST,
-                port=TEST_DB_PORT,
-                user=TEST_DB_USER,
-                password=TEST_DB_PASSWORD,
-                database=db_name
-            )
+            h2, p2, u2, pw2 = _db_params()
+            cleanup_conn = await asyncpg.connect(host=h2, port=p2, user=u2, password=pw2, database=db_name)
             
             try:
                 # Delete expired sessions
@@ -665,13 +659,8 @@ class TestPerformance:
                 await cleanup_conn.close()
             
             # Check session was deleted
-            check_conn = await asyncpg.connect(
-                host=TEST_DB_HOST,
-                port=TEST_DB_PORT,
-                user=TEST_DB_USER,
-                password=TEST_DB_PASSWORD,
-                database=db_name
-            )
+            h3, p3, u3, pw3 = _db_params()
+            check_conn = await asyncpg.connect(host=h3, port=p3, user=u3, password=pw3, database=db_name)
             try:
                 count = await check_conn.fetchval(
                     "SELECT COUNT(*) FROM sessions WHERE token_hash = $1",

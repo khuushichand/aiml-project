@@ -19,11 +19,12 @@ from requests import RequestException
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
-from App_Function_Libraries.Summarization.Summarization_General_Lib import summarize
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
 # Local Imports
-from App_Function_Libraries.Utils.Utils import loaded_config_data, logging
-from App_Function_Libraries.Web_Scraping.Article_Extractor_Lib import scrape_article
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
@@ -439,7 +440,7 @@ async def search_result_relevance(
 
                         # Generate summary using the summarize function
                         logging.info(f"Summarizing relevant result: ID={result_id}")
-                        summary = summarize(
+                        summary = analyze(
                             input_data=scraped_content['content'],
                             custom_prompt_arg=summary_prompt,
                             api_name=api_endpoint,
@@ -651,7 +652,7 @@ def aggregate_results(
             </chunk>
             """
         try:
-            chunk_summary = summarize(
+            chunk_summary = analyze(
                 input_data=info["text"],
                 custom_prompt_arg=chunk_prompt,
                 api_name=api_endpoint,

@@ -61,7 +61,7 @@ Goal: reuse Character_Chat facilities and avoid duplicating storage logic.
 ### Phase 5 – Narrow Imports & Deprecation
 Goal: encourage consumers to use focused modules.
 - [x] Annotate `Chat_Functions.py` with deprecation notes and `__all__` that forwards to the new modules.
-- [ ] Incrementally update internal imports (endpoints, services, tests) to reference the new modules directly. *(Prompt Studio, Workflow runner, and Web Search now target `chat_orchestrator`; remaining watchlist: integration tests intentionally patch the shim until compatibility window closes.)*
+- [x] Incrementally update internal imports (endpoints, services, tests) to reference the new modules directly.
 - [x] Once coverage confirms stability, trim `Chat_Functions.__all__` to only the compatibility surface.
 
 ## Testing Strategy

@@ -501,6 +501,8 @@ tldw_server is built as a modern, scalable API service:
 - pgvector (optional): production-grade Postgres extension with HNSW/IVFFLAT support, pooling, and JSONB metadata filters.
   - Configure in `Config_Files/config.txt` under `[RAG]` with `vector_store_type=pgvector` and `pgvector_*` keys (host, port, user, password, database, sslmode, pool sizes, hnsw_ef_search).
   - Admin endpoints (WebUI and REST) expose index info, ef_search (pg only), and rebuild operations.
+  - Deployment guide: see `Docs/Published/Deployment/Embeddings-Deployment-Guide.md`.
+  - Runtime notes and env: see `Env_Vars.md` → “Vector Store: pgvector”.
 - **API Design**: RESTful endpoints following OpenAPI 3.0
 - **Authentication**: JWT tokens with role-based access control
 - **Background Jobs**: Async task processing for long operations
@@ -1091,7 +1093,6 @@ Test/CI (Prompt Studio)
 - `TLDW_PS_OPT_COUNT` — override concurrent optimizations (default 3; stress 8).
 - `TLDW_TEST_POSTGRES_REQUIRED` = `1` — fail fast if Postgres probe fails; otherwise Postgres tests are skipped when unreachable.
 - `TLDW_PS_SQLITE_WAL` = `1` — opt-in to WAL for per-test SQLite DBs; default is DELETE mode to reduce CI file churn.
-- `DISABLE_HEAVY_STARTUP` = `1` — skip unrelated heavy app startup (MCP, TTS, chat workers, background loops) during tests; `TEST_MODE=true` also enables this.
 - `TLDW_PS_JOB_LEASE_SECONDS` — lease window (seconds) for Prompt Studio job processing; expired processing jobs are reclaimed on the next acquire (default: 60).
 - `TLDW_PS_HEARTBEAT_SECONDS` — heartbeat interval (seconds) for renewing job leases (default: half of lease window, up to 30).
 
@@ -1169,17 +1170,19 @@ python -m pytest --cov=tldw_Server_API --cov-report=html
 Fast test (unit + integration only)
 ```bash
 # Skips e2e and slow suites by default; trims heavy startup
-TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integration"
+TEST_MODE=true python -m pytest -q -m "unit or integration"
 ```
 
 Strict fast test (avoid audio/LLM flakes)
 ```bash
 # Further exclude external/networked/audio-heavy bits for quick local sanity
-TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integration" -k "not nemo and not parakeet and not elevenlabs and not transcription and not audio and not postgres"
+TEST_MODE=true python -m pytest -q -m "unit or integration" -k "not nemo and not parakeet and not elevenlabs and not transcription and not audio and not postgres"
 ```
 
 ### Test Suite Toggles and CI Profile
 - Postgres-backed AuthNZ integration tests are skipped unless Postgres is reachable. Force run by setting `TLDW_TEST_POSTGRES_REQUIRED=1`.
+  - Tests now auto-detect a DSN from `TEST_DATABASE_URL` or fall back to `DATABASE_URL` when it starts with `postgresql://`.
+  - Example: `export TEST_DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_test`
 - MCP Unified tests are disabled by default. Enable with `RUN_MCP_TESTS=1`.
 - Mock OpenAI server tests are disabled by default. Enable with `RUN_MOCK_OPENAI=1`.
 - WebUI end-to-end tests are skipped by default. Enable with `-m e2e`.
@@ -1187,18 +1190,17 @@ TEST_MODE=true DISABLE_HEAVY_STARTUP=1 python -m pytest -q -m "unit or integrati
 
 Recommended CI env for broad coverage without heavy services:
 ```bash
-TEST_MODE=true DISABLE_HEAVY_STARTUP=1 DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true \
+TEST_MODE=true DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true \
 RUN_MCP_TESTS=0 RUN_MOCK_OPENAI=0 python -m pytest -q
 ```
 Use targeted jobs to run MCP or Postgres suites by enabling the corresponding flags and ensuring dependencies are available.
 
 Suggested CI job profiles:
 - Baseline (fast, wide coverage):
-  - `TEST_MODE=true DISABLE_HEAVY_STARTUP=1 DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true`
+  - `TEST_MODE=true DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true`
   - `RUN_MCP_TESTS=0 RUN_MOCK_OPENAI=0`
 - MCP Unified (integration):
   - `RUN_MCP_TESTS=1`
-  - Do not set `DISABLE_HEAVY_STARTUP` for this job (MCP server initialization required)
 - AuthNZ Postgres (integration):
   - `AUTH_MODE=multi_user` and `DATABASE_URL=postgresql://...`
   - `TLDW_TEST_POSTGRES_REQUIRED=1` to fail-fast if Postgres is unreachable
@@ -1235,7 +1237,7 @@ Notes
 #### Prompt Studio tests
 - Heavy optimization suite is marked `slow` and runs against a single backend per run.
 - Select backend with `TLDW_PS_BACKEND=sqlite|postgres` (default sqlite).
-- Useful env vars: `TLDW_PS_STRESS=1`, `TLDW_PS_TC_COUNT`, `TLDW_PS_ITERATIONS`, `TLDW_PS_OPT_COUNT`, `TLDW_TEST_POSTGRES_REQUIRED=1`, `TLDW_PS_SQLITE_WAL=1`, `DISABLE_HEAVY_STARTUP=1`.
+- Useful env vars: `TLDW_PS_STRESS=1`, `TLDW_PS_TC_COUNT`, `TLDW_PS_ITERATIONS`, `TLDW_PS_OPT_COUNT`, `TLDW_TEST_POSTGRES_REQUIRED=1`, `TLDW_PS_SQLITE_WAL=1`.
 
 ### Prompt Studio Metrics (quick reference)
 - Gauges/counters: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.backlog{job_type}`, `prompt_studio.jobs.stale_processing`.

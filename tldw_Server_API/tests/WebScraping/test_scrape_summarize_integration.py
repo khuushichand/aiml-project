@@ -16,9 +16,9 @@ MOCK_ARTICLE = {
 
 @pytest.fixture
 def mock_scraping_functions():
-    with patch('App_Function_Libraries.Article_Summarization_Lib.scrape_and_summarize_multiple') as mock_multiple, \
-            patch('App_Function_Libraries.Article_Summarization_Lib.scrape_from_sitemap') as mock_sitemap, \
-            patch('App_Function_Libraries.Article_Summarization_Lib.scrape_by_url_level') as mock_url_level:
+    with patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_and_summarize_multiple') as mock_multiple, \
+            patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_from_sitemap') as mock_sitemap, \
+            patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_by_url_level') as mock_url_level:
         mock_multiple.return_value = [MOCK_ARTICLE]
         mock_sitemap.return_value = [MOCK_ARTICLE, MOCK_ARTICLE]
         mock_url_level.return_value = [MOCK_ARTICLE, MOCK_ARTICLE, MOCK_ARTICLE]
@@ -101,7 +101,7 @@ def mock_scraping_functions():
 #     assert "Unknown scraping method: Invalid Method" in result
 #
 #
-# @patch('App_Function_Libraries.Article_Summarization_Lib.scrape_by_url_level', side_effect=Exception("Test error"))
+# @patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_by_url_level', side_effect=Exception("Test error"))
 # def test_exception_handling(mock_scrape):
 #     result = scrape_and_summarize_wrapper(
 #         scrape_method="URL Level",

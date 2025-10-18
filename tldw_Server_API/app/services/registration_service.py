@@ -11,7 +11,6 @@ import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
-from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 #
 # 3rd-party imports
@@ -51,9 +50,6 @@ class RegistrationService:
         self.settings = settings or get_settings()
         self.db_pool = db_pool
         self.password_service = password_service or get_password_service()
-        
-        # Thread pool for directory operations
-        self.executor = ThreadPoolExecutor(max_workers=2)
         
         # Check if registration is enabled
         self.registration_enabled = self.settings.ENABLE_REGISTRATION
@@ -273,9 +269,7 @@ class RegistrationService:
                 await self._add_password_to_history(user_id, password_hash, conn)
                 
                 # Create user directories (before committing transaction)
-                loop = asyncio.get_event_loop()
-                directories_created = await loop.run_in_executor(
-                    self.executor,
+                directories_created = await asyncio.to_thread(
                     self._create_user_directories,
                     user_id
                 )
@@ -322,7 +316,7 @@ class RegistrationService:
         except Exception as e:
             # Rollback: Clean up directories if they were created
             if user_id and directories_created:
-                self._cleanup_user_directories(user_id)
+                await asyncio.to_thread(self._cleanup_user_directories, user_id)
             
             # Log the error
             try:
@@ -655,7 +649,7 @@ class RegistrationService:
     
     async def shutdown(self):
         """Shutdown the registration service"""
-        self.executor.shutdown(wait=False)
+        logger.info("RegistrationService shutdown complete (no dedicated executor)")
 
 
 #######################################################################################################################

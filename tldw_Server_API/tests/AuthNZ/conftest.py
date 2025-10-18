@@ -4,6 +4,8 @@ Provides PostgreSQL test database isolation with transaction rollback.
 """
 
 import os
+import shutil
+import subprocess
 import pytest
 import pytest_asyncio
 import asyncio
@@ -33,11 +35,38 @@ from tldw_Server_API.app.core.AuthNZ.token_blacklist import reset_token_blacklis
 from tldw_Server_API.app.core.AuthNZ.alerting import reset_security_alert_dispatcher
 
 # Test database configuration
-TEST_DB_NAME = "tldw_test"
-TEST_DB_HOST = os.getenv("TEST_DB_HOST", "localhost")
-TEST_DB_PORT = int(os.getenv("TEST_DB_PORT", "5432"))
-TEST_DB_USER = os.getenv("TEST_DB_USER", "tldw_user")
-TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
+# Allow a full Postgres DSN to configure tests easily
+_TEST_DSN = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
+_TEST_DSN = _TEST_DSN.strip()
+
+def _parse_pg_dsn(dsn: str):
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(dsn)
+        if not parsed.scheme.startswith("postgres"):
+            return None
+        host = parsed.hostname or "localhost"
+        port = int(parsed.port or 5432)
+        user = parsed.username or "tldw_user"
+        password = parsed.password or "TestPassword123!"
+        db = (parsed.path or "/tldw_test").lstrip("/") or "tldw_test"
+        return {
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password,
+            "db": db,
+        }
+    except Exception:
+        return None
+
+_parsed = _parse_pg_dsn(_TEST_DSN) if _TEST_DSN else None
+
+TEST_DB_NAME = (_parsed or {}).get("db") or os.getenv("TEST_DB_NAME", "tldw_test")
+TEST_DB_HOST = (_parsed or {}).get("host") or os.getenv("TEST_DB_HOST", "localhost")
+TEST_DB_PORT = int(((_parsed or {}).get("port")) or int(os.getenv("TEST_DB_PORT", "5432")))
+TEST_DB_USER = (_parsed or {}).get("user") or os.getenv("TEST_DB_USER", "tldw_user")
+TEST_DB_PASSWORD = (_parsed or {}).get("password") or os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
 
 # Import TestClient for isolated environment
 from fastapi.testclient import TestClient
@@ -64,6 +93,75 @@ class _StubAuditService:
 
 # Mark all tests in this package as integration tests (require PostgreSQL)
 pytestmark = pytest.mark.integration
+
+
+async def _can_connect_postgres(host: str, port: int, user: str, password: str, database: str = "postgres") -> bool:
+    try:
+        conn = await asyncpg.connect(host=host, port=port, user=user, password=password, database=database)
+        await conn.close()
+        return True
+    except Exception as e:
+        logger.debug(f"Postgres connectivity check failed: {e}")
+        return False
+
+
+async def _ensure_postgres_available(host: str, port: int, user: str, password: str, *, require_pg: bool, default_db: str = "postgres") -> bool:
+    """Try to connect; if not available and local, attempt to start docker, then retry.
+
+    Returns True if Postgres becomes reachable; otherwise False (caller may skip tests).
+    """
+    if await _can_connect_postgres(host, port, user, password, default_db):
+        return True
+
+    # Only attempt Docker on local hostnames
+    if str(host) not in {"localhost", "127.0.0.1", "::1"}:
+        return False
+
+    if os.getenv("TLDW_TEST_NO_DOCKER", "").lower() in ("1", "true", "yes"):
+        return False
+
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        logger.info("Docker not found in PATH; cannot auto-start Postgres for tests")
+        return False
+
+    image = os.getenv("TLDW_TEST_PG_IMAGE", "postgres:18")
+    container = os.getenv("TLDW_TEST_PG_CONTAINER_NAME", "tldw_postgres_test")
+
+    # Stop and remove an existing container with same name (best-effort)
+    try:
+        await asyncio.to_thread(subprocess.run, [docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    envs = [
+        "-e", f"POSTGRES_USER={user}",
+        "-e", f"POSTGRES_PASSWORD={password}",
+        # Create a default DB; per-test DBs will be created later as needed
+        "-e", f"POSTGRES_DB={default_db}",
+    ]
+    ports = ["-p", f"{port}:5432"]
+
+    run_cmd = [docker_bin, "run", "-d", "--name", container, *envs, *ports, image]
+    logger.info(f"Attempting to start Postgres test container: {' '.join(run_cmd)}")
+    try:
+        res = await asyncio.to_thread(subprocess.run, run_cmd, check=False, capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.warning(f"Docker run failed (code {res.returncode}): {res.stderr.strip()}")
+            # If container already running under same name, try to reuse without starting
+    except Exception as e:
+        logger.warning(f"Failed to start Docker Postgres: {e}")
+        return False
+
+    # Wait up to ~30 seconds for readiness, trying to connect
+    for _ in range(30):
+        if await _can_connect_postgres(host, port, user, password, default_db):
+            logger.info("Postgres became reachable after docker start")
+            return True
+        await asyncio.sleep(1)
+
+    logger.warning("Postgres did not become reachable after docker start attempts")
+    return False
 
 
 @pytest.fixture(scope="session")
@@ -205,19 +303,20 @@ async def isolated_test_environment(monkeypatch):
     
     # 2. Create the unique database (skip gracefully if Postgres is unavailable and not required)
     require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
-    try:
-        conn = await asyncpg.connect(
-            host=TEST_DB_HOST,
-            port=TEST_DB_PORT,
-            user=TEST_DB_USER,
-            password=TEST_DB_PASSWORD,
-            database="postgres"
-        )
-    except Exception as e:
+    # Ensure Postgres is reachable, optionally starting a local dockerized instance
+    ok = await _ensure_postgres_available(TEST_DB_HOST, TEST_DB_PORT, TEST_DB_USER, TEST_DB_PASSWORD, require_pg=require_pg, default_db="postgres")
+    if not ok:
         if not require_pg:
-            import pytest
-            pytest.skip(f"PostgreSQL not available ({e}); skipping AuthNZ integration tests. Set TLDW_TEST_POSTGRES_REQUIRED=1 to enforce.")
-        raise
+            import pytest as _pytest
+            _pytest.skip("PostgreSQL not available; attempted docker start; skipping AuthNZ integration tests. Set TLDW_TEST_POSTGRES_REQUIRED=1 to enforce.")
+        raise RuntimeError("PostgreSQL not available and docker start failed under TLDW_TEST_POSTGRES_REQUIRED=1")
+    conn = await asyncpg.connect(
+        host=TEST_DB_HOST,
+        port=TEST_DB_PORT,
+        user=TEST_DB_USER,
+        password=TEST_DB_PASSWORD,
+        database="postgres"
+    )
     
     try:
         # Drop if exists (cleanup from failed tests)
@@ -464,12 +563,12 @@ async def isolated_test_environment(monkeypatch):
 
 
 @pytest_asyncio.fixture
-async def setup_test_database():
+async def setup_test_database(monkeypatch):
     """Create and setup the test database for the test session."""
     # Ensure FastAPI + core settings pick Postgres for this test DB
     require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
     test_dsn = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
-    os.environ["DATABASE_URL"] = test_dsn
+    monkeypatch.setenv("DATABASE_URL", test_dsn)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
         from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
@@ -479,20 +578,21 @@ async def setup_test_database():
         await _reset_db_pool()
     except Exception:
         pass
-    # Connect to postgres database to create test database
-    try:
-        conn = await asyncpg.connect(
-            host=TEST_DB_HOST,
-            port=TEST_DB_PORT,
-            user=TEST_DB_USER,
-            password=TEST_DB_PASSWORD,
-            database="postgres"
-        )
-    except Exception as e:
+    # Ensure Postgres reachable before creating the session DB
+    ok = await _ensure_postgres_available(TEST_DB_HOST, TEST_DB_PORT, TEST_DB_USER, TEST_DB_PASSWORD, require_pg=require_pg, default_db="postgres")
+    if not ok:
         if not require_pg:
             import pytest as _pytest
-            _pytest.skip(f"PostgreSQL not available ({e}); skipping AuthNZ Postgres-backed tests. Set TLDW_TEST_POSTGRES_REQUIRED=1 to enforce.")
-        raise
+            _pytest.skip("PostgreSQL not available; attempted docker start; skipping AuthNZ Postgres-backed tests. Set TLDW_TEST_POSTGRES_REQUIRED=1 to enforce.")
+        raise RuntimeError("PostgreSQL not available and docker start failed under TLDW_TEST_POSTGRES_REQUIRED=1")
+    # Connect to postgres database to create test database
+    conn = await asyncpg.connect(
+        host=TEST_DB_HOST,
+        port=TEST_DB_PORT,
+        user=TEST_DB_USER,
+        password=TEST_DB_PASSWORD,
+        database="postgres"
+    )
     
     try:
         # Drop test database if it exists
@@ -622,11 +722,11 @@ async def setup_test_database():
 
     # Also run the AuthNZ module's Postgres bootstrap to ensure full schema parity
     # (sessions, registration_codes, RBAC, API keys, usage tables, etc.)
-    os.environ["AUTH_MODE"] = "multi_user"
-    os.environ["DATABASE_URL"] = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
-    os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only")
-    os.environ["RATE_LIMIT_ENABLED"] = "false"
-    os.environ["AUTHNZ_FORCE_REAL_SESSION_MANAGER"] = "1"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}")
+    monkeypatch.setenv("JWT_SECRET_KEY", os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only"))
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "1")
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import setup_database as _authnz_setup_db
         await _authnz_setup_db()

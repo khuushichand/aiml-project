@@ -106,7 +106,14 @@ async def main_async(args):
         return 2
 
     redis_url = args.redis or os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis = await aioredis.from_url(redis_url, decode_responses=True)
+    conn = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        import inspect as _inspect
+        if _inspect.isawaitable(conn):
+            conn = await conn
+    except Exception:
+        pass
+    redis = conn
     stop_ts = time.time() + args.duration
 
     prod = asyncio.create_task(_xadd_loop(redis, args.queue, args.rps, stop_ts))
@@ -137,4 +144,3 @@ def main():
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

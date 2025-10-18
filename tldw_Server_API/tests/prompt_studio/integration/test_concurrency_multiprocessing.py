@@ -96,10 +96,22 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backe
     with Manager() as manager:
         out_ids = manager.list()
         procs = [Process(target=_worker_acquire_loop, args=(spec, out_ids)) for _ in range(4)]
-        for p in procs:
-            p.start()
-        for p in procs:
-            p.join(timeout=10)
+        try:
+            for p in procs:
+                p.start()
+            for p in procs:
+                p.join(timeout=10)
+        except KeyboardInterrupt:
+            # On interrupt, terminate all child processes promptly
+            for p in procs:
+                if p.is_alive():
+                    p.terminate()
+            for p in procs:
+                try:
+                    p.join(2)
+                except Exception:
+                    pass
+            raise
         # Ensure processes are terminated if hanging
         for p in procs:
             if p.is_alive():
@@ -109,4 +121,3 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backe
         got = list(out_ids)
         assert len(got) == total, f"Expected {total} acquired jobs, got {len(got)} for backend {label}"
         assert len(set(got)) == total, "Duplicate job acquisitions detected across processes"
-

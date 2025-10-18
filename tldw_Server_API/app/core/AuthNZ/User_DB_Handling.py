@@ -308,16 +308,11 @@ async def get_request_user(
             return get_single_user_instance()
     except Exception:
         pass
-    # Lightweight bypass for broader test contexts to avoid auth friction
+    # Warn if test flags are present in production deployments
     try:
         import os as _os
         _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
-        if not _prod and _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and \
-           _os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}:
-            logger.info("TEST_MODE with DISABLE_HEAVY_STARTUP: bypassing auth, returning single-user test instance")
-            return get_single_user_instance()
-        # If production and test flags are set, warn loudly (once per process)
-        elif _prod and (_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}):
+        if _prod and (_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}):
             if not getattr(get_request_user, "_warned_testflags_prod", False):
                 logger.warning("TEST flags detected while tldw_production=true; test-only auth bypasses are disabled.")
                 setattr(get_request_user, "_warned_testflags_prod", True)

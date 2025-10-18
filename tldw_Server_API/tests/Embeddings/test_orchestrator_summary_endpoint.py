@@ -48,7 +48,6 @@ def test_orchestrator_summary_endpoint(disable_heavy_startup, admin_user, fake_r
 @pytest.mark.unit
 def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
     # Force multi-user mode so require_admin enforces admin check
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
@@ -101,7 +100,6 @@ def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user,
 @pytest.mark.unit
 def test_orchestrator_summary_no_redis(monkeypatch):
     # When Redis connection fails, endpoint should return 200 with zeroed structure
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
     app.dependency_overrides[get_request_user] = _override_user_admin()
 
     import redis.asyncio as aioredis

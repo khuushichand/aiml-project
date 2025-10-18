@@ -3,7 +3,7 @@
 #
 # Imports
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Set
+from typing import Optional, Dict, Any, List
 from collections import deque
 import json
 import asyncio
@@ -42,33 +42,71 @@ class TokenBlacklist:
         self.redis_client: Optional[redis_async.Redis] = None
         self._initialized = False
         
-        # In-memory LRU cache of recently seen blacklisted JTIs
-        self._local_cache: Set[str] = set()
+        # In-memory LRU cache of recently seen blacklisted JTIs mapped to expiry
+        self._local_cache: Dict[str, datetime] = {}
         self._local_order: deque[str] = deque()
         self._cache_size_limit = 1000
 
-    def _cache_add(self, jti: str) -> None:
-        """Add a JTI to local LRU cache."""
+    def _cache_remove(self, jti: str) -> None:
+        """Remove a JTI from the local cache if present."""
+        if jti in self._local_cache:
+            self._local_cache.pop(jti, None)
+            try:
+                self._local_order.remove(jti)
+            except ValueError:
+                pass
+
+    @staticmethod
+    def _normalize_expiry(expires_at: Optional[Any]) -> Optional[datetime]:
+        """Normalize stored expiry into a datetime (UTC) if possible."""
+        if expires_at is None:
+            return None
+        if isinstance(expires_at, datetime):
+            return expires_at
+        if isinstance(expires_at, str):
+            try:
+                return datetime.fromisoformat(expires_at)
+            except ValueError:
+                return None
+        return None
+
+    def _cache_add(self, jti: str, expires_at: Optional[Any]) -> None:
+        """Add a JTI to local LRU cache, respecting expiry."""
         if not jti:
             return
+        expiry = self._normalize_expiry(expires_at)
+        if expiry is None:
+            # Unknown expiry, avoid caching indefinitely
+            self._cache_remove(jti)
+            return
+        if expiry <= datetime.utcnow():
+            self._cache_remove(jti)
+            return
+        # Refresh ordering
         if jti in self._local_cache:
-            # Refresh order: remove and append
+            self._local_cache[jti] = expiry
             try:
                 self._local_order.remove(jti)
             except ValueError:
                 pass
             self._local_order.append(jti)
-            return
-        # Insert new
-        self._local_cache.add(jti)
-        self._local_order.append(jti)
-        # Evict oldest if exceeding limit
-        while len(self._local_cache) > self._cache_size_limit:
-            try:
-                oldest = self._local_order.popleft()
-            except IndexError:
-                break
-            self._local_cache.discard(oldest)
+        else:
+            self._local_cache[jti] = expiry
+            self._local_order.append(jti)
+        # Evict expired entries and enforce size limit
+        now = datetime.utcnow()
+        while self._local_order:
+            oldest = self._local_order[0]
+            cached_expiry = self._local_cache.get(oldest)
+            if cached_expiry and cached_expiry <= now:
+                self._local_order.popleft()
+                self._local_cache.pop(oldest, None)
+                continue
+            if len(self._local_cache) > self._cache_size_limit:
+                self._local_order.popleft()
+                self._local_cache.pop(oldest, None)
+                continue
+            break
         
     async def initialize(self):
         """Initialize blacklist service and create tables if needed"""
@@ -225,8 +263,8 @@ class TokenBlacklist:
         if not self._initialized:
             await self.initialize()
         
-        # Add to local cache (LRU)
-        self._cache_add(jti)
+        # Add to local cache (LRU) with expiry
+        self._cache_add(jti, expires_at)
         
         # Add to Redis if available
         if self.redis_client:
@@ -292,9 +330,12 @@ class TokenBlacklist:
             return False
         
         # Check local cache first (fastest)
-        if jti in self._local_cache:
-            return True
-        
+        cached_expiry = self._local_cache.get(jti)
+        if cached_expiry:
+            if cached_expiry > datetime.utcnow():
+                return True
+            self._cache_remove(jti)
+
         if not self._initialized:
             await self.initialize()
         
@@ -304,36 +345,59 @@ class TokenBlacklist:
                 key = f"blacklist:{jti}"
                 exists = await self.redis_client.exists(key)
                 if exists:
-                    # Add to local cache for next time
-                    self._cache_add(jti)
+                    ttl = await self.redis_client.ttl(key)
+                    expiry = None
+                    if isinstance(ttl, (int, float)) and ttl > 0:
+                        expiry = datetime.utcnow() + timedelta(seconds=int(ttl))
+                    # Add to local cache for next time if expiry known
+                    self._cache_add(jti, expiry)
                     return True
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis error checking blacklist: {e}")
-        
+
         # Check database
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.acquire() as conn:
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
-                    exists = await conn.fetchval(
-                        "SELECT EXISTS(SELECT 1 FROM token_blacklist WHERE jti = $1 AND expires_at > $2)",
-                        jti, datetime.utcnow()
+                    row = await conn.fetchrow(
+                        """
+                        SELECT expires_at
+                        FROM token_blacklist
+                        WHERE jti = $1 AND expires_at > $2
+                        ORDER BY expires_at DESC
+                        LIMIT 1
+                        """,
+                        jti,
+                        datetime.utcnow(),
                     )
+                    if row:
+                        expires_at = row["expires_at"]
+                    else:
+                        expires_at = None
                 else:
                     # SQLite
                     cursor = await conn.execute(
-                        "SELECT 1 FROM token_blacklist WHERE jti = ? AND expires_at > ? LIMIT 1",
+                        """
+                        SELECT expires_at
+                        FROM token_blacklist
+                        WHERE jti = ? AND expires_at > ?
+                        ORDER BY expires_at DESC
+                        LIMIT 1
+                        """,
                         (jti, datetime.utcnow().isoformat())
                     )
                     result = await cursor.fetchone()
-                    exists = result is not None
-                
-                if exists:
-                    # Add to local cache
-                    self._cache_add(jti)
+                    expires_at = result[0] if result else None
+
+                if expires_at:
+                    # Add to local cache using stored expiry
+                    self._cache_add(jti, expires_at)
                     return True
-                    
+                # If DB indicates no match, make sure cache is clean for this JTI
+                self._cache_remove(jti)
+
         except Exception as e:
             logger.error(f"Database error checking blacklist: {e}")
             # Fail closed - treat as blacklisted on error
@@ -365,9 +429,10 @@ class TokenBlacklist:
         
         try:
             db_pool = await self._ensure_db_pool()
+            using_postgres = getattr(db_pool, "pool", None) is not None
             # Get all active sessions for user
             async with db_pool.acquire() as conn:
-                if hasattr(conn, 'fetch'):
+                if using_postgres and hasattr(conn, 'fetch'):
                     # PostgreSQL
                     rows = await conn.fetch(
                         """
@@ -401,17 +466,35 @@ class TokenBlacklist:
                     ]
                 
                 # Mark sessions as revoked
-                if hasattr(conn, 'execute'):
+                if using_postgres:
                     # PostgreSQL
                     await conn.execute(
-                        "UPDATE sessions SET is_revoked = TRUE WHERE user_id = $1",
-                        user_id
+                        """
+                        UPDATE sessions
+                        SET is_revoked = TRUE,
+                            is_active = FALSE,
+                            revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+                            revoked_by = COALESCE($2, revoked_by),
+                            revoke_reason = COALESCE($3, revoke_reason)
+                        WHERE user_id = $1
+                        """,
+                        user_id,
+                        revoked_by,
+                        reason,
                     )
                 else:
                     # SQLite
                     await conn.execute(
-                        "UPDATE sessions SET is_revoked = 1 WHERE user_id = ?",
-                        (user_id,)
+                        """
+                        UPDATE sessions
+                        SET is_revoked = 1,
+                            is_active = 0,
+                            revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+                            revoked_by = COALESCE(?, revoked_by),
+                            revoke_reason = COALESCE(?, revoke_reason)
+                        WHERE user_id = ?
+                        """,
+                        (revoked_by, reason, user_id)
                     )
                     await conn.commit()
             

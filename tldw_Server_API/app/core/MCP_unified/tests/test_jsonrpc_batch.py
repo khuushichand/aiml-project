@@ -14,7 +14,6 @@ from tldw_Server_API.app.main import app
 def ws_client(monkeypatch):
     # Minimize startup side-effects for tests
     monkeypatch.setenv("TEST_MODE", "true")
-    monkeypatch.setenv("DISABLE_HEAVY_STARTUP", "1")
     monkeypatch.setenv("ENABLE_TRACING", "false")
     monkeypatch.setenv("OTEL_METRICS_EXPORTER", "console")
     monkeypatch.setenv("MCP_WS_AUTH_REQUIRED", "false")

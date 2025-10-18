@@ -12,7 +12,6 @@ from tldw_Server_API.app.core.MCP_unified import get_mcp_server
 
 # Minimize startup side-effects for tests
 _os.environ.setdefault("TEST_MODE", "true")
-_os.environ.setdefault("DISABLE_HEAVY_STARTUP", "1")
 _os.environ.setdefault("ENABLE_TRACING", "false")
 _os.environ.setdefault("OTEL_METRICS_EXPORTER", "console")
 os.environ.setdefault("MCP_WS_AUTH_REQUIRED", "false")

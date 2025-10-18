@@ -23,7 +23,7 @@ def _monkeypatch_audit_summary(monkeypatch, high_risk: int, failures: int):
 
 def _get_client(monkeypatch, env: dict):
     # Ensure test-friendly startup
-    for k, v in {"TEST_MODE": "true", "DISABLE_HEAVY_STARTUP": "1"}.items():
+    for k, v in {"TEST_MODE": "true"}.items():
         monkeypatch.setenv(k, v)
     for k, v in env.items():
         if v is None:
@@ -74,4 +74,3 @@ def test_security_low_when_some_failures_below_threshold(monkeypatch):
     data = r.json()
     assert data["risk_level"] == "low"
     assert data["status"] == "secure"
-
