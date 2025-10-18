@@ -17,7 +17,12 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 @pytest.mark.asyncio
 async def test_world_book_entries_and_attach_flow():
     tmpdir = tempfile.mkdtemp(prefix="chacha_wb_")
+    original_user_db = os.environ.get("USER_DB_BASE_DIR")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
+    from tldw_Server_API.app.core.config import clear_config_cache
+    clear_config_cache()
+    import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+    crl._rate_limiter = None
     try:
         from tldw_Server_API.app.main import app
 
@@ -71,14 +76,31 @@ async def test_world_book_entries_and_attach_flow():
             assert not any(wb.get("world_book_id") == wb_id or wb.get("id") == wb_id for wb in attached)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        if original_user_db is None:
+            os.environ.pop("USER_DB_BASE_DIR", None)
+        else:
+            os.environ["USER_DB_BASE_DIR"] = original_user_db
+        clear_config_cache()
+        try:
+            crl._rate_limiter = None
+        except Exception:
+            pass
 
 
 @pytest.mark.asyncio
 async def test_legacy_complete_endpoint_rate_limit():
     tmpdir = tempfile.mkdtemp(prefix="chacha_rate_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    # Lower per-minute message send limit for test to trigger 429 quickly
-    os.environ["MAX_MESSAGE_SENDS_PER_MINUTE"] = "5"
+    env_overrides = {
+        "USER_DB_BASE_DIR": tmpdir,
+        "MAX_MESSAGE_SENDS_PER_MINUTE": "5",  # lower per-minute message send limit
+    }
+    original_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
+    from tldw_Server_API.app.core.config import clear_config_cache
+    clear_config_cache()
+    import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+    crl._rate_limiter = None
+    original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
         from tldw_Server_API.app.main import app
 
@@ -91,8 +113,7 @@ async def test_legacy_complete_endpoint_rate_limit():
             assert r.status_code == 200
             baseline = r.json().get("total", 0)
             os.environ["MAX_CHATS_PER_USER"] = str(baseline + 1)
-            # No need to reset limiter here since legacy endpoint doesn't use it for chat creation, but creation does
-            import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
+            clear_config_cache()
             crl._rate_limiter = None
 
             # Pick default character and create chat
@@ -122,3 +143,17 @@ async def test_legacy_complete_endpoint_rate_limit():
             assert any(s == 429 for s in hits), "Expected 429 for message send rate limit"
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        if original_max_chats is None:
+            os.environ.pop("MAX_CHATS_PER_USER", None)
+        else:
+            os.environ["MAX_CHATS_PER_USER"] = original_max_chats
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_config_cache()
+        try:
+            crl._rate_limiter = None
+        except Exception:
+            pass

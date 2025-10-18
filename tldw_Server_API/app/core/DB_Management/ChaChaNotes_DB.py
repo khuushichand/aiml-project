@@ -1488,6 +1488,7 @@ UPDATE db_schema_version
             f"[Client ID: {self.client_id}] (backend={self.backend_type.value})"
         )
         self._local = threading.local()
+        self._schema_lock = threading.RLock()
         try:
             self._initialize_schema()
             logger.debug(f"CharactersRAGDB initialization completed successfully for {self.db_path_str}")
@@ -2201,6 +2202,55 @@ UPDATE db_schema_version
             raise NotImplementedError(
                 f"Schema initialization not implemented for backend {self.backend_type}"
             )
+
+    def ensure_character_tables_ready(self) -> None:
+        """
+        Ensure the core character tables exist for this database instance.
+
+        Tests occasionally delete the underlying SQLite files while keeping the cached
+        CharactersRAGDB instance alive. When a new connection is opened afterwards,
+        SQLite creates a fresh, empty database which no longer has the expected schema.
+        This guard re-runs schema initialization if we detect that the character_cards
+        table is missing.
+        """
+        with self._schema_lock:
+            try:
+                self.execute_query("SELECT 1 FROM character_cards LIMIT 1")
+                return
+            except CharactersRAGDBError as exc:
+                msg = str(exc).lower()
+                missing_markers = (
+                    "no such table",
+                    "does not exist",
+                    "missing relation",
+                    "undefined table",
+                )
+                if "character_cards" not in msg or not any(marker in msg for marker in missing_markers):
+                    raise
+                logger.warning(
+                    "Detected missing character_cards table for %s; re-initializing schema.",
+                    self.db_path_str,
+                )
+
+            # If we reach here the core table is missing; attempt to re-initialize.
+            self.close_connection()
+            try:
+                self._initialize_schema()
+            except (SchemaError, CharactersRAGDBError):
+                raise
+
+            # Verify that the table now exists; if not, escalate as SchemaError.
+            try:
+                self.execute_query("SELECT 1 FROM character_cards LIMIT 1")
+            except CharactersRAGDBError as exc:
+                logger.error(
+                    "Failed to verify character_cards table after schema re-initialization for %s: %s",
+                    self.db_path_str,
+                    exc,
+                )
+                raise SchemaError(
+                    "Character cards table missing after schema re-initialization."
+                ) from exc
 
     def _initialize_schema_sqlite(self):
         """

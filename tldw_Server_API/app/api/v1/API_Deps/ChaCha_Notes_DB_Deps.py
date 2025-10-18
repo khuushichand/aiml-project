@@ -121,6 +121,7 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
     Returns the character_id of the default character.
     """
     try:
+        db_instance.ensure_character_tables_ready()
         default_char = db_instance.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
         if default_char:
             logger.debug(f"Default character '{DEFAULT_CHARACTER_NAME}' already exists with ID: {default_char['id']}.")
@@ -163,7 +164,7 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
             return refetched_char['id']
         logger.error(f"Still could not get/create default character after conflict: {e}")
         return None
-    except (CharactersRAGDBError, InputError) as e:
+    except (CharactersRAGDBError, SchemaError, InputError) as e:
         logger.error(f"Database error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e}", exc_info=True)
         return None # Indicate failure
     except Exception as e_gen:

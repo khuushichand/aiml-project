@@ -136,16 +136,18 @@ def valid_auth_token() -> str:
         test_token = jwt.encode(payload, secret_key, algorithm=settings.JWT_ALGORITHM)
         return f"Bearer {test_token}"
     else:
-        # In single-user mode, use API_BEARER if set
-        api_bearer = os.getenv("API_BEARER")
-        if api_bearer:
-            # Ensure it has Bearer prefix
-            if not api_bearer.startswith("Bearer "):
-                return f"Bearer {api_bearer}"
-            return api_bearer
-        else:
-            # Default token for single-user mode with Bearer prefix
-            return f"Bearer {API_BEARER}"
+        # In single-user mode use the configured API key and return it with Bearer prefix
+        raw_key = settings.SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_API_KEY")
+        if not raw_key:
+            raw_key = os.getenv("API_BEARER")
+            if raw_key and raw_key.lower().startswith("bearer "):
+                return raw_key.strip()
+        if not raw_key:
+            raw_key = API_BEARER
+        raw_key = raw_key.strip()
+        if raw_key.lower().startswith("bearer "):
+            return raw_key
+        return f"Bearer {raw_key}"
 
 
 # --- Provider lists and helpers defined locally for this test file ---
