@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.config import clear_config_cache
 
 
 @pytest.mark.asyncio
@@ -109,6 +110,7 @@ async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
     }
     original_env = {key: os.environ.get(key) for key in env_overrides}
     os.environ.update(env_overrides)
+    clear_config_cache()
     import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
     crl._rate_limiter = None
     try:
@@ -160,6 +162,7 @@ async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        clear_config_cache()
         crl._rate_limiter = None
 
 

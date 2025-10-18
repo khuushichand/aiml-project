@@ -11,17 +11,21 @@ import httpx
 import pytest
 import asyncio
 
+from tldw_Server_API.app.core.config import clear_config_cache
+
 
 @pytest.mark.asyncio
 async def test_max_messages_per_chat_limit():
     tmpdir = tempfile.mkdtemp(prefix="chacha_limit_msgs_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    # Set very low per-chat message cap
-    os.environ["MAX_MESSAGES_PER_CHAT"] = "1"
+    env_overrides = {
+        "USER_DB_BASE_DIR": tmpdir,
+        "MAX_MESSAGES_PER_CHAT": "1",  # Set very low per-chat message cap
+    }
+    original_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
+    clear_config_cache()
     try:
-        # Ensure limiter picks up env overrides
-        import importlib
-        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
+        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -56,16 +60,28 @@ async def test_max_messages_per_chat_limit():
             assert r.status_code == 403
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_config_cache()
+        try:
+            crl._rate_limiter = None
+        except Exception:
+            pass
 
 
 @pytest.mark.asyncio
 async def test_max_chats_per_user_limit():
     tmpdir = tempfile.mkdtemp(prefix="chacha_limit_chats_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    # We'll compute baseline chats and set limit accordingly
+    env_overrides = {"USER_DB_BASE_DIR": tmpdir}
+    original_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
+    clear_config_cache()
+    original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
-        import importlib
-        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
+        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -82,6 +98,7 @@ async def test_max_chats_per_user_limit():
 
             # Set chat limit to baseline + 1 so first create is allowed, second blocked
             os.environ["MAX_CHATS_PER_USER"] = str(baseline + 1)
+            clear_config_cache()
             # Reset limiter to pick up new env var
             crl._rate_limiter = None
 
@@ -98,15 +115,35 @@ async def test_max_chats_per_user_limit():
             assert r.status_code == 403
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        if original_max_chats is None:
+            os.environ.pop("MAX_CHATS_PER_USER", None)
+        else:
+            os.environ["MAX_CHATS_PER_USER"] = original_max_chats
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_config_cache()
+        try:
+            crl._rate_limiter = None
+        except Exception:
+            pass
 
 
 @pytest.mark.asyncio
 async def test_chat_completion_per_minute_rate_limit():
     tmpdir = tempfile.mkdtemp(prefix="chacha_limit_complete_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    os.environ["MAX_CHAT_COMPLETIONS_PER_MINUTE"] = "3"
+    env_overrides = {
+        "USER_DB_BASE_DIR": tmpdir,
+        "MAX_CHAT_COMPLETIONS_PER_MINUTE": "3",
+    }
+    original_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
+    clear_config_cache()
+    original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
-        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
+        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -121,6 +158,7 @@ async def test_chat_completion_per_minute_rate_limit():
             assert r.status_code == 200
             baseline = r.json().get("total", 0)
             os.environ["MAX_CHATS_PER_USER"] = str(baseline + 1)
+            clear_config_cache()
             crl._rate_limiter = None
 
             # Create a chat
@@ -142,3 +180,17 @@ async def test_chat_completion_per_minute_rate_limit():
             assert any(s == 429 for s in statuses)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        if original_max_chats is None:
+            os.environ.pop("MAX_CHATS_PER_USER", None)
+        else:
+            os.environ["MAX_CHATS_PER_USER"] = original_max_chats
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_config_cache()
+        try:
+            crl._rate_limiter = None
+        except Exception:
+            pass
