@@ -44,6 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 import redis.asyncio as aioredis
+import json
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -68,6 +69,29 @@ EMBEDDING_QUEUE = os.getenv("EMBEDDING_LIVE_QUEUE", "embeddings:embedding")
 async def _redis_client() -> aioredis.Redis:
     url = os.getenv("REDIS_URL", "redis://localhost:6379")
     return await aioredis.from_url(url, decode_responses=True)
+
+
+def _is_test_env() -> bool:
+    """Return True if running under pytest or explicit TESTING env."""
+    try:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return True
+        return os.getenv("TESTING", "").lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return False
+
+
+def _dev_shortcuts_enabled() -> bool:
+    """Enable test-like shortcuts when explicitly opted-in for local dev.
+
+    Off by default; separate from test guard to avoid leaking behavior.
+    """
+    if _is_test_env():
+        return True
+    try:
+        return os.getenv("REEMBED_DEV_SHORTCUTS", "").lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return False
 
 
 def _norm_for_hash(text: str) -> str:
@@ -154,7 +178,7 @@ def _fetch_chunks(db: MediaDatabase, media_id: int) -> List[Tuple[str, int, int]
 async def _enqueue_embedding(client: aioredis.Redis, message: EmbeddingMessage) -> None:
     # Resolve target queue at call-time to avoid cross-test leakage of env at import
     try:
-        if os.getenv("TESTING", "").lower() in ("1","true","yes","on"):
+        if _is_test_env():
             q = "embeddings:embedding"
         else:
             q = os.getenv("EMBEDDING_LIVE_QUEUE", EMBEDDING_QUEUE)
@@ -163,11 +187,19 @@ async def _enqueue_embedding(client: aioredis.Redis, message: EmbeddingMessage) 
     except Exception:
         q = "embeddings:embedding"
     payload = model_dump_compat(message)
-    await client.xadd(q, payload)
-    # Also mirror to default queue in TESTING to satisfy tests that read fixed stream
     try:
-        if os.getenv("TESTING", "").lower() in ("1","true","yes","on") and q != "embeddings:embedding":
-            await client.xadd("embeddings:embedding", payload)
+        fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()}
+    except Exception:
+        fields = {k: str(v) for k, v in payload.items()}
+    await client.xadd(q, fields)
+    # Also mirror to default queue in tests to satisfy readers that expect the fixed stream
+    try:
+        if _is_test_env() and q != "embeddings:embedding":
+            try:
+                mirror_fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()}
+            except Exception:
+                mirror_fields = {k: str(v) for k, v in payload.items()}
+            await client.xadd("embeddings:embedding", mirror_fields)
     except Exception:
         pass
 
@@ -192,6 +224,11 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
         try:
             job = jm.acquire_next_job(domain="embeddings", queue=queue, lease_seconds=lease_seconds, worker_id=worker_id)
             if not job:
+                try:
+                    if os.getenv("PYTEST_CURRENT_TEST"):
+                        logger.info("Re-embed one-shot: no job available")
+                except Exception:
+                    pass
                 return False
             lease_id = str(job.get("lease_id"))
             owner = str(job.get("owner_user_id") or (job.get("payload") or {}).get("user_id") or "")
@@ -259,6 +296,11 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
                         model_provider="",
                     )
                     await _enqueue_embedding(client, msg)
+                    try:
+                        if os.getenv("PYTEST_CURRENT_TEST"):
+                            logger.info("Re-embed worker: published embedding message (one-shot)")
+                    except Exception:
+                        pass
                 try:
                     jk = f"job:{job_uuid}"
                     await client.hset(jk, mapping={
@@ -280,10 +322,15 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
             logger.error(f"Re-embed one-shot error: {e}")
             return False
 
-    # In tests, perform a one-shot attempt before entering the loop to avoid races
+    # In tests (and optional dev-shortcut mode), perform a one-shot attempt before entering the loop
     try:
-        if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING", "").lower() in ("1","true","yes","on"):
-            await _process_once()
+        if _dev_shortcuts_enabled():
+            processed = await _process_once()
+            try:
+                if _is_test_env():
+                    logger.info(f"Re-embed one-shot processed={processed}")
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -310,8 +357,13 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
             try:
                 job = jm.acquire_next_job(domain="embeddings", queue=queue, lease_seconds=lease_seconds, worker_id=worker_id)
                 if not job:
-                    # Faster polling in tests to reduce flakiness
-                    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING", "").lower() in ("1","true","yes","on"):
+                    try:
+                        if _is_test_env():
+                            logger.info("Re-embed loop: no job available")
+                    except Exception:
+                        pass
+                    # Faster polling in tests (and optional dev-shortcuts) to reduce flakiness
+                    if _dev_shortcuts_enabled():
                         await asyncio.sleep(min(0.02, poll_sleep))
                     else:
                         await asyncio.sleep(poll_sleep)
@@ -392,7 +444,16 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
                 dedupe_key = payload.get("dedupe_key") or idempotency_key
                 operation_id = payload.get("operation_id") or job_uuid
                 user_tier = str(payload.get("user_tier") or "free")
-                priority = int(job.get("priority") or 50)
+                # Normalize job priority (Jobs uses ~1..10; workers use 0..100)
+                try:
+                    _jp = int(job.get("priority") or 5)
+                except Exception:
+                    _jp = 5
+                if 0 <= _jp <= 100:
+                    priority = _jp if _jp > 10 else int(round((10 - max(1, _jp)) * (100.0 / 9.0)))
+                else:
+                    # Unknown scale — clamp into 0..100
+                    priority = max(0, min(100, _jp))
 
                 # Make chunks
                 def _make_chunk_data(rows: List[Tuple[str, int, int]]) -> List[ChunkData]:

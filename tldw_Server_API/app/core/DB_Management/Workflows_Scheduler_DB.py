@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     run_mode TEXT DEFAULT 'async',
     validation_mode TEXT DEFAULT 'block',
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Presence gating (only run when user is online)
+    require_online BOOLEAN NOT NULL DEFAULT FALSE,
     -- Scheduling behavior
     concurrency_mode TEXT NOT NULL DEFAULT 'skip', -- 'skip' or 'queue'
     misfire_grace_sec INTEGER DEFAULT 300,
@@ -71,6 +73,8 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     run_mode TEXT DEFAULT 'async',
     validation_mode TEXT DEFAULT 'block',
     enabled INTEGER NOT NULL DEFAULT 1,
+    -- Presence gating (only run when user is online)
+    require_online INTEGER NOT NULL DEFAULT 0,
     -- Scheduling behavior
     concurrency_mode TEXT NOT NULL DEFAULT 'skip', -- 'skip' or 'queue'
     misfire_grace_sec INTEGER DEFAULT 300,
@@ -100,6 +104,7 @@ class WorkflowSchedule:
     run_mode: str
     validation_mode: str
     enabled: bool
+    require_online: bool
     concurrency_mode: str
     misfire_grace_sec: int
     coalesce: bool
@@ -212,6 +217,10 @@ class WorkflowsSchedulerDB:
                     connection=conn,
                 )
                 self.backend.execute(
+                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS require_online BOOLEAN DEFAULT FALSE",
+                    connection=conn,
+                )
+                self.backend.execute(
                     "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ",
                     connection=conn,
                 )
@@ -235,6 +244,10 @@ class WorkflowsSchedulerDB:
                     pass
                 try:
                     self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN coalesce INTEGER", connection=conn)
+                except Exception:
+                    pass
+                try:
+                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN require_online INTEGER", connection=conn)
                 except Exception:
                     pass
                 try:
@@ -286,6 +299,7 @@ class WorkflowsSchedulerDB:
         run_mode: str = "async",
         validation_mode: str = "block",
         enabled: bool = True,
+        require_online: bool = False,
         concurrency_mode: str = "skip",
         misfire_grace_sec: int = 300,
         coalesce: bool = True,
@@ -303,6 +317,7 @@ class WorkflowsSchedulerDB:
             run_mode,
             validation_mode,
             1 if enabled else 0,
+            1 if require_online else 0,
             concurrency_mode,
             int(misfire_grace_sec),
             1 if coalesce else 0,
@@ -314,9 +329,9 @@ class WorkflowsSchedulerDB:
         )
         sql = (
             "INSERT INTO workflow_schedules("
-            "id,tenant_id,user_id,workflow_id,name,cron,timezone,inputs_json,run_mode,validation_mode,enabled,"
+            "id,tenant_id,user_id,workflow_id,name,cron,timezone,inputs_json,run_mode,validation_mode,enabled,require_online,"
             "concurrency_mode,misfire_grace_sec,coalesce,last_run_at,next_run_at,last_status,created_at,updated_at"
-            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         )
         with self.backend.transaction() as conn:
             self.backend.execute(sql, params, connection=conn)
@@ -332,6 +347,9 @@ class WorkflowsSchedulerDB:
                 params.append(json.dumps(v or {}))
             elif k == "enabled":
                 fields.append("enabled = ?")
+                params.append(1 if bool(v) else 0)
+            elif k == "require_online":
+                fields.append("require_online = ?")
                 params.append(1 if bool(v) else 0)
             elif k == "coalesce":
                 fields.append("coalesce = ?")
@@ -363,6 +381,7 @@ class WorkflowsSchedulerDB:
             id=r["id"], tenant_id=r["tenant_id"], user_id=r["user_id"], workflow_id=r.get("workflow_id"), name=r.get("name"),
             cron=r["cron"], timezone=r.get("timezone"), inputs_json=r["inputs_json"], run_mode=r.get("run_mode") or "async",
             validation_mode=r.get("validation_mode") or "block", enabled=bool(r.get("enabled") in (1, True, "1")),
+            require_online=bool(r.get("require_online") in (1, True, "1")),
             concurrency_mode=(r.get("concurrency_mode") or "skip"), misfire_grace_sec=int(r.get("misfire_grace_sec") or 300),
             coalesce=bool(r.get("coalesce") in (1, True, "1")), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
             last_status=r.get("last_status"), created_at=r.get("created_at"), updated_at=r.get("updated_at")
@@ -392,6 +411,7 @@ class WorkflowsSchedulerDB:
                     id=r["id"], tenant_id=r["tenant_id"], user_id=r["user_id"], workflow_id=r.get("workflow_id"), name=r.get("name"),
                     cron=r["cron"], timezone=r.get("timezone"), inputs_json=r["inputs_json"], run_mode=r.get("run_mode") or "async",
                     validation_mode=r.get("validation_mode") or "block", enabled=bool(r.get("enabled") in (1, True, "1")),
+                    require_online=bool(r.get("require_online") in (1, True, "1")),
                     concurrency_mode=(r.get("concurrency_mode") or "skip"), misfire_grace_sec=int(r.get("misfire_grace_sec") or 300),
                     coalesce=bool(r.get("coalesce") in (1, True, "1")), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
                     last_status=r.get("last_status"), created_at=r.get("created_at"), updated_at=r.get("updated_at")

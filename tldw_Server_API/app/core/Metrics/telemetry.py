@@ -50,8 +50,9 @@ try:
     
     OTEL_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"OpenTelemetry not fully available: {e}")
-    logger.info("Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi")
+    # Demote to debug/info to reduce noisy logs during tests; telemetry is optional
+    logger.debug(f"OpenTelemetry not fully available: {e}")
+    logger.debug("Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi")
     OTEL_AVAILABLE = False
     
     # Provide dummy classes for fallback
@@ -168,7 +169,7 @@ class TelemetryManager:
         self.initialized = False
         
         if not OTEL_AVAILABLE:
-            logger.warning("OpenTelemetry not available, using fallback implementations")
+            logger.info("OpenTelemetry not available, using fallback implementations")
             self.tracer = DummyTracer()
             self.meter = DummyMeter()
             return

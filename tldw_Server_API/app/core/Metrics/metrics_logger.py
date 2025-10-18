@@ -43,6 +43,24 @@ def log_histogram(metric_name, value, labels=None):
     logger.info("metric", extra=log_entry)
 
 
+def log_gauge(metric_name, value, labels=None):
+    """Log an instantaneous measurement (gauge).
+
+    The current metrics backend is log-based, so we simply emit a structured
+    log with type 'gauge'. This is non-breaking and allows callers to express
+    semantics more clearly. Downstream exporters can map these to Prometheus
+    Gauges or equivalent.
+    """
+    log_entry = {
+        "event": metric_name,
+        "type": "gauge",
+        "value": value,
+        "labels": labels or {},
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+    }
+    logger.info("metric", extra=log_entry)
+
+
 def timeit(func):
     """
     Decorator that times the execution of the wrapped function

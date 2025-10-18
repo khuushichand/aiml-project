@@ -22,24 +22,32 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Tuple
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 import xml.etree.ElementTree as ET
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.headers.update({"Accept-Encoding": "gzip, deflate"})
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        return create_client(timeout=20)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.headers.update({"Accept-Encoding": "gzip, deflate"})
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 # ---------------- IDEAS (RePEc) API: handle -> reference metadata ----------------
@@ -126,15 +134,19 @@ def get_ref_by_handle(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[s
         if isinstance(obj, dict) and obj.get("errornumber"):
             return None, f"RePEc API error: {obj.get('errornumber')}"
         return _normalize_getref_payload(obj), None
-    except requests.exceptions.Timeout:
-        return None, "RePEc getref request timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"RePEc getref HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"RePEc getref Request Error: {str(e)}"
     except ValueError:
         return None, "RePEc getref response was not valid JSON."
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "RePEc getref request timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"RePEc getref HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "RePEc getref request timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"RePEc getref HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"RePEc getref Request Error: {str(e)}"
         return None, f"RePEc getref error: {str(e)}"
 
 
@@ -193,13 +205,17 @@ def get_citations_plain(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional
                 except Exception:
                     out["cites"] = 0
         return out, None
-    except requests.exceptions.Timeout:
-        return None, "CitEc request timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"CitEc Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "CitEc request timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "CitEc request timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"CitEc Request Error: {str(e)}"
         return None, f"CitEc error: {str(e)}"
 
 
@@ -216,12 +232,15 @@ def get_citations_amf_raw(handle: str) -> Tuple[Optional[str], Optional[str]]:
             return None, None
         r.raise_for_status()
         return r.text, None
-    except requests.exceptions.Timeout:
-        return None, "CitEc request timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"CitEc Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "CitEc request timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "CitEc request timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"CitEc Request Error: {str(e)}"
         return None, f"CitEc error: {str(e)}"
-

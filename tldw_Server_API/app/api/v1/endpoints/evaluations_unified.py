@@ -102,6 +102,7 @@ from .evaluations_auth import (
     _apply_rate_limit_headers,
     require_admin,
 )
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
     global _wm_lock
@@ -1021,13 +1022,21 @@ async def delete_evaluation(
 
 # ============= Run Management Endpoints =============
 
-@router.post("/{eval_id}/runs", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+
+
+@router.post(
+    "/{eval_id}/runs",
+    response_model=RunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def create_run(
     eval_id: str,
     run_request: CreateRunRequest,
     background_tasks: BackgroundTasks,
     user_id: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    __: None = Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=False, allow_admin_bypass=True, endpoint_id="evals.create_run", count_as="run")),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,

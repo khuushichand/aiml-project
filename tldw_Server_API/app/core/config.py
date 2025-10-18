@@ -14,7 +14,50 @@ from dotenv import load_dotenv
 
 #
 # 3rd-party Libraries
-from loguru import logger#
+from loguru import logger
+from collections.abc import MutableMapping
+
+# Guard logging during module import so Loguru does not enqueue records before
+# the import lock is released. Messages emitted before `_LOGGER_READY` flips to
+# True are buffered and flushed once initialization completes.
+_LOGGER_READY = False
+_STARTUP_LOG_BUFFER: list[tuple[str, str, dict[str, Any]]] = []
+
+
+def _buffered_log(level: str, message: str, **kwargs: Any) -> None:
+    if _LOGGER_READY:
+        logger.log(level, message, **kwargs)
+    else:
+        _STARTUP_LOG_BUFFER.append((level, message, kwargs))
+
+
+def _log_info(message: str, **kwargs: Any) -> None:
+    _buffered_log("INFO", message, **kwargs)
+
+
+def _log_warning(message: str, **kwargs: Any) -> None:
+    _buffered_log("WARNING", message, **kwargs)
+
+
+def _log_error(message: str, **kwargs: Any) -> None:
+    _buffered_log("ERROR", message, **kwargs)
+
+
+def _log_critical(message: str, **kwargs: Any) -> None:
+    _buffered_log("CRITICAL", message, **kwargs)
+
+
+def _log_debug(message: str, **kwargs: Any) -> None:
+    _buffered_log("DEBUG", message, **kwargs)
+
+
+def _flush_startup_logs() -> None:
+    global _STARTUP_LOG_BUFFER
+    for level, message, kwargs in _STARTUP_LOG_BUFFER:
+        logger.log(level, message, **kwargs)
+    _STARTUP_LOG_BUFFER = []
+
+# Local Imports
 # Local Imports
 #
 ########################################################################################################################
@@ -223,10 +266,10 @@ def load_tts_config() -> Dict[str, Any]:
     # Navigate to TTS config file: .../tldw_Server_API/app/core/TTS/tts_providers_config.yaml
     tts_config_path = current_file_path.parent / 'TTS' / 'tts_providers_config.yaml'
     
-    logger.info(f"Loading TTS configuration from: {tts_config_path}")
+    _log_info(f"Loading TTS configuration from: {tts_config_path}")
     
     if not tts_config_path.exists():
-        logger.warning(f"TTS config file not found at {tts_config_path}, using defaults")
+        _log_warning(f"TTS config file not found at {tts_config_path}, using defaults")
         return _get_default_tts_config()
     
     try:
@@ -235,12 +278,12 @@ def load_tts_config() -> Dict[str, Any]:
         
         # Validate and process the configuration
         processed_config = _process_tts_config(tts_config)
-        logger.info("TTS configuration loaded successfully")
+        _log_info("TTS configuration loaded successfully")
         return processed_config
         
     except Exception as e:
-        logger.error(f"Error loading TTS configuration: {e}")
-        logger.info("Falling back to default TTS configuration")
+        _log_error(f"Error loading TTS configuration: {e}")
+        _log_info("Falling back to default TTS configuration")
         return _get_default_tts_config()
 
 def _process_tts_config(tts_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -317,12 +360,12 @@ def load_openai_mappings() -> Dict:
     api_component_root = current_file_path.parent.parent.parent  # This should be /project_root/tldw_server_api/
 
     mapping_path = api_component_root / "Config_Files" / "openai_tts_mappings.json"
-    logger.debug(f"Attempting to load OpenAI TTS mappings from: {str(mapping_path)}")
+    _log_debug(f"Attempting to load OpenAI TTS mappings from: {str(mapping_path)}")
     try:
         with open(mapping_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        logger.debug(f"Failed to load OpenAI TTS mappings from {mapping_path}: {e}")
+        _log_debug(f"Failed to load OpenAI TTS mappings from {mapping_path}: {e}")
         # Fallback to a default or raise an error
         return {
             "models": {"tts-1": "openai_official_tts-1"},
@@ -358,7 +401,7 @@ def load_settings():
     # config.py is in project_root/tldw_server_api/app/core/config.py
     # ACTUAL_PROJECT_ROOT will be /project_root/
     ACTUAL_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-    logger.info(f"Determined ACTUAL_PROJECT_ROOT for database paths: {ACTUAL_PROJECT_ROOT}")
+    _log_info(f"Determined ACTUAL_PROJECT_ROOT for database paths: {ACTUAL_PROJECT_ROOT}")
 
     # --- Application Mode ---
     single_user_mode_str = os.getenv("APP_MODE", "single").lower()
@@ -416,10 +459,10 @@ def load_settings():
     try:
         comprehensive_config = load_and_log_configs() # This function is already defined in your provided code
         if comprehensive_config is None:
-            logger.error("Failed to load comprehensive_config, will use fallbacks for some settings.")
+            _log_error("Failed to load comprehensive_config, will use fallbacks for some settings.")
             comprehensive_config = {} # Ensure it's a dict to avoid errors on .get()
     except Exception as e:
-        logger.error(f"Error loading comprehensive_config: {e}", exc_info=True)
+        _log_error(f"Error loading comprehensive_config: {e}", exc_info=True)
         comprehensive_config = {}
 
 
@@ -774,15 +817,15 @@ def load_settings():
     # --- Warnings ---
     if config_dict["SINGLE_USER_MODE"]:
         if not config_dict["SINGLE_USER_API_KEY"]:
-            logger.error(
+            _log_error(
                 "SINGLE_USER_API_KEY is not configured. The server will refuse to start in single-user mode.\n"
                 "Run `python -m tldw_Server_API.app.core.AuthNZ.initialize` and generate secure keys, "
                 "then set SINGLE_USER_API_KEY in your environment or .env file."
             )
     if not config_dict["SINGLE_USER_MODE"] and config_dict["JWT_SECRET_KEY"] == "a_very_insecure_default_secret_key_for_dev_only":
-        logger.critical("SECURITY WARNING: Using default JWT_SECRET_KEY in multi-user mode. Set a strong JWT_SECRET_KEY environment variable!")
+        _log_critical("SECURITY WARNING: Using default JWT_SECRET_KEY in multi-user mode. Set a strong JWT_SECRET_KEY environment variable!")
     if not config_dict["SINGLE_USER_MODE"] and not config_dict["USERS_DB_CONFIGURED"]:
-         logger.warning("Multi-user mode enabled (APP_MODE=multi), but USERS_DB_ENABLED is not 'true'. User authentication will likely fail.")
+         _log_warning("Multi-user mode enabled (APP_MODE=multi), but USERS_DB_ENABLED is not 'true'. User authentication will likely fail.")
 
     # Create necessary directories if they don't exist
     # Ensure main SQLite database directory exists
@@ -794,15 +837,16 @@ def load_settings():
         if not main_db_file_path.is_absolute():
              main_db_file_path = ACTUAL_PROJECT_ROOT / main_db_file_path
         main_db_file_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Ensured main SQLite database directory exists: {main_db_file_path.parent}")
+        _log_info(f"Ensured main SQLite database directory exists: {main_db_file_path.parent}")
 
     # Ensure USER_DB_BASE_DIR exists (base for user-specific SQLite and ChromaDB)
     config_dict["USER_DB_BASE_DIR"].mkdir(parents=True, exist_ok=True)
-    logger.info(f"Ensured user data base directory exists: {config_dict['USER_DB_BASE_DIR']}")
+    _log_info(f"Ensured user data base directory exists: {config_dict['USER_DB_BASE_DIR']}")
 
     return config_dict
 
 
+@lru_cache(maxsize=1)
 def load_comprehensive_config():
     current_file_path = Path(__file__).resolve()
     # Correct project_root calculation:
@@ -824,33 +868,33 @@ def load_comprehensive_config():
     for p in candidate_env_paths:
         try:
             if p.exists():
-                logger.info(f"Loading environment variables from: {str(p)}")
+                _log_info(f"Loading environment variables from: {str(p)}")
                 load_dotenv(dotenv_path=str(p), override=False)
                 loaded_any_env = True
         except Exception:
             # Continue trying other candidates
             pass
     if not loaded_any_env:
-        logger.info(
+        _log_info(
             f"No .env/.ENV file found in {project_root} or {project_root / 'Config_Files'}; using config.txt and system env"
         )
 
     config_path_obj = project_root / 'Config_Files' / 'config.txt'
 
-    logger.info(f"Attempting to load comprehensive config from: {str(config_path_obj)}")
+    _log_info(f"Attempting to load comprehensive config from: {str(config_path_obj)}")
 
     if not config_path_obj.exists():
-        logger.error(f"Config file not found at {str(config_path_obj)}")
+        _log_error(f"Config file not found at {str(config_path_obj)}")
         raise FileNotFoundError(f"Config file not found at {str(config_path_obj)}")
 
     config_parser = configparser.ConfigParser()
     try:
         config_parser.read(config_path_obj)  # configparser can read Path objects directly
     except configparser.Error as e:
-        logger.error(f"Error parsing config file {str(config_path_obj)}: {e}", exc_info=True)
+        _log_error(f"Error parsing config file {str(config_path_obj)}: {e}", exc_info=True)
         raise  # Re-raise the parsing error to be caught by load_and_log_configs
 
-    logger.info(f"load_comprehensive_config(): Sections found in config: {config_parser.sections()}")
+    _log_info(f"load_comprehensive_config(): Sections found in config: {config_parser.sections()}")
 
     # Propagate selected RAG rollout flags from config.txt into process env when unset.
     # This lets modules that consult os.getenv read file-backed defaults.
@@ -893,7 +937,7 @@ def load_comprehensive_config():
                 config_parser.get('RAG', 'agentic_cache_ttl_sec', fallback='600')
             )
     except Exception as _rag_env_err:
-        logger.debug(f"RAG env propagation skipped: {_rag_env_err}")
+        _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
 
     return config_parser
 
@@ -995,7 +1039,7 @@ def should_disable_cors() -> bool:
         if config_parser.has_section('Server'):
             return config_parser.getboolean('Server', 'disable_cors', fallback=False)
     except Exception as exc:
-        logger.debug(f"Unable to read disable_cors flag from config: {exc}")
+        _log_debug(f"Unable to read disable_cors flag from config: {exc}")
     return False
 
 def load_comprehensive_config_with_tts():
@@ -1053,14 +1097,14 @@ def load_comprehensive_config_with_tts():
     return CombinedConfig(config_parser, tts_config)
 
 def load_and_log_configs():
-    logger.debug("load_and_log_configs(): Loading and logging configurations...")
+    _log_debug("load_and_log_configs(): Loading and logging configurations...")
     try:
         # The 'config' variable below should be the result from load_comprehensive_config()
         config_parser_object = load_comprehensive_config()
 
         # This check might be redundant if load_comprehensive_config always raises on critical failure
         if config_parser_object is None:
-            logger.error("Comprehensive config object is None, cannot proceed")  # Changed to logger
+            _log_error("Comprehensive config object is None, cannot proceed")  # Changed to logger
             return None
         # API Keys - Check environment variables first, then config file
         anthropic_api_key = os.getenv('ANTHROPIC_API_KEY') or config_parser_object.get('API', 'anthropic_api_key', fallback=None)
@@ -1367,7 +1411,7 @@ def load_and_log_configs():
 
         # Retrieve output paths from the configuration file
         output_path = config_parser_object.get('Paths', 'output_path', fallback='results')
-        logger.trace(f"Output path set to: {output_path}")
+        _buffered_log("TRACE", f"Output path set to: {output_path}")
 
         # Save video transcripts
         save_video_transcripts = config_parser_object.get('Paths', 'save_video_transcripts', fallback='True')
@@ -1379,7 +1423,7 @@ def load_and_log_configs():
 
         # Retrieve processing choice from the configuration file
         processing_choice = config_parser_object.get('Processing', 'processing_choice', fallback='cpu')
-        logger.trace(f"Processing choice set to: {processing_choice}")
+        _buffered_log("TRACE", f"Processing choice set to: {processing_choice}")
 
         # [Chunking]
         # # Chunking Defaults
@@ -1483,7 +1527,7 @@ def load_and_log_configs():
         # Retrieve Embedding model settings from the configuration file
         # Default to Qwen3-Embedding-4B-GGUF if not specified
         embedding_model = config_parser_object.get('Embeddings', 'embedding_model', fallback='Qwen/Qwen3-Embedding-4B-GGUF')
-        logger.trace(f"Embedding model set to: {embedding_model}")
+        _buffered_log("TRACE", f"Embedding model set to: {embedding_model}")
         embedding_provider = config_parser_object.get('Embeddings', 'embedding_provider', fallback='huggingface')
         # Note: duplicate line removed - embedding_model already retrieved above
         onnx_model_path = config_parser_object.get('Embeddings', 'onnx_model_path', fallback="./App_Function_Libraries/onnx_models/text-embedding-3-small.onnx")
@@ -2283,28 +2327,153 @@ def load_and_log_configs():
         return None
 
 
-# Global scope in config.py
-try:
-    loaded_config_data = load_and_log_configs()
-    if loaded_config_data is None:  # Add a check here
-        logger.critical("Failed to load configuration data at module import. `loaded_config_data` is None.")
-        default_api_endpoint = "openai"  # Fallback
-    else:
-        default_api_endpoint = loaded_config_data.get('default_api', 'openai')  # Use .get() for safety
-        logger.info(f"Default API Endpoint (from config.py global scope): {default_api_endpoint}")
-except Exception as e:  # Should be less likely to hit this outer if inner one is robust
-    logger.error(f"Critical error setting default_api_endpoint in config.py global scope: {str(e)}", exc_info=True)
-    default_api_endpoint = "openai"  # Fallback
+# --- Lazy Configuration Proxies ---
+
+class _LazyMapping(MutableMapping[str, Any]):
+    """MutableMapping proxy that materializes its data on first access."""
+
+    __slots__ = ("_loader", "_data")
+
+    def __init__(self, loader):
+        object.__setattr__(self, "_loader", loader)
+        object.__setattr__(self, "_data", None)
+
+    def _ensure(self):
+        if object.__getattribute__(self, "_data") is None:
+            loader = object.__getattribute__(self, "_loader")
+            data = loader()
+            if data is None:
+                data = {}
+            object.__setattr__(self, "_data", data)
+
+    def __getitem__(self, key):
+        self._ensure()
+        return object.__getattribute__(self, "_data")[key]
+
+    def __setitem__(self, key, value):
+        self._ensure()
+        object.__getattribute__(self, "_data")[key] = value
+
+    def __delitem__(self, key):
+        self._ensure()
+        del object.__getattribute__(self, "_data")[key]
+
+    def __iter__(self):
+        self._ensure()
+        return iter(object.__getattribute__(self, "_data"))
+
+    def __len__(self):
+        self._ensure()
+        return len(object.__getattribute__(self, "_data"))
+
+    def get(self, key, default=None):
+        self._ensure()
+        return object.__getattribute__(self, "_data").get(key, default)
+
+    def keys(self):
+        self._ensure()
+        return object.__getattribute__(self, "_data").keys()
+
+    def values(self):
+        self._ensure()
+        return object.__getattribute__(self, "_data").values()
+
+    def items(self):
+        self._ensure()
+        return object.__getattribute__(self, "_data").items()
+
+    def pop(self, key, default=None):
+        self._ensure()
+        return object.__getattribute__(self, "_data").pop(key, default)
+
+    def update(self, *args, **kwargs):
+        self._ensure()
+        object.__getattribute__(self, "_data").update(*args, **kwargs)
+
+    def clear(self):
+        self._ensure()
+        object.__getattribute__(self, "_data").clear()
+
+    def __contains__(self, item):
+        self._ensure()
+        return item in object.__getattribute__(self, "_data")
 
 
-# --- Global Settings Object ---
-# Load the settings when the module is imported
-settings = load_settings()
+class LazySettings(_LazyMapping):
+    """Lazy settings mapping that also supports attribute-style access."""
 
-# For backward compatibility with code expecting 'config'
+    def __getattr__(self, name):
+        if name in {"_loader", "_data"}:
+            return object.__getattribute__(self, name)
+        self._ensure()
+        data = object.__getattribute__(self, "_data")
+        if hasattr(data, name):
+            return getattr(data, name)
+        try:
+            return data[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name, value):
+        if name in {"_loader", "_data"}:
+            object.__setattr__(self, name, value)
+            return
+        self._ensure()
+        object.__getattribute__(self, "_data")[name] = value
+
+    def __delattr__(self, name):
+        if name in {"_loader", "_data"}:
+            raise AttributeError("Cannot delete internal attribute")
+        self._ensure()
+        data = object.__getattribute__(self, "_data")
+        try:
+            del data[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __dir__(self):
+        self._ensure()
+        data = object.__getattribute__(self, "_data")
+        return sorted(set(super().__dir__()) | set(data.keys()))
+
+
+class LazyConfigData(_LazyMapping):
+    """Lazy loader for the comprehensive configuration dictionary."""
+
+    pass
+
+
+default_api_endpoint = "openai"
+
+
+def _settings_loader():
+    return load_settings()
+
+
+def _config_loader():
+    data = load_and_log_configs()
+    if data is None:
+        data = {}
+    global default_api_endpoint
+    default_api_endpoint = data.get('default_api', 'openai')
+    return data
+
+
+settings = LazySettings(_settings_loader)
 config = settings
+loaded_config_data = LazyConfigData(_config_loader)
+
+_LOGGER_READY = True
+_flush_startup_logs()
 
 
+def clear_config_cache() -> None:
+    """Clear cached configuration loaders (for tests or dynamic reloads)."""
+    load_comprehensive_config.cache_clear()
+    global default_api_endpoint
+    default_api_endpoint = "openai"
+    object.__setattr__(settings, "_data", None)
+    object.__setattr__(loaded_config_data, "_data", None)
 # --- Optional: Export individual variables if needed for backward compatibility (less recommended) ---
 # SINGLE_USER_MODE = settings["SINGLE_USER_MODE"]
 # SINGLE_USER_FIXED_ID = settings["SINGLE_USER_FIXED_ID"]

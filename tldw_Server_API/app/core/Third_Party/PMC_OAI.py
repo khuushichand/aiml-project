@@ -13,27 +13,37 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 from xml.etree import ElementTree as ET
 
 
 BASE_URL = "https://pmc.ncbi.nlm.nih.gov/api/oai/v1/mh/"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        status_forcelist=[429, 500, 502, 503, 504],
-        backoff_factor=1,
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.headers.update({"Accept-Encoding": "gzip, deflate"})
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        c = create_client(timeout=20)
+        c.headers.update({"Accept-Encoding": "gzip, deflate"})
+        return c
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            status_forcelist=[429, 500, 502, 503, 504],
+            backoff_factor=1,
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.headers.update({"Accept-Encoding": "gzip, deflate"})
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _get(session: requests.Session, params: Dict[str, Any]) -> ET.Element:
@@ -64,13 +74,17 @@ def pmc_oai_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
             "granularity": text("granularity"),
         })
         return info, None
-    except requests.exceptions.Timeout:
-        return None, "Request to PMC OAI-PMH timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"PMC OAI-PMH Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to PMC OAI-PMH timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to PMC OAI-PMH timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"PMC OAI-PMH Request Error: {str(e)}"
         return None, f"Unexpected PMC OAI-PMH Identify error: {str(e)}"
 
 
@@ -101,13 +115,17 @@ def pmc_oai_list_sets(resumption_token: Optional[str] = None) -> Tuple[Optional[
                 "setName": name.text if name is not None else None,
             })
         return sets, _parse_resumption(root), None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to PMC OAI-PMH timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to PMC OAI-PMH timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to PMC OAI-PMH timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
         return None, None, f"Unexpected PMC OAI-PMH ListSets error: {str(e)}"
 
 
@@ -215,13 +233,17 @@ def pmc_oai_list_records(
         root = _get(s, params)
         items = _parse_records(root)
         return items, _parse_resumption(root), None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to PMC OAI-PMH timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to PMC OAI-PMH timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to PMC OAI-PMH timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
         return None, None, f"Unexpected PMC OAI-PMH ListRecords error: {str(e)}"
 
 
@@ -258,13 +280,17 @@ def pmc_oai_list_identifiers(
                 "setSpecs": ss if ss else None,
             })
         return items, _parse_resumption(root), None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to PMC OAI-PMH timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to PMC OAI-PMH timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to PMC OAI-PMH timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
         return None, None, f"Unexpected PMC OAI-PMH ListIdentifiers error: {str(e)}"
 
 
@@ -282,12 +308,15 @@ def pmc_oai_get_record(
         if not items:
             return None, None
         return items[0], None
-    except requests.exceptions.Timeout:
-        return None, "Request to PMC OAI-PMH timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"PMC OAI-PMH Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to PMC OAI-PMH timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to PMC OAI-PMH timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"PMC OAI-PMH Request Error: {str(e)}"
         return None, f"Unexpected PMC OAI-PMH GetRecord error: {str(e)}"
-

@@ -688,6 +688,78 @@ class MCPProtocol:
     ) -> Dict[str, Any]:
         """List available tools"""
         tools = []
+        # Optional catalog filter: by id or name (scoped lookup)
+        catalog_filter: Optional[set[str]] = None
+        try:
+            catalog_name = None
+            catalog_id = None
+            if isinstance(params, dict):
+                catalog_name = params.get("catalog")
+                catalog_id = params.get("catalog_id")
+            if catalog_name is not None or catalog_id is not None:
+                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+                pool = await get_db_pool()
+                # Resolve catalog id, honoring team/org scoping from context (when available)
+                resolved_id = None
+                if catalog_id is not None:
+                    try:
+                        resolved_id = int(catalog_id)
+                    except Exception:
+                        resolved_id = None
+                if resolved_id is None and isinstance(catalog_name, str) and catalog_name.strip():
+                    name = catalog_name.strip()
+                    # Prefer team, then org, then global
+                    team_id = None
+                    org_id = None
+                    try:
+                        meta = getattr(context, "metadata", {}) or {}
+                        team_id = meta.get("team_id")
+                        org_id = meta.get("org_id")
+                    except Exception:
+                        team_id = None
+                        org_id = None
+                    row = None
+                    # Team-scoped
+                    if team_id is not None:
+                        row = await pool.fetchone(
+                            "SELECT id FROM tool_catalogs WHERE name = ? AND team_id = ?",
+                            name, team_id,
+                        )
+                    # Org-scoped
+                    if row is None and org_id is not None:
+                        row = await pool.fetchone(
+                            "SELECT id FROM tool_catalogs WHERE name = ? AND org_id = ? AND team_id IS NULL",
+                            name, org_id,
+                        )
+                    # Global
+                    if row is None:
+                        row = await pool.fetchone(
+                            "SELECT id FROM tool_catalogs WHERE name = ? AND org_id IS NULL AND team_id IS NULL",
+                            name,
+                        )
+                    if row and row.get("id") is not None:
+                        resolved_id = int(row.get("id"))
+                if resolved_id is not None:
+                    rows = await pool.fetchall(
+                        "SELECT tool_name FROM tool_catalog_entries WHERE catalog_id = ?",
+                        resolved_id,
+                    )
+                    names: set[str] = set()
+                    for r in rows:
+                        try:
+                            # rows may be dict or sqlite Row
+                            val = r["tool_name"] if isinstance(r, dict) else (r[0] if isinstance(r, tuple) else r[1])
+                        except Exception:
+                            try:
+                                val = r[0]
+                            except Exception:
+                                val = None
+                        if isinstance(val, str):
+                            names.add(val)
+                    catalog_filter = names
+        except Exception as _e:
+            # Fail-open for listing on catalog lookup errors (does not bypass RBAC)
+            context.logger.debug(f"tools/list catalog filter skipped: {_e}")
         modules = await self.module_registry.get_all_modules()
         
         for module_id, module in modules.items():
@@ -700,6 +772,10 @@ class MCPProtocol:
                     tool_copy = tool.copy()
                     tool_copy["module"] = module_id
                     name = tool_copy.get("name")
+                    # Catalog filter: include only when in selected catalog
+                    if catalog_filter is not None and isinstance(name, str):
+                        if name not in catalog_filter:
+                            continue
                     can_execute = await self._has_tool_permission(context, name) if name else False
                     tool_copy["canExecute"] = can_execute
                     tools.append(tool_copy)

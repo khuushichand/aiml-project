@@ -550,7 +550,11 @@ class WorkerOrchestrator:
                                 payload = None
                             if payload:
                                 try:
-                                    await client.xadd(q, payload)
+                                    fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()}
+                                except Exception:
+                                    fields = {k: str(v) for k, v in (payload or {}).items()}
+                                try:
+                                    await client.xadd(q, fields)
                                 except Exception:
                                     pass
                             # Remove regardless to avoid hot-looping on bad entries

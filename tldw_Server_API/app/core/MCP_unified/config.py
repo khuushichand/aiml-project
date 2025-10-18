@@ -18,6 +18,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
 
 
+def _default_ws_allowed_origins() -> list[str]:
+    """Safe local-only defaults for WS Origin allowlist.
+
+    Use exact Origin values commonly seen in local development to satisfy
+    production validation without accidentally exposing the server.
+    """
+    return [
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+    ]
+
+
+def _default_allowed_ips() -> list[str]:
+    """Restrict MCP to loopback by default.
+
+    This keeps the surface local-only unless explicitly configured via env.
+    """
+    return ["127.0.0.1", "::1"]
+
+
 class MCPConfig(BaseSettings):
     """
     MCP configuration with secure defaults and environment variable support.
@@ -78,7 +98,7 @@ class MCPConfig(BaseSettings):
     ws_close_timeout: int = Field(default=10, env="MCP_WS_CLOSE_TIMEOUT")
     ws_auth_required: bool = Field(default=True, env="MCP_WS_AUTH_REQUIRED")
     # WS security
-    ws_allowed_origins: List[str] = Field(default_factory=list, env="MCP_WS_ALLOWED_ORIGINS")
+    ws_allowed_origins: List[str] = Field(default_factory=_default_ws_allowed_origins, env="MCP_WS_ALLOWED_ORIGINS")
     ws_allow_query_auth: bool = Field(default=False, env="MCP_WS_ALLOW_QUERY_AUTH")
     # WS session policies
     ws_idle_timeout_seconds: int = Field(default=300, env="MCP_WS_IDLE_TIMEOUT_SECONDS")
@@ -86,7 +106,8 @@ class MCPConfig(BaseSettings):
     ws_session_rate_limit_window_seconds: int = Field(default=60, env="MCP_WS_SESSION_RATE_WINDOW_SECONDS")
     
     # Network access controls
-    allowed_client_ips: List[str] = Field(default_factory=list, env="MCP_ALLOWED_IPS")
+    # Default to loopback-only to avoid accidental exposure
+    allowed_client_ips: List[str] = Field(default_factory=_default_allowed_ips, env="MCP_ALLOWED_IPS")
     blocked_client_ips: List[str] = Field(default_factory=list, env="MCP_BLOCKED_IPS")
     trust_x_forwarded_for: bool = Field(default=False, env="MCP_TRUST_X_FORWARDED")
     trusted_proxy_depth: int = Field(default=1, ge=0, env="MCP_TRUSTED_PROXY_DEPTH")

@@ -356,6 +356,7 @@
         <span class="wf-help" title="Block validation prevents runs when inputs fail checks; non-block records validation issues but allows the run to continue.">i</span>
       </div>
       <label style="display:flex; gap:6px; align-items:center"><input type="checkbox" id="wfSched_enabled" checked /> Enabled</label>
+      <label style="display:flex; gap:6px; align-items:center" title="If enabled, run only when you are online (have an active session)"><input type="checkbox" id="wfSched_require_online" /> Require online</label>
       <input type="text" id="wfSched_inputs" placeholder='inputs JSON (optional)' style="flex:1; min-width:220px"/>
       <button class="api-button" onclick="wfSchedCreate()">Create</button>
     </div>
@@ -813,8 +814,9 @@
       const run_mode = document.getElementById('wfSched_mode').value;
       const validation_mode = document.getElementById('wfSched_validation').value;
       const enabled = document.getElementById('wfSched_enabled').checked;
+      const require_online = document.getElementById('wfSched_require_online')?.checked || false;
       const inputsText = document.getElementById('wfSched_inputs').value.trim();
-      const body = { name, cron, timezone, run_mode, validation_mode, enabled };
+      const body = { name, cron, timezone, run_mode, validation_mode, enabled, require_online };
       if (widRaw) body.workflow_id = parseInt(widRaw,10);
       if (inputsText){ try{ body.inputs = JSON.parse(inputsText); }catch(e){ Toast.error('Invalid inputs JSON'); return; } }
       const resp = await apiClient.makeRequest('POST','/api/v1/scheduler/workflows',{ body });
@@ -842,14 +844,16 @@
         <td>${it.run_mode}</td>
         <td>${it.validation_mode}</td>
         <td>${it.enabled? 'yes':'no'}</td>
+        <td>${it.require_online? 'yes':'no'}</td>
         <td>
           <button class="api-button btn-sm" onclick="wfSchedRunNow('${it.id}')">Run</button>
           <button class="api-button btn-sm" onclick="wfSchedToggle('${it.id}', ${it.enabled? 'false':'true'})">${it.enabled? 'Disable':'Enable'}</button>
+          <button class="api-button btn-sm" onclick="wfSchedToggleOnline('${it.id}', ${it.require_online? 'false':'true'})">${it.require_online? 'Always-run':'Require-online'}</button>
           <button class="api-button btn-sm danger" onclick="wfSchedDelete('${it.id}')">Delete</button>
         </td>
       </tr>`;
     }
-    return `<table class="table-compact"><thead><tr><th>ID</th><th>Name</th><th>WID</th><th>Cron</th><th>TZ</th><th>Mode</th><th>Validation</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+    return `<table class="table-compact"><thead><tr><th>ID</th><th>Name</th><th>WID</th><th>Cron</th><th>TZ</th><th>Mode</th><th>Validation</th><th>Enabled</th><th>Require Online</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   async function wfSchedDelete(id){
     try{
@@ -870,6 +874,13 @@
       const r = await apiClient.makeRequest('POST',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}/run-now`);
       Toast.success('Enqueued task '+(r?.task_id||''));
     }catch(e){ Toast.error('Run-now failed: '+(e?.message||e)); }
+  }
+  async function wfSchedToggleOnline(id, require_online){
+    try{
+      const body = { require_online };
+      await apiClient.makeRequest('PATCH',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}`,{ body });
+      await wfSchedList();
+    }catch(e){ Toast.error('Toggle require-online failed: '+(e?.message||e)); }
   }
   function wfInsertDelay(){
     try{

@@ -1186,8 +1186,12 @@ class WorkflowEngine:
                 from tldw_Server_API.app.core.Metrics import start_span as _start_span, set_span_attribute as _set_attr
                 with _start_span("workflows.webhook", attributes={"run_id": run_id}):
                     _set_attr("workflows.webhook.url", url)
-                    with httpx.Client(timeout=timeout) as client:
-                        resp = client.post(url, data=body, headers=headers)
+                try:
+                    client_ctx = httpx.Client(timeout=timeout, trust_env=False)
+                except TypeError:
+                    client_ctx = httpx.Client(timeout=timeout)
+                with client_ctx as client:
+                    resp = client.post(url, data=body, headers=headers)
                 # Record delivery event (mask full URL)
                 try:
                     host = _urlparse(url).hostname or ""

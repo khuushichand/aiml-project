@@ -81,7 +81,20 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
     elif persisted_after:
         after_id = persisted_after
     logger.info("Starting Jobs webhooks worker")
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    # Enforce egress policy per URL
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy as _eval_policy
+        pol = _eval_policy(url)
+        if not getattr(pol, "allowed", False):
+            logger.warning(f"Jobs webhooks disabled: URL not allowed by egress policy ({getattr(pol, 'reason', 'denied')})")
+            return
+    except Exception:
+        logger.warning("Jobs webhooks: egress policy check failed; refusing to start for safety")
+        return
+
+    # Use centralized HTTP client with safe defaults (trust_env=False)
+    from tldw_Server_API.app.core.http_client import create_async_client
+    async with create_async_client(timeout=timeout_s) as client:
         while True:
             if stop_event and stop_event.is_set():
                 logger.info("Stopping Jobs webhooks worker on shutdown signal")

@@ -8,6 +8,79 @@ from typing import Optional, Dict, Any
 import os
 from loguru import logger
 
+# Prefer using the central project config when available so we place
+# the scheduler DB alongside other Databases by default.
+try:
+    from tldw_Server_API.app.core.config import settings as core_settings  # type: ignore
+except Exception:
+    core_settings = None  # Fallback if import graph changes
+
+
+def _default_scheduler_db_url() -> str:
+    """Compute a sensible default DB URL under the shared Databases folder.
+
+    Priority:
+    1) SCHEDULER_DATABASE_URL (or WORKFLOWS_SCHEDULER_DATABASE_URL) env
+    2) Test contexts → temp sqlite per-process (preserves existing behavior)
+    3) Project Databases folder → sqlite:///PROJECT_ROOT/Databases/scheduler.db
+    4) Fallback to sqlite:///scheduler.db
+    """
+    # Explicit env overrides
+    env_url = os.getenv('SCHEDULER_DATABASE_URL') or os.getenv('WORKFLOWS_SCHEDULER_DATABASE_URL')
+    if env_url:
+        return env_url
+
+    # Preserve test behavior
+    if (os.getenv('PYTEST_CURRENT_TEST') is not None or
+            os.getenv('TEST_MODE', '').strip().lower() in {'1', 'true', 'yes', 'on'}):
+        import tempfile, os as _os
+        return f"sqlite:///{tempfile.gettempdir()}/scheduler_{_os.getpid()}.db"
+
+    # Try to use the repo's Databases directory
+    try:
+        project_root = None
+        if core_settings:
+            project_root = core_settings.get('PROJECT_ROOT')
+        if project_root:
+            db_path = Path(project_root) / 'Databases' / 'scheduler.db'
+            return f"sqlite:///{str(db_path.resolve())}"
+    except Exception:
+        pass
+
+    # As a final fallback, use a relative Databases path if present
+    try:
+        cwd = Path(os.getcwd())
+        candidate = cwd / 'Databases' / 'scheduler.db'
+        return f"sqlite:///{str(candidate.resolve())}"
+    except Exception:
+        # Last resort: CWD scheduler.db
+        return 'sqlite:///scheduler.db'
+
+
+def _default_scheduler_base_path() -> Path:
+    """Place scheduler payloads under PROJECT_ROOT/Databases/scheduler by default."""
+    env_base = os.getenv('SCHEDULER_BASE_PATH')
+    if env_base:
+        try:
+            return Path(env_base)
+        except Exception:
+            pass
+
+    try:
+        if core_settings:
+            project_root = core_settings.get('PROJECT_ROOT')
+            if project_root:
+                return Path(project_root) / 'Databases' / 'scheduler'
+    except Exception:
+        pass
+
+    # Fallback: put under local Databases if present; else default to ~/.local/share/scheduler
+    try:
+        local = Path(os.getcwd()) / 'Databases' / 'scheduler'
+        return local
+    except Exception:
+        return Path.home() / '.local' / 'share' / 'scheduler'
+
 
 @dataclass
 class SchedulerConfig:
@@ -19,20 +92,10 @@ class SchedulerConfig:
     """
     
     # Database configuration
-    database_url: str = field(
-        default_factory=lambda: (
-            os.getenv('SCHEDULER_DATABASE_URL')
-            or os.getenv('WORKFLOWS_SCHEDULER_DATABASE_URL')
-            or 'sqlite:///scheduler.db'
-        )
-    )
+    database_url: str = field(default_factory=_default_scheduler_db_url)
     
     # Base path for all scheduler data
-    base_path: Path = field(
-        default_factory=lambda: Path(
-            os.getenv('SCHEDULER_BASE_PATH', '/var/lib/scheduler')
-        )
-    )
+    base_path: Path = field(default_factory=_default_scheduler_base_path)
     
     # Write buffer configuration
     write_buffer_size: int = field(

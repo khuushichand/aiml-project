@@ -292,8 +292,18 @@ class BaseWorker(ABC):
                     # Non-fatal; proceed without dedupe
                     pass
                 
-                # Update job status
-                await self._update_job_status(message.job_id, JobStatus.CHUNKING)
+                # Update job status according to stage
+                try:
+                    _stage = self._stage_name()
+                    _status_map = {
+                        "chunking": JobStatus.CHUNKING,
+                        "embedding": JobStatus.EMBEDDING,
+                        "storage": JobStatus.STORING,
+                    }
+                    _status = _status_map.get(_stage, JobStatus.PROCESSING)
+                except Exception:
+                    _status = JobStatus.PROCESSING
+                await self._update_job_status(message.job_id, _status)
                 
                 # Process the message within a tracing span
                 async with tm.async_span(
@@ -398,12 +408,15 @@ class BaseWorker(ABC):
                     f"Message {message.job_id} sent to DLQ (retries={message.retry_count}/{message.max_retries}, type={failure_type}, code={error_code})"
                 )
                 
-            # Always acknowledge to prevent reprocessing
-            await self.redis_client.xack(
-                self._active_stream_for_batch or self.config.queue_name,
-                self.config.consumer_group,
-                message_id
-            )
+            # Always acknowledge to prevent reprocessing (guarded)
+            try:
+                await self.redis_client.xack(
+                    self._active_stream_for_batch or self.config.queue_name,
+                    self.config.consumer_group,
+                    message_id
+                )
+            except Exception:
+                pass
             
         except Exception as e:
             logger.error(f"Error handling failed message: {e}")
@@ -438,7 +451,11 @@ class BaseWorker(ABC):
                     except Exception as _zerr:
                         logger.warning(f"Fallback delayed scheduling failed ({_zerr}); requeue live")
                         try:
-                            await self.redis_client.xadd(self.config.queue_name, payload)
+                            _fields = {k: (v if isinstance(v, str) else json.dumps(v, default=str)) for k, v in (payload or {}).items()}
+                        except Exception:
+                            _fields = {k: str(v) for k, v in (payload or {}).items()}
+                        try:
+                            await self.redis_client.xadd(self.config.queue_name, _fields)
                         except Exception:
                             pass
                 else:
@@ -598,8 +615,30 @@ class BaseWorker(ABC):
     
     async def _calculate_load(self) -> float:
         """Calculate current worker load (0-1)"""
-        # This is a simple implementation - can be overridden by subclasses
-        queue_length = await self.redis_client.xlen(self.config.queue_name)
+        # Account for priority subqueues when enabled to better reflect backlog
+        queue_length = 0
+        try:
+            if getattr(self, "_priority_enabled", False):
+                base = self.config.queue_name
+                total = 0
+                for suf in ("high", "normal", "low"):
+                    q = f"{base}:{suf}"
+                    try:
+                        total += int(await self.redis_client.xlen(q))
+                    except Exception:
+                        # Missing subqueue or backend issue — ignore
+                        pass
+                # Also include base queue in case some writers use it directly
+                try:
+                    total += int(await self.redis_client.xlen(base))
+                except Exception:
+                    pass
+                queue_length = total
+            else:
+                queue_length = int(await self.redis_client.xlen(self.config.queue_name))
+        except Exception:
+            # Fall back to zero load on errors
+            queue_length = 0
         return min(1.0, queue_length / 100)  # Normalize to 0-1
     
     async def _cleanup(self):
@@ -733,4 +772,8 @@ class BaseWorker(ABC):
                 await asyncio.sleep(max(0.001, min(3.0, delay_ms / 1000.0)))
             except Exception:
                 pass
-            await self.redis_client.xadd(self.config.queue_name, payload)
+            try:
+                _fields = {k: (v if isinstance(v, str) else json.dumps(v, default=str)) for k, v in (payload or {}).items()}
+            except Exception:
+                _fields = {k: str(v) for k, v in (payload or {}).items()}
+            await self.redis_client.xadd(self.config.queue_name, _fields)

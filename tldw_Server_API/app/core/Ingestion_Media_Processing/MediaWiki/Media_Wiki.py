@@ -24,6 +24,7 @@ import yaml
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.Utils.Utils import logging
 #
 #######################################################################################################################
@@ -460,12 +461,14 @@ def process_single_item(
             # Ensure ingestion_date is a string in 'YYYY-MM-DD' format
             ingestion_date_str = timestamp_dt.strftime('%Y-%m-%d')
 
-            result = MediaDatabase.add_media_with_keywords(  # This function is from App_Function_Libraries.DB.DB_Manager
+            # Create a DB instance and persist
+            db_instance = create_media_database(client_id="mediawiki_import")
+            result = db_instance.add_media_with_keywords(
                 url=url,
                 title=title,
                 media_type="mediawiki_page",  # Adjusted type
                 content=content,
-                keywords=f"mediawiki,{wiki_name},page",
+                keywords=["mediawiki", wiki_name, "page"],
                 prompt="",
                 analysis_content="",  # Analysis/summary would be separate
                 transcription_model="N/A",
@@ -475,7 +478,9 @@ def process_single_item(
             # Assuming add_media_with_keywords returns (media_id, message)
             # If it returns the full DB record or just ID, adapt here.
             # Let's assume it's (media_id, message) as per your original code.
-            if isinstance(result, tuple) and len(result) == 2:
+            if isinstance(result, tuple) and len(result) == 3:
+                media_id, _, message = result
+            elif isinstance(result, tuple) and len(result) == 2:
                 media_id, message = result
             else:  # Fallback if structure is different
                 media_id = result if isinstance(result, int) else None

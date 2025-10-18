@@ -39,7 +39,7 @@ class TeamResponse(BaseModel):
 
 class TeamMemberAddRequest(BaseModel):
     user_id: int
-    role: Optional[str] = Field("member", pattern=r"^(owner|admin|member)$")
+    role: Optional[str] = Field("member", pattern=r"^(owner|admin|lead|member)$")
 
 
 class TeamMemberResponse(BaseModel):
@@ -62,6 +62,11 @@ class VirtualKeyCreateRequest(BaseModel):
     budget_month_tokens: Optional[int] = None
     budget_day_usd: Optional[float] = None
     budget_month_usd: Optional[float] = None
+    # Additional generic constraints stored in metadata for non-LLM enforcement
+    allowed_methods: Optional[List[str]] = None
+    allowed_paths: Optional[List[str]] = None
+    max_calls: Optional[int] = Field(None, ge=0)
+    max_runs: Optional[int] = Field(None, ge=0)
 
 
 # ============================
@@ -70,7 +75,7 @@ class VirtualKeyCreateRequest(BaseModel):
 
 class OrgMemberAddRequest(BaseModel):
     user_id: int
-    role: Optional[str] = Field("member", pattern=r"^(owner|admin|member)$")
+    role: Optional[str] = Field("member", pattern=r"^(owner|admin|lead|member)$")
 
 
 class OrgMemberResponse(BaseModel):
@@ -80,7 +85,7 @@ class OrgMemberResponse(BaseModel):
 
 
 class OrgMemberRoleUpdateRequest(BaseModel):
-    role: str = Field(..., pattern=r"^(owner|admin|member)$")
+    role: str = Field(..., pattern=r"^(owner|admin|lead|member)$")
 
 
 class OrgMemberListItem(BaseModel):

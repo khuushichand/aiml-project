@@ -973,6 +973,7 @@ The RAG module has comprehensive documentation for both developers and API consu
 
 - **[RAG Developer Guide](Docs/Development/RAG-Developer-Guide.md)** - Architecture, components, testing, and extending the RAG module
 - **[RAG API Guide](Docs/API-related/RAG-API-Guide.md)** - Complete API reference with examples in JavaScript, Python, and cURL
+- **[Media→Embeddings→RAG→Evals Workflow](Docs/Published/User_Guides/Media_to_RAG_Evals_Workflow.md)** - End‑to‑end recipe to ingest, embed, search, and evaluate
 
 ### Agentic Chunking (experimental)
 - Design doc: `Docs/Design/Agentic_Chunking.md`

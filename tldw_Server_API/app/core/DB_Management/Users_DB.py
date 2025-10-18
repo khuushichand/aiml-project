@@ -599,13 +599,12 @@ async def get_user_media_db(user_id: int, db_name: str = "media"):
     # Get the database path (ensures directory exists)
     db_path = Path(get_user_db_path(user_id, db_name))
     
-    # Import MediaDatabase (avoid circular import)
+    # Import media DB factory (avoid circular import)
     try:
-        from tldw_Server_API.app.core.DB_Management.DB_Manager import MediaDatabase
+        from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
         
-        # Create and return the database instance
-        # The MediaDatabase class should handle initialization
-        db_instance = MediaDatabase(str(db_path))
+        # Create and return the database instance via central factory
+        db_instance = create_media_database(client_id=str(user_id), db_path=str(db_path))
         return db_instance
         
     except ImportError as e:

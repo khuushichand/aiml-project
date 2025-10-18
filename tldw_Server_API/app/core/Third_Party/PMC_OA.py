@@ -12,27 +12,35 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import os
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from xml.etree import ElementTree as ET
+from tldw_Server_API.app.core.http_client import create_client
 
 
 BASE_URL = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        status_forcelist=[429, 500, 502, 503, 504],
-        backoff_factor=1,
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.headers.update({"Accept-Encoding": "gzip, deflate"})
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        return create_client(timeout=20)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            status_forcelist=[429, 500, 502, 503, 504],
+            backoff_factor=1,
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.headers.update({"Accept-Encoding": "gzip, deflate"})
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _get(params: Dict[str, Any]) -> ET.Element:
@@ -58,13 +66,17 @@ def pmc_oa_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
             "latest": latest.text if latest is not None else None,
         })
         return info, None
-    except requests.exceptions.Timeout:
-        return None, "Request to PMC OA Web Service timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"PMC OA HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"PMC OA Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to PMC OA Web Service timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"PMC OA HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to PMC OA Web Service timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"PMC OA HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"PMC OA Request Error: {str(e)}"
         return None, f"Unexpected PMC OA Identify error: {str(e)}"
 
 
@@ -125,13 +137,17 @@ def pmc_oa_query(
                 "links": links,
             })
         return records, _parse_resumption(root), None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to PMC OA Web Service timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"PMC OA HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"PMC OA Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to PMC OA Web Service timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"PMC OA HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to PMC OA Web Service timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"PMC OA HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"PMC OA Request Error: {str(e)}"
         return None, None, f"Unexpected PMC OA query error: {str(e)}"
 
 
@@ -154,12 +170,15 @@ def download_pmc_pdf(pmcid: str) -> Tuple[Optional[bytes], Optional[str], Option
         if cd and "filename=" in cd:
             filename = cd.split("filename=")[-1].strip('"')
         return r.content, filename, None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to PMC to fetch PDF timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"PMC PDF HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"PMC PDF Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to PMC to fetch PDF timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"PMC PDF HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to PMC to fetch PDF timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"PMC PDF HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"PMC PDF Request Error: {str(e)}"
         return None, None, f"Unexpected PMC PDF download error: {str(e)}"
-

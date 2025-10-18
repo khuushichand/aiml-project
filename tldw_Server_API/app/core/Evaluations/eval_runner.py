@@ -412,6 +412,45 @@ class EvaluationRunner:
                 "max_generation_tokens": (rg.get("max_tokens") or [None])[0] if isinstance(rg.get("max_tokens"), list) else (rg.get("max_tokens") or 500),
             }
 
+            # Additional retrieval knobs (safe pass-through)
+            if rt.get("fts_level") in ("media", "chunk"):
+                upr_args_common["fts_level"] = rt.get("fts_level")
+
+            # Advanced pass-through from an optional 'advanced' block
+            adv = rp.get("advanced") or {}
+            if isinstance(adv, dict):
+                allowed_adv_keys = {
+                    # Search/expansion/cache
+                    "expand_query","expansion_strategies","spell_check","enable_cache","cache_threshold","adaptive_cache",
+                    # Security/filters
+                    "enable_security_filter","detect_pii","redact_pii","sensitivity_level","content_filter",
+                    # Tables/VLM
+                    "enable_table_processing","table_method","enable_vlm_late_chunking","vlm_backend","vlm_detect_tables_only","vlm_max_pages","vlm_late_chunk_top_k_docs",
+                    # Context/chunking
+                    "enable_enhanced_chunking","chunk_type_filter","enable_parent_expansion","parent_context_size","include_parent_document","sibling_window","include_sibling_chunks",
+                    # Advanced retrieval
+                    "enable_multi_vector_passages","mv_span_chars","mv_stride","mv_max_spans","mv_flatten_to_spans","enable_numeric_table_boost",
+                    # Reranking extras
+                    "reranking_model","rerank_min_relevance_prob","rerank_sentinel_margin",
+                    # Citations/generation guardrails
+                    "enable_citations","citation_style","include_page_numbers","enable_chunk_citations","strict_extractive","require_hard_citations","enable_numeric_fidelity","numeric_fidelity_behavior",
+                    # Generation extras
+                    "enable_abstention","abstention_behavior","enable_multi_turn_synthesis","synthesis_time_budget_sec","synthesis_draft_tokens","synthesis_refine_tokens",
+                    # Post-verification/adaptive
+                    "enable_post_verification","adaptive_max_retries","adaptive_unsupported_threshold","adaptive_max_claims","adaptive_time_budget_sec","low_confidence_behavior","adaptive_advanced_rewrites","adaptive_rerun_on_low_confidence","adaptive_rerun_include_generation","adaptive_rerun_bypass_cache","adaptive_rerun_time_budget_sec","adaptive_rerun_doc_budget",
+                    # Observability/perf
+                    "enable_monitoring","enable_observability","trace_id","enable_performance_analysis","timeout_seconds",
+                    # Namespace and UX
+                    "index_namespace","highlight_results","highlight_query_terms","track_cost","debug_mode",
+                    # Claims/factuality
+                    "enable_claims","claim_extractor","claim_verifier","claims_top_k","claims_conf_threshold","claims_max","nli_model","claims_concurrency",
+                    # Filtering/date/media type
+                    "enable_date_filter","date_range","filter_media_types",
+                }
+                for k, v in adv.items():
+                    if k in allowed_adv_keys:
+                        upr_args_common[k] = v
+
             # Enhanced chunking toggles (note: retrieval-time placeholder in unified pipeline)
             if ck:
                 upr_args_common.update({

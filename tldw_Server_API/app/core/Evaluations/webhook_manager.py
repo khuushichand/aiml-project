@@ -903,21 +903,22 @@ class WebhookManager:
         """
         # Get webhook details
         with self.db_adapter.transaction():
-            
-            cursor.execute("""
+            row = self.db_adapter.fetch_one(
+                """
                 SELECT id, secret FROM webhook_registrations
                 WHERE user_id = ? AND url = ?
-            """, (user_id, url))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                return {
-                    "success": False,
-                    "error": "Webhook not found"
-                }
-            
-            webhook_id, secret = row
+                """,
+                (user_id, url)
+            )
+
+        if not row:
+            return {
+                "success": False,
+                "error": "Webhook not found"
+            }
+
+        webhook_id = row.get("id") if isinstance(row, dict) else row[0]
+        secret = row.get("secret") if isinstance(row, dict) else row[1]
         
         # Create test payload
         payload = WebhookPayload(

@@ -940,8 +940,20 @@ class Chunker:
         start = 0
         last_end = 0
         while start < len(words):
-            effective_start = max(0, start - (overlap if start > 0 else 0))
-            end = min(effective_start + max_words, len(words))
+            # If the remaining tokens fit within one window, emit a final tail
+            # chunk that ends exactly at the end of the text to guarantee full
+            # coverage without emitting an extra tiny chunk later.
+            if (len(words) - start) <= max_words:
+                if overlap > 0:
+                    # Preserve the intended overlap at the head of the last chunk
+                    effective_start = max(0, last_end - overlap)
+                else:
+                    # No-overlap case: start exactly at the remainder start to avoid duplication
+                    effective_start = start
+                end = len(words)
+            else:
+                effective_start = max(0, start - (overlap if start > 0 else 0))
+                end = min(effective_start + max_words, len(words))
             # Avoid emitting a chunk fully contained within the previous one
             if end <= last_end:
                 break
@@ -950,6 +962,8 @@ class Chunker:
             last_end = end
             if end == len(words):
                 break
+            # Advance by fixed stride; the overlap is handled by effective_start.
+            # This keeps the number of chunks minimal while preserving context.
             start += max_words
             logging.debug(f"Created word chunk {len(chunks)} with {len(chunk_words)} words")
 

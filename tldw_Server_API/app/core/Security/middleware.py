@@ -24,6 +24,24 @@ DEFAULT_CSP = (
     "upgrade-insecure-requests"
 )
 
+# Relaxed CSP for WebUI path. Keeps strict defaults elsewhere.
+# - Allows inline event handlers via script-src-attr 'unsafe-inline'
+# - Allows eval for legacy dynamic tab scripts
+# - Keeps other directives aligned with DEFAULT_CSP
+RELAXED_CSP_WEBUI = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-eval'; "
+    "script-src-attr 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "upgrade-insecure-requests"
+)
+
 DEFAULT_PERMISSIONS_POLICY = (
     "geolocation=(), "
     "microphone=(), "
@@ -107,8 +125,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if self.referrer_policy:
             response.headers.setdefault("Referrer-Policy", self.referrer_policy)
 
-        csp_value = self.content_security_policy or DEFAULT_CSP
-        response.headers.setdefault("Content-Security-Policy", csp_value)
+        # Path-scoped CSP: relax for WebUI while keeping strict defaults globally
+        path = request.url.path or ""
+        if path.startswith("/webui"):
+            # Force relaxed CSP for WebUI assets/pages
+            response.headers["Content-Security-Policy"] = RELAXED_CSP_WEBUI
+        else:
+            csp_value = self.content_security_policy or DEFAULT_CSP
+            response.headers.setdefault("Content-Security-Policy", csp_value)
 
         permissions_value = self.permissions_policy or DEFAULT_PERMISSIONS_POLICY
         response.headers.setdefault("Permissions-Policy", permissions_value)

@@ -1183,8 +1183,18 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
     params = {"q": search_term, "textDecorations": True, "textFormat": "HTML", "count": result_count,
               "freshness": date_range, "promote": "webpages", "safeSearch": "Moderate"}
 
-    response = requests.get(search_url, headers=headers, params=params)
-    response.raise_for_status()
+    # Enforce SSRF/egress policy
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(search_url)
+        if not getattr(pol, 'allowed', False):
+            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise RequestException(f"Egress policy evaluation failed: {_e}")
+
+    with create_session() as _s:
+        response = _s.get(search_url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     brave_search_results = response.json()
     return brave_search_results
@@ -1277,9 +1287,15 @@ def test_parse_brave_results():
 # https://github.com/deedy5/duckduckgo_search
 # Copied request format/structure from https://github.com/deedy5/duckduckgo_search/blob/main/duckduckgo_search/duckduckgo_search.py
 def create_session() -> requests.Session:
+    """Create a Requests session with safe defaults: retries, trust_env=False."""
     session = requests.Session()
+    try:
+        session.trust_env = False
+    except Exception:
+        pass
     retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[429, 500, 502, 503, 504])
     session.mount('https://', HTTPAdapter(max_retries=retries))
+    session.mount('http://', HTTPAdapter(max_retries=retries))
     return session
 
 def search_web_duckduckgo(
@@ -1315,8 +1331,17 @@ def search_web_duckduckgo(
     cache = set()
     results: list[dict[str, str]] = []
 
+    ddg_url = "https://html.duckduckgo.com/html"
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        if not evaluate_url_policy(ddg_url).allowed:
+            return results
+    except Exception:
+        return results
+
     for _ in range(5):
-        response = requests.post("https://html.duckduckgo.com/html", data=payload)
+        with create_session() as _s:
+            response = _s.post(ddg_url, data=payload, timeout=10)
         resp_content = response.content
         if b"No  results." in resp_content:
             return results

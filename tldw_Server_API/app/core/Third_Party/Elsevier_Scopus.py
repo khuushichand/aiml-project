@@ -8,8 +8,13 @@ from __future__ import annotations
 import os
 from typing import Optional, Tuple, List, Dict, Any
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 def _missing_key_error() -> str:
@@ -19,18 +24,21 @@ def _missing_key_error() -> str:
 BASE_URL = "https://api.elsevier.com/content/search/scopus"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        return create_client(timeout=20)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _headers() -> Dict[str, str]:
@@ -115,13 +123,17 @@ def search_scopus(
         entries = sr.get("entry") or []
         items = [_normalize_entry(e) for e in entries]
         return items, total, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to Scopus API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"Scopus API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"Scopus API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to Scopus API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"Scopus API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to Scopus API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"Scopus API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"Scopus API Request Error: {str(e)}"
         return None, 0, f"Scopus error: {str(e)}"
 
 
@@ -147,11 +159,15 @@ def get_scopus_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
         if not entries:
             return None, None
         return _normalize_entry(entries[0]), None
-    except requests.exceptions.Timeout:
-        return None, "Request to Scopus API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"Scopus API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"Scopus API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to Scopus API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"Scopus API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to Scopus API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"Scopus API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"Scopus API Request Error: {str(e)}"
         return None, f"Scopus error: {str(e)}"

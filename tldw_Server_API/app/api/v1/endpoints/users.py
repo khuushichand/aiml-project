@@ -3,6 +3,7 @@
 #
 # Imports
 from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, Field
 from datetime import datetime
 #
 # 3rd-party imports
@@ -311,6 +312,48 @@ async def create_api_key(
         description=request.description,
         scope=request.scope,
         expires_in_days=request.expires_in_days,
+    )
+    return APIKeyCreateResponse(**result)
+
+
+class SelfVirtualAPIKeyRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    expires_in_days: Optional[int] = Field(30, ge=1)
+    allowed_endpoints: Optional[List[str]] = None
+    # Generic constraints
+    allowed_methods: Optional[List[str]] = None
+    allowed_paths: Optional[List[str]] = None
+    max_calls: Optional[int] = Field(None, ge=0)
+    max_runs: Optional[int] = Field(None, ge=0)
+    # Optional LLM budgets (if used by client tools)
+    budget_day_tokens: Optional[int] = None
+    budget_month_tokens: Optional[int] = None
+    budget_day_usd: Optional[float] = None
+    budget_month_usd: Optional[float] = None
+
+
+@router.post("/api-keys/virtual", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_virtual_api_key(
+    request: SelfVirtualAPIKeyRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+) -> APIKeyCreateResponse:
+    """Create a constrained (virtual/burnable) API key for the current user."""
+    api_mgr = await get_api_key_manager()
+    result = await api_mgr.create_virtual_key(
+        user_id=int(current_user["id"]),
+        name=request.name,
+        description=request.description,
+        expires_in_days=request.expires_in_days,
+        allowed_endpoints=request.allowed_endpoints,
+        budget_day_tokens=request.budget_day_tokens,
+        budget_month_tokens=request.budget_month_tokens,
+        budget_day_usd=request.budget_day_usd,
+        budget_month_usd=request.budget_month_usd,
+        allowed_methods=request.allowed_methods,
+        allowed_paths=request.allowed_paths,
+        max_calls=request.max_calls,
+        max_runs=request.max_runs,
     )
     return APIKeyCreateResponse(**result)
 

@@ -373,13 +373,16 @@ def authenticated_client(client, auth_token):
     
     def authenticated_post(url, **kwargs):
         headers = kwargs.pop("headers", {})
+        # Include CSRF token if available on the client
+        csrf_token = getattr(client, "csrf_token", None)
+        if csrf_token and "X-CSRF-Token" not in headers:
+            headers["X-CSRF-Token"] = csrf_token
         
         if settings.AUTH_MODE == "multi_user":
             headers["Authorization"] = auth_token
         else:
-            # Use Token header with Bearer format for chat endpoint
-            token_with_bearer = auth_token if auth_token.startswith("Bearer ") else f"Bearer {auth_token}"
-            headers["Token"] = token_with_bearer
+            # Single-user mode: chat endpoint expects X-API-KEY
+            headers["X-API-KEY"] = auth_token
         
         return original_post(url, headers=headers, **kwargs)
     

@@ -5,8 +5,13 @@
 from typing import List, Dict, Any, Optional, Tuple  # Added Optional, Tuple
 import time  # For potential delays if Semantic Scholar API has strict rate limits
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry  # Correct import for Retry
+from tldw_Server_API.app.core.http_client import create_client
 #
 ####################################################################################################
 #
@@ -103,41 +108,45 @@ def search_papers_semantic_scholar(  # Renamed for clarity
                 print(f"Warning: Could not parse year range: {year_range}. Ignoring.")
                 pass  # Ignore if parsing fails
 
-        # Configure retry strategy for requests
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes to retry on
-            allowed_methods=["HEAD", "GET", "OPTIONS"],  # Methods to retry
-            backoff_factor=1  # sleep for {backoff factor} * (2 ** ({number of total retries} - 1))
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        http_session = requests.Session()
-        http_session.mount("https://", adapter)
-        http_session.mount("http://", adapter)
-
-        response = http_session.get(url, params=params, timeout=15)  # Added timeout
+        # Prefer centralized httpx client; fallback to requests+retry if unavailable
+        try:
+            http_session = create_client(timeout=15)
+            response = http_session.get(url, params=params, timeout=15)
+        except Exception:
+            retry_strategy = Retry(
+                total=3,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["HEAD", "GET", "OPTIONS"],
+                backoff_factor=1,
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            http_session = requests.Session()
+            http_session.mount("https://", adapter)
+            http_session.mount("http://", adapter)
+            response = http_session.get(url, params=params, timeout=15)
         response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
 
         # Optional: small delay if making many calls, though retry handles 429
         # time.sleep(0.2)
 
         return response.json(), None
-    except requests.exceptions.Timeout:
-        error_msg = f"Request to Semantic Scholar API timed out. URL: {url} Params: {params}"
-        # print(f"**Error:** {error_msg}") # Logging handled by API endpoint
-        return None, error_msg
-    except requests.exceptions.HTTPError as e:
-        error_msg = f"Semantic Scholar API HTTP Error: {e.response.status_code} - {e.response.text}. URL: {e.request.url}"
-        # print(f"**Error:** {error_msg}")
-        return None, error_msg
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Semantic Scholar API Request Error: {e}. URL: {e.request.url if e.request else url}"
-        # print(f"**Error:** {error_msg}")
-        return None, error_msg
     except Exception as e:
-        error_msg = f"An unexpected error occurred during Semantic Scholar search: {e}"
-        # print(f"**Error:** {error_msg}")
-        return None, error_msg
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, f"Request to Semantic Scholar API timed out. URL: {url} Params: {params}"
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            sc = getattr(getattr(e, 'response', None), 'status_code', '?')
+            return None, f"Semantic Scholar API HTTP Error: {sc}. URL: {url}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, f"Request to Semantic Scholar API timed out. URL: {url} Params: {params}"
+        if isinstance(e, requests.exceptions.HTTPError):
+            sc = getattr(getattr(e, 'response', None), 'status_code', '?')
+            txt = getattr(getattr(e, 'response', None), 'text', '')
+            req_url = getattr(getattr(e, 'request', None), 'url', url)
+            return None, f"Semantic Scholar API HTTP Error: {sc} - {txt}. URL: {req_url}"
+        if isinstance(e, requests.exceptions.RequestException):
+            req_url = getattr(getattr(e, 'request', None), 'url', url)
+            return None, f"Semantic Scholar API Request Error: {e}. URL: {req_url}"
+        return None, f"An unexpected error occurred during Semantic Scholar search: {e}"
 
 
 def get_paper_details_semantic_scholar(paper_id: str, fields_to_return: str = DEFAULT_SEARCH_FIELDS) -> Tuple[
@@ -158,18 +167,21 @@ def get_paper_details_semantic_scholar(paper_id: str, fields_to_return: str = DE
         response.raise_for_status()
         # time.sleep(0.2)
         return response.json(), None
-    except requests.exceptions.Timeout:
-        error_msg = f"Request for paper details (ID: {paper_id}) timed out."
-        return None, error_msg
-    except requests.exceptions.HTTPError as e:
-        error_msg = f"HTTP Error fetching paper details (ID: {paper_id}): {e.response.status_code} - {e.response.text}"
-        return None, error_msg
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Request Error fetching paper details (ID: {paper_id}): {e}"
-        return None, error_msg
     except Exception as e:
-        error_msg = f"Unexpected error fetching paper details (ID: {paper_id}): {e}"
-        return None, error_msg
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, f"Request for paper details (ID: {paper_id}) timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            sc = getattr(getattr(e, 'response', None), 'status_code', '?')
+            return None, f"HTTP Error fetching paper details (ID: {paper_id}): {sc}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, f"Request for paper details (ID: {paper_id}) timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            sc = getattr(getattr(e, 'response', None), 'status_code', '?')
+            txt = getattr(getattr(e, 'response', None), 'text', '')
+            return None, f"HTTP Error fetching paper details (ID: {paper_id}): {sc} - {txt}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"Request Error fetching paper details (ID: {paper_id}): {e}"
+        return None, f"Unexpected error fetching paper details (ID: {paper_id}): {e}"
 
 
 def format_paper_info(paper: Dict[str, Any]) -> str:

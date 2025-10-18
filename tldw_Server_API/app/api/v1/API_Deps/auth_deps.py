@@ -317,11 +317,42 @@ async def get_current_user(
     except Exception:
         pass
 
+    # Helper: IP allowlist check for single-user mode
+    def _ip_allowed_single_user(client_ip: Optional[str]) -> bool:
+        try:
+            settings = get_settings()
+            allowed = [s.strip() for s in (settings.SINGLE_USER_ALLOWED_IPS or []) if str(s).strip()]
+            if not allowed:
+                return True
+            if not client_ip:
+                return False
+            import ipaddress as _ip
+            ip = _ip.ip_address(client_ip)
+            for entry in allowed:
+                try:
+                    # Support exact IP or CIDR
+                    if '/' in entry:
+                        if ip in _ip.ip_network(entry, strict=False):
+                            return True
+                    else:
+                        if str(ip) == entry:
+                            return True
+                except Exception:
+                    continue
+            return False
+        except Exception:
+            # Fail closed if configuration is malformed
+            return False
+
     # Single-user mode: honor the configured SINGLE_USER_API_KEY directly (no DB lookups)
     try:
-        if is_single_user_mode() and x_api_key:
+        if is_single_user_mode():
             settings = get_settings()
-            if x_api_key == settings.SINGLE_USER_API_KEY:
+            client_ip = request.client.host if getattr(request, "client", None) else None
+            # Accept X-API-KEY header
+            if x_api_key and x_api_key == settings.SINGLE_USER_API_KEY:
+                if not _ip_allowed_single_user(client_ip):
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="IP not allowed")
                 user = {
                     "id": settings.SINGLE_USER_FIXED_ID,
                     "username": "single_user",
@@ -337,6 +368,27 @@ async def get_current_user(
                 except Exception:
                     pass
                 return user
+            # Also allow Authorization: Bearer <SINGLE_USER_API_KEY>
+            if credentials and (credentials.scheme or '').lower() == 'bearer':
+                token = credentials.credentials
+                if token == settings.SINGLE_USER_API_KEY:
+                    if not _ip_allowed_single_user(client_ip):
+                        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="IP not allowed")
+                    user = {
+                        "id": settings.SINGLE_USER_FIXED_ID,
+                        "username": "single_user",
+                        "email": None,
+                        "role": "admin",
+                        "is_active": True,
+                        "is_verified": True,
+                    }
+                    try:
+                        request.state.user_id = settings.SINGLE_USER_FIXED_ID
+                        request.state.team_ids = []
+                        request.state.org_ids = []
+                    except Exception:
+                        pass
+                    return user
     except Exception:
         # Fall through to other mechanisms if any issue arises
         pass
@@ -818,6 +870,229 @@ def rbac_rate_limit(resource: str):
     async def _dep(request: Request, db_pool: DatabasePool = Depends(get_db_pool)):
         await enforce_rbac_rate_limit(request, resource, db_pool)
     return _dep
+
+
+#######################################################################################################################
+#
+# Scoped Virtual-Key Enforcement
+
+_VK_USAGE: dict = {}
+
+
+def require_token_scope(
+    scope: str,
+    *,
+    require_if_present: bool = True,
+    require_schedule_match: bool = False,
+    schedule_path_param: str = "schedule_id",
+    schedule_header: str = "X-Workflow-Schedule-Id",
+    allow_admin_bypass: bool = True,
+    endpoint_id: Optional[str] = None,
+    count_as: Optional[str] = None,
+):
+    """
+    Create a dependency that enforces a scoped JWT ("virtual key").
+
+    Behavior:
+    - If the Authorization bearer token contains a 'scope' claim and require_if_present=True,
+      it must match the provided `scope` or 403.
+    - If `require_schedule_match=True` and the token includes 'schedule_id', the value must
+      match the request path param `schedule_path_param` when present, or header `schedule_header`.
+    - In single-user mode, or when no bearer token is present, this check is bypassed.
+    - If `allow_admin_bypass=True`, admin users skip this enforcement.
+    """
+    async def _checker(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+        jwt_service: JWTService = Depends(get_jwt_service_dep),
+        db_pool: DatabasePool = Depends(get_db_pool),
+    ) -> None:
+        # If we have Authorization bearer, apply JWT-based checks; otherwise, try X-API-KEY checks
+        if credentials:
+            token = credentials.credentials
+            try:
+                payload = jwt_service.decode_access_token(token)
+            except Exception:
+                return None
+            # Optional admin bypass based on token role claim
+            try:
+                if allow_admin_bypass and str(payload.get("role", "")) == "admin":
+                    return None
+            except Exception:
+                pass
+            tok_scope = str(payload.get("scope") or "").strip()
+            if tok_scope and require_if_present and tok_scope != str(scope):
+                raise HTTPException(status_code=403, detail="Forbidden: invalid token scope")
+
+            # Enforce endpoint allowlist
+            try:
+                if endpoint_id:
+                    allowed_eps = payload.get("allowed_endpoints")
+                    if isinstance(allowed_eps, list) and allowed_eps:
+                        if endpoint_id not in [str(x) for x in allowed_eps]:
+                            raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for token")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+            # Enforce HTTP method allowlist
+            try:
+                am = payload.get("allowed_methods")
+                if isinstance(am, list) and am:
+                    method = str(getattr(request, "method", "")).upper()
+                    if method and method not in [str(x).upper() for x in am]:
+                        raise HTTPException(status_code=403, detail="Forbidden: method not permitted for token")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+            # Enforce path prefix allowlist
+            try:
+                ap = payload.get("allowed_paths")
+                if isinstance(ap, list) and ap:
+                    path = getattr(getattr(request, "url", None), "path", None) or getattr(request, "scope", {}).get("path")
+                    if path and not any(str(path).startswith(str(pfx)) for pfx in ap):
+                        raise HTTPException(status_code=403, detail="Forbidden: path not permitted for token")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+            # Quotas: simple per-token counters (DB-backed; fallback to process-local)
+            try:
+                if count_as:
+                    jti = payload.get("jti")
+                    if jti:
+                        key = (f"jwt:{jti}", str(count_as))
+                        max_calls = None
+                        if str(count_as) == "run":
+                            max_calls = payload.get("max_runs")
+                        if max_calls is None:
+                            max_calls = payload.get("max_calls")
+                        if isinstance(max_calls, int) and max_calls >= 0:
+                            try:
+                                from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
+                                allowed, _cnt = await increment_and_check_jwt_quota(
+                                    db_pool=db_pool,
+                                    jti=str(jti),
+                                    counter_type=str(count_as),
+                                    limit=int(max_calls),
+                                )
+                                if not allowed:
+                                    raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
+                            except HTTPException:
+                                raise
+                            except Exception:
+                                cur = int(_VK_USAGE.get(key, 0))
+                                if cur >= int(max_calls):
+                                    raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
+                                _VK_USAGE[key] = cur + 1
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+            return None
+
+        # Fallback: X-API-KEY constraints enforcement (if header present and key is valid)
+        try:
+            api_key = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
+        except Exception:
+            api_key = None
+        if api_key:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+                api_mgr = await get_api_key_manager()
+                client_ip = request.client.host if getattr(request, "client", None) else None
+                info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+                if not info:
+                    # Let upstream auth fail; do not enforce here
+                    return None
+                # Admin bypass via scope 'admin'
+                if allow_admin_bypass and str(info.get("scope", "")).lower() == "admin":
+                    return None
+                # Allowed endpoints from llm_allowed_endpoints
+                allowed_eps = info.get("llm_allowed_endpoints")
+                if isinstance(allowed_eps, str):
+                    import json as _json
+                    try:
+                        allowed_eps = _json.loads(allowed_eps)
+                    except Exception:
+                        allowed_eps = None
+                if endpoint_id and isinstance(allowed_eps, list) and allowed_eps:
+                    if endpoint_id not in [str(x) for x in allowed_eps]:
+                        raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for API key")
+                # Metadata-based constraints
+                meta = info.get("metadata")
+                if isinstance(meta, str):
+                    import json as _json
+                    try:
+                        meta = _json.loads(meta)
+                    except Exception:
+                        meta = None
+                if isinstance(meta, dict):
+                    am = meta.get("allowed_methods")
+                    if isinstance(am, list) and am:
+                        method = str(getattr(request, "method", "")).upper()
+                        if method and method not in [str(x).upper() for x in am]:
+                            raise HTTPException(status_code=403, detail="Forbidden: method not permitted for API key")
+                    ap = meta.get("allowed_paths")
+                    if isinstance(ap, list) and ap:
+                        path = getattr(getattr(request, "url", None), "path", None) or getattr(request, "scope", {}).get("path")
+                        if path and not any(str(path).startswith(str(pfx)) for pfx in ap):
+                            raise HTTPException(status_code=403, detail="Forbidden: path not permitted for API key")
+                    if count_as:
+                        key_id = info.get("id")
+                        if key_id is not None:
+                            quota = None
+                            if str(count_as) == "run":
+                                quota = meta.get("max_runs")
+                            if quota is None:
+                                quota = meta.get("max_calls")
+                            if isinstance(quota, int) and quota >= 0:
+                                try:
+                                    from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_api_key_quota
+                                    allowed, _cnt = await increment_and_check_api_key_quota(
+                                        db_pool=db_pool,
+                                        api_key_id=int(key_id),
+                                        counter_type=str(count_as),
+                                        limit=int(quota),
+                                    )
+                                    if not allowed:
+                                        raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
+                                except HTTPException:
+                                    raise
+                                except Exception:
+                                    key = (f"apikey:{key_id}", str(count_as))
+                                    cur = int(_VK_USAGE.get(key, 0))
+                                    if cur >= int(quota):
+                                        raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
+                                    _VK_USAGE[key] = cur + 1
+            except HTTPException:
+                raise
+            except Exception:
+                # Best-effort: do not block if metadata not available
+                return None
+        
+        if require_schedule_match and 'payload' in locals():
+            tok_sid = payload.get("schedule_id")
+            expected = None
+            try:
+                expected = request.path_params.get(schedule_path_param)
+            except Exception:
+                expected = None
+            if not expected:
+                try:
+                    expected = request.headers.get(schedule_header)
+                except Exception:
+                    expected = None
+            if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
+                raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
+
+        return None
+
+    return _checker
 #
 # End of auth_deps.py
 #######################################################################################################################

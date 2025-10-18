@@ -17,26 +17,34 @@ from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 BASE_URL = "https://api.osf.io/v2/preprints/"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.headers.update({"Accept": "application/json"})
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        return create_client(timeout=20)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.headers.update({"Accept": "application/json"})
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,13 +115,17 @@ def search_preprints(
         if total == 0:
             total = len(items)
         return items, total, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to OSF API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"OSF API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to OSF API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to OSF API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"OSF API Request Error: {str(e)}"
         return None, 0, f"OSF error: {str(e)}"
 
 
@@ -129,13 +141,17 @@ def get_preprint_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[
         if isinstance(data.get("data"), dict):
             return _normalize_item(data["data"]), None
         return None, None
-    except requests.exceptions.Timeout:
-        return None, "Request to OSF API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"OSF API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to OSF API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to OSF API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"OSF API Request Error: {str(e)}"
         return None, f"OSF error: {str(e)}"
 
 
@@ -162,13 +178,17 @@ def get_preprint_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[st
         if items2:
             return _normalize_item(items2[0]), None
         return None, None
-    except requests.exceptions.Timeout:
-        return None, "Request to OSF API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"OSF API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to OSF API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to OSF API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"OSF API Request Error: {str(e)}"
         return None, f"OSF error: {str(e)}"
 
 
@@ -206,13 +226,17 @@ def get_primary_file_download_url(osf_id: str) -> Tuple[Optional[str], Optional[
         links = (fdata.get("data") or {}).get("links") or {}
         dl_url = links.get("download") or links.get("meta", {}).get("download")
         return (dl_url or None), None
-    except requests.exceptions.Timeout:
-        return None, "Request to OSF API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"OSF API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to OSF API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, f"Request to OSF API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"OSF API Request Error: {str(e)}"
         return None, f"OSF error: {str(e)}"
 
 
@@ -228,13 +252,17 @@ def raw_preprints(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str
         r.raise_for_status()
         ct = r.headers.get("content-type") or "application/json"
         return r.content, ct.split(";")[0], None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to OSF API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"OSF API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to OSF API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to OSF API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"OSF API Request Error: {str(e)}"
         return None, None, f"OSF error: {str(e)}"
 
 
@@ -248,11 +276,15 @@ def raw_by_id(osf_id: str) -> Tuple[Optional[bytes], Optional[str], Optional[str
         r.raise_for_status()
         ct = r.headers.get("content-type") or "application/json"
         return r.content, ct.split(";")[0], None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to OSF API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"OSF API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to OSF API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to OSF API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"OSF API Request Error: {str(e)}"
         return None, None, f"OSF error: {str(e)}"

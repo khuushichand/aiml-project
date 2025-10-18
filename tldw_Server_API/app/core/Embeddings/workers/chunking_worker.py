@@ -2,6 +2,7 @@
 # Worker for processing text chunking tasks
 
 import hashlib
+import json as _json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -157,10 +158,12 @@ class ChunkingWorker(BaseWorker):
         except Exception:
             target_queue = self.embedding_queue
 
-        await self.redis_client.xadd(
-            target_queue,
-            model_dump_compat(result)
-        )
+        payload = model_dump_compat(result)
+        try:
+            fields = {k: (v if isinstance(v, str) else _json.dumps(v)) for k, v in payload.items()}
+        except Exception:
+            fields = {k: str(v) for k, v in payload.items()}
+        await self.redis_client.xadd(target_queue, fields)
         logger.debug(f"Sent job {result.job_id} to embedding queue")
     
     def _chunk_text(self, text: str, *args, **kwargs) -> List[tuple[str, int, int]]:

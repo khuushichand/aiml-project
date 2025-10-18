@@ -1762,14 +1762,86 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
 
 
 async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Send a webhook event with SSRF/egress protections and optional direct URL.
+    """Send an HTTP request (with safe egress) or dispatch a local webhook event.
 
-    Config:
-      - url: optional (if provided, send to specific URL; otherwise, deliver to registered webhooks)
-      - event: str
+    Config (HTTP mode when 'url' provided):
+      - url: str (templated)
+      - method: str = POST (GET|POST|PUT|PATCH|DELETE)
+      - headers: dict[str,str] (templated values)
+      - body: dict|list|str|number|bool|null — request JSON body (supports simple JSON-path injection)
+        Special string values are supported to inject JSON from context:
+          - 'JSON:inputs.qa_samples'  => replaces with context['inputs']['qa_samples'] (not a string)
+          - 'JSON:prev.response_json.items|pluck:id' => list of id fields from previous step response
+      - timeout_seconds: int (default: 10)
+
+    Config (local webhook mode when no 'url' provided):
+      - event: str (default 'workflow.event')
       - data: dict (templated minimal)
-    Output: {"dispatched": bool}
+
+    Output keys:
+      - dispatched: bool
+      - status_code: int (HTTP mode)
+      - response_json: any (when response is JSON)
+      - response_text: str (when response not JSON)
+      - error: str (on failure)
     """
+    def _render_value(v: Any) -> Any:
+        """Render strings via prompt templating; recurse into lists/dicts."""
+        from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+        if isinstance(v, str):
+            try:
+                return _tmpl(v, context)
+            except Exception:
+                return v
+        if isinstance(v, list):
+            return [_render_value(x) for x in v]
+        if isinstance(v, dict):
+            return {k: _render_value(val) for k, val in v.items()}
+        return v
+
+    def _resolve_json_ref(expr: str) -> Any:
+        """Resolve a limited JSON reference like 'inputs.qa_samples' or 'prev.response_json.items|pluck:id'."""
+        path = expr
+        pluck_field: Optional[str] = None
+        # Support '|pluck:field'
+        if "|pluck:" in path:
+            path, tail = path.split("|pluck:", 1)
+            pluck_field = tail.strip()
+        # Walk dotted path from context root
+        cur: Any = context
+        for part in [p for p in path.strip().split(".") if p]:
+            if isinstance(cur, dict) and part in cur:
+                cur = cur[part]
+            else:
+                try:
+                    cur = getattr(cur, part)
+                except Exception:
+                    cur = None
+                    break
+        # Optional pluck across list of dicts
+        if pluck_field and isinstance(cur, list):
+            out = []
+            for item in cur:
+                try:
+                    if isinstance(item, dict) and pluck_field in item:
+                        out.append(item[pluck_field])
+                except Exception:
+                    continue
+            cur = out
+        return cur
+
+    def _inject_json_specials(obj: Any) -> Any:
+        """Traverse obj and replace strings starting with 'JSON:' with referenced JSON from context."""
+        if isinstance(obj, str):
+            if obj.strip().lower().startswith("json:"):
+                ref = obj.split(":", 1)[1].strip()
+                return _resolve_json_ref(ref)
+            return obj
+        if isinstance(obj, list):
+            return [_inject_json_specials(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: _inject_json_specials(v) for k, v in obj.items()}
+        return obj
     from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
     user_id = str(context.get("user_id") or context.get("inputs", {}).get("user_id") or "1")
     event_name = str(config.get("event") or "workflow.event")
@@ -1800,22 +1872,117 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             return {"dispatched": False, "error": "blocked_egress"}
         try:
             import httpx, hmac, hashlib
-            headers = {"content-type": "application/json"}
+            # Method, headers, timeout
+            method = str(config.get("method") or "POST").upper()
+            headers_cfg = config.get("headers") or {}
+            # Templating for url and headers
+            url_t = _render_value(url) or url
+            headers_r: Dict[str, str] = {}
+            if isinstance(headers_cfg, dict):
+                for hk, hv in headers_cfg.items():
+                    try:
+                        headers_r[str(hk)] = str(_render_value(hv))
+                    except Exception:
+                        headers_r[str(hk)] = str(hv)
+            # Drop empty headers (avoid sending empty Authorization/X-API-KEY)
+            try:
+                headers_r = {k: v for k, v in headers_r.items() if isinstance(v, str) and v.strip()}
+            except Exception:
+                pass
+            # If no explicit auth headers provided, allow secrets from workflow run to supply them
+            try:
+                secrets = context.get("secrets") if isinstance(context, dict) else None
+                if isinstance(secrets, dict):
+                    has_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
+                    if not has_auth:
+                        _jwt = secrets.get("jwt") or secrets.get("bearer")
+                        _api = secrets.get("api_key") or secrets.get("x_api_key")
+                        if _jwt:
+                            headers_r["Authorization"] = f"Bearer {_jwt}"
+                        elif _api:
+                            headers_r["X-API-KEY"] = str(_api)
+            except Exception:
+                pass
+            # Ensure content-type unless provided
+            if "content-type" not in {k.lower(): v for k, v in headers_r.items()}:
+                headers_r["Content-Type"] = "application/json"
+            # Default auth fallbacks for scheduled runs (optional)
+            try:
+                _had_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
+                used_fallback = False
+                if not _had_auth:
+                    _bear = os.getenv("WORKFLOWS_DEFAULT_BEARER_TOKEN", "").strip()
+                    _key = os.getenv("WORKFLOWS_DEFAULT_API_KEY", "").strip()
+                    if _bear:
+                        headers_r["Authorization"] = f"Bearer {_bear}"
+                        used_fallback = True
+                    elif _key:
+                        headers_r["X-API-KEY"] = _key
+                        used_fallback = True
+                # Optional sanity check for fallback auth (once per run)
+                try:
+                    if used_fallback and str(os.getenv("WORKFLOWS_VALIDATE_DEFAULT_AUTH", "")).lower() in {"1", "true", "yes", "on"} and not context.get("_wf_default_auth_checked"):
+                        base = os.getenv("WORKFLOWS_INTERNAL_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+                        _url = f"{base}/api/v1/workflows/auth/check"
+                        with httpx.Client(timeout=5.0, trust_env=False) as _client:
+                            _resp = _client.get(_url, headers=headers_r)
+                            if _resp.status_code // 100 != 2:
+                                return {"dispatched": False, "error": "default_auth_validation_failed", "status_code": _resp.status_code}
+                        context["_wf_default_auth_checked"] = True
+                except Exception:
+                    # Non-fatal; allow the request to proceed
+                    pass
+            except Exception:
+                pass
+            # Render and prepare body
+            body_raw = config.get("body") if ("body" in config) else (config.get("data") if ("data" in config) else None)
+            body_r = _render_value(body_raw) if body_raw is not None else None
+            body_r = _inject_json_specials(body_r)
             # Inject W3C trace context
             try:
                 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
-                _get_tm().inject_context(headers)
+                _get_tm().inject_context(headers_r)
             except Exception:
                 pass
             secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
-            body = json.dumps(payload)
+            body_json_str = None
+            # Prepare request kwargs
+            req_kwargs: Dict[str, Any] = {}
+            if method == "GET":
+                if isinstance(body_r, dict):
+                    req_kwargs["params"] = body_r
+                elif body_r is not None:
+                    # Non-dict body for GET — ignore
+                    pass
+            else:
+                if body_r is not None:
+                    # Use JSON body if not already a string
+                    req_kwargs["content"] = json.dumps(body_r)
+                    body_json_str = req_kwargs["content"]
+                else:
+                    req_kwargs["content"] = json.dumps(payload)
+                    body_json_str = req_kwargs["content"]
             if secret:
-                sig = hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
-                headers["X-Workflows-Signature"] = sig
-                headers["X-Hub-Signature-256"] = f"sha256={sig}"
-            timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(url, data=body, headers=headers)
+                sig = hmac.new(secret.encode("utf-8"), (body_json_str or "").encode("utf-8"), hashlib.sha256).hexdigest()
+                headers_r["X-Workflows-Signature"] = sig
+                headers_r["X-Hub-Signature-256"] = f"sha256={sig}"
+            timeout = float(config.get("timeout_seconds") or os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
+            try:
+                client_ctx = httpx.Client(timeout=timeout, trust_env=False)
+            except TypeError:
+                client_ctx = httpx.Client(timeout=timeout)
+            with client_ctx as client:
+                # Dispatch
+                req_fn = client.post
+                if method == "GET":
+                    req_fn = client.get
+                elif method == "PUT":
+                    req_fn = client.put
+                elif method == "PATCH":
+                    req_fn = client.patch
+                elif method == "DELETE":
+                    req_fn = client.delete
+                resp = req_fn(url_t, headers=headers_r, **req_kwargs)
                 ok = 200 <= resp.status_code < 300
                 # Metrics for success/failure
                 try:
@@ -1842,9 +2009,44 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                             mime_type="application/json",
                             metadata={"url": url},
                         )
+                        # Optionally save response body for diagnostics
+                        try:
+                            if bool(config.get("save_response_json")) or bool(config.get("save_response_body")):
+                                body_path = art_dir / "webhook_response_body.json"
+                                body_mime = "application/json"
+                                try:
+                                    body_text = resp.text
+                                except Exception:
+                                    body_text = ""
+                                # Pretty print JSON when possible
+                                try:
+                                    parsed = resp.json()
+                                    body_text = json.dumps(parsed, indent=2)
+                                except Exception:
+                                    # keep as text/plain when not JSON
+                                    body_mime = "text/plain"
+                                body_path.write_text(body_text, encoding="utf-8")
+                                context["add_artifact"](
+                                    type="webhook_response_body",
+                                    uri=f"file://{body_path}",
+                                    size_bytes=len((body_path.read_bytes() if body_path.exists() else b"")),
+                                    mime_type=body_mime,
+                                    metadata={"url": url},
+                                )
+                        except Exception:
+                            pass
                 except Exception:
                     pass
-                return {"dispatched": ok, "status_code": resp.status_code}
+                # Build outputs
+                out: Dict[str, Any] = {"dispatched": ok, "status_code": resp.status_code}
+                try:
+                    out["response_json"] = resp.json()
+                except Exception:
+                    try:
+                        out["response_text"] = resp.text
+                    except Exception:
+                        pass
+                return out
         except Exception as e:
             return {"dispatched": False, "error": str(e)}
 

@@ -97,13 +97,14 @@ class RequestBatcher:
             return await self._process_single(text, model, provider, metadata)
         
         # Create request
+        loop = asyncio.get_running_loop()
         request = BatchRequest(
             request_id=str(uuid.uuid4()),
             text=text,
             model=model,
             provider=provider,
             metadata=metadata or {},
-            future=asyncio.Future(),
+            future=loop.create_future(),
             timestamp=time.time()
         )
         

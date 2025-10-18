@@ -50,7 +50,19 @@ class JWTService:
             self._decode_key = self.settings.JWT_SECRET_KEY
             self._secondary_decode_key = self.settings.JWT_SECONDARY_SECRET
             if not self._encode_key:
-                raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
+                # In single-user mode, allow initialization for hashing by deriving a per-instance key
+                if (self.settings.AUTH_MODE == "single_user" and getattr(self.settings, "SINGLE_USER_API_KEY", None)):
+                    try:
+                        # Derive a stable surrogate secret from the API key
+                        derived = derive_hmac_key(self.settings)
+                        # jose accepts str/bytes; use hex string for readability
+                        self._encode_key = derived.hex()
+                        self._decode_key = self._encode_key
+                        logger.debug("JWTService: using derived single-user surrogate key for HS algorithms")
+                    except Exception:
+                        raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
+                else:
+                    raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
         elif alg_upper.startswith("RS") or alg_upper.startswith("ES"):
             # Asymmetric (RSA/ECDSA)
             self._encode_key = self.settings.JWT_PRIVATE_KEY
@@ -324,6 +336,65 @@ class JWTService:
             ExpiredTokenError: If token has expired
         """
         return self.verify_token(token, token_type="refresh")
+
+    def create_virtual_access_token(
+        self,
+        *,
+        user_id: int,
+        username: str,
+        role: str,
+        scope: str = "workflows",
+        ttl_minutes: int = 60,
+        schedule_id: Optional[str] = None,
+        additional_claims: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Create a short-lived, scoped access token ("virtual key").
+
+        Intended for internal automation (e.g., Workflows scheduler) and
+        constrained integrations. Tokens include a required `scope` claim and
+        optional `schedule_id` claim for further restriction.
+
+        Args:
+            user_id: Subject user id
+            username: Display username for diagnostics
+            role: User role (admin/user)
+            scope: Logical scope string (e.g., 'workflows')
+            ttl_minutes: Time-to-live in minutes
+            schedule_id: Optional associated schedule id
+            additional_claims: Extra claims to include
+
+        Returns:
+            Encoded JWT access token (scoped)
+        """
+        expire = datetime.utcnow() + timedelta(minutes=max(1, int(ttl_minutes)))
+        payload: Dict[str, Any] = {
+            "sub": str(user_id),
+            "username": username,
+            "role": role,
+            "exp": expire,
+            "iat": datetime.utcnow(),
+            "jti": str(uuid4()),
+            "type": "access",
+            "scope": str(scope or "workflows"),
+        }
+        if schedule_id:
+            payload["schedule_id"] = str(schedule_id)
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
+        if additional_claims:
+            payload.update(additional_claims)
+        try:
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
+            logger.debug(
+                f"Created virtual access token scope={payload.get('scope')} user={username} ttl={ttl_minutes}m"
+            )
+            return token
+        except Exception as e:
+            logger.error(f"Failed to create virtual access token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}")
     
     def hash_token(self, token: str) -> str:
         """

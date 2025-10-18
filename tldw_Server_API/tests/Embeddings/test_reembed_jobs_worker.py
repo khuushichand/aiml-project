@@ -48,8 +48,16 @@ def test_reembed_worker_expands_to_embedding_stream(monkeypatch, fake_redis):
 
     asyncio.run(_run_worker_brief())
 
-    # Verify the embedding stream received entries
-    res = asyncio.run(fake_redis.xrange("embeddings:embedding", "-", "+", count=10))
+    # Verify the embedding stream received entries (poll briefly to avoid races)
+    async def _poll_stream():
+        for _ in range(60):  # up to ~1.2s @ 20ms
+            out = await fake_redis.xrange("embeddings:embedding", "-", "+", count=10)
+            if isinstance(out, list) and len(out) >= 1 and isinstance(out[0], (list, tuple)):
+                return out
+            await asyncio.sleep(0.02)
+        return []
+
+    res = asyncio.run(_poll_stream())
     assert isinstance(res, list) and len(res) >= 1
     # Fields should include job_id
     entry_id, fields = res[0]

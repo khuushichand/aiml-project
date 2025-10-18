@@ -450,6 +450,17 @@ def test_completion_webhook_tenant_denylist_blocked(monkeypatch, client_with_wor
     assert "blocked" in statuses
 
     # Admin can filter by specific owner (user 2) and should see that run
+    # Ensure there is at least one run owned by user id=2
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User, get_request_user as _gru
+    prev_dep = client.app.dependency_overrides[_gru]
+    async def override_user2():
+        return _User(id=2, username="owner2", email="o2@x", is_active=True, is_admin=False)
+    client.app.dependency_overrides[_gru] = override_user2
+    def_u2 = {"name": "u2-def", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "yo"}}]}
+    wid_u2 = client.post("/api/v1/workflows", json=def_u2).json()["id"]
+    r_u2 = client.post(f"/api/v1/workflows/{wid_u2}/run", json={"inputs": {}}).json()["run_id"]
+    client.app.dependency_overrides[_gru] = prev_dep
+
     lst_owner2 = client.get("/api/v1/workflows/runs", params={"owner": "2", "limit": 50}).json()
     ids2 = [r.get("run_id") for r in lst_owner2.get("runs", [])]
     assert r_u2 in ids2

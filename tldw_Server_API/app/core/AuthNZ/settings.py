@@ -172,7 +172,7 @@ class Settings(BaseSettings):
     )
     
     CHROMADB_BASE_PATH: str = Field(
-        default="./chromadb_data",
+        default="",
         description="Base path for ChromaDB data"
     )
     
@@ -494,6 +494,11 @@ class Settings(BaseSettings):
         default=1,
         description="Fixed user ID for single-user mode"
     )
+    # Optional IP allowlist for single-user mode (comma-separated env or list)
+    SINGLE_USER_ALLOWED_IPS: list[str] = Field(
+        default_factory=list,
+        description="Optional list of allowed client IPs/CIDRs for SINGLE_USER_API_KEY"
+    )
     
     # ===== Service Account Settings =====
     SERVICE_ACCOUNT_RATE_LIMIT: int = Field(
@@ -628,6 +633,21 @@ class Settings(BaseSettings):
         if v and len(v) < 32:
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
         return v
+
+    @field_validator("SINGLE_USER_ALLOWED_IPS", mode="before")
+    @classmethod
+    def parse_single_user_allowed_ips(cls, v):
+        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
+        if not v:
+            return []
+        if isinstance(v, str):
+            try:
+                return [s.strip() for s in v.split(',') if s.strip()]
+            except Exception:
+                return []
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
     
     @field_validator("DATABASE_URL")
     @classmethod

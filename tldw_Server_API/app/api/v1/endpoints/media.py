@@ -3179,6 +3179,12 @@ async def _process_document_like_item(
              # --- FIX: Ensure process_document_content receives all its required args ---
              # Common args already contain api_name, api_key, prompts etc.
 
+        elif media_type == "json":
+             # Treat JSON as plaintext document for ingestion, but keep media_type separate for filtering
+             if not processing_filepath: raise ValueError("JSON processing requires a file path.")
+             processing_func = process_document_content
+             specific_args = {"doc_path": processing_filepath}
+
         elif media_type == "ebook":
              if not processing_filepath: raise ValueError("Ebook processing requires a file path.")
              # Need a wrapper if process_epub is sync
@@ -3909,6 +3915,7 @@ async def add_media(
                     + (['.zip'] if getattr(form_data, 'accept_archives', False) else [])
                     + (['.mbox'] if getattr(form_data, 'accept_mbox', False) else [])
                     + (['.pst', '.ost'] if getattr(form_data, 'accept_pst', False) else []),
+                "json": ['.json'],
                 # For 'document', allow a broad set; leave None to let validator handle
             }
             allowed_exts = allowed_ext_map.get(str(form_data.media_type).lower())
@@ -7170,7 +7177,15 @@ async def process_mediawiki_dump_ephemeral_endpoint(
 # Endpoints:
 #
 
-@router.post("/ingest-web-content", dependencies=[Depends(guard_backpressure_and_quota)])
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+
+@router.post(
+    "/ingest-web-content",
+    dependencies=[
+        Depends(guard_backpressure_and_quota),
+        Depends(require_token_scope("any", require_if_present=False, endpoint_id="media.ingest", count_as="call")),
+    ],
+)
 async def ingest_web_content(
     request: IngestWebContentRequest,
     background_tasks: BackgroundTasks,

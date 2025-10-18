@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_document_version as sqlite_get_document_version,
     get_media_transcripts as sqlite_get_media_transcripts,
     get_specific_transcript as sqlite_get_specific_transcript, \
-    get_specific_analysis as sqlite_get_specific_summary, \
+    get_specific_analysis as sqlite_get_specific_analysis, \
     get_media_prompts as sqlite_get_media_prompts,
     get_specific_prompt as sqlite_get_specific_prompt, \
     fetch_keywords_for_media as sqlite_fetch_keywords_for_media, \
@@ -244,7 +244,8 @@ SQL_CONTENT_BACKENDS = {'sqlite', 'postgres'}
 
 def get_all_content_from_database(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.get_all_content_from_database(*args, **kwargs)
+        # Media_DB_v2 exposes this as a standalone helper requiring db_instance
+        return sqlite_get_all_content_from_database(*args, **kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
@@ -281,7 +282,12 @@ def get_full_media_details_rich2(*args, **kwargs):
 
 def get_paginated_files(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.get_paginated_files(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("get_paginated_files requires 'db_instance' (MediaDatabase)")
+        page = kwargs.get('page', 1)
+        results_per_page = kwargs.get('results_per_page', 50)
+        return db_instance.get_paginated_files(page=page, results_per_page=results_per_page)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
@@ -309,7 +315,11 @@ def import_obsidian_note_to_db(*args, **kwargs):
 
 def add_media_with_keywords(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.add_media_with_keywords(*args, **kwargs)
+        # Normalized wrapper: require a db_instance and forward kwargs to instance method
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("add_media_with_keywords requires 'db_instance' (MediaDatabase)")
+        return db_instance.add_media_with_keywords(**kwargs)
     elif db_type == 'elasticsearch':
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
     else:
@@ -337,7 +347,10 @@ def ingest_article_to_db(*args, **kwargs):
 
 def add_media_chunk(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        MediaDatabase.add_media_chunk(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("add_media_chunk requires 'db_instance' (MediaDatabase)")
+        return db_instance.add_media_chunk(**kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version not yet implemented")
@@ -346,7 +359,10 @@ def add_media_chunk(*args, **kwargs):
 
 def batch_insert_chunks(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        MediaDatabase.batch_insert_chunks(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("batch_insert_chunks requires 'db_instance' (MediaDatabase)")
+        return db_instance.batch_insert_chunks(**kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version not yet implemented")
@@ -355,7 +371,10 @@ def batch_insert_chunks(*args, **kwargs):
 
 def get_unprocessed_media(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return sqlite_get_unprocessed_media(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("get_unprocessed_media requires 'db_instance' (MediaDatabase)")
+        return sqlite_get_unprocessed_media(db_instance)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of get_unprocessed_media not yet implemented")
@@ -365,7 +384,13 @@ def get_unprocessed_media(*args, **kwargs):
 
 def mark_media_as_processed(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return sqlite_mark_media_as_processed(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("mark_media_as_processed requires 'db_instance' (MediaDatabase)")
+        media_id = kwargs.pop('media_id', None)
+        if media_id is None:
+            raise ValueError("mark_media_as_processed requires 'media_id'")
+        return sqlite_mark_media_as_processed(db_instance, media_id)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of mark_media_as_processed not yet implemented")
@@ -375,7 +400,14 @@ def mark_media_as_processed(*args, **kwargs):
 
 def update_keywords_for_media(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.update_keywords_for_media(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("update_keywords_for_media requires 'db_instance' (MediaDatabase)")
+        media_id = kwargs.pop('media_id', None)
+        keywords = kwargs.pop('keywords', None)
+        if media_id is None or keywords is None:
+            raise ValueError("update_keywords_for_media requires 'media_id' and 'keywords'")
+        return db_instance.update_keywords_for_media(media_id, keywords)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of update_keywords_for_media not yet implemented")
@@ -383,9 +415,16 @@ def update_keywords_for_media(*args, **kwargs):
         raise ValueError(f"Unsupported database type: {db_type}")
 
 
-def rollback_to_version(*arg, **kwargs):
+def rollback_to_version(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.rollback_to_version(*arg, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("rollback_to_version requires 'db_instance' (MediaDatabase)")
+        media_id = kwargs.pop('media_id', None)
+        target_version_number = kwargs.pop('target_version_number', None)
+        if media_id is None or target_version_number is None:
+            raise ValueError("rollback_to_version requires 'media_id' and 'target_version_number'")
+        return db_instance.rollback_to_version(media_id, target_version_number)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of rollback_to_version not yet implemented")
@@ -395,7 +434,13 @@ def rollback_to_version(*arg, **kwargs):
 
 def delete_document_version(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.soft_delete_document_version(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("delete_document_version requires 'db_instance' (MediaDatabase)")
+        version_uuid = kwargs.pop('version_uuid', None)
+        if version_uuid is None:
+            raise ValueError("delete_document_version requires 'version_uuid'")
+        return db_instance.soft_delete_document_version(version_uuid)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of delete_document_version not yet implemented")
@@ -498,9 +543,12 @@ def delete_document_version(*args, **kwargs):
 #         # Implement Postgres version
 #         raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
 
-def mark_as_trash(*args, **kwargs: int) -> bool:
+def mark_as_trash(*args, **kwargs) -> bool:
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.mark_as_trash(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("mark_as_trash requires 'db_instance' (MediaDatabase)")
+        return db_instance.mark_as_trash(**kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version when available
         raise NotImplementedError("Elasticsearch version of mark_as_trash not yet implemented")
@@ -518,14 +566,20 @@ def get_latest_transcription(*args, **kwargs):
 
 def fetch_paginated_data(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.fetch_paginated_data(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("fetch_paginated_data requires 'db_instance' (MediaDatabase)")
+        # Media_DB_v2 does not expose fetch_paginated_data; prefer get_paginated_files
+        page = kwargs.get('page', 1)
+        results_per_page = kwargs.get('results_per_page', 50)
+        return db_instance.get_paginated_files(page=page, results_per_page=results_per_page)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of fetch_paginated_data not yet implemented")
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_media_transcripts(*args, **kwargs: int) -> List[Dict]:
+def get_media_transcripts(*args, **kwargs) -> List[Dict]:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_media_transcripts(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -533,7 +587,7 @@ def get_media_transcripts(*args, **kwargs: int) -> List[Dict]:
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_specific_transcript(*args, **kwargs: int) -> Dict:
+def get_specific_transcript(*args, **kwargs) -> Dict:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_specific_transcript(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -578,7 +632,7 @@ def get_all_document_versions(db_instance: MediaDatabase, media_id: int, **kwarg
 #
 # Prompt Functions:
 
-def get_media_prompts(*args, **kwargs: int) -> List[Dict]:
+def get_media_prompts(*args, **kwargs) -> List[Dict]:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_media_prompts(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -586,29 +640,13 @@ def get_media_prompts(*args, **kwargs: int) -> List[Dict]:
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_specific_prompt(*args, **kwargs: int) -> Dict:
+def get_specific_prompt(*args, **kwargs) -> Dict:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_specific_prompt(*args, **kwargs)
     elif db_type == 'elasticsearch':
         raise NotImplementedError("Elasticsearch version of get_specific_prompt not yet implemented")
     else:
         return {'error': f"Unsupported database type: {db_type}"}
-
-def delete_specific_summary(*args, **kwargs: int) -> str:
-    if db_type == 'sqlite':
-        return delete_specific_summary(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        raise NotImplementedError("Elasticsearch version of delete_specific_summary not yet implemented")
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
-
-def delete_specific_prompt(*args, **kwargs: int) -> str:
-    if db_type == 'sqlite':
-        return delete_specific_prompt(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        raise NotImplementedError("Elasticsearch version of delete_specific_prompt not yet implemented")
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
 
 
 #
@@ -619,45 +657,19 @@ def delete_specific_prompt(*args, **kwargs: int) -> str:
 #
 # Keywords-related Functions
 
-def keywords_browser_interface(*args, **kwargs):
-    if db_type == 'sqlite':
-        return keywords_browser_interface(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version
-        raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
-
 def add_keyword(*args, **kwargs):
-    if db_type == 'sqlite':
-        return add_keyword(*args, **kwargs)
+    if db_type in SQL_CONTENT_BACKENDS:
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("add_keyword requires 'db_instance' (MediaDatabase)")
+        keyword = kwargs.get('keyword') or kwargs.get('keyword_text')
+        if keyword is None:
+            raise ValueError("add_keyword requires 'keyword'")
+        return db_instance.add_keyword(keyword)
     elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version
-        raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
+        raise NotImplementedError("Elasticsearch version of add_keyword not yet implemented")
     elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
-
-def delete_keyword(*args, **kwargs):
-    if db_type == 'sqlite':
-        return delete_keyword(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version
-        raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
-
-def export_keywords_to_csv(*args, **kwargs):
-    if db_type == 'sqlite':
-        return export_keywords_to_csv(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version
-        raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
+        raise NotImplementedError("Postgres version of add_keyword not yet implemented")
 
 def fetch_keywords_for_media(*args, **kwargs):
     if db_type == 'sqlite':
@@ -986,28 +998,6 @@ def fetch_keywords_for_media(*args, **kwargs):
 
 ############################################################################################################
 #
-# Trash-related Functions
-
-def get_trashed_items(*args, **kwargs):
-    if db_type == 'sqlite':
-        return get_trashed_items(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version
-        raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
-
-def user_delete_item(*args, **kwargs):
-    if db_type == 'sqlite':
-        return user_delete_item(*args, **kwargs)
-    elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version
-        raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
-
 def empty_trash(*args, **kwargs):
     if db_type == 'sqlite':
         return sqlite_empty_trash(*args, **kwargs)
@@ -1021,19 +1011,32 @@ def empty_trash(*args, **kwargs):
 
 def fetch_item_details(*args, **kwargs) -> Tuple[str, str, str]:
     """
-    Fetch the details of a media item including content, prompt, and summary.
+    Fetch basic details of a media item including content, prompt, and summary.
 
-    Args:
-        media_id (int): The ID of the media item.
-
-    Returns:
-        Tuple[str, str, str]: A tuple containing (content, prompt, summary).
-        If an error occurs, it returns empty strings for each field.
+    Expects kwargs: db_instance (MediaDatabase), media_id (int)
+    Returns empty strings when not found or inactive.
     """
-    if db_type == 'sqlite':
-        return fetch_item_details(*args, **kwargs)
+    if db_type in SQL_CONTENT_BACKENDS:
+        db_instance: MediaDatabase = kwargs.get('db_instance') or (args[0] if args else None)
+        media_id: Optional[int] = kwargs.get('media_id')
+        if not isinstance(db_instance, MediaDatabase) or media_id is None:
+            raise ValueError("fetch_item_details requires 'db_instance' and 'media_id'")
+        details = sqlite_get_full_media_details_rich(
+            db_instance=db_instance,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            return "", "", ""
+        media = details.get('media') or {}
+        latest = details.get('latest_version') or {}
+        content = media.get('content') or ""
+        prompt = latest.get('prompt') or ""
+        summary = latest.get('analysis_content') or ""
+        return content, prompt, summary
     elif db_type == 'elasticsearch':
-        # Implement Elasticsearch version when available
         raise NotImplementedError("Elasticsearch version of fetch_item_details not yet implemented")
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
@@ -1068,7 +1071,10 @@ def create_automated_backup(*args, **kwargs):
 
 def create_document_version(*args, **kwargs):
     if db_type == 'sqlite':
-        return create_document_version(*args, **kwargs)
+        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        if not isinstance(db_instance, MediaDatabase):
+            raise ValueError("create_document_version requires 'db_instance' (MediaDatabase)")
+        return db_instance.create_document_version(**kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of create_document_version not yet implemented")
@@ -1117,5 +1123,3 @@ def get_document_version(*args, **kwargs):
 #
 # End of file
 ############################################################################################################
-class DatabaseError:
-    pass

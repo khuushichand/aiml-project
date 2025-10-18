@@ -42,6 +42,10 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolPermissionGrantRequest,
     ToolPermissionBatchRequest,
     ToolPermissionPrefixRequest,
+    ToolCatalogCreateRequest,
+    ToolCatalogResponse,
+    ToolCatalogEntryCreateRequest,
+    ToolCatalogEntryResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -783,6 +787,10 @@ async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateReques
             budget_month_tokens=payload.budget_month_tokens,
             budget_day_usd=payload.budget_day_usd,
             budget_month_usd=payload.budget_month_usd,
+            allowed_methods=payload.allowed_methods,
+            allowed_paths=payload.allowed_paths,
+            max_calls=payload.max_calls,
+            max_runs=payload.max_runs,
         )
         return result
     except Exception as e:
@@ -3637,3 +3645,261 @@ async def get_personalization_status():
     except Exception as e:
         logger.warning(f"Admin status fetch failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch status")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# MCP Tool Catalogs (Admin)
+
+@router.get(
+    "/mcp/tool_catalogs",
+    response_model=List[ToolCatalogResponse],
+    summary="List MCP tool catalogs (admin)",
+    description=(
+        "List MCP tool catalogs across global/org/team scopes.\n\n"
+        "RBAC: Admin-only.\n\n"
+        "Filters: Optional `org_id` and/or `team_id` parameters restrict results to a given scope.\n"
+        "Without filters, returns all catalogs."
+    ),
+)
+async def list_tool_catalogs(
+    org_id: Optional[int] = Query(None),
+    team_id: Optional[int] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db=Depends(get_db_transaction),
+) -> List[ToolCatalogResponse]:
+    """List tool catalogs with optional org/team filtering."""
+    try:
+        is_pg = await is_postgres_backend()
+        where: list[str] = []
+        params: list[Any] = []
+        if org_id is not None:
+            where.append("org_id = $1" if is_pg else "org_id = ?")
+            params.append(org_id)
+        if team_id is not None:
+            if is_pg:
+                where.append(f"team_id = ${len(params)+1}")
+            else:
+                where.append("team_id = ?")
+            params.append(team_id)
+        where_clause = (" WHERE " + " AND ".join(where)) if where else ""
+        if is_pg:
+            q = (
+                f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,TRUE) as is_active, created_at, updated_at "
+                f"FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT $ {len(params)+1} OFFSET $ {len(params)+2}"
+            ).replace('$ ', '$')
+            rows = await db.fetch(q, *params, limit, offset)
+            return [ToolCatalogResponse(**dict(r)) for r in rows]
+        else:
+            q = f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            cur = await db.execute(q, [*params, limit, offset])
+            rows = await cur.fetchall()
+            return [
+                ToolCatalogResponse(
+                    id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
+                ) for r in rows
+            ]
+    except Exception as e:
+        logger.error(f"Failed to list tool catalogs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list tool catalogs")
+
+
+@router.post(
+    "/mcp/tool_catalogs",
+    response_model=ToolCatalogResponse,
+    status_code=201,
+    summary="Create MCP tool catalog (admin)",
+    description=(
+        "Create a new MCP tool catalog in the chosen scope.\n\n"
+        "RBAC: Admin-only.\n\n"
+        "Scope: Set `org_id` for org-owned, `team_id` for team-owned, or neither for global.\n"
+        "Name must be unique per (name, org_id, team_id)."
+    ),
+)
+async def create_tool_catalog(payload: ToolCatalogCreateRequest, db=Depends(get_db_transaction)) -> ToolCatalogResponse:
+    """Create a tool catalog."""
+    try:
+        is_pg = await is_postgres_backend()
+        name = payload.name.strip()
+        desc = payload.description
+        org_id = payload.org_id
+        team_id = payload.team_id
+        is_active = bool(payload.is_active if payload.is_active is not None else True)
+        if is_pg:
+            await db.execute(
+                """
+                INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (name, org_id, team_id) DO NOTHING
+                """,
+                name, desc, org_id, team_id, is_active,
+            )
+            row = await db.fetchrow(
+                "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE name = $1 AND ((org_id IS NOT DISTINCT FROM $2) AND (team_id IS NOT DISTINCT FROM $3))",
+                name, org_id, team_id,
+            )
+            if not row:
+                raise HTTPException(status_code=409, detail="Catalog already exists")
+            return ToolCatalogResponse(**dict(row))
+        else:
+            # SQLite uniqueness is via UNIQUE(name, org_id, team_id)
+            cur = await db.execute(
+                "SELECT id FROM tool_catalogs WHERE name = ? AND ( (org_id IS ? OR org_id = ?) AND (team_id IS ? OR team_id = ?) )",
+                (name, None, org_id, None, team_id),
+            )
+            exists = await cur.fetchone()
+            if exists:
+                raise HTTPException(status_code=409, detail="Catalog already exists")
+            await db.execute(
+                "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES (?, ?, ?, ?, ?)",
+                (name, desc, org_id, team_id, 1 if is_active else 0),
+            )
+            cur2 = await db.execute(
+                "SELECT id, name, description, org_id, team_id, is_active, created_at, updated_at FROM tool_catalogs WHERE name = ? AND ( (org_id IS ? OR org_id = ?) AND (team_id IS ? OR team_id = ?) )",
+                (name, None, org_id, None, team_id),
+            )
+            r = await cur2.fetchone()
+            return ToolCatalogResponse(
+                id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create tool catalog: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create tool catalog")
+
+
+@router.delete(
+    "/mcp/tool_catalogs/{catalog_id}",
+    summary="Delete MCP tool catalog (admin)",
+    description=(
+        "Delete a catalog by id. Entries are removed via ON DELETE CASCADE.\n\n"
+        "RBAC: Admin-only.\n\n"
+        "Scope: Works for any catalog (global/org/team)."
+    ),
+)
+async def delete_tool_catalog(catalog_id: int, db=Depends(get_db_transaction)) -> dict:
+    """Delete a tool catalog (entries cascade)."""
+    try:
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            await db.execute("DELETE FROM tool_catalogs WHERE id = $1", catalog_id)
+        else:
+            await db.execute("DELETE FROM tool_catalogs WHERE id = ?", (catalog_id,))
+            await db.commit()
+        return {"message": "Catalog deleted", "id": catalog_id}
+    except Exception as e:
+        logger.error(f"Failed to delete tool catalog {catalog_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete tool catalog")
+
+
+@router.get(
+    "/mcp/tool_catalogs/{catalog_id}/entries",
+    response_model=List[ToolCatalogEntryResponse],
+    summary="List catalog entries (admin)",
+    description=(
+        "List tools included in the specified catalog.\n\n"
+        "RBAC: Admin-only."
+    ),
+)
+async def list_tool_catalog_entries(catalog_id: int, db=Depends(get_db_transaction)) -> List[ToolCatalogEntryResponse]:
+    """List entries in a tool catalog."""
+    try:
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            rows = await db.fetch(
+                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 ORDER BY tool_name",
+                catalog_id,
+            )
+            return [ToolCatalogEntryResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(
+                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? ORDER BY tool_name",
+                (catalog_id,),
+            )
+            rows = await cur.fetchall()
+            return [ToolCatalogEntryResponse(catalog_id=r[0], tool_name=r[1], module_id=r[2]) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list tool catalog entries: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list tool catalog entries")
+
+
+@router.post(
+    "/mcp/tool_catalogs/{catalog_id}/entries",
+    response_model=ToolCatalogEntryResponse,
+    status_code=201,
+    summary="Add tool to catalog (admin)",
+    description=(
+        "Add a tool entry to the catalog. Idempotent per (catalog_id, tool_name).\n\n"
+        "RBAC: Admin-only."
+    ),
+)
+async def add_tool_catalog_entry(catalog_id: int, payload: ToolCatalogEntryCreateRequest, db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
+    """Add a tool entry to a catalog (idempotent)."""
+    try:
+        tool = payload.tool_name.strip()
+        module_id = payload.module_id.strip() if payload.module_id else None
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            await db.execute(
+                """
+                INSERT INTO tool_catalog_entries (catalog_id, tool_name, module_id)
+                VALUES ($1, $2, $3) ON CONFLICT (catalog_id, tool_name) DO NOTHING
+                """,
+                catalog_id, tool, module_id,
+            )
+            row = await db.fetchrow(
+                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2",
+                catalog_id, tool,
+            )
+            return ToolCatalogEntryResponse(**dict(row)) if row else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
+        else:
+            cur = await db.execute(
+                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
+                (catalog_id, tool),
+            )
+            r = await cur.fetchone()
+            if not r:
+                await db.execute(
+                    "INSERT OR IGNORE INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES (?, ?, ?)",
+                    (catalog_id, tool, module_id),
+                )
+                await db.commit()
+                cur2 = await db.execute(
+                    "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
+                    (catalog_id, tool),
+                )
+                r = await cur2.fetchone()
+            return ToolCatalogEntryResponse(catalog_id=r[0], tool_name=r[1], module_id=r[2]) if r else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
+    except Exception as e:
+        logger.error(f"Failed to add tool catalog entry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add tool catalog entry")
+
+
+@router.delete(
+    "/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}",
+    summary="Remove tool from catalog (admin)",
+    description=(
+        "Remove a tool entry from the catalog. Returns 200 whether or not the entry existed.\n\n"
+        "RBAC: Admin-only."
+    ),
+)
+async def delete_tool_catalog_entry(catalog_id: int, tool_name: str, db=Depends(get_db_transaction)) -> dict:
+    """Remove a tool from a catalog."""
+    try:
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            await db.execute(
+                "DELETE FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2",
+                catalog_id, tool_name,
+            )
+        else:
+            await db.execute(
+                "DELETE FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
+                (catalog_id, tool_name),
+            )
+            await db.commit()
+        return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name}
+    except Exception as e:
+        logger.error(f"Failed to delete tool catalog entry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")

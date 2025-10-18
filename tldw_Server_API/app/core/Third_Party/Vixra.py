@@ -18,45 +18,54 @@ from __future__ import annotations
 from typing import Optional, Tuple, Dict, Any, List
 import re
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 ABS_URL = "https://vixra.org/abs/{vid}"
 PDF_BASE = "https://vixra.org/pdf/{suffix}"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "HEAD"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.headers.update({
-        "Accept": "text/html,application/pdf,application/json",
-        "User-Agent": "tldw_server/1.0 (+https://github.com/)",
-    })
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
-
-
-def _try_pdf(session: requests.Session, url: str) -> Optional[str]:
+def _mk_session():
     try:
+        return create_client(timeout=20)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "HEAD"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.headers.update({
+            "Accept": "text/html,application/pdf,application/json",
+            "User-Agent": "tldw_server/1.0 (+https://github.com/)",
+        })
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
+
+
+def _try_pdf(session, url: str) -> Optional[str]:
+    try:
+        # httpx.Client supports allow_redirects on head as well
         r = session.head(url, timeout=15, allow_redirects=True)
         if r.status_code == 200:
             ct = (r.headers.get("content-type") or "").lower()
             if "pdf" in ct or url.lower().endswith(".pdf"):
                 return url
         return None
-    except requests.RequestException:
+    except Exception:
         return None
 
 
-def _extract_pdf_from_abs(session: requests.Session, abs_url: str) -> Optional[str]:
+def _extract_pdf_from_abs(session, abs_url: str) -> Optional[str]:
     try:
         r = session.get(abs_url, timeout=20)
         r.raise_for_status()
@@ -67,7 +76,7 @@ def _extract_pdf_from_abs(session: requests.Session, abs_url: str) -> Optional[s
             if href.startswith("/"):
                 return f"https://vixra.org{href}"
         return None
-    except requests.RequestException:
+    except Exception:
         return None
 
 

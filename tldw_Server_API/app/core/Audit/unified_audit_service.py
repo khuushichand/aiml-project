@@ -16,6 +16,7 @@ Features:
 """
 
 import asyncio
+import os
 import csv
 import hashlib
 import json
@@ -33,7 +34,6 @@ from uuid import uuid4
 import aiosqlite
 from typing import AsyncGenerator
 from loguru import logger
-import os
 try:
     # Prefer dict-like project settings if available
     from tldw_Server_API.app.core.config import settings as _app_settings  # type: ignore
@@ -482,6 +482,18 @@ class UnifiedAuditService:
         self.buffer_size = buffer_size
         self.flush_interval = flush_interval
         self.max_db_mb = max_db_mb
+
+        # Detect test environments to avoid spawning busy background loops when
+        # tests monkeypatch asyncio.sleep globally (common in our Workflows tests).
+        # In these contexts we disable background tasks entirely and prefer
+        # direct/on-demand flushing via log_event/flush.
+        try:
+            self._test_mode = any(
+                (os.getenv(k, "").strip().lower() in {"1", "true", "yes", "on"})
+                for k in ("TEST_MODE", "TLDW_TEST_MODE")
+            ) or (os.getenv("PYTEST_CURRENT_TEST") is not None)
+        except Exception:
+            self._test_mode = False
         
         # Components
         # Configure PII detector and scan fields
@@ -539,7 +551,11 @@ class UnifiedAuditService:
         await self._init_database()
         # Open persistent connection for reuse
         await self._ensure_db_pool()
-        await self.start_background_tasks()
+        # Avoid starting background tasks in test environments where asyncio.sleep
+        # may be monkeypatched to return immediately, which would otherwise cause
+        # tight loops and starve the event loop.
+        if not self._test_mode:
+            await self.start_background_tasks()
     
     async def _init_database(self):
         """Initialize database schema"""

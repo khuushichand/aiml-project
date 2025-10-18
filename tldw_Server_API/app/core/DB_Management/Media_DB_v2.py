@@ -70,6 +70,11 @@ import yaml
 
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, MigrationError
+try:
+    # Optional integration for Collections (highlights re-anchoring)
+    from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase as _CollectionsDB
+except Exception:
+    _CollectionsDB = None  # Safe fallback when module unavailable
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     DatabaseBackend,
@@ -1291,6 +1296,49 @@ class MediaDatabase:
                     logging.error(f"[Schema V1] Failed creating Claims table: {e}", exc_info=True)
                     raise
 
+                # Ensure Collections tables exist (output_templates, reading_highlights)
+                try:
+                    conn.executescript(
+                        """
+                        CREATE TABLE IF NOT EXISTS output_templates (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            name TEXT NOT NULL,
+                            type TEXT NOT NULL,
+                            format TEXT NOT NULL,
+                            body TEXT NOT NULL,
+                            description TEXT,
+                            is_default INTEGER NOT NULL DEFAULT 0,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+
+                        CREATE TABLE IF NOT EXISTS reading_highlights (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            item_id INTEGER NOT NULL,
+                            quote TEXT NOT NULL,
+                            start_offset INTEGER,
+                            end_offset INTEGER,
+                            color TEXT,
+                            note TEXT,
+                            created_at TEXT NOT NULL,
+                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                            content_hash_ref TEXT,
+                            context_before TEXT,
+                            context_after TEXT,
+                            state TEXT NOT NULL DEFAULT 'active'
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+                        """
+                    )
+                    logging.debug("[Schema V1] Collections tables ensured.")
+                except sqlite3.Error as e:
+                    logging.error(f"[Schema V1] Failed creating Collections tables: {e}", exc_info=True)
+                    raise
+
                 # --- Validation step (optional but good) - Check Media table ---
                 try:
                     cursor = conn.execute("PRAGMA table_info(Media)")
@@ -1487,6 +1535,43 @@ class MediaDatabase:
                     # Ensure Claims table exists for older DBs without bumping version
                     conn.executescript(self._CLAIMS_TABLE_SQL)
                     self._ensure_fts_structures(conn)
+                    # Ensure Collections tables exist
+                    conn.executescript(
+                        """
+                        CREATE TABLE IF NOT EXISTS output_templates (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            name TEXT NOT NULL,
+                            type TEXT NOT NULL,
+                            format TEXT NOT NULL,
+                            body TEXT NOT NULL,
+                            description TEXT,
+                            is_default INTEGER NOT NULL DEFAULT 0,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+
+                        CREATE TABLE IF NOT EXISTS reading_highlights (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            item_id INTEGER NOT NULL,
+                            quote TEXT NOT NULL,
+                            start_offset INTEGER,
+                            end_offset INTEGER,
+                            color TEXT,
+                            note TEXT,
+                            created_at TEXT NOT NULL,
+                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                            content_hash_ref TEXT,
+                            context_before TEXT,
+                            context_after TEXT,
+                            state TEXT NOT NULL DEFAULT 'active'
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+                        """
+                    )
                     logging.debug("Verified FTS tables exist.")
                 except (sqlite3.Error, DatabaseError) as fts_err:
                     logging.warning(f"Could not verify/create FTS tables on already correct schema version: {fts_err}")
@@ -1547,6 +1632,43 @@ class MediaDatabase:
                             conn = self.get_connection()
                             # Ensure FTS tables exist
                             self._ensure_fts_structures(conn)
+                            # Ensure Collections tables exist
+                            conn.executescript(
+                                """
+                                CREATE TABLE IF NOT EXISTS output_templates (
+                                    id INTEGER PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    name TEXT NOT NULL,
+                                    type TEXT NOT NULL,
+                                    format TEXT NOT NULL,
+                                    body TEXT NOT NULL,
+                                    description TEXT,
+                                    is_default INTEGER NOT NULL DEFAULT 0,
+                                    created_at TEXT NOT NULL,
+                                    updated_at TEXT NOT NULL
+                                );
+                                CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+                                CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+
+                                CREATE TABLE IF NOT EXISTS reading_highlights (
+                                    id INTEGER PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    item_id INTEGER NOT NULL,
+                                    quote TEXT NOT NULL,
+                                    start_offset INTEGER,
+                                    end_offset INTEGER,
+                                    color TEXT,
+                                    note TEXT,
+                                    created_at TEXT NOT NULL,
+                                    anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                                    content_hash_ref TEXT,
+                                    context_before TEXT,
+                                    context_after TEXT,
+                                    state TEXT NOT NULL DEFAULT 'active'
+                                );
+                                CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+                                """
+                            )
                         else:
                             raise SchemaError(f"Migration failed: {result}")
 
@@ -1573,6 +1695,31 @@ class MediaDatabase:
             if not schema_exists:
                 self._apply_schema_v1_postgres(conn)
                 self._ensure_postgres_fts(conn)
+                # Ensure Collections tables exist
+                try:
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS output_templates ("
+                            "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, "
+                            "format TEXT NOT NULL, body TEXT NOT NULL, description TEXT, is_default BOOLEAN NOT NULL DEFAULT FALSE, "
+                            "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name)", connection=conn)
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS reading_highlights ("
+                            "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, quote TEXT NOT NULL, "
+                            "start_offset INTEGER, end_offset INTEGER, color TEXT, note TEXT, created_at TIMESTAMPTZ NOT NULL, "
+                            "anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote', content_hash_ref TEXT, context_before TEXT, context_after TEXT, "
+                            "state TEXT NOT NULL DEFAULT 'active')"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                except Exception:
+                    pass
                 self._sync_postgres_sequences(conn)
                 return
 
@@ -1600,6 +1747,31 @@ class MediaDatabase:
                 self._apply_schema_v1_postgres(conn)
                 current_version = target_version  # base schema applies current version
                 self._ensure_postgres_fts(conn)
+                # Ensure Collections tables exist
+                try:
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS output_templates ("
+                            "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, "
+                            "format TEXT NOT NULL, body TEXT NOT NULL, description TEXT, is_default BOOLEAN NOT NULL DEFAULT FALSE, "
+                            "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name)", connection=conn)
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS reading_highlights ("
+                            "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, quote TEXT NOT NULL, "
+                            "start_offset INTEGER, end_offset INTEGER, color TEXT, note TEXT, created_at TIMESTAMPTZ NOT NULL, "
+                            "anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote', content_hash_ref TEXT, context_before TEXT, context_after TEXT, "
+                            "state TEXT NOT NULL DEFAULT 'active')"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                except Exception:
+                    pass
                 self._sync_postgres_sequences(conn)
                 return
 
@@ -1607,6 +1779,31 @@ class MediaDatabase:
                 self._run_postgres_migrations(conn, current_version, target_version)
 
             self._ensure_postgres_fts(conn)
+            # Ensure Collections tables exist
+            try:
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS output_templates ("
+                        "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, "
+                        "format TEXT NOT NULL, body TEXT NOT NULL, description TEXT, is_default BOOLEAN NOT NULL DEFAULT FALSE, "
+                        "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)"
+                    ),
+                    connection=conn,
+                )
+                backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name)", connection=conn)
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS reading_highlights ("
+                        "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, quote TEXT NOT NULL, "
+                        "start_offset INTEGER, end_offset INTEGER, color TEXT, note TEXT, created_at TIMESTAMPTZ NOT NULL, "
+                        "anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote', content_hash_ref TEXT, context_before TEXT, context_after TEXT, "
+                        "state TEXT NOT NULL DEFAULT 'active')"
+                    ),
+                    connection=conn,
+                )
+                backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+            except Exception:
+                pass
             self._sync_postgres_sequences(conn)
 
     def _run_postgres_migrations(self, conn, current_version: int, target_version: int) -> None:
@@ -3769,6 +3966,12 @@ class MediaDatabase:
                             media_id=media_id, content=content, prompt=prompt, analysis_content=analysis_content
                         )
                         _persist_chunks(conn, media_id)
+                        # Re-anchoring: mark reading highlights stale if content changed
+                        try:
+                            if _CollectionsDB is not None and client_id is not None:
+                                _CollectionsDB.from_backend(user_id=str(client_id), backend=self.backend).mark_highlights_stale_if_content_changed(media_id, content_hash)
+                        except Exception as _anch_err:
+                            logging.debug(f"Highlight re-anchoring hook failed (non-fatal): {_anch_err}")
                         # Invalidate agentic intra-doc vectors on content update
                         try:
                             from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
@@ -4088,6 +4291,447 @@ class MediaDatabase:
         with self.transaction() as conn:
             cur = conn.execute("DELETE FROM DocumentStructureIndex WHERE media_id = ?", (media_id,))
             return int(cur.rowcount or 0)
+
+    # =========================================================================
+    # Chunking Templates Methods (moved earlier to ensure availability)
+    # =========================================================================
+    
+    def create_chunking_template(self, 
+                                name: str,
+                                template_json: str,
+                                description: Optional[str] = None,
+                                is_builtin: bool = False,
+                                tags: Optional[List[str]] = None,
+                                user_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Create a new chunking template.
+        
+        Args:
+            name: Template name (must be unique among non-deleted templates)
+            template_json: JSON string containing template configuration
+            description: Optional template description
+            is_builtin: Whether this is a built-in template (cannot be modified/deleted)
+            tags: Optional list of tags for categorization
+            user_id: Optional user ID for ownership tracking
+            
+        Returns:
+            Dictionary containing created template information
+            
+        Raises:
+            DatabaseError: If template creation fails
+            InputError: If name already exists
+        """
+        import uuid as uuid_module
+        
+        template_uuid = str(uuid_module.uuid4())
+        tags_json = json.dumps(tags) if tags else None
+
+        try:
+            json.loads(template_json)
+        except json.JSONDecodeError as e:
+            raise InputError(f"Invalid template JSON: {e}")
+
+        current_time = self._get_current_utc_timestamp_str()
+
+        with self.transaction() as conn:
+            existing = self._fetchone_with_connection(
+                conn,
+                "SELECT 1 FROM ChunkingTemplates WHERE name = ? AND deleted = ? LIMIT 1",
+                (name, False),
+            )
+            if existing:
+                raise InputError(f"Template with name '{name}' already exists")
+
+            insert_sql = """
+                INSERT INTO ChunkingTemplates (
+                    uuid, name, description, template_json, is_builtin, tags,
+                    created_at, updated_at, last_modified, version, client_id,
+                    user_id, deleted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            params = (
+                template_uuid,
+                name,
+                description,
+                template_json,
+                is_builtin,
+                tags_json,
+                current_time,
+                current_time,
+                current_time,
+                1,
+                self.client_id,
+                user_id,
+                False,
+            )
+
+            if self.backend_type == BackendType.POSTGRESQL:
+                insert_sql += " RETURNING id"
+
+            insert_cursor = self._execute_with_connection(conn, insert_sql, params)
+            if self.backend_type == BackendType.POSTGRESQL:
+                inserted_row = insert_cursor.fetchone()
+                template_id = inserted_row['id'] if inserted_row else None
+            else:
+                template_id = insert_cursor.lastrowid
+
+            if not template_id:
+                raise DatabaseError("Failed to create chunking template.")
+
+        logger.info(f"Created chunking template '{name}' with UUID {template_uuid}")
+
+        return {
+            'id': template_id,
+            'uuid': template_uuid,
+            'name': name,
+            'description': description,
+            'template_json': template_json,
+            'is_builtin': is_builtin,
+            'tags': tags,
+            'user_id': user_id,
+            'version': 1,
+        }
+
+    def get_chunking_template(self, 
+                             template_id: Optional[int] = None,
+                             name: Optional[str] = None,
+                             uuid: Optional[str] = None,
+                             include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Get a chunking template by ID, name, or UUID.
+        
+        Args:
+            template_id: Template database ID
+            name: Template name
+            uuid: Template UUID
+            include_deleted: Whether to include soft-deleted templates
+            
+        Returns:
+            Template dictionary or None if not found
+        """
+        if not any([template_id, name, uuid]):
+            raise InputError("Must provide template_id, name, or uuid")
+        params: List[Any] = []
+        conditions: List[str] = []
+
+        if template_id is not None:
+            conditions.append("id = ?")
+            params.append(template_id)
+        if name:
+            conditions.append("name = ?")
+            params.append(name)
+        if uuid:
+            conditions.append("uuid = ?")
+            params.append(uuid)
+
+        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False)
+
+        cursor = self.execute_query(query, tuple(params))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            'id': row['id'],
+            'uuid': row['uuid'],
+            'name': row['name'],
+            'description': row['description'],
+            'template_json': row['template_json'],
+            'is_builtin': bool(row['is_builtin']),
+            'tags': json.loads(row['tags']) if row['tags'] else [],
+            'created_at': row['created_at'],
+            'updated_at': row['updated_at'],
+            'version': row['version'],
+            'user_id': row['user_id'],
+            'deleted': bool(row['deleted']),
+        }
+
+    def list_chunking_templates(self,
+                               include_builtin: bool = True,
+                               include_custom: bool = True,
+                               tags: Optional[List[str]] = None,
+                               user_id: Optional[str] = None,
+                               include_deleted: bool = False) -> List[Dict[str, Any]]:
+        """
+        List all chunking templates with optional filtering.
+        
+        Args:
+            include_builtin: Include built-in templates
+            include_custom: Include custom templates
+            tags: Filter by tags (templates must have at least one matching tag)
+            user_id: Filter by user ID
+            include_deleted: Include soft-deleted templates
+            
+        Returns:
+            List of template dictionaries
+        """
+        if not include_builtin and not include_custom:
+            return []
+
+        conditions: List[str] = []
+        params: List[Any] = []
+
+        if not include_deleted:
+            conditions.append("deleted = ?")
+            params.append(False)
+
+        if include_builtin != include_custom:
+            conditions.append("is_builtin = ?")
+            params.append(include_builtin)
+
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
+
+        query = "SELECT * FROM ChunkingTemplates"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY is_builtin DESC, name ASC"
+
+        cursor = self.execute_query(query, tuple(params))
+        rows = cursor.fetchall()
+
+        templates = []
+        for row in rows:
+            template = {
+                'id': row['id'],
+                'uuid': row['uuid'],
+                'name': row['name'],
+                'description': row['description'],
+                'template_json': row['template_json'],
+                'is_builtin': bool(row['is_builtin']),
+                'tags': json.loads(row['tags']) if row['tags'] else [],
+                'created_at': row['created_at'],
+                'updated_at': row['updated_at'],
+                'version': row['version'],
+                'user_id': row['user_id'],
+            }
+
+            if tags and not any(tag in template['tags'] for tag in tags):
+                continue
+
+            templates.append(template)
+
+        return templates
+
+    def update_chunking_template(self,
+                                template_id: Optional[int] = None,
+                                name: Optional[str] = None,
+                                uuid: Optional[str] = None,
+                                template_json: Optional[str] = None,
+                                description: Optional[str] = None,
+                                tags: Optional[List[str]] = None) -> bool:
+        """
+        Update a chunking template (cannot update built-in templates).
+        
+        Args:
+            template_id: Template ID to update
+            name: Template name to update
+            uuid: Template UUID to update
+            template_json: New template JSON configuration
+            description: New description
+            tags: New tags list
+            
+        Returns:
+            True if updated, False if not found or is built-in
+            
+        Raises:
+            InputError: If trying to update a built-in template
+            DatabaseError: If update fails
+        """
+        # Get existing template
+        template = self.get_chunking_template(
+            template_id=template_id, 
+            name=name, 
+            uuid=uuid
+        )
+        
+        if not template:
+            return False
+        
+        if template['is_builtin']:
+            raise InputError("Cannot modify built-in templates")
+        
+        # Validate new JSON if provided
+        if template_json:
+            try:
+                json.loads(template_json)
+            except json.JSONDecodeError as e:
+                raise InputError(f"Invalid template JSON: {e}")
+        
+        updates: List[str] = []
+        params: List[Any] = []
+
+        if template_json is not None:
+            updates.append("template_json = ?")
+            params.append(template_json)
+
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+
+        if tags is not None:
+            updates.append("tags = ?")
+            params.append(json.dumps(tags))
+
+        if not updates:
+            return False
+
+        current_time = self._get_current_utc_timestamp_str()
+        updates.extend([
+            "updated_at = ?",
+            "last_modified = ?",
+            "version = version + 1",
+            "client_id = ?",
+        ])
+        params.extend([current_time, current_time, self.client_id, template['id'], False])
+
+        update_sql = f"""
+            UPDATE ChunkingTemplates
+            SET {', '.join(updates)}
+            WHERE id = ? AND deleted = ?
+        """
+
+        with self.transaction() as conn:
+            cursor = self._execute_with_connection(conn, update_sql, tuple(params))
+            if cursor.rowcount == 0:
+                return False
+
+        logger.info(f"Updated chunking template ID {template['id']}")
+        return True
+
+    def delete_chunking_template(self,
+                                template_id: Optional[int] = None,
+                                name: Optional[str] = None,
+                                uuid: Optional[str] = None,
+                                hard_delete: bool = False) -> bool:
+        """
+        Delete a chunking template (soft delete by default).
+        
+        Args:
+            template_id: Template ID to delete
+            name: Template name to delete
+            uuid: Template UUID to delete
+            hard_delete: Permanently delete instead of soft delete
+            
+        Returns:
+            True if deleted, False if not found
+            
+        Raises:
+            InputError: If trying to delete a built-in template
+        """
+        # Get existing template
+        template = self.get_chunking_template(
+            template_id=template_id,
+            name=name,
+            uuid=uuid
+        )
+        
+        if not template:
+            return False
+        
+        if template['is_builtin']:
+            raise InputError("Cannot delete built-in templates")
+        
+        deleted_rows = 0
+
+        with self.transaction() as conn:
+            if hard_delete:
+                delete_cursor = self._execute_with_connection(
+                    conn,
+                    "DELETE FROM ChunkingTemplates WHERE id = ?",
+                    (template['id'],),
+                )
+                deleted_rows = delete_cursor.rowcount
+                logger.info(f"Hard deleted chunking template ID {template['id']}")
+            else:
+                current_time = self._get_current_utc_timestamp_str()
+                update_cursor = self._execute_with_connection(
+                    conn,
+                    """
+                    UPDATE ChunkingTemplates
+                    SET deleted = ?,
+                        updated_at = ?,
+                        last_modified = ?,
+                        client_id = ?
+                    WHERE id = ?
+                    """,
+                    (True, current_time, current_time, self.client_id, template['id']),
+                )
+                deleted_rows = update_cursor.rowcount
+                logger.info(f"Soft deleted chunking template ID {template['id']}")
+
+        return deleted_rows > 0
+
+    def seed_builtin_templates(self, templates: List[Dict[str, Any]]) -> int:
+        """
+        Seed built-in templates into the database.
+        
+        Args:
+            templates: List of template dictionaries to seed
+            
+        Returns:
+            Number of templates seeded
+        """
+        count = 0
+        
+        for template in templates:
+            # Check if template already exists
+            existing = self.get_chunking_template(
+                name=template['name'],
+                include_deleted=True
+            )
+            
+            if not existing:
+                try:
+                    self.create_chunking_template(
+                        name=template['name'],
+                        template_json=json.dumps(template.get('template', template)),
+                        description=template.get('description', ''),
+                        is_builtin=True,
+                        tags=template.get('tags', [])
+                    )
+                    count += 1
+                    logger.info(f"Seeded built-in template: {template['name']}")
+                except Exception as e:
+                    logger.error(f"Failed to seed template {template['name']}: {e}")
+            elif existing['deleted']:
+                # Restore deleted built-in template
+                current_time = self._get_current_utc_timestamp_str()
+                with self.transaction() as conn:
+                    self._execute_with_connection(
+                        conn,
+                        """
+                        UPDATE ChunkingTemplates
+                        SET deleted = ?,
+                            template_json = ?,
+                            description = ?,
+                            tags = ?,
+                            updated_at = ?,
+                            last_modified = ?,
+                            version = version + 1,
+                            client_id = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            False,
+                            json.dumps(template.get('template', template)),
+                            template.get('description', ''),
+                            json.dumps(template.get('tags', [])),
+                            current_time,
+                            current_time,
+                            self.client_id,
+                            existing['id'],
+                        ),
+                    )
+                count += 1
+                logger.info(f"Restored built-in template: {template['name']}")
+
+        return count
 
     def lookup_section_for_offset(self, media_id: int, char_offset: int) -> Optional[Dict[str, Any]]:
         """Return the most specific section covering char_offset for media_id."""
@@ -4793,6 +5437,12 @@ class MediaDatabase:
                 self._update_fts_media(conn, media_id, current_title, target_content)  # Use original title, new content
 
             logger.info(f"Rolled back media {media_id} to state of doc ver {target_version_number}. New DocVer: {new_doc_version_number}, New MediaVer: {new_media_version}")
+            # Re-anchoring: mark reading highlights stale after rollback content change
+            try:
+                if _CollectionsDB is not None and client_id is not None:
+                    _CollectionsDB.from_backend(user_id=str(client_id), backend=self.backend).mark_highlights_stale_if_content_changed(media_id, new_content_hash)
+            except Exception as _anch_err:
+                logging.debug(f"Highlight re-anchoring hook (rollback) failed: {_anch_err}")
             # Invalidate agentic intra-doc vectors after content rollback
             try:
                 from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
@@ -5417,1299 +6067,858 @@ def get_full_media_details_rich(
         "versions": versions_list,
     }
 
-    # Add similar get_media_by_uuid, get_media_by_url, get_media_by_hash, get_media_by_title
-    # Ensure they include the include_deleted and include_trash filters correctly.
-    def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
-        """
-        Retrieves a single media item by its UUID.
+# Add similar get_media_by_uuid, get_media_by_url, get_media_by_hash, get_media_by_title
+# Ensure they include the include_deleted and include_trash filters correctly.
+def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+    """
+    Retrieves a single media item by its UUID.
 
-        By default, only returns active (non-deleted, non-trash) items. UUIDs are unique.
+    By default, only returns active (non-deleted, non-trash) items. UUIDs are unique.
 
-        Args:
-            media_uuid (str): The UUID string of the media item.
-            include_deleted (bool): If True, include soft-deleted items. Defaults to False.
-            include_trash (bool): If True, include trashed items. Defaults to False.
+    Args:
+        media_uuid (str): The UUID string of the media item.
+        include_deleted (bool): If True, include soft-deleted items. Defaults to False.
+        include_trash (bool): If True, include trashed items. Defaults to False.
 
-        Returns:
-            Optional[Dict[str, Any]]: A dictionary representing the media item if found,
-                                      otherwise None.
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary representing the media item if found,
+                                  otherwise None.
 
-        Raises:
-            InputError: If `media_uuid` is empty or None.
-            DatabaseError: If a database query error occurs.
-        """
-        if not media_uuid:
-            raise InputError("media_uuid cannot be empty.")
-        query = "SELECT * FROM Media WHERE uuid = ?"
-        params = [media_uuid]
-        if not include_deleted:
-            query += " AND deleted = 0"
-        if not include_trash:
-            query += " AND is_trash = 0"
-        try:
-            cursor = self.execute_query(query, tuple(params))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-        except (DatabaseError, sqlite3.Error) as e:
-            logger.error(f"Error fetching media by UUID {media_uuid}: {e}")
-            raise DatabaseError(f"Failed fetch media by UUID: {e}") from e
+    Raises:
+        InputError: If `media_uuid` is empty or None.
+        DatabaseError: If a database query error occurs.
+    """
+    if not media_uuid:
+        raise InputError("media_uuid cannot be empty.")
+    query = "SELECT * FROM Media WHERE uuid = ?"
+    params = [media_uuid]
+    if not include_deleted:
+        query += " AND deleted = 0"
+    if not include_trash:
+        query += " AND is_trash = 0"
+    try:
+        cursor = self.execute_query(query, tuple(params))
+        result = cursor.fetchone()
+        return dict(result) if result else None
+    except (DatabaseError, sqlite3.Error) as e:
+        logger.error(f"Error fetching media by UUID {media_uuid}: {e}")
+        raise DatabaseError(f"Failed fetch media by UUID: {e}") from e
 
-    def get_media_by_url(self, url: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
-        """
-        Retrieves a single media item by its URL.
+def get_media_by_url(self, url: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+    """
+    Retrieves a single media item by its URL.
 
-        By default, only returns active (non-deleted, non-trash) items. URLs are unique.
+    By default, only returns active (non-deleted, non-trash) items. URLs are unique.
 
-        Args:
-            url (str): The URL string of the media item.
-            include_deleted (bool): If True, include soft-deleted items. Defaults to False.
-            include_trash (bool): If True, include trashed items. Defaults to False.
+    Args:
+        url (str): The URL string of the media item.
+        include_deleted (bool): If True, include soft-deleted items. Defaults to False.
+        include_trash (bool): If True, include trashed items. Defaults to False.
 
-        Returns:
-            Optional[Dict[str, Any]]: A dictionary representing the media item if found,
-                                      otherwise None.
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary representing the media item if found,
+                                  otherwise None.
 
-        Raises:
-            InputError: If `url` is empty or None.
-            DatabaseError: If a database query error occurs.
-        """
-        if not url:
-            raise InputError("url cannot be empty or None.")
+    Raises:
+        InputError: If `url` is empty or None.
+        DatabaseError: If a database query error occurs.
+    """
+    if not url:
+        raise InputError("url cannot be empty or None.")
 
-        query = "SELECT * FROM Media WHERE url = ?"
-        params = [url]
+    query = "SELECT * FROM Media WHERE url = ?"
+    params = [url]
 
-        if not include_deleted:
-            query += " AND deleted = 0"
-        if not include_trash:
-            query += " AND is_trash = 0"
+    if not include_deleted:
+        query += " AND deleted = 0"
+    if not include_trash:
+        query += " AND is_trash = 0"
 
-        # URLs are unique, so LIMIT 1 is implicit but doesn't hurt
-        query += " LIMIT 1"
+    # URLs are unique, so LIMIT 1 is implicit but doesn't hurt
+    query += " LIMIT 1"
 
-        try:
-            cursor = self.execute_query(query, tuple(params))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-        except sqlite3.Error as e:
-            logger.error(f"Error fetching media by URL '{url}': {e}", exc_info=True)
-            raise DatabaseError(f"Failed to fetch media by URL: {e}") from e
-        except Exception as e:
-            logger.error(f"Unexpected error fetching media by URL '{url}': {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected error fetching media by URL: {e}") from e
+    try:
+        cursor = self.execute_query(query, tuple(params))
+        result = cursor.fetchone()
+        return dict(result) if result else None
+    except sqlite3.Error as e:
+        logger.error(f"Error fetching media by URL '{url}': {e}", exc_info=True)
+        raise DatabaseError(f"Failed to fetch media by URL: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error fetching media by URL '{url}': {e}", exc_info=True)
+        raise DatabaseError(f"Unexpected error fetching media by URL: {e}") from e
 
-    def get_media_by_hash(self, content_hash: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
-        """
-        Retrieves a single media item by its content hash (SHA256).
+def get_media_by_hash(self, content_hash: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+    """
+    Retrieves a single media item by its content hash (SHA256).
 
-        By default, only returns active (non-deleted, non-trash) items. Hashes are unique.
+    By default, only returns active (non-deleted, non-trash) items. Hashes are unique.
 
-        Args:
-            content_hash (str): The SHA256 hash string of the media content.
-            include_deleted (bool): If True, include soft-deleted items. Defaults to False.
-            include_trash (bool): If True, include trashed items. Defaults to False.
+    Args:
+        content_hash (str): The SHA256 hash string of the media content.
+        include_deleted (bool): If True, include soft-deleted items. Defaults to False.
+        include_trash (bool): If True, include trashed items. Defaults to False.
 
-        Returns:
-            Optional[Dict[str, Any]]: A dictionary representing the media item if found,
-                                      otherwise None.
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary representing the media item if found,
+                                  otherwise None.
 
-        Raises:
-            InputError: If `content_hash` is empty or None.
-            DatabaseError: If a database query error occurs.
-        """
-        if not content_hash:
-            raise InputError("content_hash cannot be empty or None.")
+    Raises:
+        InputError: If `content_hash` is empty or None.
+        DatabaseError: If a database query error occurs.
+    """
+    if not content_hash:
+        raise InputError("content_hash cannot be empty or None.")
 
-        query = "SELECT * FROM Media WHERE content_hash = ?"
-        params = [content_hash]
+    query = "SELECT * FROM Media WHERE content_hash = ?"
+    params = [content_hash]
 
-        if not include_deleted:
-            query += " AND deleted = 0"
-        if not include_trash:
-            query += " AND is_trash = 0"
+    if not include_deleted:
+        query += " AND deleted = 0"
+    if not include_trash:
+        query += " AND is_trash = 0"
 
-        # Hashes are unique, so LIMIT 1 is implicit
-        query += " LIMIT 1"
+    # Hashes are unique, so LIMIT 1 is implicit
+    query += " LIMIT 1"
 
-        try:
-            cursor = self.execute_query(query, tuple(params))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-        except sqlite3.Error as e:
-            logger.error(f"Error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
-            raise DatabaseError(f"Failed to fetch media by hash: {e}") from e
-        except Exception as e:
-            logger.error(f"Unexpected error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected error fetching media by hash: {e}") from e
+    try:
+        cursor = self.execute_query(query, tuple(params))
+        result = cursor.fetchone()
+        return dict(result) if result else None
+    except sqlite3.Error as e:
+        logger.error(f"Error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
+        raise DatabaseError(f"Failed to fetch media by hash: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
+        raise DatabaseError(f"Unexpected error fetching media by hash: {e}") from e
 
-    def get_media_by_title(self, title: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
-        """
-        Retrieves the *first* media item matching a given title (case-sensitive).
+def get_media_by_title(self, title: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+    """
+    Retrieves the *first* media item matching a given title (case-sensitive).
 
-        Note: Titles are not guaranteed to be unique. This returns the most recently
-        modified match if multiple exist. By default, only returns active items.
+    Note: Titles are not guaranteed to be unique. This returns the most recently
+    modified match if multiple exist. By default, only returns active items.
 
-        Args:
-            title (str): The title string of the media item.
-            include_deleted (bool): If True, include soft-deleted items. Defaults to False.
-            include_trash (bool): If True, include trashed items. Defaults to False.
+    Args:
+        title (str): The title string of the media item.
+        include_deleted (bool): If True, include soft-deleted items. Defaults to False.
+        include_trash (bool): If True, include trashed items. Defaults to False.
 
-        Returns:
-            Optional[Dict[str, Any]]: A dictionary representing the first matching media
-                                      item (ordered by last_modified DESC), or None.
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary representing the first matching media
+                                  item (ordered by last_modified DESC), or None.
 
-        Raises:
-            InputError: If `title` is empty or None.
-            DatabaseError: If a database query error occurs.
-        """
-        if not title:
-            raise InputError("title cannot be empty or None.")
+    Raises:
+        InputError: If `title` is empty or None.
+        DatabaseError: If a database query error occurs.
+    """
+    if not title:
+        raise InputError("title cannot be empty or None.")
 
-        query = "SELECT * FROM Media WHERE title = ?"
-        params = [title]
+    query = "SELECT * FROM Media WHERE title = ?"
+    params = [title]
 
-        if not include_deleted:
-            query += " AND deleted = 0"
-        if not include_trash:
-            query += " AND is_trash = 0"
+    if not include_deleted:
+        query += " AND deleted = 0"
+    if not include_trash:
+        query += " AND is_trash = 0"
 
-        # Order by last_modified to get potentially the most relevant if duplicates exist
-        query += " ORDER BY last_modified DESC LIMIT 1"
+    # Order by last_modified to get potentially the most relevant if duplicates exist
+    query += " ORDER BY last_modified DESC LIMIT 1"
 
-        try:
-            cursor = self.execute_query(query, tuple(params))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-        except sqlite3.Error as e:
-            logger.error(f"Error fetching media by title '{title}': {e}", exc_info=True)
-            raise DatabaseError(f"Failed to fetch media by title: {e}") from e
-        except Exception as e:
-            logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
+    try:
+        cursor = self.execute_query(query, tuple(params))
+        result = cursor.fetchone()
+        return dict(result) if result else None
+    except sqlite3.Error as e:
+        logger.error(f"Error fetching media by title '{title}': {e}", exc_info=True)
+        raise DatabaseError(f"Failed to fetch media by title: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
+        raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
 
-    def get_paginated_files(self, page: int = 1, results_per_page: int = 50) -> Tuple[List[sqlite3.Row], int, int, int]:
-        """
-        Fetches a paginated list of active media items (id, title, type) from this database instance.
+def get_paginated_files(self, page: int = 1, results_per_page: int = 50) -> Tuple[List[sqlite3.Row], int, int, int]:
+    """
+    Fetches a paginated list of active media items (id, title, type) from this database instance.
 
-        Filters for items where `deleted = 0` and `is_trash = 0`.
+    Filters for items where `deleted = 0` and `is_trash = 0`.
 
-        Args:
-            page (int): The page number (1-based). Defaults to 1.
-            results_per_page (int): The number of items per page. Defaults to 50.
+    Args:
+        page (int): The page number (1-based). Defaults to 1.
+        results_per_page (int): The number of items per page. Defaults to 50.
 
-        Returns:
-            A tuple containing:
-                - results (List[sqlite3.Row]): List of Row objects for the current page.
-                                               Each row contains 'id', 'title', 'type'.
-                - total_pages (int): Total number of pages for active items.
-                - current_page (int): The requested page number.
-                - total_items (int): The total number of active items matching the criteria.
+    Returns:
+        A tuple containing:
+            - results (List[sqlite3.Row]): List of Row objects for the current page.
+                                           Each row contains 'id', 'title', 'type'.
+            - total_pages (int): Total number of pages for active items.
+            - current_page (int): The requested page number.
+            - total_items (int): The total number of active items matching the criteria.
 
-        Raises:
-            ValueError: If page or results_per_page are invalid.
-            DatabaseError: If a database query fails.
-        """
-        # No need to check self type, it's guaranteed by method call
-        if page < 1:
-            raise ValueError("Page number must be 1 or greater.")
-        if results_per_page < 1:
-            raise ValueError("Results per page must be 1 or greater.")
+    Raises:
+        ValueError: If page or results_per_page are invalid.
+        DatabaseError: If a database query fails.
+    """
+    # No need to check self type, it's guaranteed by method call
+    if page < 1:
+        raise ValueError("Page number must be 1 or greater.")
+    if results_per_page < 1:
+        raise ValueError("Results per page must be 1 or greater.")
 
-        # Use self.db_path_str for logging context
-        logging.debug(
-            f"Fetching paginated files: page={page}, results_per_page={results_per_page} from DB: {self.db_path_str} (Active Only)")
+    # Use self.db_path_str for logging context
+    logging.debug(
+        f"Fetching paginated files: page={page}, results_per_page={results_per_page} from DB: {self.db_path_str} (Active Only)")
 
-        offset = (page - 1) * results_per_page
-        total_items = 0
-        results: List[sqlite3.Row] = []  # Type hint for clarity
+    offset = (page - 1) * results_per_page
+    total_items = 0
+    results: List[sqlite3.Row] = []  # Type hint for clarity
 
-        try:
-            # Query 1: Get total count of active items
-            count_query = "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 0"
+    try:
+        # Query 1: Get total count of active items
+        count_query = "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 0"
+        # Use self.execute_query
+        count_cursor = self.execute_query(count_query)
+        count_result = count_cursor.fetchone()
+        total_items = count_result['total_items'] if count_result else 0
+
+        # Query 2: Get paginated items if count > 0
+        if total_items > 0:
+            # Order by most recently modified, then ID for stable pagination
+            items_query = """
+                          SELECT id, title, type
+                          FROM Media
+                          WHERE deleted = 0
+                            AND is_trash = 0
+                          ORDER BY last_modified DESC, id DESC LIMIT ?
+                          OFFSET ?
+                          """
             # Use self.execute_query
-            count_cursor = self.execute_query(count_query)
-            count_result = count_cursor.fetchone()
-            total_items = count_result['total_items'] if count_result else 0
+            items_cursor = self.execute_query(items_query, (results_per_page, offset))
+            # Fetchall returns a list of Row objects (if row_factory is sqlite3.Row)
+            results = items_cursor.fetchall()
 
-            # Query 2: Get paginated items if count > 0
-            if total_items > 0:
-                # Order by most recently modified, then ID for stable pagination
-                items_query = """
-                              SELECT id, title, type
-                              FROM Media
-                              WHERE deleted = 0
-                                AND is_trash = 0
-                              ORDER BY last_modified DESC, id DESC LIMIT ?
-                              OFFSET ?
-                              """
-                # Use self.execute_query
-                items_cursor = self.execute_query(items_query, (results_per_page, offset))
-                # Fetchall returns a list of Row objects (if row_factory is sqlite3.Row)
-                results = items_cursor.fetchall()
+        # Calculate total pages
+        total_pages = ceil(total_items / results_per_page) if results_per_page > 0 and total_items > 0 else 0
 
-            # Calculate total pages
-            total_pages = ceil(total_items / results_per_page) if results_per_page > 0 and total_items > 0 else 0
+        return results, total_pages, page, total_items
 
-            return results, total_pages, page, total_items
+    # Catch DatabaseError potentially raised by self.execute_query
+    except DatabaseError as e:
+        logging.error(f"Database error in get_paginated_files for DB {self.db_path_str}: {e}", exc_info=True)
+        # Re-raise the specific error for the caller to handle
+        raise
+    # Catch potential underlying SQLite errors if not wrapped by execute_query
+    except sqlite3.Error as e:
+        logging.error(f"SQLite error during pagination query in {self.db_path_str}: {e}", exc_info=True)
+        raise DatabaseError(f"Failed pagination query: {e}") from e
+    # Catch unexpected errors
+    except Exception as e:
+        logging.error(f"Unexpected error in get_paginated_files for DB {self.db_path_str}: {e}", exc_info=True)
+        # Wrap unexpected errors in DatabaseError
+        raise DatabaseError(f"Unexpected error during pagination: {e}") from e
 
-        # Catch DatabaseError potentially raised by self.execute_query
-        except DatabaseError as e:
-            logging.error(f"Database error in get_paginated_files for DB {self.db_path_str}: {e}", exc_info=True)
-            # Re-raise the specific error for the caller to handle
-            raise
-        # Catch potential underlying SQLite errors if not wrapped by execute_query
-        except sqlite3.Error as e:
-            logging.error(f"SQLite error during pagination query in {self.db_path_str}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed pagination query: {e}") from e
-        # Catch unexpected errors
-        except Exception as e:
-            logging.error(f"Unexpected error in get_paginated_files for DB {self.db_path_str}: {e}", exc_info=True)
-            # Wrap unexpected errors in DatabaseError
-            raise DatabaseError(f"Unexpected error during pagination: {e}") from e
+def backup_database(self, backup_file_path: str) -> bool | None:
+    """
+    Creates a backup of the current database to the specified file path.
 
-    def backup_database(self, backup_file_path: str) -> bool | None:
-        """
-        Creates a backup of the current database to the specified file path.
+    Args:
+        backup_file_path (str): The path to save the backup database file.
 
-        Args:
-            backup_file_path (str): The path to save the backup database file.
+    Returns:
+        bool: True if the backup was successful, False otherwise.
+    """
+    logger.info(f"Starting database backup from '{self.db_path_str}' to '{backup_file_path}'")
+    src_conn = None
+    backup_conn = None
+    try:
+        # Ensure the backup file path is not the same as the source, unless it's an in-memory DB
+        if not self.is_memory_db and Path(self.db_path_str).resolve() == Path(backup_file_path).resolve():
+            logger.error("Backup path cannot be the same as the source database path.")
+            raise ValueError("Backup path cannot be the same as the source database path.")
 
-        Returns:
-            bool: True if the backup was successful, False otherwise.
-        """
-        logger.info(f"Starting database backup from '{self.db_path_str}' to '{backup_file_path}'")
-        src_conn = None
-        backup_conn = None
-        try:
-            # Ensure the backup file path is not the same as the source, unless it's an in-memory DB
-            if not self.is_memory_db and Path(self.db_path_str).resolve() == Path(backup_file_path).resolve():
-                logger.error("Backup path cannot be the same as the source database path.")
-                raise ValueError("Backup path cannot be the same as the source database path.")
+        # Get connection to the source database
+        src_conn = self.get_connection()  # This uses the existing thread-local connection or creates one
 
-            # Get connection to the source database
-            src_conn = self.get_connection()  # This uses the existing thread-local connection or creates one
+        # Create a connection to the backup database file
+        # Ensure parent directory for backup_file_path exists
+        backup_db_path = Path(backup_file_path)
+        backup_db_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Create a connection to the backup database file
-            # Ensure parent directory for backup_file_path exists
-            backup_db_path = Path(backup_file_path)
-            backup_db_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_conn = sqlite3.connect(backup_file_path)
 
-            backup_conn = sqlite3.connect(backup_file_path)
+        logger.debug(f"Source DB connection: {src_conn}")
+        logger.debug(f"Backup DB connection: {backup_conn} to file {backup_file_path}")
 
-            logger.debug(f"Source DB connection: {src_conn}")
-            logger.debug(f"Backup DB connection: {backup_conn} to file {backup_file_path}")
+        # Perform the backup
+        # pages=0 means all pages will be copied
+        src_conn.backup(backup_conn, pages=0, progress=None)
 
-            # Perform the backup
-            # pages=0 means all pages will be copied
-            src_conn.backup(backup_conn, pages=0, progress=None)
+        logger.info(f"Database backup successful from '{self.db_path_str}' to '{backup_file_path}'")
+        return True
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error during database backup: {e}", exc_info=True)
+        return False
+    except ValueError as ve: # Catch specific ValueError for path mismatch
+        logger.error(f"ValueError during database backup: {ve}", exc_info=True)
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error during database backup: {e}", exc_info=True)
+        return False
+    finally:
+        if backup_conn:
+            try:
+                backup_conn.close()
+                logger.debug("Closed backup database connection.")
+            except sqlite3.Error as e:
+                logger.warning(f"Error closing backup database connection: {e}")
+        # Do not close src_conn here if it's managed by _get_thread_connection / close_connection
+        # self.close_connection() might close the main connection pool which might not be desired.
+        # The source connection is managed by the class's connection pooling.
+        # If this backup is a one-off, the connection will be closed when the thread context ends
+        # or if explicitly closed by the caller of this instance.
+        # For safety, if this method obtained a new connection not from the pool, it should close it.
+        # However, self.get_connection() reuses pooled connections.
 
-            logger.info(f"Database backup successful from '{self.db_path_str}' to '{backup_file_path}'")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"SQLite error during database backup: {e}", exc_info=True)
-            return False
-        except ValueError as ve: # Catch specific ValueError for path mismatch
-            logger.error(f"ValueError during database backup: {ve}", exc_info=True)
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during database backup: {e}", exc_info=True)
-            return False
-        finally:
-            if backup_conn:
+def get_distinct_media_types(self, include_deleted=False, include_trash=False) -> List[str]:
+    """
+    Retrieves a list of all distinct, non-null media types present in the Media table.
+
+    Args:
+        include_deleted (bool): If True, consider types from soft-deleted media items.
+        include_trash (bool): If True, consider types from trashed media items.
+
+    Returns:
+        List[str]: A sorted list of unique media type strings.
+                   Returns an empty list if no types are found or in case of error.
+
+    Raises:
+        DatabaseError: If a database query error occurs.
+    """
+    logger.debug(
+        f"Fetching distinct media types from DB: {self.db_path_str} (deleted={include_deleted}, trash={include_trash})")
+    conditions = ["type IS NOT NULL AND type != ''"]
+    if not include_deleted:
+        conditions.append("deleted = 0")
+    if not include_trash:
+        conditions.append("is_trash = 0")
+
+    where_clause = " AND ".join(conditions)
+
+    query = f"SELECT DISTINCT type FROM Media WHERE {where_clause} ORDER BY type ASC"
+    try:
+        cursor = self.execute_query(query)
+        results = [row['type'] for row in cursor.fetchall() if row['type']]
+        logger.info(f"Found {len(results)} distinct media types: {results}")
+        return results
+    except sqlite3.Error as e:
+        logger.error(f"Error fetching distinct media types from DB {self.db_path_str}: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to fetch distinct media types: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error fetching distinct media types from DB {self.db_path_str}: {e}",
+                     exc_info=True)
+        raise DatabaseError(f"An unexpected error occurred while fetching distinct media types: {e}") from e
+
+def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_index: int, chunk_id: str) -> Optional[Dict]:
+    """
+    Adds a single chunk record to the MediaChunks table for an active media item.
+
+    Handles transaction, generates UUID, sets sync metadata, and logs a 'create' sync event.
+    This is an instance method operating on the specific user's database.
+
+    Args:
+        media_id (int): The ID of the parent Media item.
+        chunk_text (str): The text content of the chunk.
+        start_index (int): Starting character index within the original content.
+        end_index (int): Ending character index within the original content.
+        chunk_id (str): The application-specific unique ID for this chunk within the media item.
+
+    Returns:
+        Optional[Dict]: A dictionary containing the new chunk's database 'id' and 'uuid'
+                        on success, otherwise None or raises an exception.
+
+    Raises:
+        InputError: If media_id doesn't exist/is inactive, or chunk_text is empty.
+        DatabaseError: For database errors during insertion or sync logging, including IntegrityErrors.
+    """
+    if not chunk_text:
+        raise InputError("Chunk text cannot be empty.")
+
+    logger.debug(f"Adding chunk for media_id {media_id}, chunk_id {chunk_id} using client {self.client_id}")
+
+    # Prepare sync/metadata fields using instance attributes/methods
+    client_id = self.client_id
+    current_time = self._get_current_utc_timestamp_str()  # Use internal helper
+    new_uuid = self._generate_uuid()  # Use internal helper
+    new_sync_version = 1  # Initial version for a new chunk record
+
+    try:
+        # Use instance transaction method
+        with self.transaction() as conn:
+            # Optional: Check if parent media exists and is active
+            cursor_check = conn.cursor()
+            cursor_check.execute("SELECT uuid FROM Media WHERE id = ? AND deleted = 0", (media_id,))
+            media_info = cursor_check.fetchone()
+            if not media_info:
+                raise InputError(f"Cannot add chunk: Parent Media ID {media_id} not found or deleted.")
+            media_uuid = media_info['uuid']  # Get parent UUID for context if needed
+
+            # Prepare data for insert statement
+            insert_data = {
+                'media_id': media_id,
+                'chunk_text': chunk_text,
+                'start_index': start_index,
+                'end_index': end_index,
+                'chunk_id': chunk_id,  # Keep the original chunk_id column
+                'uuid': new_uuid,  # Add the new UUID column
+                'last_modified': current_time,
+                'version': new_sync_version,
+                'client_id': client_id,
+                'deleted': 0,
+                'media_uuid': media_uuid  # For sync payload context
+            }
+
+            # Execute INSERT
+            cursor_insert = conn.cursor()
+            sql = """
+                  INSERT INTO MediaChunks
+                  (media_id, chunk_text, start_index, end_index, chunk_id, uuid, last_modified, version, client_id, \
+                   deleted)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                  """
+            params = (
+                insert_data['media_id'], insert_data['chunk_text'], insert_data['start_index'],
+                insert_data['end_index'], insert_data['chunk_id'], insert_data['uuid'],
+                insert_data['last_modified'], insert_data['version'], insert_data['client_id'],
+                insert_data['deleted']
+            )
+            cursor_insert.execute(sql, params)
+            chunk_pk_id = cursor_insert.lastrowid
+
+            if not chunk_pk_id:
+                raise DatabaseError("Failed to get last row ID for new media chunk.")
+
+            # Log sync event using instance method (passing connection)
+            self._log_sync_event(conn, 'MediaChunks', new_uuid, 'create', new_sync_version, insert_data)
+
+            logger.info(f"Successfully added chunk ID {chunk_pk_id} (UUID: {new_uuid}) for media {media_id}.")
+            return {'id': chunk_pk_id, 'uuid': new_uuid}
+
+    except sqlite3.IntegrityError as ie:
+        logger.error(f"Integrity error adding chunk for media {media_id}: {ie}", exc_info=True)
+        raise DatabaseError(f"Failed to add chunk due to constraint violation: {ie}") from ie
+    except (InputError, DatabaseError) as e:
+        logger.error(f"Error adding chunk for media {media_id}: {e}", exc_info=True)
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error adding chunk for media {media_id}: {e}", exc_info=True)
+        raise DatabaseError(f"An unexpected error occurred while adding media chunk: {e}") from e
+
+def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: List[Dict[str, Any]],
+                                batch_size: int = 100) -> int:
+    """
+    Processes a list of chunk dictionaries and adds them to the MediaChunks table in batches.
+    This method adapts the input chunk format for the internal self.batch_insert_chunks method.
+    It preserves the batching and logging behavior of the original standalone process_chunks function.
+
+    Args:
+        media_id (int): ID of the media these chunks belong to.
+        chunks_to_add (List[Dict[str, Any]]): List of chunk dictionaries. Each dictionary must have
+                                              'text', 'start_index', and 'end_index' keys.
+                                              Example: [{'text': 'chunk1', 'start_index': 0, 'end_index': 10}, ...]
+        batch_size (int): Number of chunks to process and pass to self.batch_insert_chunks in each iteration.
+
+    Returns:
+        int: The total number of chunks successfully processed and attempted for insertion.
+
+    Raises:
+        InputError: If essential keys are missing in `chunks_to_add` items, or if `media_id` is invalid
+                    (this error would be propagated from the underlying `self.batch_insert_chunks` call).
+        DatabaseError: For database errors during insertion (propagated from `self.batch_insert_chunks`).
+        Exception: For other unexpected errors during the process.
+    """
+    # These log_counter and log_histogram calls assume they are available in the global scope
+    # or otherwise accessible, as per the original function's structure.
+    # If not, they would need to be passed to this method or the Database instance.
+    log_counter("add_media_chunks_in_batches_attempt", labels={"media_id": media_id})
+    start_time = time.time()
+    total_chunks_in_input = len(chunks_to_add)
+    successfully_processed_count = 0
+
+    # Parent media_id validity will be checked within self.batch_insert_chunks.
+    # If media_id is invalid, self.batch_insert_chunks will raise an InputError.
+
+    try:
+        for i in range(0, total_chunks_in_input, batch_size):
+            current_batch_from_input = chunks_to_add[i:i + batch_size]
+
+            # Adapt batch to the format expected by self.batch_insert_chunks:
+            # [{'text': ..., 'metadata': {'start_index': ..., 'end_index': ...}}]
+            adapted_batch_for_internal_method = []
+            for chunk_item in current_batch_from_input:
                 try:
-                    backup_conn.close()
-                    logger.debug("Closed backup database connection.")
-                except sqlite3.Error as e:
-                    logger.warning(f"Error closing backup database connection: {e}")
-            # Do not close src_conn here if it's managed by _get_thread_connection / close_connection
-            # self.close_connection() might close the main connection pool which might not be desired.
-            # The source connection is managed by the class's connection pooling.
-            # If this backup is a one-off, the connection will be closed when the thread context ends
-            # or if explicitly closed by the caller of this instance.
-            # For safety, if this method obtained a new connection not from the pool, it should close it.
-            # However, self.get_connection() reuses pooled connections.
+                    # Ensure 'text', 'start_index', 'end_index' are present
+                    # The self.batch_insert_chunks method expects 'text' (or 'chunk_text')
+                    # and 'metadata' containing 'start_index' and 'end_index'.
+                    text_content = chunk_item['text']
+                    start_idx = chunk_item['start_index']
+                    end_idx = chunk_item['end_index']
 
-    def get_distinct_media_types(self, include_deleted=False, include_trash=False) -> List[str]:
-        """
-        Retrieves a list of all distinct, non-null media types present in the Media table.
+                    adapted_chunk = {
+                        'text': text_content,
+                        'metadata': {
+                            'start_index': start_idx,
+                            'end_index': end_idx
+                        }
+                    }
+                    adapted_batch_for_internal_method.append(adapted_chunk)
+                except KeyError as e:
+                    # Using global 'logging' as per the style in Database class and original function
+                    logging.error(
+                        f"Media ID {media_id}: Skipping chunk due to missing key {e} in input data: {chunk_item}")
+                    log_counter("add_media_chunks_in_batches_item_skip_key_error",
+                                labels={"media_id": media_id, "key": str(e)})
+                    continue  # Skip this malformed chunk_item
 
-        Args:
-            include_deleted (bool): If True, consider types from soft-deleted media items.
-            include_trash (bool): If True, consider types from trashed media items.
+            if not adapted_batch_for_internal_method:
+                if current_batch_from_input:  # Original batch had items, but all were malformed or skipped
+                    logging.warning(
+                        f"Media ID {media_id}: Batch starting at index {i} resulted in no valid chunks to process.")
+                continue  # Move to the next batch
 
-        Returns:
-            List[str]: A sorted list of unique media type strings.
-                       Returns an empty list if no types are found or in case of error.
+            try:
+                # self.batch_insert_chunks is an existing method in your Database class.
+                # It handles its own transaction, generates UUIDs, sets sync metadata (version, client_id, etc.),
+                # and logs sync events for each chunk.
+                # It returns the number of chunks it prepared/attempted from the adapted_batch.
+                num_inserted_this_batch = self.batch_insert_chunks(media_id, adapted_batch_for_internal_method)
 
-        Raises:
-            DatabaseError: If a database query error occurs.
-        """
-        logger.debug(
-            f"Fetching distinct media types from DB: {self.db_path_str} (deleted={include_deleted}, trash={include_trash})")
-        conditions = ["type IS NOT NULL AND type != ''"]
-        if not include_deleted:
-            conditions.append("deleted = 0")
-        if not include_trash:
-            conditions.append("is_trash = 0")
+                successfully_processed_count += num_inserted_this_batch
+                logging.info(
+                    f"Media ID {media_id}: Processed {successfully_processed_count}/{total_chunks_in_input} chunks so far. Current batch (size {len(adapted_batch_for_internal_method)}) resulted in {num_inserted_this_batch} items attempted.")
+                log_counter("add_media_chunks_in_batches_batch_success", labels={"media_id": media_id})
 
-        where_clause = " AND ".join(conditions)
+            # Catch specific errors that self.batch_insert_chunks might raise
+            except InputError as e:  # e.g., if media_id is invalid, or chunk structure within adapted_batch is wrong
+                logging.error(f"Media ID {media_id}: Input error during an internal batch insertion: {e}")
+                log_counter("add_media_chunks_in_batches_batch_error",
+                            labels={"media_id": media_id, "error_type": "InputError"})
+                raise  # Re-raise to halt the entire operation
+            except DatabaseError as e:  # For other database-related errors from self.batch_insert_chunks
+                logging.error(f"Media ID {media_id}: Database error during an internal batch insertion: {e}")
+                log_counter("add_media_chunks_in_batches_batch_error",
+                            labels={"media_id": media_id, "error_type": "DatabaseError"})
+                raise  # Re-raise
+            except Exception as e:  # Catch any other unexpected errors from self.batch_insert_chunks
+                logging.error(f"Media ID {media_id}: Unexpected error during an internal batch insertion: {e}",
+                              exc_info=True)
+                log_counter("add_media_chunks_in_batches_batch_error",
+                            labels={"media_id": media_id, "error_type": type(e).__name__})
+                raise  # Re-raise
 
-        query = f"SELECT DISTINCT type FROM Media WHERE {where_clause} ORDER BY type ASC"
-        try:
-            cursor = self.execute_query(query)
-            results = [row['type'] for row in cursor.fetchall() if row['type']]
-            logger.info(f"Found {len(results)} distinct media types: {results}")
-            return results
-        except sqlite3.Error as e:
-            logger.error(f"Error fetching distinct media types from DB {self.db_path_str}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to fetch distinct media types: {e}") from e
-        except Exception as e:
-            logger.error(f"Unexpected error fetching distinct media types from DB {self.db_path_str}: {e}",
-                         exc_info=True)
-            raise DatabaseError(f"An unexpected error occurred while fetching distinct media types: {e}") from e
+        logging.info(
+            f"Media ID {media_id}: Finished processing chunk list. Total chunks from input: {total_chunks_in_input}. Successfully processed and attempted for insertion: {successfully_processed_count}.")
+        duration = time.time() - start_time
+        log_histogram("add_media_chunks_in_batches_duration", duration, labels={"media_id": media_id})
+        log_counter("add_media_chunks_in_batches_success_overall", labels={"media_id": media_id})
+        return successfully_processed_count
 
-    def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_index: int, chunk_id: str) -> Optional[Dict]:
-        """
-        Adds a single chunk record to the MediaChunks table for an active media item.
+    except Exception as e:  # Catches errors from the outer loop logic or re-raised errors from the inner try-except block
+        duration = time.time() - start_time
+        # Log duration even if the overall process failed
+        log_histogram("add_media_chunks_in_batches_duration", duration, labels={"media_id": media_id})
+        log_counter("add_media_chunks_in_batches_error_overall",
+                    labels={"media_id": media_id, "error_type": type(e).__name__})
+        logging.error(f"Media ID {media_id}: Error processing the list of chunks: {e}", exc_info=True)
+        raise  # Re-raise the caught exception to inform the caller
 
-        Handles transaction, generates UUID, sets sync metadata, and logs a 'create' sync event.
-        This is an instance method operating on the specific user's database.
+def batch_insert_chunks(self, media_id: int, chunks: List[Dict]) -> int:
+    """
+    Inserts a batch of chunk records into the MediaChunks table for an active media item.
 
-        Args:
-            media_id (int): The ID of the parent Media item.
-            chunk_text (str): The text content of the chunk.
-            start_index (int): Starting character index within the original content.
-            end_index (int): Ending character index within the original content.
-            chunk_id (str): The application-specific unique ID for this chunk within the media item.
+    Uses executemany for efficiency within a single transaction.
+    Generates UUIDs, sets sync metadata, and logs a 'create' sync event for EACH chunk.
+    This is an instance method operating on the specific user's database.
 
-        Returns:
-            Optional[Dict]: A dictionary containing the new chunk's database 'id' and 'uuid'
-                            on success, otherwise None or raises an exception.
+    Args:
+        media_id (int): The ID of the parent Media item.
+        chunks (List[Dict]): A list of dictionaries, where each dictionary represents a chunk.
+                             Expected keys in each dict: 'text' (or 'chunk_text'), and
+                             'metadata' dict containing 'start_index', 'end_index'.
 
-        Raises:
-            InputError: If media_id doesn't exist/is inactive, or chunk_text is empty.
-            DatabaseError: For database errors during insertion or sync logging, including IntegrityErrors.
-        """
-        if not chunk_text:
-            raise InputError("Chunk text cannot be empty.")
+    Returns:
+        int: The number of chunks successfully prepared for insertion.
 
-        logger.debug(f"Adding chunk for media_id {media_id}, chunk_id {chunk_id} using client {self.client_id}")
+    Raises:
+        InputError: If media_id doesn't exist/is inactive, or the chunks list is empty or invalid.
+        DatabaseError: For database errors during insertion or sync logging, including IntegrityErrors.
+        KeyError: If expected keys ('text', 'metadata', 'start_index', 'end_index') are missing in chunk dicts.
+    """
+    if not chunks:
+        logger.warning(f"batch_insert_chunks called with empty list for media {media_id}.")
+        return 0
 
-        # Prepare sync/metadata fields using instance attributes/methods
-        client_id = self.client_id
-        current_time = self._get_current_utc_timestamp_str()  # Use internal helper
-        new_uuid = self._generate_uuid()  # Use internal helper
-        new_sync_version = 1  # Initial version for a new chunk record
+    logger.info(f"Batch inserting {len(chunks)} chunks for media_id {media_id} using client {self.client_id}.")
 
-        try:
-            # Use instance transaction method
-            with self.transaction() as conn:
-                # Optional: Check if parent media exists and is active
-                cursor_check = conn.cursor()
-                cursor_check.execute("SELECT uuid FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-                media_info = cursor_check.fetchone()
-                if not media_info:
-                    raise InputError(f"Cannot add chunk: Parent Media ID {media_id} not found or deleted.")
-                media_uuid = media_info['uuid']  # Get parent UUID for context if needed
+    # Use instance attributes/methods
+    client_id = self.client_id
+    current_time = self._get_current_utc_timestamp_str()
+    params_list = []
+    sync_log_data = []
 
-                # Prepare data for insert statement
-                insert_data = {
+    try:
+        # Prepare data for all chunks first
+        for i, chunk_dict in enumerate(chunks):
+            try:
+                chunk_text = chunk_dict.get('text', chunk_dict['chunk_text'])
+                metadata = chunk_dict['metadata']
+                start_index = metadata['start_index']
+                end_index = metadata['end_index']
+            except KeyError as ke:
+                logger.error(f"Missing expected key {ke} in chunk data at index {i} for media {media_id}")
+                raise InputError(f"Invalid chunk data structure at index {i}: Missing key {ke}") from ke
+
+            if not chunk_text:
+                logger.warning(f"Skipping chunk at index {i} for media {media_id} due to empty text.")
+                continue
+
+            # Generate IDs and sync fields using instance methods
+            chunk_id = f"{media_id}_chunk_{i + 1}"
+            new_uuid = self._generate_uuid()
+            new_sync_version = 1
+
+            params = (
+                media_id, chunk_text, start_index, end_index, chunk_id, new_uuid,
+                current_time, new_sync_version, client_id, 0  # deleted=0
+            )
+            params_list.append(params)
+
+            payload = {
+                'media_id': media_id, 'chunk_text': chunk_text, 'start_index': start_index,
+                'end_index': end_index, 'chunk_id': chunk_id, 'uuid': new_uuid,
+                'last_modified': current_time, 'version': new_sync_version,
+                'client_id': client_id, 'deleted': 0
+            }
+            sync_log_data.append((new_uuid, new_sync_version, payload))
+
+        if not params_list:
+            logger.warning(f"No valid chunks prepared for batch insert media {media_id}.")
+            return 0
+
+        # Perform insertion and logging within a transaction using instance method
+        with self.transaction() as conn:
+            cursor_check = conn.cursor()
+            cursor_check.execute("SELECT 1 FROM Media WHERE id = ? AND deleted = 0", (media_id,))
+            if not cursor_check.fetchone():
+                raise InputError(f"Cannot batch insert chunks: Parent Media ID {media_id} not found or deleted.")
+
+            cursor_insert = conn.cursor()
+            sql = """
+                  INSERT INTO MediaChunks
+                  (media_id, chunk_text, start_index, end_index, chunk_id, uuid, last_modified, version, client_id, \
+                   deleted)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                  """
+            cursor_insert.executemany(sql, params_list)
+
+            inserted_count = len(params_list)
+            logger.debug(f"Executed batch insert for {inserted_count} chunks media {media_id}.")
+
+            # Log sync events using instance method
+            for chunk_uuid_log, version_log, payload_log in sync_log_data:
+                self._log_sync_event(conn, 'MediaChunks', chunk_uuid_log, 'create', version_log, payload_log)
+
+        logger.info(f"Successfully batch inserted {inserted_count} chunks for media {media_id}.")
+        return inserted_count
+
+    except sqlite3.IntegrityError as ie:
+        logger.error(f"Integrity error batch inserting chunks for media {media_id}: {ie}", exc_info=True)
+        raise DatabaseError(f"Failed to batch insert chunks due to constraint violation: {ie}") from ie
+    except (InputError, DatabaseError, KeyError) as e:
+        logger.error(f"Error batch inserting chunks for media {media_id}: {e}", exc_info=True)
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error batch inserting chunks for media {media_id}: {e}", exc_info=True)
+        raise DatabaseError(f"An unexpected error occurred during batch chunk insertion: {e}") from e
+
+def process_chunks(self, media_id: int, chunks: List[Dict[str, Any]], batch_size: int = 100):
+    """
+    Process chunks in batches and insert them into the MediaChunks table.
+
+    This method is part of the Database class and works with the V2 schema
+    for MediaChunks. It generates necessary IDs (a UUID for 'chunk_id' and
+    another for 'uuid') and sync metadata for each chunk.
+
+    Args:
+        media_id (int): ID of the media these chunks belong to.
+        chunks (List[Dict[str, Any]]): List of chunk dictionaries. Each dictionary is
+                                       expected to have 'text', 'start_index',
+                                       and 'end_index' keys.
+        batch_size (int): Number of chunks to process in each database transaction.
+
+    Raises:
+        InputError: If the parent media_id is not found or is deleted, or if
+                    a chunk dictionary is missing required keys.
+        DatabaseError: If there's an error during database operations (e.g.,
+                       integrity constraints) or sync logging.
+        Exception: For other unexpected errors during processing.
+    """
+    log_counter("process_chunks_attempt", labels={"media_id": media_id})
+    start_time = time.time()
+    total_chunks_to_process = len(chunks)
+    successfully_inserted_chunks = 0
+
+    # Initial check for parent media_id existence and active status.
+    # This uses a direct query. An alternative is self.get_media_by_id(media_id).
+    conn_for_check = self.get_connection()
+    cursor_check = conn_for_check.execute("SELECT 1 FROM Media WHERE id = ? AND deleted = 0", (media_id,))
+    if not cursor_check.fetchone():
+        logging.error(f"Parent Media ID {media_id} not found or is deleted. Cannot process chunks.")
+        log_counter("process_chunks_error", labels={"media_id": media_id, "error_type": "ParentMediaNotFound"})
+        duration = time.time() - start_time  # Log duration even for this early exit
+        log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
+        raise InputError(f"Parent Media ID {media_id} not found or is deleted.")
+
+    try:
+        for i in range(0, total_chunks_to_process, batch_size):
+            batch_of_input_chunks = chunks[i:i + batch_size]
+
+            db_insert_params_list = []
+            # Store tuples of (entity_uuid, version, payload) for logging after successful insert
+            sync_log_data_for_batch = []
+
+            current_timestamp = self._get_current_utc_timestamp_str()
+            # Assumes self.client_id is available from the Database instance
+            client_id = self.client_id
+
+            for input_chunk_dict in batch_of_input_chunks:
+                try:
+                    chunk_text = input_chunk_dict['text']
+                    start_index = input_chunk_dict['start_index']
+                    end_index = input_chunk_dict['end_index']
+                except KeyError as e:
+                    logging.warning(
+                        f"Skipping chunk for media_id {media_id} due to missing key '{e}': {str(input_chunk_dict)[:100]}")
+                    log_counter("process_chunks_item_skipped",
+                                labels={"media_id": media_id, "reason": "missing_key", "key": str(e)})
+                    continue  # Skip this malformed chunk
+
+                # Generate fields required by the MediaChunks schema.
+                # MediaChunks.chunk_id has a TEXT UNIQUE constraint. We generate a UUID for it.
+                generated_chunk_id_for_db = self._generate_uuid()
+                # MediaChunks.uuid also has a TEXT UNIQUE NOT NULL constraint.
+                generated_uuid_for_db = self._generate_uuid()
+
+                chunk_version = 1  # Initial sync version for new records
+                deleted_status = 0  # New chunks are not deleted
+
+                # Parameters order must match the INSERT statement columns
+                params_tuple = (
+                    media_id,
+                    chunk_text,
+                    start_index,
+                    end_index,
+                    generated_chunk_id_for_db,  # value for 'chunk_id' column
+                    generated_uuid_for_db,  # value for 'uuid' column
+                    current_timestamp,  # last_modified
+                    chunk_version,  # version
+                    client_id,  # client_id
+                    deleted_status  # deleted
+                )
+                db_insert_params_list.append(params_tuple)
+
+                # Prepare data for sync logging (payload should reflect the inserted row)
+                sync_payload = {
                     'media_id': media_id,
                     'chunk_text': chunk_text,
                     'start_index': start_index,
                     'end_index': end_index,
-                    'chunk_id': chunk_id,  # Keep the original chunk_id column
-                    'uuid': new_uuid,  # Add the new UUID column
-                    'last_modified': current_time,
-                    'version': new_sync_version,
+                    'chunk_id': generated_chunk_id_for_db,
+                    'uuid': generated_uuid_for_db,
+                    'last_modified': current_timestamp,
+                    'version': chunk_version,
                     'client_id': client_id,
-                    'deleted': 0,
-                    'media_uuid': media_uuid  # For sync payload context
+                    'deleted': deleted_status
+                    # prev_version and merge_parent_uuid are typically NULL/None on creation
                 }
-
-                # Execute INSERT
-                cursor_insert = conn.cursor()
-                sql = """
-                      INSERT INTO MediaChunks
-                      (media_id, chunk_text, start_index, end_index, chunk_id, uuid, last_modified, version, client_id, \
-                       deleted)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                      """
-                params = (
-                    insert_data['media_id'], insert_data['chunk_text'], insert_data['start_index'],
-                    insert_data['end_index'], insert_data['chunk_id'], insert_data['uuid'],
-                    insert_data['last_modified'], insert_data['version'], insert_data['client_id'],
-                    insert_data['deleted']
-                )
-                cursor_insert.execute(sql, params)
-                chunk_pk_id = cursor_insert.lastrowid
-
-                if not chunk_pk_id:
-                    raise DatabaseError("Failed to get last row ID for new media chunk.")
-
-                # Log sync event using instance method (passing connection)
-                self._log_sync_event(conn, 'MediaChunks', new_uuid, 'create', new_sync_version, insert_data)
-
-                logger.info(f"Successfully added chunk ID {chunk_pk_id} (UUID: {new_uuid}) for media {media_id}.")
-                return {'id': chunk_pk_id, 'uuid': new_uuid}
-
-        except sqlite3.IntegrityError as ie:
-            logger.error(f"Integrity error adding chunk for media {media_id}: {ie}", exc_info=True)
-            raise DatabaseError(f"Failed to add chunk due to constraint violation: {ie}") from ie
-        except (InputError, DatabaseError) as e:
-            logger.error(f"Error adding chunk for media {media_id}: {e}", exc_info=True)
-            raise e
-        except Exception as e:
-            logger.error(f"Unexpected error adding chunk for media {media_id}: {e}", exc_info=True)
-            raise DatabaseError(f"An unexpected error occurred while adding media chunk: {e}") from e
-
-    def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: List[Dict[str, Any]],
-                                    batch_size: int = 100) -> int:
-        """
-        Processes a list of chunk dictionaries and adds them to the MediaChunks table in batches.
-        This method adapts the input chunk format for the internal self.batch_insert_chunks method.
-        It preserves the batching and logging behavior of the original standalone process_chunks function.
-
-        Args:
-            media_id (int): ID of the media these chunks belong to.
-            chunks_to_add (List[Dict[str, Any]]): List of chunk dictionaries. Each dictionary must have
-                                                  'text', 'start_index', and 'end_index' keys.
-                                                  Example: [{'text': 'chunk1', 'start_index': 0, 'end_index': 10}, ...]
-            batch_size (int): Number of chunks to process and pass to self.batch_insert_chunks in each iteration.
-
-        Returns:
-            int: The total number of chunks successfully processed and attempted for insertion.
-
-        Raises:
-            InputError: If essential keys are missing in `chunks_to_add` items, or if `media_id` is invalid
-                        (this error would be propagated from the underlying `self.batch_insert_chunks` call).
-            DatabaseError: For database errors during insertion (propagated from `self.batch_insert_chunks`).
-            Exception: For other unexpected errors during the process.
-        """
-        # These log_counter and log_histogram calls assume they are available in the global scope
-        # or otherwise accessible, as per the original function's structure.
-        # If not, they would need to be passed to this method or the Database instance.
-        log_counter("add_media_chunks_in_batches_attempt", labels={"media_id": media_id})
-        start_time = time.time()
-        total_chunks_in_input = len(chunks_to_add)
-        successfully_processed_count = 0
-
-        # Parent media_id validity will be checked within self.batch_insert_chunks.
-        # If media_id is invalid, self.batch_insert_chunks will raise an InputError.
-
-        try:
-            for i in range(0, total_chunks_in_input, batch_size):
-                current_batch_from_input = chunks_to_add[i:i + batch_size]
-
-                # Adapt batch to the format expected by self.batch_insert_chunks:
-                # [{'text': ..., 'metadata': {'start_index': ..., 'end_index': ...}}]
-                adapted_batch_for_internal_method = []
-                for chunk_item in current_batch_from_input:
-                    try:
-                        # Ensure 'text', 'start_index', 'end_index' are present
-                        # The self.batch_insert_chunks method expects 'text' (or 'chunk_text')
-                        # and 'metadata' containing 'start_index' and 'end_index'.
-                        text_content = chunk_item['text']
-                        start_idx = chunk_item['start_index']
-                        end_idx = chunk_item['end_index']
-
-                        adapted_chunk = {
-                            'text': text_content,
-                            'metadata': {
-                                'start_index': start_idx,
-                                'end_index': end_idx
-                            }
-                        }
-                        adapted_batch_for_internal_method.append(adapted_chunk)
-                    except KeyError as e:
-                        # Using global 'logging' as per the style in Database class and original function
-                        logging.error(
-                            f"Media ID {media_id}: Skipping chunk due to missing key {e} in input data: {chunk_item}")
-                        log_counter("add_media_chunks_in_batches_item_skip_key_error",
-                                    labels={"media_id": media_id, "key": str(e)})
-                        continue  # Skip this malformed chunk_item
-
-                if not adapted_batch_for_internal_method:
-                    if current_batch_from_input:  # Original batch had items, but all were malformed or skipped
-                        logging.warning(
-                            f"Media ID {media_id}: Batch starting at index {i} resulted in no valid chunks to process.")
-                    continue  # Move to the next batch
-
-                try:
-                    # self.batch_insert_chunks is an existing method in your Database class.
-                    # It handles its own transaction, generates UUIDs, sets sync metadata (version, client_id, etc.),
-                    # and logs sync events for each chunk.
-                    # It returns the number of chunks it prepared/attempted from the adapted_batch.
-                    num_inserted_this_batch = self.batch_insert_chunks(media_id, adapted_batch_for_internal_method)
-
-                    successfully_processed_count += num_inserted_this_batch
-                    logging.info(
-                        f"Media ID {media_id}: Processed {successfully_processed_count}/{total_chunks_in_input} chunks so far. Current batch (size {len(adapted_batch_for_internal_method)}) resulted in {num_inserted_this_batch} items attempted.")
-                    log_counter("add_media_chunks_in_batches_batch_success", labels={"media_id": media_id})
-
-                # Catch specific errors that self.batch_insert_chunks might raise
-                except InputError as e:  # e.g., if media_id is invalid, or chunk structure within adapted_batch is wrong
-                    logging.error(f"Media ID {media_id}: Input error during an internal batch insertion: {e}")
-                    log_counter("add_media_chunks_in_batches_batch_error",
-                                labels={"media_id": media_id, "error_type": "InputError"})
-                    raise  # Re-raise to halt the entire operation
-                except DatabaseError as e:  # For other database-related errors from self.batch_insert_chunks
-                    logging.error(f"Media ID {media_id}: Database error during an internal batch insertion: {e}")
-                    log_counter("add_media_chunks_in_batches_batch_error",
-                                labels={"media_id": media_id, "error_type": "DatabaseError"})
-                    raise  # Re-raise
-                except Exception as e:  # Catch any other unexpected errors from self.batch_insert_chunks
-                    logging.error(f"Media ID {media_id}: Unexpected error during an internal batch insertion: {e}",
-                                  exc_info=True)
-                    log_counter("add_media_chunks_in_batches_batch_error",
-                                labels={"media_id": media_id, "error_type": type(e).__name__})
-                    raise  # Re-raise
-
-            logging.info(
-                f"Media ID {media_id}: Finished processing chunk list. Total chunks from input: {total_chunks_in_input}. Successfully processed and attempted for insertion: {successfully_processed_count}.")
-            duration = time.time() - start_time
-            log_histogram("add_media_chunks_in_batches_duration", duration, labels={"media_id": media_id})
-            log_counter("add_media_chunks_in_batches_success_overall", labels={"media_id": media_id})
-            return successfully_processed_count
-
-        except Exception as e:  # Catches errors from the outer loop logic or re-raised errors from the inner try-except block
-            duration = time.time() - start_time
-            # Log duration even if the overall process failed
-            log_histogram("add_media_chunks_in_batches_duration", duration, labels={"media_id": media_id})
-            log_counter("add_media_chunks_in_batches_error_overall",
-                        labels={"media_id": media_id, "error_type": type(e).__name__})
-            logging.error(f"Media ID {media_id}: Error processing the list of chunks: {e}", exc_info=True)
-            raise  # Re-raise the caught exception to inform the caller
-
-    def batch_insert_chunks(self, media_id: int, chunks: List[Dict]) -> int:
-        """
-        Inserts a batch of chunk records into the MediaChunks table for an active media item.
-
-        Uses executemany for efficiency within a single transaction.
-        Generates UUIDs, sets sync metadata, and logs a 'create' sync event for EACH chunk.
-        This is an instance method operating on the specific user's database.
-
-        Args:
-            media_id (int): The ID of the parent Media item.
-            chunks (List[Dict]): A list of dictionaries, where each dictionary represents a chunk.
-                                 Expected keys in each dict: 'text' (or 'chunk_text'), and
-                                 'metadata' dict containing 'start_index', 'end_index'.
-
-        Returns:
-            int: The number of chunks successfully prepared for insertion.
-
-        Raises:
-            InputError: If media_id doesn't exist/is inactive, or the chunks list is empty or invalid.
-            DatabaseError: For database errors during insertion or sync logging, including IntegrityErrors.
-            KeyError: If expected keys ('text', 'metadata', 'start_index', 'end_index') are missing in chunk dicts.
-        """
-        if not chunks:
-            logger.warning(f"batch_insert_chunks called with empty list for media {media_id}.")
-            return 0
-
-        logger.info(f"Batch inserting {len(chunks)} chunks for media_id {media_id} using client {self.client_id}.")
-
-        # Use instance attributes/methods
-        client_id = self.client_id
-        current_time = self._get_current_utc_timestamp_str()
-        params_list = []
-        sync_log_data = []
-
-        try:
-            # Prepare data for all chunks first
-            for i, chunk_dict in enumerate(chunks):
-                try:
-                    chunk_text = chunk_dict.get('text', chunk_dict['chunk_text'])
-                    metadata = chunk_dict['metadata']
-                    start_index = metadata['start_index']
-                    end_index = metadata['end_index']
-                except KeyError as ke:
-                    logger.error(f"Missing expected key {ke} in chunk data at index {i} for media {media_id}")
-                    raise InputError(f"Invalid chunk data structure at index {i}: Missing key {ke}") from ke
-
-                if not chunk_text:
-                    logger.warning(f"Skipping chunk at index {i} for media {media_id} due to empty text.")
-                    continue
-
-                # Generate IDs and sync fields using instance methods
-                chunk_id = f"{media_id}_chunk_{i + 1}"
-                new_uuid = self._generate_uuid()
-                new_sync_version = 1
-
-                params = (
-                    media_id, chunk_text, start_index, end_index, chunk_id, new_uuid,
-                    current_time, new_sync_version, client_id, 0  # deleted=0
-                )
-                params_list.append(params)
-
-                payload = {
-                    'media_id': media_id, 'chunk_text': chunk_text, 'start_index': start_index,
-                    'end_index': end_index, 'chunk_id': chunk_id, 'uuid': new_uuid,
-                    'last_modified': current_time, 'version': new_sync_version,
-                    'client_id': client_id, 'deleted': 0
-                }
-                sync_log_data.append((new_uuid, new_sync_version, payload))
-
-            if not params_list:
-                logger.warning(f"No valid chunks prepared for batch insert media {media_id}.")
-                return 0
-
-            # Perform insertion and logging within a transaction using instance method
-            with self.transaction() as conn:
-                cursor_check = conn.cursor()
-                cursor_check.execute("SELECT 1 FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-                if not cursor_check.fetchone():
-                    raise InputError(f"Cannot batch insert chunks: Parent Media ID {media_id} not found or deleted.")
-
-                cursor_insert = conn.cursor()
-                sql = """
-                      INSERT INTO MediaChunks
-                      (media_id, chunk_text, start_index, end_index, chunk_id, uuid, last_modified, version, client_id, \
-                       deleted)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                      """
-                cursor_insert.executemany(sql, params_list)
-
-                inserted_count = len(params_list)
-                logger.debug(f"Executed batch insert for {inserted_count} chunks media {media_id}.")
-
-                # Log sync events using instance method
-                for chunk_uuid_log, version_log, payload_log in sync_log_data:
-                    self._log_sync_event(conn, 'MediaChunks', chunk_uuid_log, 'create', version_log, payload_log)
-
-            logger.info(f"Successfully batch inserted {inserted_count} chunks for media {media_id}.")
-            return inserted_count
-
-        except sqlite3.IntegrityError as ie:
-            logger.error(f"Integrity error batch inserting chunks for media {media_id}: {ie}", exc_info=True)
-            raise DatabaseError(f"Failed to batch insert chunks due to constraint violation: {ie}") from ie
-        except (InputError, DatabaseError, KeyError) as e:
-            logger.error(f"Error batch inserting chunks for media {media_id}: {e}", exc_info=True)
-            raise e
-        except Exception as e:
-            logger.error(f"Unexpected error batch inserting chunks for media {media_id}: {e}", exc_info=True)
-            raise DatabaseError(f"An unexpected error occurred during batch chunk insertion: {e}") from e
-
-    def process_chunks(self, media_id: int, chunks: List[Dict[str, Any]], batch_size: int = 100):
-        """
-        Process chunks in batches and insert them into the MediaChunks table.
-
-        This method is part of the Database class and works with the V2 schema
-        for MediaChunks. It generates necessary IDs (a UUID for 'chunk_id' and
-        another for 'uuid') and sync metadata for each chunk.
-
-        Args:
-            media_id (int): ID of the media these chunks belong to.
-            chunks (List[Dict[str, Any]]): List of chunk dictionaries. Each dictionary is
-                                           expected to have 'text', 'start_index',
-                                           and 'end_index' keys.
-            batch_size (int): Number of chunks to process in each database transaction.
-
-        Raises:
-            InputError: If the parent media_id is not found or is deleted, or if
-                        a chunk dictionary is missing required keys.
-            DatabaseError: If there's an error during database operations (e.g.,
-                           integrity constraints) or sync logging.
-            Exception: For other unexpected errors during processing.
-        """
-        log_counter("process_chunks_attempt", labels={"media_id": media_id})
-        start_time = time.time()
-        total_chunks_to_process = len(chunks)
-        successfully_inserted_chunks = 0
-
-        # Initial check for parent media_id existence and active status.
-        # This uses a direct query. An alternative is self.get_media_by_id(media_id).
-        conn_for_check = self.get_connection()
-        cursor_check = conn_for_check.execute("SELECT 1 FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-        if not cursor_check.fetchone():
-            logging.error(f"Parent Media ID {media_id} not found or is deleted. Cannot process chunks.")
-            log_counter("process_chunks_error", labels={"media_id": media_id, "error_type": "ParentMediaNotFound"})
-            duration = time.time() - start_time  # Log duration even for this early exit
-            log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
-            raise InputError(f"Parent Media ID {media_id} not found or is deleted.")
-
-        try:
-            for i in range(0, total_chunks_to_process, batch_size):
-                batch_of_input_chunks = chunks[i:i + batch_size]
-
-                db_insert_params_list = []
-                # Store tuples of (entity_uuid, version, payload) for logging after successful insert
-                sync_log_data_for_batch = []
-
-                current_timestamp = self._get_current_utc_timestamp_str()
-                # Assumes self.client_id is available from the Database instance
-                client_id = self.client_id
-
-                for input_chunk_dict in batch_of_input_chunks:
-                    try:
-                        chunk_text = input_chunk_dict['text']
-                        start_index = input_chunk_dict['start_index']
-                        end_index = input_chunk_dict['end_index']
-                    except KeyError as e:
-                        logging.warning(
-                            f"Skipping chunk for media_id {media_id} due to missing key '{e}': {str(input_chunk_dict)[:100]}")
-                        log_counter("process_chunks_item_skipped",
-                                    labels={"media_id": media_id, "reason": "missing_key", "key": str(e)})
-                        continue  # Skip this malformed chunk
-
-                    # Generate fields required by the MediaChunks schema.
-                    # MediaChunks.chunk_id has a TEXT UNIQUE constraint. We generate a UUID for it.
-                    generated_chunk_id_for_db = self._generate_uuid()
-                    # MediaChunks.uuid also has a TEXT UNIQUE NOT NULL constraint.
-                    generated_uuid_for_db = self._generate_uuid()
-
-                    chunk_version = 1  # Initial sync version for new records
-                    deleted_status = 0  # New chunks are not deleted
-
-                    # Parameters order must match the INSERT statement columns
-                    params_tuple = (
-                        media_id,
-                        chunk_text,
-                        start_index,
-                        end_index,
-                        generated_chunk_id_for_db,  # value for 'chunk_id' column
-                        generated_uuid_for_db,  # value for 'uuid' column
-                        current_timestamp,  # last_modified
-                        chunk_version,  # version
-                        client_id,  # client_id
-                        deleted_status  # deleted
-                    )
-                    db_insert_params_list.append(params_tuple)
-
-                    # Prepare data for sync logging (payload should reflect the inserted row)
-                    sync_payload = {
-                        'media_id': media_id,
-                        'chunk_text': chunk_text,
-                        'start_index': start_index,
-                        'end_index': end_index,
-                        'chunk_id': generated_chunk_id_for_db,
-                        'uuid': generated_uuid_for_db,
-                        'last_modified': current_timestamp,
-                        'version': chunk_version,
-                        'client_id': client_id,
-                        'deleted': deleted_status
-                        # prev_version and merge_parent_uuid are typically NULL/None on creation
-                    }
-                    # Store data needed for _log_sync_event: (entity_uuid, version, payload_dict)
-                    sync_log_data_for_batch.append((generated_uuid_for_db, chunk_version, sync_payload))
-
-                if not db_insert_params_list:  # If all chunks in the current batch were skipped
-                    logging.info(
-                        f"Batch starting at index {i} for media_id {media_id} resulted in no valid chunks to insert.")
-                    continue
-
-                try:
-                    # Each batch is processed in its own transaction for atomicity of that batch
-                    with self.transaction() as conn:  # `conn` is yielded by the transaction context manager
-                        insert_sql = """
-                                     INSERT INTO MediaChunks
-                                     (media_id, chunk_text, start_index, end_index, chunk_id, uuid,
-                                      last_modified, version, client_id, deleted)
-                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                                     """
-                        # self.execute_many is called within the transaction.
-                        # The default commit=False for execute_many is correct here.
-                        self.execute_many(insert_sql, db_insert_params_list)
-
-                        # If execute_many succeeded, log sync events for this batch
-                        for entity_uuid, version_val, payload_dict in sync_log_data_for_batch:
-                            self._log_sync_event(
-                                conn=conn,  # Pass the connection from the transaction
-                                entity="MediaChunks",
-                                entity_uuid=entity_uuid,  # The UUID of the MediaChunk record
-                                operation="create",
-                                version=version_val,  # The sync version of the MediaChunk
-                                payload=payload_dict
-                            )
-
-                    successfully_inserted_chunks += len(db_insert_params_list)
-                    logging.info(
-                        f"Successfully processed batch for media_id {media_id}. Total inserted so far: {successfully_inserted_chunks}/{total_chunks_to_process}")
-                    log_counter("process_chunks_batch_success", labels={"media_id": media_id})
-
-                except sqlite3.IntegrityError as e:
-                    # This could be a FOREIGN KEY constraint failure if media_id became invalid
-                    # or a UNIQUE constraint failure.
-                    logging.error(f"Database integrity error inserting chunk batch for media_id {media_id}: {e}")
-                    log_counter("process_chunks_batch_error",
-                                labels={"media_id": media_id, "error_type": "IntegrityError"})
-                    # Re-raise to stop processing further batches, as this indicates a critical issue.
-                    raise DatabaseError(
-                        f"Integrity error during chunk batch insertion for media_id {media_id}: {e}") from e
-                except Exception as e:  # Catch other errors from DB operation or sync logging
-                    logging.error(f"Error processing chunk batch for media_id {media_id}: {e}", exc_info=True)
-                    log_counter("process_chunks_batch_error",
-                                labels={"media_id": media_id, "error_type": type(e).__name__})
-                    raise  # Re-raise to be caught by the outer try-except, stopping further processing.
-
-            logging.info(
-                f"Finished processing all chunks for media_id {media_id}. Total successfully inserted: {successfully_inserted_chunks}")
-            duration = time.time() - start_time
-            log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
-            log_counter("process_chunks_success", labels={"media_id": media_id})
-            # No explicit return value, matching the original function's behavior.
-
-        except Exception as e:  # Catches errors from loop setup or re-raised errors from batch processing
-            duration = time.time() - start_time
-            # Log duration even if the overall process failed or exited early
-            log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
-            log_counter("process_chunks_error", labels={"media_id": media_id, "error_type": type(e).__name__})
-            logging.error(f"Overall error processing chunks for media_id {media_id}: {e}", exc_info=True)
-
-            # Re-raise the exception so the caller is aware of the failure.
-            # Wrap in DatabaseError if it's not already one of our specific DB errors.
-            if not isinstance(e, (DatabaseError, InputError)):  # Check if e is already a known custom error
-                raise DatabaseError(
-                    f"An unexpected error occurred while processing chunks for media_id {media_id}: {e}") from e
-            else:
-                raise
-
-    # =========================================================================
-    # Chunking Templates Methods
-    # =========================================================================
-    
-    def create_chunking_template(self, 
-                                name: str,
-                                template_json: str,
-                                description: Optional[str] = None,
-                                is_builtin: bool = False,
-                                tags: Optional[List[str]] = None,
-                                user_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Create a new chunking template.
-        
-        Args:
-            name: Template name (must be unique among non-deleted templates)
-            template_json: JSON string containing template configuration
-            description: Optional template description
-            is_builtin: Whether this is a built-in template (cannot be modified/deleted)
-            tags: Optional list of tags for categorization
-            user_id: Optional user ID for ownership tracking
-            
-        Returns:
-            Dictionary containing created template information
-            
-        Raises:
-            DatabaseError: If template creation fails
-            InputError: If name already exists
-        """
-        import uuid as uuid_module
-        
-        template_uuid = str(uuid_module.uuid4())
-        tags_json = json.dumps(tags) if tags else None
-
-        try:
-            json.loads(template_json)
-        except json.JSONDecodeError as e:
-            raise InputError(f"Invalid template JSON: {e}")
-
-        current_time = self._get_current_utc_timestamp_str()
-
-        with self.transaction() as conn:
-            existing = self._fetchone_with_connection(
-                conn,
-                "SELECT 1 FROM ChunkingTemplates WHERE name = ? AND deleted = ? LIMIT 1",
-                (name, False),
-            )
-            if existing:
-                raise InputError(f"Template with name '{name}' already exists")
-
-            insert_sql = """
-                INSERT INTO ChunkingTemplates (
-                    uuid, name, description, template_json, is_builtin, tags,
-                    created_at, updated_at, last_modified, version, client_id,
-                    user_id, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            params = (
-                template_uuid,
-                name,
-                description,
-                template_json,
-                is_builtin,
-                tags_json,
-                current_time,
-                current_time,
-                current_time,
-                1,
-                self.client_id,
-                user_id,
-                False,
-            )
-
-            if self.backend_type == BackendType.POSTGRESQL:
-                insert_sql += " RETURNING id"
-
-            insert_cursor = self._execute_with_connection(conn, insert_sql, params)
-            if self.backend_type == BackendType.POSTGRESQL:
-                inserted_row = insert_cursor.fetchone()
-                template_id = inserted_row['id'] if inserted_row else None
-            else:
-                template_id = insert_cursor.lastrowid
-
-            if not template_id:
-                raise DatabaseError("Failed to create chunking template.")
-
-        logger.info(f"Created chunking template '{name}' with UUID {template_uuid}")
-
-        return {
-            'id': template_id,
-            'uuid': template_uuid,
-            'name': name,
-            'description': description,
-            'template_json': template_json,
-            'is_builtin': is_builtin,
-            'tags': tags,
-            'user_id': user_id,
-            'version': 1,
-        }
-    
-    def get_chunking_template(self, 
-                             template_id: Optional[int] = None,
-                             name: Optional[str] = None,
-                             uuid: Optional[str] = None,
-                             include_deleted: bool = False) -> Optional[Dict[str, Any]]:
-        """
-        Get a chunking template by ID, name, or UUID.
-        
-        Args:
-            template_id: Template database ID
-            name: Template name
-            uuid: Template UUID
-            include_deleted: Whether to include soft-deleted templates
-            
-        Returns:
-            Template dictionary or None if not found
-        """
-        if not any([template_id, name, uuid]):
-            raise InputError("Must provide template_id, name, or uuid")
-        params: List[Any] = []
-        conditions: List[str] = []
-
-        if template_id is not None:
-            conditions.append("id = ?")
-            params.append(template_id)
-        if name:
-            conditions.append("name = ?")
-            params.append(name)
-        if uuid:
-            conditions.append("uuid = ?")
-            params.append(uuid)
-
-        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"
-        if not include_deleted:
-            query += " AND deleted = ?"
-            params.append(False)
-
-        cursor = self.execute_query(query, tuple(params))
-        row = cursor.fetchone()
-
-        if not row:
-            return None
-
-        return {
-            'id': row['id'],
-            'uuid': row['uuid'],
-            'name': row['name'],
-            'description': row['description'],
-            'template_json': row['template_json'],
-            'is_builtin': bool(row['is_builtin']),
-            'tags': json.loads(row['tags']) if row['tags'] else [],
-            'created_at': row['created_at'],
-            'updated_at': row['updated_at'],
-            'version': row['version'],
-            'user_id': row['user_id'],
-            'deleted': bool(row['deleted']),
-        }
-    
-    def list_chunking_templates(self,
-                               include_builtin: bool = True,
-                               include_custom: bool = True,
-                               tags: Optional[List[str]] = None,
-                               user_id: Optional[str] = None,
-                               include_deleted: bool = False) -> List[Dict[str, Any]]:
-        """
-        List all chunking templates with optional filtering.
-        
-        Args:
-            include_builtin: Include built-in templates
-            include_custom: Include custom templates
-            tags: Filter by tags (templates must have at least one matching tag)
-            user_id: Filter by user ID
-            include_deleted: Include soft-deleted templates
-            
-        Returns:
-            List of template dictionaries
-        """
-        if not include_builtin and not include_custom:
-            return []
-
-        conditions: List[str] = []
-        params: List[Any] = []
-
-        if not include_deleted:
-            conditions.append("deleted = ?")
-            params.append(False)
-
-        if include_builtin != include_custom:
-            conditions.append("is_builtin = ?")
-            params.append(include_builtin)
-
-        if user_id:
-            conditions.append("user_id = ?")
-            params.append(user_id)
-
-        query = "SELECT * FROM ChunkingTemplates"
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY is_builtin DESC, name ASC"
-
-        cursor = self.execute_query(query, tuple(params))
-        rows = cursor.fetchall()
-
-        templates = []
-        for row in rows:
-            template = {
-                'id': row['id'],
-                'uuid': row['uuid'],
-                'name': row['name'],
-                'description': row['description'],
-                'template_json': row['template_json'],
-                'is_builtin': bool(row['is_builtin']),
-                'tags': json.loads(row['tags']) if row['tags'] else [],
-                'created_at': row['created_at'],
-                'updated_at': row['updated_at'],
-                'version': row['version'],
-                'user_id': row['user_id'],
-            }
-
-            if tags and not any(tag in template['tags'] for tag in tags):
+                # Store data needed for _log_sync_event: (entity_uuid, version, payload_dict)
+                sync_log_data_for_batch.append((generated_uuid_for_db, chunk_version, sync_payload))
+
+            if not db_insert_params_list:  # If all chunks in the current batch were skipped
+                logging.info(
+                    f"Batch starting at index {i} for media_id {media_id} resulted in no valid chunks to insert.")
                 continue
 
-            templates.append(template)
-
-        return templates
-    
-    def update_chunking_template(self,
-                                template_id: Optional[int] = None,
-                                name: Optional[str] = None,
-                                uuid: Optional[str] = None,
-                                template_json: Optional[str] = None,
-                                description: Optional[str] = None,
-                                tags: Optional[List[str]] = None) -> bool:
-        """
-        Update a chunking template (cannot update built-in templates).
-        
-        Args:
-            template_id: Template ID to update
-            name: Template name to update
-            uuid: Template UUID to update
-            template_json: New template JSON configuration
-            description: New description
-            tags: New tags list
-            
-        Returns:
-            True if updated, False if not found or is built-in
-            
-        Raises:
-            InputError: If trying to update a built-in template
-            DatabaseError: If update fails
-        """
-        # Get existing template
-        template = self.get_chunking_template(
-            template_id=template_id, 
-            name=name, 
-            uuid=uuid
-        )
-        
-        if not template:
-            return False
-        
-        if template['is_builtin']:
-            raise InputError("Cannot modify built-in templates")
-        
-        # Validate new JSON if provided
-        if template_json:
             try:
-                json.loads(template_json)
-            except json.JSONDecodeError as e:
-                raise InputError(f"Invalid template JSON: {e}")
-        
-        updates: List[str] = []
-        params: List[Any] = []
+                # Each batch is processed in its own transaction for atomicity of that batch
+                with self.transaction() as conn:  # `conn` is yielded by the transaction context manager
+                    insert_sql = """
+                                 INSERT INTO MediaChunks
+                                 (media_id, chunk_text, start_index, end_index, chunk_id, uuid,
+                                  last_modified, version, client_id, deleted)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                                 """
+                    # self.execute_many is called within the transaction.
+                    # The default commit=False for execute_many is correct here.
+                    self.execute_many(insert_sql, db_insert_params_list)
 
-        if template_json is not None:
-            updates.append("template_json = ?")
-            params.append(template_json)
+                    # If execute_many succeeded, log sync events for this batch
+                    for entity_uuid, version_val, payload_dict in sync_log_data_for_batch:
+                        self._log_sync_event(
+                            conn=conn,  # Pass the connection from the transaction
+                            entity="MediaChunks",
+                            entity_uuid=entity_uuid,  # The UUID of the MediaChunk record
+                            operation="create",
+                            version=version_val,  # The sync version of the MediaChunk
+                            payload=payload_dict
+                        )
 
-        if description is not None:
-            updates.append("description = ?")
-            params.append(description)
+                successfully_inserted_chunks += len(db_insert_params_list)
+                logging.info(
+                    f"Successfully processed batch for media_id {media_id}. Total inserted so far: {successfully_inserted_chunks}/{total_chunks_to_process}")
+                log_counter("process_chunks_batch_success", labels={"media_id": media_id})
 
-        if tags is not None:
-            updates.append("tags = ?")
-            params.append(json.dumps(tags))
+            except sqlite3.IntegrityError as e:
+                # This could be a FOREIGN KEY constraint failure if media_id became invalid
+                # or a UNIQUE constraint failure.
+                logging.error(f"Database integrity error inserting chunk batch for media_id {media_id}: {e}")
+                log_counter("process_chunks_batch_error",
+                            labels={"media_id": media_id, "error_type": "IntegrityError"})
+                # Re-raise to stop processing further batches, as this indicates a critical issue.
+                raise DatabaseError(
+                    f"Integrity error during chunk batch insertion for media_id {media_id}: {e}") from e
+            except Exception as e:  # Catch other errors from DB operation or sync logging
+                logging.error(f"Error processing chunk batch for media_id {media_id}: {e}", exc_info=True)
+                log_counter("process_chunks_batch_error",
+                            labels={"media_id": media_id, "error_type": type(e).__name__})
+                raise  # Re-raise to be caught by the outer try-except, stopping further processing.
 
-        if not updates:
-            return False
+        logging.info(
+            f"Finished processing all chunks for media_id {media_id}. Total successfully inserted: {successfully_inserted_chunks}")
+        duration = time.time() - start_time
+        log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
+        log_counter("process_chunks_success", labels={"media_id": media_id})
+        # No explicit return value, matching the original function's behavior.
 
-        current_time = self._get_current_utc_timestamp_str()
-        updates.extend([
-            "updated_at = ?",
-            "last_modified = ?",
-            "version = version + 1",
-            "client_id = ?",
-        ])
-        params.extend([current_time, current_time, self.client_id, template['id'], False])
+    except Exception as e:  # Catches errors from loop setup or re-raised errors from batch processing
+        duration = time.time() - start_time
+        # Log duration even if the overall process failed or exited early
+        log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
+        log_counter("process_chunks_error", labels={"media_id": media_id, "error_type": type(e).__name__})
+        logging.error(f"Overall error processing chunks for media_id {media_id}: {e}", exc_info=True)
 
-        update_sql = f"""
-            UPDATE ChunkingTemplates
-            SET {', '.join(updates)}
-            WHERE id = ? AND deleted = ?
-        """
-
-        with self.transaction() as conn:
-            cursor = self._execute_with_connection(conn, update_sql, tuple(params))
-            if cursor.rowcount == 0:
-                return False
-
-        logger.info(f"Updated chunking template ID {template['id']}")
-        return True
-    
-    def delete_chunking_template(self,
-                                template_id: Optional[int] = None,
-                                name: Optional[str] = None,
-                                uuid: Optional[str] = None,
-                                hard_delete: bool = False) -> bool:
-        """
-        Delete a chunking template (soft delete by default).
-        
-        Args:
-            template_id: Template ID to delete
-            name: Template name to delete
-            uuid: Template UUID to delete
-            hard_delete: Permanently delete instead of soft delete
-            
-        Returns:
-            True if deleted, False if not found
-            
-        Raises:
-            InputError: If trying to delete a built-in template
-        """
-        # Get existing template
-        template = self.get_chunking_template(
-            template_id=template_id,
-            name=name,
-            uuid=uuid
-        )
-        
-        if not template:
-            return False
-        
-        if template['is_builtin']:
-            raise InputError("Cannot delete built-in templates")
-        
-        deleted_rows = 0
-
-        with self.transaction() as conn:
-            if hard_delete:
-                delete_cursor = self._execute_with_connection(
-                    conn,
-                    "DELETE FROM ChunkingTemplates WHERE id = ?",
-                    (template['id'],),
-                )
-                deleted_rows = delete_cursor.rowcount
-                logger.info(f"Hard deleted chunking template ID {template['id']}")
-            else:
-                current_time = self._get_current_utc_timestamp_str()
-                update_cursor = self._execute_with_connection(
-                    conn,
-                    """
-                    UPDATE ChunkingTemplates
-                    SET deleted = ?,
-                        updated_at = ?,
-                        last_modified = ?,
-                        client_id = ?
-                    WHERE id = ?
-                    """,
-                    (True, current_time, current_time, self.client_id, template['id']),
-                )
-                deleted_rows = update_cursor.rowcount
-                logger.info(f"Soft deleted chunking template ID {template['id']}")
-
-        return deleted_rows > 0
-    
-    def seed_builtin_templates(self, templates: List[Dict[str, Any]]) -> int:
-        """
-        Seed built-in templates into the database.
-        
-        Args:
-            templates: List of template dictionaries to seed
-            
-        Returns:
-            Number of templates seeded
-        """
-        count = 0
-        
-        for template in templates:
-            # Check if template already exists
-            existing = self.get_chunking_template(
-                name=template['name'],
-                include_deleted=True
-            )
-            
-            if not existing:
-                try:
-                    self.create_chunking_template(
-                        name=template['name'],
-                        template_json=json.dumps(template.get('template', template)),
-                        description=template.get('description', ''),
-                        is_builtin=True,
-                        tags=template.get('tags', [])
-                    )
-                    count += 1
-                    logger.info(f"Seeded built-in template: {template['name']}")
-                except Exception as e:
-                    logger.error(f"Failed to seed template {template['name']}: {e}")
-            elif existing['deleted']:
-                # Restore deleted built-in template
-                current_time = self._get_current_utc_timestamp_str()
-                with self.transaction() as conn:
-                    self._execute_with_connection(
-                        conn,
-                        """
-                        UPDATE ChunkingTemplates
-                        SET deleted = ?,
-                            template_json = ?,
-                            description = ?,
-                            tags = ?,
-                            updated_at = ?,
-                            last_modified = ?,
-                            version = version + 1,
-                            client_id = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            False,
-                            json.dumps(template.get('template', template)),
-                            template.get('description', ''),
-                            json.dumps(template.get('tags', [])),
-                            current_time,
-                            current_time,
-                            self.client_id,
-                            existing['id'],
-                        ),
-                    )
-                count += 1
-                logger.info(f"Restored built-in template: {template['name']}")
-
-        return count
-
+        # Re-raise the exception so the caller is aware of the failure.
+        # Wrap in DatabaseError if it's not already one of our specific DB errors.
+        if not isinstance(e, (DatabaseError, InputError)):  # Check if e is already a known custom error
+            raise DatabaseError(
+                f"An unexpected error occurred while processing chunks for media_id {media_id}: {e}") from e
+        else:
+            raise
 
 # =========================================================================
 # Standalone Functions (REQUIRE db_instance passed explicitly)
 # =========================================================================
 # These generally call instance methods now, which handle logging/FTS internally.
+
 
 def get_document_version(db_instance: MediaDatabase, media_id: int, version_number: Optional[int] = None, include_content: bool = True) -> Optional[Dict[str, Any]]:
     """

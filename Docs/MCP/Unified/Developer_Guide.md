@@ -245,6 +245,30 @@ Notes for module authors
 
 ## API Integration
 
+### Tools Listing and Discovery
+
+`GET /api/v1/mcp/tools` lists available tools filtered by RBAC for the caller. Catalog filters shape discovery but do not grant permissions.
+
+- Catalog filtering:
+  - `catalog` (name) and `catalog_id` (numeric) narrow discovery to tools included in a named catalog.
+  - Name resolution honors caller context with precedence: team > org > global.
+  - When both `catalog` and `catalog_id` are supplied, `catalog_id` takes precedence.
+  - If resolution fails, the server fails open (no catalog filter) while RBAC still gates visibility and execution.
+  - `canExecute` indicates whether the caller can execute the tool; catalog membership alone does not grant execute rights.
+
+HTTP examples:
+
+```bash
+# List tools (all, RBAC-filtered)
+curl -H "X-API-KEY: ..." "http://127.0.0.1:8000/api/v1/mcp/tools"
+
+# List tools in catalog by name
+curl -H "X-API-KEY: ..." "http://127.0.0.1:8000/api/v1/mcp/tools?catalog=research-kit"
+
+# List tools by catalog id (takes precedence over name)
+curl -H "X-API-KEY: ..." "http://127.0.0.1:8000/api/v1/mcp/tools?catalog_id=123"
+```
+
 ### Client Libraries
 
 #### Python Client

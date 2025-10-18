@@ -74,11 +74,14 @@ class NeuTTSAdapter(TTSAdapter):
             logger.info(
                 f"NeuTTS: loading backbone={self.backbone_repo} codec={self.codec_repo}"
             )
+            # Respect auto_download toggle from provider config (default True)
+            auto_download = bool(self.config.get("auto_download", True))
             self._engine = _NeuTTSAir(
                 backbone_repo=self.backbone_repo,
                 backbone_device=self.backbone_device,
                 codec_repo=self.codec_repo,
                 codec_device=self.codec_device,
+                auto_download=auto_download,
             )
 
             # Detect capabilities from engine flags
@@ -336,4 +339,3 @@ class NeuTTSAdapter(TTSAdapter):
                 "NeuTTS per-request repo override ignored (engine already initialized)."
             )
         # Device overrides are safe to ignore at runtime; could be used in future
-

@@ -7,8 +7,13 @@ from __future__ import annotations
 import os
 from typing import Optional, Tuple, List, Dict, Any
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 def _missing_key_error() -> str:
@@ -18,18 +23,21 @@ def _missing_key_error() -> str:
 BASE_URL = "https://api.springernature.com/metadata/json"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        return create_client(timeout=20)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _join_authors(creators: Any) -> Optional[str]:
@@ -118,13 +126,17 @@ def search_springer(
         records = data.get("records") or []
         items = [_normalize_record(rec) for rec in records]
         return items, total, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to Springer API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"Springer API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"Springer API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to Springer API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"Springer API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to Springer API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"Springer API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"Springer API Request Error: {str(e)}"
         return None, 0, f"Springer error: {str(e)}"
 
 
@@ -147,11 +159,15 @@ def get_springer_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
         if not records:
             return None, None
         return _normalize_record(records[0]), None
-    except requests.exceptions.Timeout:
-        return None, "Request to Springer API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"Springer API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"Springer API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to Springer API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"Springer API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to Springer API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"Springer API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"Springer API Request Error: {str(e)}"
         return None, f"Springer error: {str(e)}"

@@ -1,9 +1,21 @@
+from __future__ import annotations
 from typing import Generator
 from pathlib import Path
-import librosa
+import os
+import inspect
 import numpy as np
-import torch
 import re
+
+# Defer heavy imports; set to None if missing and import lazily where needed
+try:  # pragma: no cover
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
+
+try:  # pragma: no cover
+    import librosa  # type: ignore
+except Exception:  # pragma: no cover
+    librosa = None  # type: ignore
 
 # Try to import perth; fall back to local stub if unavailable
 try:
@@ -15,13 +27,15 @@ except Exception:  # pragma: no cover - dev env fallback
         perth = None  # type: ignore
 
 try:
-    from neucodec import NeuCodec, DistillNeuCodec
-except Exception as e:  # pragma: no cover - adapter will gracefully handle missing dep
+    from neucodec import NeuCodec, DistillNeuCodec  # type: ignore
+except Exception:  # pragma: no cover - adapter will gracefully handle missing dep
     NeuCodec = None  # type: ignore
     DistillNeuCodec = None  # type: ignore
 
-from phonemizer.backend import EspeakBackend
-from transformers import AutoTokenizer, AutoModelForCausalLM
+# Import phonemizer/transformers lazily in _load_backbone
+EspeakBackend = None  # type: ignore
+AutoTokenizer = None  # type: ignore
+AutoModelForCausalLM = None  # type: ignore
 
 
 def _linear_overlap_add(frames: list[np.ndarray], stride: int) -> np.ndarray:
@@ -59,6 +73,8 @@ class NeuTTSAir:
         backbone_device="cpu",
         codec_repo="neuphonic/neucodec",
         codec_device="cpu",
+        *,
+        auto_download: bool = True,
     ):
 
         # Consts
@@ -74,11 +90,19 @@ class NeuTTSAir:
         # ggml & onnx flags
         self._is_quantized_model = False
         self._is_onnx_codec = False
+        self._auto_download = bool(auto_download)
 
         # HF tokenizer
         self.tokenizer = None
 
         # Load phonemizer + models
+        global EspeakBackend
+        if EspeakBackend is None:
+            try:
+                from phonemizer.backend import EspeakBackend as _EspeakBackend  # type: ignore
+                EspeakBackend = _EspeakBackend
+            except Exception as e:  # pragma: no cover
+                raise ImportError("phonemizer is required for NeuTTS. pip install phonemizer") from e
         self.phonemizer = EspeakBackend(
             language="en-us", preserve_punctuation=True, with_stress=True
         )
@@ -98,7 +122,13 @@ class NeuTTSAir:
                 raise ImportError(
                     "Failed to import `llama_cpp`. Please install with: pip install llama-cpp-python"
                 ) from e
-
+            # Require local files when auto-download is disabled
+            if not self._auto_download:
+                repo_path = Path(str(backbone_repo))
+                if not repo_path.exists():
+                    raise ImportError(
+                        "NeuTTS auto_download is disabled. Provide a local path to GGUF files for backbone_repo."
+                    )
             self.backbone = Llama.from_pretrained(
                 repo_id=backbone_repo,
                 filename="*.gguf",
@@ -111,8 +141,21 @@ class NeuTTSAir:
             self._is_quantized_model = True
 
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(backbone_repo)
-            self.backbone = AutoModelForCausalLM.from_pretrained(backbone_repo).to(
+            # Lazy import transformers to avoid mandatory dependency at import time
+            global AutoTokenizer, AutoModelForCausalLM
+            if AutoTokenizer is None or AutoModelForCausalLM is None:
+                try:
+                    from transformers import AutoTokenizer as _AT, AutoModelForCausalLM as _AM  # type: ignore
+                    AutoTokenizer, AutoModelForCausalLM = _AT, _AM
+                except Exception as e:  # pragma: no cover
+                    raise ImportError(
+                        "transformers is required for NeuTTS torch backbone. pip install transformers"
+                    ) from e
+            local_only = not self._auto_download
+            self.tokenizer = AutoTokenizer.from_pretrained(backbone_repo, local_files_only=local_only)
+            if torch is None:  # pragma: no cover
+                raise ImportError("PyTorch is required for NeuTTS torch backbone. pip install torch")
+            self.backbone = AutoModelForCausalLM.from_pretrained(backbone_repo, local_files_only=local_only).to(
                 torch.device(backbone_device)
             )
 
@@ -120,22 +163,43 @@ class NeuTTSAir:
         if codec_repo == "neuphonic/neucodec":
             if NeuCodec is None:  # pragma: no cover
                 raise ImportError("neucodec is required for NeuTTS Air. pip install neucodec")
-            self.codec = NeuCodec.from_pretrained(codec_repo)
+            kwargs = {}
+            if not self._auto_download:
+                # Try to enforce local-only mode if supported; otherwise require path
+                if "local_files_only" in inspect.signature(NeuCodec.from_pretrained).parameters:  # type: ignore[attr-defined]
+                    kwargs["local_files_only"] = True
+                else:
+                    if not Path(str(codec_repo)).exists():
+                        raise ImportError(
+                            "NeuTTS auto_download is disabled. Provide a local path for codec_repo or enable auto_download."
+                        )
+            self.codec = NeuCodec.from_pretrained(codec_repo, **kwargs)
             self.codec.eval().to(codec_device)
         elif codec_repo == "neuphonic/distill-neucodec":
             if DistillNeuCodec is None:  # pragma: no cover
                 raise ImportError("neucodec>=0.0.4 is required for distill codec")
-            self.codec = DistillNeuCodec.from_pretrained(codec_repo)
+            kwargs = {}
+            if not self._auto_download:
+                if "local_files_only" in inspect.signature(DistillNeuCodec.from_pretrained).parameters:  # type: ignore[attr-defined]
+                    kwargs["local_files_only"] = True
+                else:
+                    if not Path(str(codec_repo)).exists():
+                        raise ImportError(
+                            "NeuTTS auto_download is disabled. Provide a local path for codec_repo or enable auto_download."
+                        )
+            self.codec = DistillNeuCodec.from_pretrained(codec_repo, **kwargs)
             self.codec.eval().to(codec_device)
         elif codec_repo == "neuphonic/neucodec-onnx-decoder":
-            if codec_device != "cpu":  # pragma: no cover
-                raise ValueError("Onnx decoder only currently runs on CPU.")
             try:
                 from neucodec import NeuCodecOnnxDecoder
             except ImportError as e:  # pragma: no cover
                 raise ImportError(
                     "Failed to import the onnx decoder. Install onnxruntime and neucodec>=0.0.4."
                 ) from e
+            if not self._auto_download and not Path(str(codec_repo)).exists():
+                raise ImportError(
+                    "NeuTTS auto_download is disabled. Provide a local path for codec_repo (onnx decoder) or enable auto_download."
+                )
             self.codec = NeuCodecOnnxDecoder.from_pretrained(codec_repo)
             self._is_onnx_codec = True
         else:  # pragma: no cover
@@ -164,6 +228,10 @@ class NeuTTSAir:
             raise NotImplementedError("Streaming is not implemented for the torch backend!")
 
     def encode_reference(self, ref_audio_path: str | Path):
+        if librosa is None:  # pragma: no cover
+            raise ImportError("librosa is required for NeuTTS reference encoding. pip install librosa")
+        if torch is None:  # pragma: no cover
+            raise ImportError("PyTorch is required for NeuTTS reference encoding. pip install torch")
         wav, _ = librosa.load(ref_audio_path, sr=16000, mono=True)
         wav_tensor = torch.from_numpy(wav).float().unsqueeze(0).unsqueeze(0)  # [1, 1, T]
         with torch.no_grad():
@@ -337,4 +405,3 @@ class NeuTTSAir:
             processed_recon = _linear_overlap_add(audio_cache, stride=self.streaming_stride_samples)
             processed_recon = processed_recon[n_decoded_samples:]
             yield processed_recon
-

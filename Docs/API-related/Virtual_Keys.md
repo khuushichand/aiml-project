@@ -42,7 +42,7 @@ Response 200 (application/json):
 
 Notes:
 - The `key` value is only returned once at creation/rotation time.
-- `allowed_endpoints` supports: `chat.completions`, `embeddings` (more may be added later).
+- `allowed_endpoints` supports the logical endpoint IDs listed below.
 
 Example (cURL):
 ```bash
@@ -147,3 +147,128 @@ Example (cURL):
 curl -X GET http://127.0.0.1:8000/api/v1/admin/users/123/virtual-keys \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
+
+## Scoped JWTs for Workflows (Virtual Keys)
+
+In addition to API keys, the server supports short‑lived, scoped JWTs ("virtual keys") intended for internal automation such as Workflows schedules.
+
+- Mint token (admin; multi‑user):
+  - POST `/api/v1/workflows/auth/virtual-key`
+  - Body: `{ "ttl_minutes": 60, "scope": "workflows", "schedule_id": "<optional>" }`
+  - Returns: `{ token, expires_at, scope, schedule_id }`
+
+- Mint token (self‑service; multi‑user):
+  - POST `/api/v1/auth/virtual-key`
+  - Body (examples):
+    - Basic: `{ "ttl_minutes": 30, "scope": "workflows" }`
+    - With constraints:
+      ```json
+      {
+        "ttl_minutes": 30,
+        "scope": "workflows",
+        "allowed_endpoints": ["scheduler.workflows.run_now", "evals.create_run"],
+        "allowed_methods": ["POST"],
+        "allowed_paths": ["/api/v1/scheduler/workflows", "/api/v1/evaluations"],
+        "max_calls": 10,
+        "max_runs": 5,
+        "not_before": "2025-01-01T00:00:00Z"
+      }
+      ```
+  - Returns: `{ token, expires_at, scope, schedule_id }`
+
+Scope enforcement
+- Endpoints can opt‑in to scope checks. For example:
+  - `scope=workflows` required when a scoped token is presented for evaluation run creation.
+  - For scheduler endpoints such as `POST /api/v1/scheduler/workflows/{schedule_id}/run-now`, when a token contains a `schedule_id` claim, it must match the path `schedule_id`.
+- Admin tokens (role=admin) bypass scope checks.
+- API key and single‑user flows are unaffected.
+
+Endpoint allowlists and quotas
+- Tokens may include optional claims enforced where enabled:
+  - `allowed_endpoints`: list of logical endpoint IDs; requests outside the list are rejected (403).
+  - `allowed_methods`: allowed HTTP methods.
+  - `allowed_paths`: list of allowed URL path prefixes.
+  - `max_calls`: process‑local, best‑effort cap on number of invocations with the token.
+  - `max_runs`: same as `max_calls` but counted for endpoints that mark the action as a run.
+- Note: For hard multi‑instance budgets and LLM token budgets, prefer Admin Virtual API keys with DB‑backed enforcement. Scoped JWT quotas are lightweight and process‑local.
+
+Scheduler integration
+- To automatically mint a per‑run token for schedules and inject it into workflow steps, set:
+  - `WORKFLOWS_MINT_VIRTUAL_KEYS=true`
+  - `WORKFLOWS_VIRTUAL_KEY_TTL_MIN=15`
+  The scheduler adds a `secrets.jwt` bearer to the run context; adapters (e.g., webhook) use it when headers do not already specify auth.
+
+Helper CLI
+- Mint and export a scoped token for the scheduler service:
+```bash
+python -m Helper_Scripts.AuthNZ.mint_virtual_key \
+  --user-id 1 --username admin --role admin \
+  --scope workflows --ttl-minutes 30 --print-export
+# or write to dotenv
+python -m Helper_Scripts.AuthNZ.mint_virtual_key \
+  --user-id 1 --username admin --role admin \
+  --dotenv tldw_Server_API/Config_Files/workflows.env
+```
+
+Workflows webhook adapter auth fallbacks
+- When an HTTP step omits explicit Authorization or X‑API‑KEY headers, the adapter will:
+  1) Use `secrets.jwt` as `Authorization: Bearer ...`, or
+  2) Use `secrets.api_key` as `X-API-KEY: ...`, or
+  3) Fall back to `WORKFLOWS_DEFAULT_BEARER_TOKEN` or `WORKFLOWS_DEFAULT_API_KEY` if provided.
+- Optionally validate fallback auth once per run by setting `WORKFLOWS_VALIDATE_DEFAULT_AUTH=true` (Base URL: `WORKFLOWS_INTERNAL_BASE_URL`).
+
+## Self-service Virtual API Keys (X-API-KEY)
+
+Users can mint constrained API keys for themselves that enforce the same endpoint/method/path and quota rules as scoped JWTs.
+
+- POST `/api/v1/users/api-keys/virtual`
+- Body (examples):
+  ```json
+  {
+    "name": "wf-runner",
+    "expires_in_days": 7,
+    "allowed_endpoints": ["scheduler.workflows.run_now", "evals.create_run"],
+    "allowed_methods": ["POST"],
+    "allowed_paths": ["/api/v1/scheduler/workflows", "/api/v1/evaluations"],
+    "max_runs": 10
+  }
+  ```
+- Returns the key value once; store it securely. Use `X-API-KEY: <key>`.
+
+Enforcement
+- Endpoints with scope enforcement also apply rules for API keys:
+  - allowed_endpoints checked against logical endpoint IDs listed above.
+  - allowed_methods/allowed_paths verified per request.
+  - max_calls/max_runs apply as best-effort process-local caps.
+- LLM budgets on Virtual API keys (`budget_day_tokens`, etc.) continue to apply for LLM endpoints.
+
+## Endpoint IDs and Paths (allowlists)
+
+Use these logical IDs in `allowed_endpoints`. When you prefer path-based allowlists, match the associated path prefix.
+
+- chat.completions → POST `/api/v1/chat/completions`
+- rag.search → POST `/api/v1/rag/search`
+- audio.speech → POST `/api/v1/audio/speech`
+- audio.transcriptions → POST `/api/v1/audio/transcriptions`
+- audio.translations → POST `/api/v1/audio/translations`
+- audio.stream.transcribe → WS `/api/v1/audio/stream/transcribe`
+- media.ingest → POST `/api/v1/media/ingest-web-content`
+
+## WebSocket STT Enforcement
+
+The real-time STT endpoint (`/api/v1/audio/stream/transcribe`) enforces virtual-key constraints during the handshake:
+
+- Authorization: Bearer (scoped JWT) or `X-API-KEY` (virtual API key) accepted in headers.
+- `allowed_endpoints` must include `audio.stream.transcribe` if present.
+- Optional `allowed_paths` should include `/api/v1/audio/stream/transcribe` when used.
+- Quotas (`max_calls` / `max_runs`) are enforced via DB-backed counters across instances.
+  - On quota exhaustion, the server sends an error frame and closes with code 4403.
+
+## Quota Buckets (per-day caps)
+
+For per-day call quotas without adding new tables, you can attach a simple bucket to counters:
+
+- Scoped JWTs: add claim `"period": "day"` alongside `max_calls` or `max_runs`.
+- Virtual API keys: put `"period": "day"` inside `metadata`.
+
+With `period=day`, the quota counter is keyed by the current UTC date internally. This provides a daily rolling cap per token/key without additional schema changes.

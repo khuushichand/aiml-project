@@ -475,9 +475,9 @@ class EvaluationManager:
             # Get evaluation from LLM
             response = await asyncio.to_thread(
                 analyze,
+                api_name,
                 json.dumps(input_data),
                 full_prompt,
-                api_name,
                 "",
                 temp=0.3,
                 system_message="You are an expert evaluator. Provide scores and detailed explanations."

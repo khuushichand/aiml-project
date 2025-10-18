@@ -998,17 +998,33 @@ async def download_chatbook(
         except Exception:
             pass
         
+        # Build safe Content-Disposition (ASCII fallback + RFC 5987 filename*)
+        def _safe_disp_parts(name: str) -> tuple[str, Optional[str]]:
+            try:
+                name.encode("ascii")
+                return name, None
+            except Exception:
+                try:
+                    import urllib.parse as _u
+                    return "download", _u.quote(name)
+                except Exception:
+                    return "download", None
+        ascii_name, encoded_name = _safe_disp_parts(filename)
+        headers = {
+            "X-Content-Type-Options": "nosniff",
+            "X-Download-Options": "noopen",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Content-Disposition": (
+                f"attachment; filename={ascii_name}" + (f"; filename*=UTF-8''{encoded_name}" if encoded_name else "")
+            ),
+        }
+
         # Return file with security headers
         return FileResponse(
             path=str(file_path),
             filename=filename,
             media_type="application/zip",
-            headers={
-                "X-Content-Type-Options": "nosniff",
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "X-Download-Options": "noopen",  # Prevent IE from opening files directly
-                "Cache-Control": "no-cache, no-store, must-revalidate"  # Prevent caching of sensitive data
-            }
+            headers=headers,
         )
         
     except HTTPException:

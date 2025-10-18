@@ -24,25 +24,35 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover - optional
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        status_forcelist=[429, 500, 502, 503, 504],
-        backoff_factor=1,
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    # Centralized client (trust_env=False, timeouts)
+    try:
+        return create_client(timeout=15)
+    except Exception:
+        # Fallback to requests if httpx not available
+        retry_strategy = Retry(
+            total=3,
+            status_forcelist=[429, 500, 502, 503, 504],
+            backoff_factor=1,
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _build_term(query: str, free_full_text: bool) -> str:
@@ -178,13 +188,20 @@ def search_pubmed(
             items.append(_normalize_item(str(uid), raw))
 
         return items, total, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to PubMed API timed out."
-    except requests.exceptions.HTTPError as e:
-        code = getattr(e.response, "status_code", None)
-        return None, 0, f"PubMed API HTTP Error: {code if code is not None else '?'}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"PubMed API Request Error: {str(e)}"
+    except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to PubMed API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            code = getattr(e.response, "status_code", None)
+            return None, 0, f"PubMed API HTTP Error: {code if code is not None else '?'}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to PubMed API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            code = getattr(getattr(e, 'response', None), "status_code", None)
+            return None, 0, f"PubMed API HTTP Error: {code if code is not None else '?'}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"PubMed API Request Error: {str(e)}"
+        return None, 0, f"Unexpected error during PubMed search: {str(e)}"
     except Exception as e:
         return None, 0, f"Unexpected error during PubMed search: {str(e)}"
 
@@ -237,12 +254,17 @@ def get_pubmed_by_id(pmid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
         if abstract_text:
             base["abstract"] = abstract_text
         return base, None
-    except requests.exceptions.Timeout:
-        return None, "Request to PubMed API timed out."
-    except requests.exceptions.HTTPError as e:
-        code = getattr(e.response, "status_code", None)
-        return None, f"PubMed API HTTP Error: {code if code is not None else '?'}"
-    except requests.exceptions.RequestException as e:
-        return None, f"PubMed API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to PubMed API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            code = getattr(e.response, "status_code", None)
+            return None, f"PubMed API HTTP Error: {code if code is not None else '?'}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to PubMed API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            code = getattr(getattr(e, 'response', None), "status_code", None)
+            return None, f"PubMed API HTTP Error: {code if code is not None else '?'}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"PubMed API Request Error: {str(e)}"
         return None, f"Unexpected error during PubMed by-id lookup: {str(e)}"

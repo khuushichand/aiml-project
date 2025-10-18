@@ -45,7 +45,7 @@ import requests
 import trafilatura
 from tqdm import tqdm
 
-from tldw_Server_API.app.core.DB_Management.DB_Manager import ingest_article_to_db
+from tldw_Server_API.app.core.DB_Management.DB_Manager import ingest_article_to_db, create_media_database
 #
 # Import Local
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
@@ -427,7 +427,20 @@ async def async_scrape_and_no_summarize_then_ingest(url, keywords, custom_articl
         ingestion_date = datetime.now().strftime('%Y-%m-%d')
 
         # Step 2: Ingest the article into the database
-        ingestion_result = ingest_article_to_db(url, title, author, content, keywords, ingestion_date, None, None)
+        db_instance = create_media_database(client_id="article_extractor")
+        # Ensure keywords list
+        kw_list = [kw.strip() for kw in str(keywords).split(',')] if isinstance(keywords, str) else (keywords or [])
+        ingestion_result = ingest_article_to_db(
+            db_instance=db_instance,
+            url=url,
+            title=title,
+            author=author,
+            content=content,
+            keywords=kw_list,
+            ingestion_date=ingestion_date,
+            custom_prompt=None,
+            summary=None,
+        )
         log_counter("article_ingested", labels={"success": str(ingestion_result).lower(), "url": url})
 
         # When displaying content, we might want to strip metadata

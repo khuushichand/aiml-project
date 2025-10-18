@@ -11,6 +11,9 @@ from urllib.parse import urlparse
 DEFAULT_ALLOWED_SCHEMES = {"http", "https"}
 ALLOWLIST_ENV = "WORKFLOWS_EGRESS_ALLOWLIST"
 DENYLIST_ENV = "WORKFLOWS_EGRESS_DENYLIST"
+# Global variants (applied across all usages)
+GLOBAL_ALLOWLIST_ENV = "EGRESS_ALLOWLIST"
+GLOBAL_DENYLIST_ENV = "EGRESS_DENYLIST"
 BLOCK_PRIVATE_ENV = "WORKFLOWS_EGRESS_BLOCK_PRIVATE"
 ALLOWED_PORTS_ENV = "WORKFLOWS_EGRESS_ALLOWED_PORTS"
 PROFILENAME = "WORKFLOWS_EGRESS_PROFILE"  # strict | permissive | custom
@@ -184,10 +187,15 @@ def evaluate_url_policy(
 
     allowlist = list(allowlist) if allowlist is not None else None
     if allowlist is None:
-        allowlist = _get_allowlist(os.getenv(ALLOWLIST_ENV, ""))
+        # Merge global and workflows lists
+        gl = _get_allowlist(os.getenv(GLOBAL_ALLOWLIST_ENV, ""))
+        wl = _get_allowlist(os.getenv(ALLOWLIST_ENV, ""))
+        allowlist = list(dict.fromkeys(gl + wl))
     denylist = list(denylist) if denylist is not None else None
     if denylist is None:
-        denylist = _get_allowlist(os.getenv(DENYLIST_ENV, ""))
+        gd = _get_allowlist(os.getenv(GLOBAL_DENYLIST_ENV, ""))
+        wd = _get_allowlist(os.getenv(DENYLIST_ENV, ""))
+        denylist = list(dict.fromkeys(gd + wd))
 
     # Profile handling: strict requires explicit allowlist match
     profile = (os.getenv(PROFILENAME, "") or "").strip().lower()

@@ -17,7 +17,7 @@ Module: `tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wik
 - namespaces: list of namespace IDs to include (e.g., `[0]` for main/articles).
 - skip_redirects: ignore redirect pages.
 - chunk_options_override: currently only `max_size` is honored by the module-local chunker; other keys (e.g., `method`, `overlap`) are ignored here.
-- store_to_db: persist via `MediaDatabase.add_media_with_keywords` with `media_type="mediawiki_page"` and URL `mediawiki:{wiki_name}:{quoted_title}`.
+- store_to_db: persist via a real DB instance — e.g., `db = create_media_database(client_id="mediawiki_import"); db.add_media_with_keywords(...)` — with `media_type="mediawiki_page"` and URL `mediawiki:{wiki_name}:{quoted_title}`.
 - store_to_vector_db: scaffolded; code includes a placeholder for chunk vectorization.
 
 ### Event Stream

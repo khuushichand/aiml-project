@@ -97,7 +97,7 @@ def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes() -> None:
 
             # GIN index exists on payload_json
             gin_def = _index_def(backend, conn, "workflow_events", "idx_events_payload_json_gin")
-            assert gin_def and "USING gin" in gin_def.lower()
+            assert gin_def and "using gin" in gin_def.lower()
 
             # Unique index on (run_id, event_seq)
             uniq_def = _index_def(backend, conn, "workflow_events", "ux_events_run_seq")

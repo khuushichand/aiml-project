@@ -477,6 +477,30 @@ async def setup_database():
                     """)
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)")
 
+                    # Cross-instance quota counters for virtual keys (JWT + API keys)
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS vk_jwt_counters (
+                            jti TEXT NOT NULL,
+                            counter_type TEXT NOT NULL,
+                            count BIGINT DEFAULT 0,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (jti, counter_type)
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS vk_api_key_counters (
+                            api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+                            counter_type TEXT NOT NULL,
+                            count BIGINT DEFAULT 0,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (api_key_id, counter_type)
+                        )
+                        """
+                    )
+
             print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
         except Exception as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")

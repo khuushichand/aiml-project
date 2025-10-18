@@ -69,6 +69,8 @@ nav:
   - Workflows:
       - Workflows PRD: Workflows_PRD.md
       - Runbook: Workflows_Runbook.md
+      - RAG Config Optimization: Workflows_RAG_Config_Optimization.md
+      - Embeddings A/B Test: Workflows_Embeddings_ABTest.md
       - Performance: Workflows_Performance.md
       - Examples & CLI: Workflows_Examples.md
       - Debugging: Workflows_Debugging.md
@@ -147,6 +149,7 @@ nav:
       - Metrics Cheatsheet: Monitoring/Metrics_Cheatsheet.md
   - User Guides:
       - Overview: User_Guides/index.md
+      - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
       - WebUI — Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md

@@ -128,12 +128,15 @@ def process_and_ingest_arxiv_paper(paper_id, additional_keywords):
         if additional_keywords:
             keywords += f",{additional_keywords}"
 
-        MediaDatabase.add_media_with_keywords(
+        # Persist via MediaDatabase instance
+        from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+        db_instance = create_media_database(client_id="research_ingest")
+        db_instance.add_media_with_keywords(
             url=f"https://arxiv.org/abs/{paper_id}",
             title=title,
             media_type='document',
             content=markdown,
-            keywords=keywords,
+            keywords=[kw.strip() for kw in keywords.split(',') if kw.strip()] if isinstance(keywords, str) else (keywords or []),
             prompt='No prompt for arXiv papers',
             analysis_content='arXiv paper ingested from XML',
             transcription_model='None',

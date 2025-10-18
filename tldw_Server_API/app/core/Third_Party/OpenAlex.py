@@ -9,31 +9,42 @@ from typing import Optional, Tuple, List, Dict, Any
 import os
 import math
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 BASE_URL = "https://api.openalex.org"
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=5,
-        backoff_factor=1.0,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    # Set a polite User-Agent to avoid 403s; OpenAlex prefers a contact email.
-    # Set a polite UA and optional mailto contact per OpenAlex best practices
-    mailto = os.getenv("OPENALEX_MAILTO")
-    ua = "tldw_server/0.1 (+https://github.com/openai/tldw_server)"
-    headers = {"Accept": "application/json", "User-Agent": ua}
-    s.headers.update(headers)
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        c = create_client(timeout=20)
+        mailto = os.getenv("OPENALEX_MAILTO")
+        ua = "tldw_server/0.1 (+https://github.com/openai/tldw_server)"
+        headers = {"Accept": "application/json", "User-Agent": ua}
+        c.headers.update(headers)
+        return c
+    except Exception:
+        retry_strategy = Retry(
+            total=5,
+            backoff_factor=1.0,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        mailto = os.getenv("OPENALEX_MAILTO")
+        ua = "tldw_server/0.1 (+https://github.com/openai/tldw_server)"
+        headers = {"Accept": "application/json", "User-Agent": ua}
+        s.headers.update(headers)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _norm_authors(authorships: Any) -> Optional[str]:
@@ -131,13 +142,17 @@ def search_openalex(
         total = (data.get("meta") or {}).get("count") or 0
         items = [_normalize_openalex_work(it) for it in results]
         return items, int(total), None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to OpenAlex API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"OpenAlex API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"OpenAlex API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to OpenAlex API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"OpenAlex API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to OpenAlex API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"OpenAlex API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"OpenAlex API Request Error: {str(e)}"
         return None, 0, f"OpenAlex error: {str(e)}"
 
 
@@ -152,13 +167,17 @@ def get_openalex_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
         r.raise_for_status()
         data = r.json()
         return _normalize_openalex_work(data), None
-    except requests.exceptions.Timeout:
-        return None, "Request to OpenAlex API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"OpenAlex API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"OpenAlex API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to OpenAlex API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"OpenAlex API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to OpenAlex API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"OpenAlex API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"OpenAlex API Request Error: {str(e)}"
         return None, f"OpenAlex error: {str(e)}"
 
 

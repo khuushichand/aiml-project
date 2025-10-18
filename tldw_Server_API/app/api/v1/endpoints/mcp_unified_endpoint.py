@@ -518,9 +518,28 @@ async def get_prometheus_metrics(
     return Response(content=content, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
-@router.get("/tools")
+@router.get(
+    "/tools",
+    summary="List MCP tools",
+    description=(
+        "List available MCP tools. Tools are filtered by RBAC; catalog filters shape discovery only.\n\n"
+        "Parameters:\n"
+        "- `module`: Filter by module id.\n"
+        "- `catalog`: Filter by tool catalog name. The server resolves the name with precedence\n"
+        "  `team > org > global` based on the authenticated context (API key or JWT). When both\n"
+        "  `catalog` and `catalog_id` are provided, `catalog_id` takes precedence.\n"
+        "- `catalog_id`: Filter by tool catalog id directly.\n\n"
+        "Behavior:\n"
+        "- If the catalog name/id cannot be resolved, the server fails open (no catalog filter),\n"
+        "  but RBAC is still enforced.\n"
+        "- `canExecute` reflects the caller's permissions. Catalog membership does not grant\n"
+        "  execution rights; it only affects discovery."
+    ),
+)
 async def list_tools(
     module: Optional[str] = Query(None, description="Filter by module"),
+    catalog: Optional[str] = Query(None, description="Filter by tool catalog name"),
+    catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
     user: Optional[TokenData] = Depends(get_current_user),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     _guard: None = Depends(enforce_http_security),
@@ -531,11 +550,14 @@ async def list_tools(
     Returns tools with their descriptions and required parameters.
     Tools are filtered based on user permissions if authenticated.
     """
-    request = MCPRequest(
-        method="tools/list",
-        params={"module": module} if module else {},
-        id="http-tools-list"
-    )
+    params: Dict[str, Any] = {}
+    if module:
+        params["module"] = module
+    if catalog is not None:
+        params["catalog"] = catalog
+    if catalog_id is not None:
+        params["catalog_id"] = catalog_id
+    request = MCPRequest(method="tools/list", params=params, id="http-tools-list")
     
     server = get_mcp_server()
     if not server.initialized:

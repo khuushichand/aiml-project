@@ -27,10 +27,10 @@ def list_ocr_backends() -> Dict[str, Any]:
         url = PointsReaderBackend().describe().get("url")
         if url:
             try:
-                import requests
-
-                r = requests.get(url.rsplit("/v1", 1)[0] + "/v1/models", timeout=1.5)
-                out["points"]["sglang_reachable"] = r.status_code in (200, 401)
+                from tldw_Server_API.app.core.http_client import create_client as _create_client
+                with _create_client(timeout=1.5) as _c:
+                    r = _c.get(url.rsplit("/v1", 1)[0] + "/v1/models")
+                    out["points"]["sglang_reachable"] = r.status_code in (200, 401)
             except Exception:
                 out["points"]["sglang_reachable"] = False
     except Exception:
@@ -45,10 +45,10 @@ def list_ocr_backends() -> Dict[str, Any]:
         vllm = dots_desc.get("vllm_url")
         if vllm:
             try:
-                import requests
-
-                r = requests.get(vllm.rsplit("/v1", 1)[0] + "/v1/models", timeout=1.5)
-                out["dots"]["vllm_reachable"] = r.status_code in (200, 401)
+                from tldw_Server_API.app.core.http_client import create_client as _create_client
+                with _create_client(timeout=1.5) as _c:
+                    r = _c.get(vllm.rsplit("/v1", 1)[0] + "/v1/models")
+                    out["dots"]["vllm_reachable"] = r.status_code in (200, 401)
             except Exception:
                 out["dots"]["vllm_reachable"] = False
     except Exception:

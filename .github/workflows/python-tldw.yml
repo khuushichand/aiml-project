@@ -321,6 +321,7 @@ jobs:
             tldw_Server_API/tests/Workflows/test_workflows_postgres_migrations.py \
             tldw_Server_API/tests/Workflows/test_dual_backend_engine.py \
             tldw_Server_API/tests/Workflows/test_dual_backend_workflows.py \
+            tldw_Server_API/tests/MCP_unified/test_tool_catalogs_pg.py \
             --timeout=300 --junit-xml=postgres-tests.xml
 
       - name: Upload postgres test results

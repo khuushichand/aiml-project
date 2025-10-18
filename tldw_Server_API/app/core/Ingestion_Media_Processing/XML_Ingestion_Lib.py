@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 # Local Imports
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
 from tldw_Server_API.app.core.Utils.Utils import logging
 #
 #######################################################################################################################
@@ -80,8 +80,10 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
         else:
             summary = "No summary provided"
 
-        # Add to database
+        # Add to database (ensure we have a MediaDatabase instance)
+        db_instance = create_media_database(client_id="xml_import")
         result = add_media_with_keywords(
+            db_instance=db_instance,
             url=import_file.name,  # Using filename as URL
             info_dict=info_dict,
             segments=segments,

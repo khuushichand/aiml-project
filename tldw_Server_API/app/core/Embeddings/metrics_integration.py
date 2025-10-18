@@ -8,9 +8,10 @@ import asyncio
 
 from loguru import logger
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
-    log_counter, 
+    log_counter,
     log_histogram,
-    log_resource_usage
+    log_gauge,
+    log_resource_usage,
 )
 
 
@@ -64,17 +65,11 @@ class EmbeddingMetrics:
     
     def update_cache_size(self, size: int):
         """Update current cache size"""
-        log_histogram(
-            f"{self.metrics_prefix}_cache_size",
-            size
-        )
+        log_gauge(f"{self.metrics_prefix}_cache_size", size)
     
     def update_cache_memory(self, memory_bytes: int):
         """Update cache memory usage"""
-        log_histogram(
-            f"{self.metrics_prefix}_cache_memory_bytes",
-            memory_bytes
-        )
+        log_gauge(f"{self.metrics_prefix}_cache_memory_bytes", memory_bytes)
     
     # Model metrics
     def log_model_load(self, model: str, load_time_seconds: float):
@@ -98,18 +93,11 @@ class EmbeddingMetrics:
     
     def update_models_in_memory(self, count: int):
         """Update number of models in memory"""
-        log_histogram(
-            f"{self.metrics_prefix}_models_in_memory",
-            count
-        )
+        log_gauge(f"{self.metrics_prefix}_models_in_memory", count)
     
     def update_model_memory_usage(self, model: str, memory_gb: float):
         """Update memory usage for a model"""
-        log_histogram(
-            f"{self.metrics_prefix}_model_memory_gb",
-            memory_gb,
-            labels={"model": model}
-        )
+        log_gauge(f"{self.metrics_prefix}_model_memory_gb", memory_gb, labels={"model": model})
     
     # Error metrics
     def log_error(self, provider: str, error_type: str):
@@ -145,24 +133,13 @@ class EmbeddingMetrics:
     # Connection pool metrics
     def update_pool_connections(self, provider: str, active: int, idle: int):
         """Update connection pool stats"""
-        log_histogram(
-            f"{self.metrics_prefix}_pool_active_connections",
-            active,
-            labels={"provider": provider}
-        )
-        log_histogram(
-            f"{self.metrics_prefix}_pool_idle_connections",
-            idle,
-            labels={"provider": provider}
-        )
+        log_gauge(f"{self.metrics_prefix}_pool_active_connections", active, labels={"provider": provider})
+        log_gauge(f"{self.metrics_prefix}_pool_idle_connections", idle, labels={"provider": provider})
     
     # DLQ metrics
     def update_dlq_size(self, size: int):
         """Update dead letter queue size"""
-        log_histogram(
-            f"{self.metrics_prefix}_dlq_size",
-            size
-        )
+        log_gauge(f"{self.metrics_prefix}_dlq_size", size)
     
     def log_dlq_addition(self, reason: str):
         """Log addition to DLQ"""

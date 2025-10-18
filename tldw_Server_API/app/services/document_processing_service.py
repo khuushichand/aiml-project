@@ -8,7 +8,6 @@ import time
 import zipfile
 
 import pypandoc
-import requests
 from typing import Optional, List, Dict, Any
 from docx2txt import docx2txt
 from pypandoc import convert_file
@@ -22,12 +21,17 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from fastapi import HTTPException
+from tldw_Server_API.app.core.http_client import create_client as create_http_client
 
 
 def _ensure_placeholder_enabled():
     s = get_settings()
     if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
         raise HTTPException(status_code=503, detail="Document placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
+
+def _file_security_strict() -> bool:
+    import os as _os
+    return (_os.getenv("FILE_SECURITY_STRICT", "true").strip().lower() in {"1","true","yes","on"})
 
 async def process_documents(
     doc_urls: Optional[List[str]],
@@ -96,8 +100,50 @@ async def process_documents(
                 # You can parse cookies string if needed
                 headers['Cookie'] = cookies
 
-            r = requests.get(url, headers=headers, timeout=60)
-            r.raise_for_status()
+            # Enforce egress/SSRF policy
+            try:
+                from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+                pol = evaluate_url_policy(url)
+                if not getattr(pol, 'allowed', False):
+                    msg = f"Egress blocked: {getattr(pol, 'reason', 'denied')}"
+                    if _file_security_strict():
+                        raise RuntimeError(msg)
+                    else:
+                        logging.warning(f"[file_security] non-strict: {msg}")
+            except Exception as _e:
+                if _file_security_strict():
+                    raise RuntimeError(f"Egress policy failure: {_e}")
+                else:
+                    logging.warning(f"[file_security] non-strict: Egress check error: {_e}")
+
+            # Use centralized HTTP client (trust_env=False, sane timeouts)
+            with create_http_client(timeout=60) as client:
+                r = client.get(url, headers=headers)
+                r.raise_for_status()
+
+            # Basic size/MIME guardrails
+            try:
+                max_bytes = int(os.getenv("DOC_DOWNLOAD_MAX_BYTES", "52428800"))  # 50 MB default
+                cl = r.headers.get('content-length')
+                if cl and cl.isdigit() and int(cl) > max_bytes:
+                    if _file_security_strict():
+                        raise RuntimeError("Document too large")
+                    else:
+                        logging.warning("[file_security] non-strict: Document exceeds size; continuing")
+                allowed_mimes = [s.strip() for s in (os.getenv("DOC_DOWNLOAD_ALLOWED_MIME", "text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/html").split(",")) if s.strip()]
+                ct = r.headers.get('content-type', '')
+                if allowed_mimes and ct:
+                    mt = ct.split(';', 1)[0].strip().lower()
+                    if not any(mt == a or (a.endswith('/*') and mt.startswith(a[:-1])) for a in allowed_mimes):
+                        if _file_security_strict():
+                            raise RuntimeError(f"MIME not allowed: {mt}")
+                        else:
+                            logging.warning(f"[file_security] non-strict: MIME {mt} not allowed; continuing")
+            except Exception as _guard:
+                if _file_security_strict():
+                    raise RuntimeError(str(_guard))
+                else:
+                    logging.warning(f"[file_security] non-strict: guard error {str(_guard)}; continuing")
 
             # Create a temp file name with the same extension if possible
             basename = os.path.basename(url).split("?")[0]  # strip query
@@ -405,9 +451,36 @@ def _extract_zip_and_combine(zip_path: str) -> str:
     Adjust logic as you see fit.
     """
     combined_text = []
+    def _safe_extractall(zf: zipfile.ZipFile, dst: str) -> None:
+        base = os.path.abspath(dst)
+        for member in zf.infolist():
+            # Prevent Zip Slip (path traversal)
+            name = member.filename
+            if name.endswith('/'):
+                # Directory entry
+                out_path = os.path.abspath(os.path.join(base, name))
+                if not out_path.startswith(base + os.sep) and out_path != base:
+                    if _file_security_strict():
+                        raise RuntimeError("Unsafe zip entry path")
+                    else:
+                        logging.warning(f"[file_security] non-strict: skipping unsafe dir entry: {name}")
+                        continue
+                os.makedirs(out_path, exist_ok=True)
+                continue
+            out_path = os.path.abspath(os.path.join(base, name))
+            if not out_path.startswith(base + os.sep):
+                if _file_security_strict():
+                    raise RuntimeError("Unsafe zip entry path")
+                else:
+                    logging.warning(f"[file_security] non-strict: skipping unsafe file entry: {name}")
+                    continue
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with zf.open(member, 'r') as src, open(out_path, 'wb') as dst_f:
+                dst_f.write(src.read())
+
     with tempfile.TemporaryDirectory() as temp_dir:
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(temp_dir)
+            _safe_extractall(zip_ref, temp_dir)
 
         for root, _, files in os.walk(temp_dir):
             for f in files:

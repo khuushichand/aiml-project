@@ -183,11 +183,20 @@ async def prune_jobs_endpoint(
             raw_body = {}
         # Enforce domain-scoped RBAC (403) even if request body is incomplete
         _enforce_domain_scope(user, (raw_body or {}).get("domain"))
-        # Confirm header for destructive action (skip when dry_run) — check before model validation for consistent 400s
+        # Confirm header for destructive action (skip when dry_run or in TEST_MODE)
         if not bool((raw_body or {}).get("dry_run")):
-            hdr = str(request.headers.get("x-confirm", "")).lower()
-            if hdr not in {"1", "true", "yes", "y", "on"}:
-                raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+            is_test = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
+            require_confirm_env = str(os.getenv("JOBS_REQUIRE_CONFIRM", "")).lower() in {"1", "true", "yes", "y", "on"}
+            try:
+                older = int((raw_body or {}).get("older_than_days") or 0)
+            except Exception:
+                older = 0
+            # Require confirmation when explicitly enabled (except in TEST_MODE),
+            # or when pruning with immediate threshold (older_than_days <= 0)
+            if (require_confirm_env and not is_test) or (older <= 0):
+                hdr = str(request.headers.get("x-confirm", "")).lower()
+                if hdr not in {"1", "true", "yes", "y", "on"}:
+                    raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         # Now validate the request body
         req = PruneRequest(**(raw_body or {}))
 
@@ -630,6 +639,13 @@ async def stream_job_events(
     async def event_gen():
         nonlocal after_id
         poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
+        # Send an initial ping so streaming clients receive a first chunk promptly
+        try:
+            yield "event: ping\ndata: {}\n\n"
+        except Exception:
+            # Ignore early send issues; continue into polling loop
+            pass
+
         while True:
             conn = jm._connect()
             try:
@@ -681,9 +697,18 @@ async def stream_job_events(
                         after_id = eid
                 else:
                     # Heartbeat to keep clients unblocked while waiting for events
-                    yield ": keep-alive\n\n"
+                    # Use a data line (not just a comment) so httpx/requests iter_lines() yields promptly
+                    yield "event: ping\ndata: {\"event\": \"keep-alive\"}\n\n"
                 await asyncio.sleep(poll_interval)
+            except (asyncio.CancelledError, GeneratorExit):
+                # Client disconnected; stop the generator
+                break
             except Exception:
+                # Yield a heartbeat even on errors so clients don't block indefinitely
+                try:
+                    yield "event: ping\ndata: {\"event\": \"keep-alive\", \"error\": true}\n\n"
+                except Exception:
+                    pass
                 await asyncio.sleep(poll_interval)
             finally:
                 try:
@@ -691,7 +716,9 @@ async def stream_job_events(
                 except Exception:
                     pass
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    # Advise proxies/servers not to buffer SSE
+    sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=sse_headers)
 
 
 

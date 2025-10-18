@@ -122,7 +122,8 @@ Optional tuning (via `config.txt` or env): default page sizes, max limits, reque
 
 1) Given DOI, try `Unpaywall.resolve_oa_pdf(doi)`.
 2) If OA PDF found, download bytes and call existing `process_pdf_task(...)` with chunking/analysis options.
-3) Persist via `MediaDatabase.add_media_with_keywords(...)` with enriched metadata.
+3) Persist via a database instance, for example:
+   `db = create_media_database(client_id="paper_search") ; db.add_media_with_keywords(...)` with enriched metadata.
 4) If OA not found, return metadata and link-only response.
 
 ## Tests
@@ -160,4 +161,3 @@ Total: ~11–14 days, assuming keys available and no unexpected API blockers.
 - DOI and ID lookups work across providers.
 - OA ingestion by DOI works where available.
 - Tests passing with >80% coverage for new modules; docs updated.
-

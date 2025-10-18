@@ -164,7 +164,9 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
         f"Starting Workflows webhook DLQ worker (interval={interval}s, batch={batch}, timeout={timeout_sec}s, max_attempts={max_attempts})"
     )
 
-    async with httpx.AsyncClient() as client:
+    # Centralized client: trust_env=False to avoid proxy capture in tests/CI
+    from tldw_Server_API.app.core.http_client import create_async_client
+    async with create_async_client(timeout=timeout_sec) as client:
         while not stop_event.is_set():
             try:
                 rows = db.list_webhook_dlq_due(limit=batch)

@@ -921,6 +921,89 @@ def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> No
         pass
     conn.commit()
     logger.info("Migration 021: Added bytes_in_total column to usage_daily")
+
+
+def migration_022_create_tool_catalogs(conn: sqlite3.Connection) -> None:
+    """Create tables for MCP tool catalogs (SQLite)."""
+    # tool_catalogs: scoped by (org_id, team_id) with name unique per scope
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tool_catalogs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            org_id INTEGER,
+            team_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, org_id, team_id),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_catalogs_org_team ON tool_catalogs(org_id, team_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_catalogs_name ON tool_catalogs(name)")
+
+    # tool_catalog_entries
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tool_catalog_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            catalog_id INTEGER NOT NULL,
+            tool_name TEXT NOT NULL,
+            module_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(catalog_id, tool_name),
+            FOREIGN KEY (catalog_id) REFERENCES tool_catalogs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_catalog_entries_catalog ON tool_catalog_entries(catalog_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_catalog_entries_tool ON tool_catalog_entries(tool_name)")
+    conn.commit()
+    logger.info("Migration 022: Created tool_catalogs and tool_catalog_entries tables")
+
+
+def migration_023_create_virtual_key_counters(conn: sqlite3.Connection) -> None:
+    """Create counters tables for virtual keys (SQLite)."""
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vk_jwt_counters (
+                jti TEXT NOT NULL,
+                counter_type TEXT NOT NULL,
+                count INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (jti, counter_type)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vk_api_key_counters (
+                api_key_id INTEGER NOT NULL,
+                counter_type TEXT NOT NULL,
+                count INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (api_key_id, counter_type)
+            )
+            """
+        )
+        # Helpful indexes for reporting/cleanup (best-effort)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_vk_jwt_counters_type ON vk_jwt_counters(counter_type)")
+        except Exception:
+            pass
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_vk_api_key_counters_type ON vk_api_key_counters(counter_type)")
+        except Exception:
+            pass
+        conn.commit()
+        logger.info("Migration 023: Created virtual key counters tables")
+    except Exception as e:
+        logger.warning(f"Migration 023 skipped/failed: {e}")
 #######################################################################################################################
 #
 # Migration Registry
@@ -950,6 +1033,8 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(19, "Add request_id to usage_log", migration_019_usage_log_add_request_id),
         Migration(20, "Add bytes_in to usage_log", migration_020_usage_log_add_bytes_in),
         Migration(21, "Add bytes_in_total to usage_daily", migration_021_usage_daily_add_bytes_in_total),
+        Migration(22, "Create tool catalogs tables", migration_022_create_tool_catalogs),
+        Migration(23, "Create virtual key counters tables", migration_023_create_virtual_key_counters),
     ]
 
 

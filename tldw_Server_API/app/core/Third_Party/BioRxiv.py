@@ -10,8 +10,13 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+try:
+    import httpx  # type: ignore
+except Exception:  # pragma: no cover - optional
+    httpx = None  # type: ignore
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+from tldw_Server_API.app.core.http_client import create_client
 
 
 BIO_RXIV_API_BASE = "https://api.biorxiv.org"
@@ -32,18 +37,21 @@ def _default_date_range() -> Tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        status_forcelist=[429, 500, 502, 503, 504],
-        backoff_factor=1,
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def _mk_session():
+    try:
+        return create_client(timeout=15)
+    except Exception:
+        retry_strategy = Retry(
+            total=3,
+            status_forcelist=[429, 500, 502, 503, 504],
+            backoff_factor=1,
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        s = requests.Session()
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
 
 
 def _media_type_for_format(fmt: str) -> str:
@@ -69,13 +77,17 @@ def _raw_get(path: str, fmt: Optional[str] = None, params: Optional[Dict[str, An
         # Prefer declared format for media type to satisfy caller expectations (CSV/XML/HTML)
         media_type = _media_type_for_format(fmt or "json")
         return resp.content, media_type, None
-    except requests.exceptions.Timeout:
-        return None, None, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, None, "Request to BioRxiv API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, None, "Request to BioRxiv API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, None, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, None, f"BioRxiv API Request Error: {str(e)}"
         return None, None, f"Unexpected error during BioRxiv raw fetch: {str(e)}"
 
 
@@ -248,13 +260,17 @@ def search_biorxiv(
         # Now slice according to within-batch offset and limit
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if query or category else total), None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to BioRxiv API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to BioRxiv API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"BioRxiv API Request Error: {str(e)}"
         return None, 0, f"Unexpected error during BioRxiv search: {str(e)}"
 
 
@@ -400,13 +416,17 @@ def get_biorxiv_published_by_doi(
         if not coll:
             return None, None
         return _normalize_published_item(coll[0]), None
-    except requests.exceptions.Timeout:
-        return None, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, "Request to BioRxiv API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, "Request to BioRxiv API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, f"BioRxiv API Request Error: {str(e)}"
         return None, f"Unexpected error during BioRxiv published DOI lookup: {str(e)}"
 
 
@@ -478,13 +498,17 @@ def search_biorxiv_publisher(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to BioRxiv API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to BioRxiv API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"BioRxiv API Request Error: {str(e)}"
         return None, 0, f"Unexpected error during BioRxiv publisher search: {str(e)}"
 
 
@@ -549,13 +573,17 @@ def search_biorxiv_pub(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to BioRxiv API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to BioRxiv API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"BioRxiv API Request Error: {str(e)}"
         return None, 0, f"Unexpected error during BioRxiv pub search: {str(e)}"
 
 
@@ -639,13 +667,17 @@ def search_biorxiv_funder(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
+        if httpx is not None and isinstance(e, httpx.TimeoutException):
+            return None, 0, "Request to BioRxiv API timed out."
+        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.Timeout):
+            return None, 0, "Request to BioRxiv API timed out."
+        if isinstance(e, requests.exceptions.HTTPError):
+            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        if isinstance(e, requests.exceptions.RequestException):
+            return None, 0, f"BioRxiv API Request Error: {str(e)}"
         return None, 0, f"Unexpected error during BioRxiv funder search: {str(e)}"
 
 

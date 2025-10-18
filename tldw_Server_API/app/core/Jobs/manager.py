@@ -186,6 +186,20 @@ class JobManager:
             conn = psycopg.connect(self.db_url)
             return conn
         conn = sqlite3.connect(self.db_path)
+        # Apply pragmatic SQLite settings for concurrent read/write under tests and dev
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except Exception:
+            pass
+        try:
+            conn.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            pass
+        try:
+            # Ensure reads wait briefly instead of raising 'database is locked'
+            conn.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -1274,7 +1288,7 @@ class JobManager:
                                     "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
                                     "  )"
                                     + (" AND owner_user_id = %s" if owner_user_id else "") +
-                                    "  ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                                    "  ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                                     ")"
                                     "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
                                     "WHERE id IN (SELECT id FROM picked) RETURNING *"
@@ -1309,7 +1323,7 @@ class JobManager:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
                             # Stable ordering: priority DESC (higher numeric first), then available/created asc, then id asc
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1407,9 +1421,9 @@ class JobManager:
                             params_sub.append(owner_user_id)
                         # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1419,6 +1433,10 @@ class JobManager:
                         )
                         params_upd: List[Any] = [f"+{lease_seconds} seconds", worker_id, lease_id] + params_sub
                         conn.execute(sql, tuple(params_upd))
+                        try:
+                            conn.commit()
+                        except Exception:
+                            pass
                         if conn.total_changes == 0:
                             return None
                         row = conn.execute("SELECT * FROM jobs WHERE lease_id = ?", (lease_id,)).fetchone()
@@ -1484,9 +1502,9 @@ class JobManager:
                             params.append(owner_user_id)
                         # Ordering: FIFO by default; when counters are enabled, prefer most recent
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         row = conn.execute(base, params).fetchone()
                         if not row:
                             return None
@@ -1502,6 +1520,10 @@ class JobManager:
                             ),
                             (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), job_id),
                         )
+                        try:
+                            conn.commit()
+                        except Exception:
+                            pass
                         if conn.total_changes == 0:
                             return None
                         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -1764,6 +1786,14 @@ class JobManager:
                                 (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
                             )
                             ok = cur.rowcount > 0
+                            # Fallback: allow completing queued jobs when enforcement is disabled
+                            if not ok:
+                                cur.execute(
+                                    "UPDATE jobs SET status = 'completed', result = %s::jsonb, completed_at = NOW(), completion_token = COALESCE(completion_token, %s) WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)",
+                                    (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
+                                )
+                                ok = cur.rowcount > 0
+                            ok = cur.rowcount > 0
                         # Truncation metric (PG)
                         try:
                             if base and ok and isinstance(res_obj, dict) and res_obj.get("_truncated"):
@@ -1855,6 +1885,16 @@ class JobManager:
                             (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
                         )
                         ok = conn.total_changes > 0
+                        # Fallback: allow completing queued jobs when enforcement is disabled
+                        if not ok:
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'completed', result = ?, completed_at = DATETIME('now'), completion_token = COALESCE(completion_token, ?) "
+                                    "WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
+                                ),
+                                (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
+                            )
+                            ok = conn.total_changes > 0
                     # Truncation metric (SQLite)
                     try:
                         if rowm and ok and isinstance(res_obj, dict) and res_obj.get("_truncated"):
@@ -2344,6 +2384,24 @@ class JobManager:
                                     completion_token,
                                 ),
                             )
+                            if (cur.rowcount or 0) == 0:
+                                # Fallback: allow failing queued jobs when enforcement disabled
+                                cur.execute(
+                                    (
+                                        "UPDATE jobs SET status = 'failed', last_error = %s, error_message = %s, error_code = %s, error_class = %s, error_stack = %s::jsonb, completion_token = COALESCE(completion_token, %s), "
+                                        "completed_at = NOW() WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)"
+                                    ),
+                                    (
+                                        (error_code or error),
+                                        error,
+                                        error_code,
+                                        error_class,
+                                        (json.dumps(error_stack) if error_stack is not None else None),
+                                        completion_token,
+                                        int(job_id),
+                                        completion_token,
+                                    ),
+                                )
                         ok = cur.rowcount > 0
                         try:
                             if ok and elem:
@@ -2584,6 +2642,24 @@ class JobManager:
                                 completion_token,
                             ),
                         )
+                        if conn.total_changes == 0:
+                            # Fallback: allow failing queued jobs when enforcement disabled
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
+                                    "completed_at = DATETIME('now') WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
+                                ),
+                                (
+                                    (error_code or error),
+                                    error,
+                                    error_code,
+                                    error_class,
+                                    (json.dumps(error_stack) if error_stack is not None else None),
+                                    completion_token,
+                                    job_id,
+                                    completion_token,
+                                ),
+                            )
                     ok = conn.total_changes > 0
                     try:
                         if ok and rowl:

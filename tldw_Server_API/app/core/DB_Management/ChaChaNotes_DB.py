@@ -6396,15 +6396,31 @@ UPDATE db_schema_version
                 connection=conn,
             )
             # Trigger to maintain tsvector
-            self.backend.execute(
-                (
-                    "CREATE TRIGGER flashcards_fts_tsv_update "
-                    "BEFORE INSERT OR UPDATE OF front, back, notes ON flashcards "
-                    "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
-                    "flashcards_fts_tsv, 'pg_catalog.english', front, back, notes)"
-                ),
-                connection=conn,
-            )
+            try:
+                # Check if trigger already exists for this table in current schema
+                exists_res = self.backend.execute(
+                    (
+                        "SELECT 1 FROM pg_trigger t "
+                        "JOIN pg_class c ON t.tgrelid = c.oid "
+                        "JOIN pg_namespace n ON c.relnamespace = n.oid "
+                        "WHERE t.tgname = 'flashcards_fts_tsv_update' AND c.relname = 'flashcards' "
+                        "AND n.nspname = current_schema()"
+                    ),
+                    connection=conn,
+                )
+                exists = bool(getattr(exists_res, 'rows', []) )
+            except Exception:
+                exists = False
+            if not exists:
+                self.backend.execute(
+                    (
+                        "CREATE TRIGGER flashcards_fts_tsv_update "
+                        "BEFORE INSERT OR UPDATE OF front, back, notes ON flashcards "
+                        "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
+                        "flashcards_fts_tsv, 'pg_catalog.english', front, back, notes)"
+                    ),
+                    connection=conn,
+                )
         except Exception as e:
             # If any statement fails due to existing objects, ignore and proceed
             logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")

@@ -66,6 +66,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 # Initialize rate limiter
 def _rate_limit_key(request: _FastAPIRequest) -> str:
@@ -118,7 +119,11 @@ async def get_tts_service() -> TTSServiceV2:
 # --- End of Placeholder ---
 
 
-@router.post("/speech", summary="Generates audio from text input.")
+@router.post(
+    "/speech",
+    summary="Generates audio from text input.",
+    dependencies=[Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.speech", count_as="call"))],
+)
 @limiter.limit("10/minute")  # Rate limit: 10 requests per minute per IP
 async def create_speech(
     request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
@@ -341,7 +346,11 @@ async def create_speech(
             )
 
 
-@router.post("/transcriptions", summary="Transcribes audio into text (OpenAI Compatible)")
+@router.post(
+    "/transcriptions",
+    summary="Transcribes audio into text (OpenAI Compatible)",
+    dependencies=[Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.transcriptions", count_as="call"))],
+)
 @limiter.limit("20/minute")  # Rate limit: 20 requests per minute
 async def create_transcription(
     request: Request,
@@ -715,7 +724,11 @@ async def create_transcription(
                 pass
 
 
-@router.post("/translations", summary="Translates audio into English (OpenAI Compatible)")
+@router.post(
+    "/translations",
+    summary="Translates audio into English (OpenAI Compatible)",
+    dependencies=[Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.translations", count_as="call"))],
+)
 @limiter.limit("20/minute")
 async def create_translation(
     request: Request,
@@ -1024,6 +1037,94 @@ async def websocket_transcribe(
     jwt_user_id: Optional[int] = None
 
     if is_multi_user_mode():
+        # Optional X-API-KEY path (virtual API keys) for multi-user
+        try:
+            x_api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+        except Exception:
+            x_api_key = None
+        if x_api_key:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+                from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_api_key_quota
+                api_mgr = await get_api_key_manager()
+                client_ip = getattr(websocket.client, "host", None)
+                info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
+                if not info:
+                    await websocket.send_json({"type": "error", "message": "Invalid API key"})
+                    await websocket.close(code=4401)
+                    return
+                # Admin bypass
+                if str(info.get("scope", "")).lower() != "admin":
+                    # Endpoint allowlist enforcement
+                    allowed_eps = info.get("llm_allowed_endpoints")
+                    if isinstance(allowed_eps, str):
+                        import json as _json
+                        try:
+                            allowed_eps = _json.loads(allowed_eps)
+                        except Exception:
+                            allowed_eps = None
+                    endpoint_id = "audio.stream.transcribe"
+                    if isinstance(allowed_eps, list) and allowed_eps:
+                        if endpoint_id not in [str(x) for x in allowed_eps]:
+                            await websocket.send_json({"type": "error", "message": "Endpoint not permitted for API key"})
+                            await websocket.close(code=4403)
+                            return
+                    # Path allowlist via metadata
+                    meta = info.get("metadata")
+                    if isinstance(meta, str):
+                        import json as _json
+                        try:
+                            meta = _json.loads(meta)
+                        except Exception:
+                            meta = None
+                    if isinstance(meta, dict):
+                        ap = meta.get("allowed_paths")
+                        if isinstance(ap, list) and ap:
+                            # WebSocket path is fixed under /api/v1/audio/stream/transcribe once mounted
+                            ws_path = "/api/v1/audio/stream/transcribe"
+                            if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
+                                await websocket.send_json({"type": "error", "message": "Path not permitted for API key"})
+                                await websocket.close(code=4403)
+                                return
+                        # Quota enforcement (DB-backed)
+                        quota = meta.get("max_runs")
+                        if quota is None:
+                            quota = meta.get("max_calls")
+                        if isinstance(quota, int) and quota >= 0:
+                            # Optional daily bucket
+                            bucket = None
+                            per = meta.get("period")
+                            if isinstance(per, str) and per.lower() == "day":
+                                from datetime import datetime, timezone
+                                bucket = datetime.now(timezone.utc).date().isoformat()
+                            db_pool = await get_db_pool()
+                            ok, _cnt = await increment_and_check_api_key_quota(
+                                db_pool=db_pool,
+                                api_key_id=int(info.get("id")),
+                                counter_type="call",
+                                limit=int(quota),
+                                bucket=bucket,
+                            )
+                            if not ok:
+                                await websocket.send_json({"type": "error", "message": "API key quota exceeded"})
+                                await websocket.close(code=4403)
+                                return
+                authenticated = True
+                # Mark a synthetic user id from API key owner if available
+                uid = info.get("user_id")
+                if uid is not None:
+                    try:
+                        jwt_user_id = int(uid)
+                    except Exception:
+                        jwt_user_id = None
+                # Skip JWT branch when X-API-KEY is used
+                bearer = None
+            except Exception as _api_key_e:
+                logger.warning(f"WS API key auth failed: {_api_key_e}")
+                await websocket.send_json({"type": "error", "message": "API key authentication failed"})
+                await websocket.close(code=4401)
+                return
         # Prefer Authorization: Bearer <JWT>
         auth_header = websocket.headers.get("authorization")
         bearer = None
@@ -1053,6 +1154,53 @@ async def websocket_transcribe(
                 user_row = await _get_user_by_id(int(uid))
                 if not user_row:
                     raise InvalidTokenError("user not found")
+                # Enforce virtual-key scope + quotas if claims present
+                # Admin bypass via role=admin
+                if str(payload.get("role", "")) != "admin":
+                    try:
+                        endpoint_id = "audio.stream.transcribe"
+                        allowed_eps = payload.get("allowed_endpoints")
+                        if isinstance(allowed_eps, list) and allowed_eps:
+                            if endpoint_id not in [str(x) for x in allowed_eps]:
+                                await websocket.send_json({"type": "error", "message": "Endpoint not permitted for token"})
+                                await websocket.close(code=4403)
+                                return
+                        # Optional path prefix allowlist
+                        ap = payload.get("allowed_paths")
+                        if isinstance(ap, list) and ap:
+                            ws_path = "/api/v1/audio/stream/transcribe"
+                            if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
+                                await websocket.send_json({"type": "error", "message": "Path not permitted for token"})
+                                await websocket.close(code=4403)
+                                return
+                        # Quotas using DB-backed counters when max_calls/max_runs present
+                        max_calls = payload.get("max_runs")
+                        if max_calls is None:
+                            max_calls = payload.get("max_calls")
+                        if isinstance(max_calls, int) and max_calls >= 0:
+                            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+                            from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
+                            # Optional daily bucket
+                            bucket = None
+                            per = payload.get("period")
+                            if isinstance(per, str) and per.lower() == "day":
+                                from datetime import datetime, timezone
+                                bucket = datetime.now(timezone.utc).date().isoformat()
+                            db_pool = await get_db_pool()
+                            ok, _cnt = await increment_and_check_jwt_quota(
+                                db_pool=db_pool,
+                                jti=str(payload.get("jti")),
+                                counter_type="call",
+                                limit=int(max_calls),
+                                bucket=bucket,
+                            )
+                            if not ok:
+                                await websocket.send_json({"type": "error", "message": "Token quota exceeded"})
+                                await websocket.close(code=4403)
+                                return
+                    except Exception as _vk_e:
+                        # Fail closed if explicit constraints present but evaluation failed badly
+                        logger.debug(f"WS VK scope enforcement skipped/failed: {_vk_e}")
                 jwt_user_id = int(uid)
                 authenticated = True
             except (InvalidTokenError, TokenExpiredError) as e:
@@ -1103,9 +1251,48 @@ async def websocket_transcribe(
                     await websocket.close(code=4401)
                     return
     if not is_multi_user_mode():
-        # Single-user mode: API key via query or auth message
+        # Single-user mode: API key via header, query or auth message, with optional IP allowlist
         expected_key = settings.SINGLE_USER_API_KEY
-        if token and token == expected_key:
+        client_ip = None
+        try:
+            client_ip = getattr(websocket.client, "host", None)
+        except Exception:
+            client_ip = None
+        def _ip_allowed_single_user(ip: Optional[str]) -> bool:
+            try:
+                allowed = [s.strip() for s in (settings.SINGLE_USER_ALLOWED_IPS or []) if str(s).strip()]
+                if not allowed:
+                    return True
+                if not ip:
+                    return False
+                import ipaddress as _ip
+                pip = _ip.ip_address(ip)
+                for entry in allowed:
+                    try:
+                        if '/' in entry:
+                            if pip in _ip.ip_network(entry, strict=False):
+                                return True
+                        else:
+                            if str(pip) == entry:
+                                return True
+                    except Exception:
+                        continue
+                return False
+            except Exception:
+                return False
+
+        # Headers first
+        header_api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+        auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+        header_bearer = None
+        if auth_header and auth_header.lower().startswith("bearer "):
+            header_bearer = auth_header.split(" ", 1)[1].strip()
+
+        if (header_api_key and header_api_key == expected_key) or (header_bearer and header_bearer == expected_key) or (token and token == expected_key):
+            if not _ip_allowed_single_user(client_ip):
+                await websocket.send_json({"type": "error", "message": "IP not allowed"})
+                await websocket.close(code=1008)
+                return
             authenticated = True
         elif token and token != expected_key:
             logger.warning("WebSocket: invalid query token")
@@ -1122,6 +1309,10 @@ async def websocket_transcribe(
                         "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
                     })
                     await websocket.close()
+                    return
+                if not _ip_allowed_single_user(client_ip):
+                    await websocket.send_json({"type": "error", "message": "IP not allowed"})
+                    await websocket.close(code=1008)
                     return
                 authenticated = True
             except asyncio.TimeoutError:

@@ -174,7 +174,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
         """Load model if not already loaded"""
         if model_name not in self.models:
             # Run model loading in thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
             def load():
                 from sentence_transformers import SentenceTransformer
@@ -199,7 +199,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
         await self._load_model(model)
         
         # Run encoding in thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         embedding = await loop.run_in_executor(
             self.executor,
             lambda: self.models[model].encode(text, convert_to_tensor=False)

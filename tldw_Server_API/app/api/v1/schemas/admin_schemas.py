@@ -375,6 +375,46 @@ class ToolPermissionPrefixRequest(BaseModel):
     prefix: str = Field(..., min_length=1)
 
 
+#######################################################################################################################
+#
+# MCP Tool Catalog Schemas
+
+class ToolCatalogCreateRequest(BaseModel):
+    """Create a new MCP tool catalog."""
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    org_id: Optional[int] = None
+    team_id: Optional[int] = None
+    is_active: Optional[bool] = True
+
+
+class ToolCatalogResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    org_id: Optional[int] = None
+    team_id: Optional[int] = None
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ToolCatalogEntryCreateRequest(BaseModel):
+    """Add a tool entry to a catalog."""
+    tool_name: str = Field(..., min_length=1, max_length=200)
+    module_id: Optional[str] = Field(None, max_length=200)
+
+
+class ToolCatalogEntryResponse(BaseModel):
+    catalog_id: int
+    tool_name: str
+    module_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #
 ## End of admin_schemas.py
 #######################################################################################################################

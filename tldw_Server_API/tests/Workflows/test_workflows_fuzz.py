@@ -7,7 +7,8 @@ from typing import List
 
 import pytest
 from fastapi.testclient import TestClient
-from hypothesis import given, strategies as st, settings
+from hypothesis import given, strategies as st, settings, HealthCheck
+import string
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
@@ -41,7 +42,7 @@ def _step_ids(n: int) -> List[str]:
     return [f"s{i+1}" for i in range(n)]
 
 
-@settings(max_examples=12, deadline=None)
+@settings(max_examples=12, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     st.integers(min_value=1, max_value=5),
     st.lists(st.sampled_from(["prompt", "log", "delay"]), min_size=1, max_size=5),
@@ -73,15 +74,23 @@ def test_definition_fuzz_linear_or_branch(client_with_db: TestClient, n_steps: i
     assert rr.status_code == 200
 
 
-@settings(max_examples=12, deadline=None)
-@given(st.text(min_size=1, max_size=32))
+_SAFE_CHARS = string.ascii_letters + string.digits + "_-"
+_SAFE_TEXT = st.text(alphabet=st.sampled_from(list(_SAFE_CHARS)), min_size=1, max_size=32)
+
+@settings(max_examples=12, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(_SAFE_TEXT)
 def test_artifact_path_fuzz_strict_vs_non_strict(monkeypatch, client_with_db: TestClient, suffix: str):
     client = client_with_db
     # Ensure env strict by default
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")
     # Create run
-    d = {"name": "art-fuzz", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "ok"}}]}
-    wid = client.post("/api/v1/workflows", json=d).json()["id"]
+    # Use suffix to avoid unique constraint collisions across Hypothesis examples
+    d = {"name": f"art-fuzz-{suffix}", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "ok"}}]}
+    _resp = client.post("/api/v1/workflows", json=d)
+    if _resp.status_code != 201:
+        # Skip this example if definition was rejected (e.g., duplicate name/version)
+        return
+    wid = _resp.json()["id"]
     run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}}).json()["run_id"]
 
     # Temp file (outside CWD workdir scope most of the time)

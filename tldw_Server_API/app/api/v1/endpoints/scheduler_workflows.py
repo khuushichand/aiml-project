@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
 from tldw_Server_API.app.core.Scheduler import Scheduler
 from tldw_Server_API.app.core.Scheduler import create_scheduler
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 
 router = APIRouter(prefix="/api/v1/scheduler/workflows", tags=["scheduler", "workflows"])
@@ -29,6 +30,7 @@ class ScheduleCreateRequest(BaseModel):
     concurrency_mode: str = Field("skip", pattern="^(skip|queue)$", description="skip: drop overlaps; queue: allow overlaps")
     misfire_grace_sec: int = Field(300, ge=0, le=86400)
     coalesce: bool = Field(True, description="Coalesce misfires into single run")
+    require_online: bool = Field(False, description="If true, only run when the user has an active session")
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -42,6 +44,7 @@ class ScheduleUpdateRequest(BaseModel):
     concurrency_mode: Optional[str] = Field(None, pattern="^(skip|queue)$")
     misfire_grace_sec: Optional[int] = Field(None, ge=0, le=86400)
     coalesce: Optional[bool] = None
+    require_online: Optional[bool] = Field(None, description="Toggle presence gating for this schedule")
 
 
 class ScheduleResponse(BaseModel):
@@ -59,12 +62,18 @@ class ScheduleResponse(BaseModel):
     concurrency_mode: str
     misfire_grace_sec: int
     coalesce: bool
+    require_online: bool
     last_run_at: Optional[str]
     next_run_at: Optional[str]
     last_status: Optional[str]
 
 
-@router.post("", response_model=Dict[str, str], status_code=201)
+@router.post(
+    "",
+    response_model=Dict[str, str],
+    status_code=201,
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.create"))],
+)
 async def create_schedule(
     body: ScheduleCreateRequest,
     current_user: User = Depends(get_request_user),
@@ -86,11 +95,45 @@ async def create_schedule(
         concurrency_mode=body.concurrency_mode,
         misfire_grace_sec=body.misfire_grace_sec,
         coalesce=body.coalesce,
+        require_online=body.require_online,
     )
     return {"id": sid}
 
 
-@router.get("", response_model=List[ScheduleResponse])
+@router.post(
+    "/admin/rescan",
+    response_model=Dict[str, Any],
+    status_code=200,
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.admin_rescan"))],
+)
+async def admin_rescan(
+    current_user: User = Depends(get_request_user),
+):
+    """Force a one-shot rescan of all users’ schedules.
+
+    Admin-only: returns number of registered APScheduler jobs after rescan.
+    """
+    if not bool(getattr(current_user, "is_admin", False)):
+        raise HTTPException(status_code=403, detail="Admin-only endpoint")
+    svc = get_workflows_scheduler()
+    try:
+        await svc._rescan_once()  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.warning(f"Admin rescan failed: {e}")
+        raise HTTPException(status_code=500, detail="Rescan failed")
+    jobs = 0
+    try:
+        jobs = len(svc._aps.get_jobs()) if getattr(svc, "_aps", None) else 0  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return {"ok": True, "jobs": jobs}
+
+
+@router.get(
+    "",
+    response_model=List[ScheduleResponse],
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.list"))],
+)
 async def list_schedules(
     owner: Optional[str] = Query(None, description="Admin-only: filter by owner user_id"),
     limit: int = Query(50, ge=1, le=200),
@@ -131,6 +174,7 @@ async def list_schedules(
                 concurrency_mode=r.concurrency_mode,
                 misfire_grace_sec=r.misfire_grace_sec,
                 coalesce=bool(r.coalesce),
+                require_online=bool(getattr(r, 'require_online', False)),
                 last_run_at=r.last_run_at,
                 next_run_at=r.next_run_at,
                 last_status=r.last_status,
@@ -139,7 +183,11 @@ async def list_schedules(
     return out
 
 
-@router.get("/{schedule_id}", response_model=ScheduleResponse)
+@router.get(
+    "/{schedule_id}",
+    response_model=ScheduleResponse,
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.get"))],
+)
 async def get_schedule(
     schedule_id: str,
     current_user: User = Depends(get_request_user),
@@ -152,6 +200,24 @@ async def get_schedule(
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     import json
+    # Best-effort: compute next_run_at if missing (e.g., freshly created)
+    if not s.next_run_at:
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            tz = s.timezone or os.getenv("WORKFLOWS_SCHEDULER_TZ", "UTC")
+            trigger = CronTrigger.from_crontab(s.cron, timezone=tz)
+            from datetime import datetime
+            now = datetime.now(trigger.timezone)
+            nxt = trigger.get_next_fire_time(None, now)
+            if nxt is not None:
+                try:
+                    svc._get_db(int(s.user_id)).set_history(s.id, next_run_at=nxt.isoformat())  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                # Refresh s to reflect persisted value
+                s = svc.get(schedule_id) or s
+        except Exception:
+            pass
     try:
         inputs = json.loads(s.inputs_json or "{}")
     except Exception:
@@ -171,13 +237,18 @@ async def get_schedule(
         concurrency_mode=s.concurrency_mode,
         misfire_grace_sec=s.misfire_grace_sec,
         coalesce=bool(s.coalesce),
+        require_online=bool(getattr(s, 'require_online', False)),
         last_run_at=s.last_run_at,
         next_run_at=s.next_run_at,
         last_status=s.last_status,
     )
 
 
-@router.patch("/{schedule_id}", response_model=Dict[str, bool])
+@router.patch(
+    "/{schedule_id}",
+    response_model=Dict[str, bool],
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.update"))],
+)
 async def update_schedule(
     schedule_id: str,
     body: ScheduleUpdateRequest,
@@ -212,11 +283,17 @@ async def update_schedule(
         update["misfire_grace_sec"] = int(body.misfire_grace_sec)
     if body.coalesce is not None:
         update["coalesce"] = bool(body.coalesce)
+    if body.require_online is not None:
+        update["require_online"] = bool(body.require_online)
     ok = svc.update(schedule_id, update)
     return {"ok": bool(ok)}
 
 
-@router.delete("/{schedule_id}", response_model=Dict[str, bool])
+@router.delete(
+    "/{schedule_id}",
+    response_model=Dict[str, bool],
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.delete"))],
+)
 async def delete_schedule(
     schedule_id: str,
     current_user: User = Depends(get_request_user),
@@ -232,7 +309,11 @@ async def delete_schedule(
     return {"ok": bool(ok)}
 
 
-@router.post("/{schedule_id}/run-now", response_model=Dict[str, str])
+@router.post(
+    "/{schedule_id}/run-now",
+    response_model=Dict[str, str],
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=True, schedule_path_param="schedule_id", allow_admin_bypass=True, endpoint_id="scheduler.workflows.run_now", count_as="run"))],
+)
 async def run_now(
     schedule_id: str,
     current_user: User = Depends(get_request_user),
@@ -264,7 +345,11 @@ class DryRunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
 
 
-@router.post("/dry-run", response_model=Dict[str, Any])
+@router.post(
+    "/dry-run",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.dry_run"))],
+)
 async def dry_run_schedule(body: DryRunRequest, current_user: User = Depends(get_request_user)):
     """Validate cron/timezone and return next run time and echo inputs.
 

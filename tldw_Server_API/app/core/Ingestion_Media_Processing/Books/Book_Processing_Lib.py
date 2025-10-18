@@ -51,7 +51,7 @@ import html2text
 
 #
 # Import Local
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process, ChunkingError, \
     InvalidChunkingMethodError
@@ -1433,19 +1433,23 @@ def ingest_text_file(file_path, title=None, author=None, keywords=None):
         if not author:
             author = 'Unknown'
 
-        # If keywords are not provided, use a default keyword
+        # Build keywords list
         if not keywords:
-            keywords = 'text_file,epub_converted'
+            keywords_list = ['text_file', 'epub_converted']
         else:
-            keywords = f'text_file,epub_converted,{keywords}'
+            # ensure 'text_file' and 'epub_converted' are included
+            provided = [kw.strip() for kw in str(keywords).split(',') if kw.strip()]
+            keywords_list = ['text_file', 'epub_converted'] + provided
 
         # Add the text file to the database
+        db_instance = create_media_database(client_id="book_ingest")
         add_media_with_keywords(
+            db_instance=db_instance,
             url="its_a_book",
             title=title,
             media_type='book',
             content=content,
-            keywords=keywords,
+            keywords=keywords_list,
             prompt='No prompt for text files',
             summary='No summary for text files',
             transcription_model='None',

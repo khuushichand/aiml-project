@@ -2,7 +2,7 @@
 # Description: Enhanced authentication endpoints with password reset, MFA, and email verification
 #
 # Imports
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import secrets
 import base64
@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 
 #######################################################################################################################
 #
@@ -68,7 +69,7 @@ class MFASetupResponse(BaseModel):
     """Response for MFA setup initiation"""
     secret: str = Field(..., description="TOTP secret (store securely)")
     qr_code: str = Field(..., description="QR code image as base64")
-    backup_codes: list[str] = Field(..., description="Backup codes for recovery")
+    backup_codes: List[str] = Field(..., description="Backup codes for recovery")
 
 class MFAVerifyRequest(BaseModel):
     """Request to verify MFA setup"""
@@ -93,7 +94,8 @@ async def forgot_password(
     request: Request,
     data: ForgotPasswordRequest,
     db=Depends(get_db_transaction),
-    jwt_service: JWTService = Depends(get_jwt_service_dep)
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    rate_limiter=Depends(get_rate_limiter_dep)
 ) -> Dict[str, str]:
     """
     Request password reset email
@@ -104,6 +106,15 @@ async def forgot_password(
     try:
         # Get client info
         client_ip = request.client.host if request.client else "unknown"
+        # Apply simple per-IP rate limit to mitigate abuse; on exceed, return generic success
+        try:
+            allowed, _ = await rate_limiter.check_rate_limit(
+                identifier=f"ip:{client_ip}", endpoint="auth:forgot_password", limit=10, burst=5, window_minutes=1
+            )
+            if not allowed:
+                return {"message": "If the email exists, a reset link has been sent"}
+        except Exception:
+            pass
         
         # Validate email format
         validator = get_input_validator()
@@ -186,7 +197,9 @@ async def reset_password(
     data: ResetPasswordRequest,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
-    password_service: PasswordService = Depends(get_password_service_dep)
+    password_service: PasswordService = Depends(get_password_service_dep),
+    request: Request = None,
+    rate_limiter=Depends(get_rate_limiter_dep)
 ) -> Dict[str, str]:
     """
     Reset password with valid token
@@ -194,6 +207,14 @@ async def reset_password(
     Validates the reset token and updates the user's password.
     """
     try:
+        # Optional per-IP throttling
+        try:
+            ip_addr = request.client.host if request and getattr(request, 'client', None) else "unknown"
+            await rate_limiter.check_rate_limit(
+                identifier=f"ip:{ip_addr}", endpoint="auth:reset_password", limit=20, burst=10, window_minutes=5
+            )
+        except Exception:
+            pass
         # Verify token
         try:
             payload = jwt_service.verify_token(data.token, token_type="password_reset")
@@ -403,11 +424,11 @@ async def resend_verification(
 # MFA Endpoints
 #
 
-@router.post("/mfa/setup", response_model=MFASetupResponse)
+@router.post("/mfa/setup")
 async def setup_mfa(
     current_user=Depends(get_current_active_user),
     db=Depends(get_db_transaction)
-) -> MFASetupResponse:
+) -> Dict[str, Any]:
     """
     Initialize MFA setup for current user
     
@@ -418,8 +439,8 @@ async def setup_mfa(
         mfa_service = get_mfa_service()
         
         # Check if MFA is already enabled
-        status = await mfa_service.get_user_mfa_status(current_user.id)
-        if status["enabled"]:
+        mfa_status = await mfa_service.get_user_mfa_status(current_user.id)
+        if mfa_status["enabled"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="MFA is already enabled for this account"
@@ -440,11 +461,11 @@ async def setup_mfa(
         # In production, use Redis or session storage
         # For now, we'll return to client to verify
         
-        return MFASetupResponse(
-            secret=secret,
-            qr_code=f"data:image/png;base64,{qr_code_base64}",
-            backup_codes=backup_codes
-        )
+        return {
+            "secret": secret,
+            "qr_code": f"data:image/png;base64,{qr_code_base64}",
+            "backup_codes": backup_codes,
+        }
         
     except HTTPException:
         raise
@@ -460,7 +481,8 @@ async def verify_mfa_setup(
     data: MFAVerifyRequest,
     request: Request,
     current_user=Depends(get_current_active_user),
-) -> Dict[str, str]:
+    rate_limiter=Depends(get_rate_limiter_dep),
+) -> Dict[str, Any]:
     """
     Verify and enable MFA with TOTP token
     
@@ -477,6 +499,15 @@ async def verify_mfa_setup(
                 detail="MFA secret not found. Please restart setup."
             )
         
+        # Basic per-user rate limit for MFA verification attempts
+        try:
+            allowed, _meta = await rate_limiter.check_user_rate_limit(current_user.id, endpoint="auth:mfa_verify")
+            if not allowed:
+                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         # Verify TOTP token
         if not mfa_service.verify_totp(secret, data.token):
             raise HTTPException(

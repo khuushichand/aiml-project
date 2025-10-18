@@ -43,7 +43,11 @@ async def process_once(client: aioredis.Redis, max_items: int = BATCH) -> int:
         try:
             fields = dict(fields or {})
             fields["scheduled_at"] = datetime.utcnow().isoformat()
-            await client.xadd(SCHEDULED_STREAM, fields)
+            try:
+                enc = {k: (v if isinstance(v, str) else __import__('json').dumps(v)) for k, v in fields.items()}
+            except Exception:
+                enc = {k: str(v) for k, v in fields.items()}
+            await client.xadd(SCHEDULED_STREAM, enc)
         except Exception as e:
             logger.debug(f"Failed to xadd scheduled: {e}")
             continue
@@ -72,4 +76,3 @@ async def run():
 
 if __name__ == "__main__":
     asyncio.run(run())
-

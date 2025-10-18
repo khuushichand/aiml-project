@@ -345,7 +345,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     @classmethod
     def validate_media_type_choices(cls, v):
         # Accept only known values; for invalid input, emit the exact message expected by tests
-        allowed = {'video', 'audio', 'document', 'pdf', 'ebook', 'email'}
+        allowed = {'video', 'audio', 'document', 'pdf', 'ebook', 'email', 'json'}
         if isinstance(v, str):
             lv = v.strip().lower()
             if lv not in allowed:

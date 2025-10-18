@@ -342,7 +342,7 @@ class AsyncRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,
             self.rate_limiter.check_rate_limit,
@@ -358,7 +358,7 @@ class AsyncRateLimiter:
     
     async def get_user_usage_async(self, user_id: str) -> Dict[str, any]:
         """Get user usage statistics asynchronously"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,
             self.rate_limiter.get_user_usage,

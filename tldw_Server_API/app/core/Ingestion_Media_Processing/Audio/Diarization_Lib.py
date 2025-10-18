@@ -35,13 +35,22 @@ def _check_torch_available():
         # Test basic functionality to ensure proper loading
         return True
     except ImportError as e:
-        print(f"PyTorch not installed: {e}")
+        try:
+            logger.debug(f"PyTorch not installed: {e}")
+        except Exception:
+            pass
         return False
     except OSError as e:
-        print(f"PyTorch library loading failed: {e}")
+        try:
+            logger.debug(f"PyTorch library loading failed: {e}")
+        except Exception:
+            pass
         return False
     except Exception as e:
-        print(f"Unexpected error loading PyTorch: {e}")
+        try:
+            logger.debug(f"Unexpected error loading PyTorch: {e}")
+        except Exception:
+            pass
         return False
 
 
@@ -52,10 +61,17 @@ def _check_speechbrain_available():
         import torchaudio
         return True
     except (ImportError, OSError) as e:
-        print(f"SpeechBrain/torchaudio not available: {e}")
+        # Reduce noisy stdout during tests; log at debug level
+        try:
+            logger.debug(f"SpeechBrain/torchaudio not available: {e}")
+        except Exception:
+            pass
         return False
     except Exception as e:
-        print(f"Unexpected error loading SpeechBrain: {e}")
+        try:
+            logger.debug(f"Unexpected error loading SpeechBrain: {e}")
+        except Exception:
+            pass
         return False
 
 
@@ -65,10 +81,16 @@ def _check_sklearn_available():
         # Test basic import
         return True
     except ImportError as e:
-        print(f"scikit-learn not installed: {e}")
+        try:
+            logger.debug(f"scikit-learn not installed: {e}")
+        except Exception:
+            pass
         return False
     except Exception as e:
-        print(f"Unexpected error loading scikit-learn: {e}")
+        try:
+            logger.debug(f"Unexpected error loading scikit-learn: {e}")
+        except Exception:
+            pass
         return False
 
 
@@ -78,13 +100,22 @@ def _check_torchaudio_available():
         # Test basic functionality
         return True
     except ImportError as e:
-        print(f"TorchAudio not installed: {e}")
+        try:
+            logger.debug(f"TorchAudio not installed: {e}")
+        except Exception:
+            pass
         return False
     except OSError as e:
-        print(f"TorchAudio library loading failed: {e}")
+        try:
+            logger.debug(f"TorchAudio library loading failed: {e}")
+        except Exception:
+            pass
         return False
     except Exception as e:
-        print(f"Unexpected error loading TorchAudio: {e}")
+        try:
+            logger.debug(f"Unexpected error loading TorchAudio: {e}")
+        except Exception:
+            pass
         return False
 
 

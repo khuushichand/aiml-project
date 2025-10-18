@@ -57,9 +57,7 @@ from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import create_client as _create_http_client
 
 
 router = APIRouter()
@@ -796,12 +794,16 @@ async def pmc_oa_ingest_pdf(
 
 
 def _http_session():
-    retry_strategy = Retry(total=3, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=1)
-    s = requests.Session()
-    s.headers.update({"Accept-Encoding": "gzip, deflate"})
-    s.mount("https://", HTTPAdapter(max_retries=retry_strategy))
-    s.mount("http://", HTTPAdapter(max_retries=retry_strategy))
-    return s
+    """Create a centralized HTTP client for outbound fetches in research endpoints.
+
+    Uses the shared http_client factory (trust_env=False) and sets basic headers.
+    """
+    client = _create_http_client(timeout=30)
+    try:
+        client.headers.update({"Accept-Encoding": "gzip, deflate"})
+    except Exception:
+        pass
+    return client
 
 
 @router.post(

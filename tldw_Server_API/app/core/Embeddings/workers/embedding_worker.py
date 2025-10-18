@@ -321,9 +321,9 @@ class EmbeddingWorker(BaseWorker):
                         )
                     else:
                         # Use message-level or default configuration
-                        if message.model_provider and message.model_config:
+                        if message.model_provider and message.embedding_model_config:
                             model_provider = message.model_provider
-                            model_name = message.model_config.get("model_name_or_path", self.embedding_config.default_model_name)
+                            model_name = message.embedding_model_config.get("model_name_or_path", self.embedding_config.default_model_name)
                         else:
                             model_config = self._get_model_config(message)
                             model_provider = message.model_provider or self.embedding_config.default_model_provider
@@ -617,25 +617,28 @@ class EmbeddingWorker(BaseWorker):
         except Exception:
             target_queue = self.storage_queue
 
-        await self.redis_client.xadd(
-            target_queue,
-            model_dump_compat(result)
-        )
+        payload = model_dump_compat(result)
+        # Ensure Redis stream field values are strings (encode nested types as JSON)
+        try:
+            fields = {k: (v if isinstance(v, str) else _json.dumps(v)) for k, v in payload.items()}
+        except Exception:
+            fields = {k: str(v) for k, v in payload.items()}
+        await self.redis_client.xadd(target_queue, fields)
         logger.debug(f"Sent job {result.job_id} to storage queue")
     
     def _get_model_config(self, message: EmbeddingMessage) -> Union[HFModelCfg, ONNXModelCfg, OpenAIModelCfg, LocalAPICfg]:
         """Get or create model configuration"""
-        if message.model_config:
+        if message.embedding_model_config:
             # Use provided config
             provider = message.model_provider
             if provider == "huggingface":
-                return HFModelCfg(**message.model_config)
+                return HFModelCfg(**message.embedding_model_config)
             elif provider == "onnx":
-                return ONNXModelCfg(**message.model_config)
+                return ONNXModelCfg(**message.embedding_model_config)
             elif provider == "openai":
-                return OpenAIModelCfg(**message.model_config)
+                return OpenAIModelCfg(**message.embedding_model_config)
             elif provider == "local_api":
-                return LocalAPICfg(**message.model_config)
+                return LocalAPICfg(**message.embedding_model_config)
         
         # Use default config based on user tier
         if message.user_tier == "enterprise":
@@ -656,7 +659,7 @@ class EmbeddingWorker(BaseWorker):
         """
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _build_app_config(model_id: str, prov: str, cfg_obj: Any) -> Dict[str, Any]:
             # Pass through the typed cfg_obj directly to avoid union misclassification

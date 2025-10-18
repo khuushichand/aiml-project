@@ -18,151 +18,382 @@ from starlette.staticfiles import StaticFiles
 #
 # Local Imports
 #
+# Early logging configuration to keep startup output consistent
+import os as _early_os
+_early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
+
+class InterceptHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
+class _SafeExtra(dict):
+    """A dict that returns empty string for missing keys.
+
+    Prevents KeyError when format strings reference {extra[missing_key]}."""
+    def __getitem__(self, key):  # type: ignore[override]
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            return ""
+
+
+def _trace_log_patcher(record):
+    try:
+        from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
+        span = _get_tm().get_current_span()
+        trace_id = span.get_span_context().trace_id if span else 0
+        span_id = span.get_span_context().span_id if span else 0
+        record.setdefault("extra", {})
+        record["extra"].setdefault("trace_id", f"{trace_id:032x}" if trace_id else "")
+        record["extra"].setdefault("span_id", f"{span_id:016x}" if span_id else "")
+        if record["extra"].get("trace_id") and record["extra"].get("span_id"):
+            record["extra"].setdefault("traceparent", f"00-{record['extra']['trace_id']}-{record['extra']['span_id']}-01")
+        else:
+            record["extra"].setdefault("traceparent", "")
+        try:
+            req = _get_tm().get_baggage("request_id")
+            ses = _get_tm().get_baggage("session_id")
+            if req:
+                record["extra"].setdefault("request_id", req)
+            if ses:
+                record["extra"].setdefault("session_id", ses)
+        except Exception:
+            pass
+    except Exception:
+        record.setdefault("extra", {})
+        record["extra"].setdefault("trace_id", "")
+        record["extra"].setdefault("span_id", "")
+        record["extra"].setdefault("traceparent", "")
+        record["extra"].setdefault("request_id", "")
+        record["extra"].setdefault("session_id", "")
+    # Ensure commonly referenced extra keys exist to avoid formatter KeyErrors
+    # and wrap with SafeExtra so any unknown keys resolve to an empty string.
+    try:
+        record["extra"].setdefault("event_id", "")
+        record["extra"].setdefault("event_type", "")
+        record["extra"].setdefault("category", "")
+        record["extra"].setdefault("action", "")
+        # Replace the mapping with a tolerant wrapper
+        if not isinstance(record["extra"], _SafeExtra):
+            record["extra"] = _SafeExtra(record["extra"])  # type: ignore[assignment]
+    except Exception:
+        # As a last resort, provide an empty tolerant mapping
+        record["extra"] = _SafeExtra()
+    try:
+        import re as _re
+        msg = record.get("message", "")
+        msg = _re.sub(r"sk-[A-Za-z0-9-_]{8,}", "sk-***REDACTED***", msg)
+        msg = _re.sub(r"(?i)(api[_-]?key|authorization|token|password)\s*[:=]\s*[^\s,;]+", r"\1=***REDACTED***", msg)
+        record["message"] = msg
+    except Exception:
+        pass
+
+def _safe_log_format(record: dict) -> str:
+    try:
+        ts = record.get("time")
+        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
+    except Exception:
+        ts_str = ""
+    level = record.get("level").name if record.get("level") else "INFO"
+    extra = record.get("extra") or {}
+    trace_id = extra.get("trace_id", "")
+    span_id = extra.get("span_id", "")
+    request_id = extra.get("request_id", "")
+    session_id = extra.get("session_id", "")
+    def _san(v: object) -> str:
+        try:
+            s = str(v)
+            return s.replace("<", "").replace(">", "")
+        except Exception:
+            return ""
+    name = _san(record.get("name", ""))
+    function = _san(record.get("function", ""))
+    line = record.get("line", "")
+    message = _san(record.get("message", ""))
+    # Colorized with Loguru markup tags (processed when colorize=True)
+    return (
+        f"<dim>{ts_str}</dim> | "
+        f"<level>{level:<8}</level> | "
+        f"<cyan>trace={trace_id}</cyan> <cyan>span={span_id}</cyan> "
+        f"<yellow>req={request_id}</yellow> <yellow>ses={session_id}</yellow> | "
+        f"<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
+    )
+
+# Reset Loguru and configure a single, thread-safe sink
+logger.remove()
+_log_level = "DEBUG"
+_force_color = (
+    _early_os.getenv("FORCE_COLOR", "").lower() in {"1","true","yes","on"}
+    or _early_os.getenv("PY_COLORS", "").lower() in {"1","true","yes","on"}
+)
+_sink_choice = _early_os.getenv("LOG_STREAM", "stderr").lower()
+_sink = sys.stdout if _sink_choice in {"1","true","yes","on","stdout"} else sys.stderr
+_use_color = _force_color or (_sink.isatty() and _early_os.getenv("LOG_COLOR", "1").lower() not in {"0","false","no","off"})
+# Use synchronous logging during import-time initialization to avoid Loguru's background
+# queue thread taking the import lock while startup modules are still being loaded.
+logger.add(
+    _sink,
+    level=_log_level,
+    format=_safe_log_format,
+    colorize=_use_color,
+    enqueue=False,
+)
+logger = logger.patch(_trace_log_patcher)
+
+# Intercept stdlib and uvicorn logs early
+try:
+    for _h in list(logging.root.handlers):
+        logging.root.removeHandler(_h)
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+except Exception:
+    logging.getLogger().handlers = [InterceptHandler()]
+    logging.getLogger().setLevel(0)
+
+for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _lg = logging.getLogger(_name)
+    _lg.handlers = [InterceptHandler()]
+    _lg.propagate = False
+
+# Guard against later reconfiguration by uvicorn or libraries
+def _reinstall_intercept_handlers():
+    try:
+        logging.root.handlers = [InterceptHandler()]
+        logging.root.setLevel(0)
+    except Exception:
+        pass
+    # Replace handlers on all known loggers to avoid mixed formats
+    try:
+        for _lname, _logger in list(logging.root.manager.loggerDict.items()):
+            if isinstance(_logger, logging.Logger):
+                _logger.handlers = [InterceptHandler()]
+                _logger.propagate = False
+    except Exception:
+        pass
+    for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        try:
+            _lg = logging.getLogger(_name)
+            _lg.handlers = [InterceptHandler()]
+            _lg.propagate = False
+        except Exception:
+            pass
+
+try:
+    import logging.config as _logcfg
+    _orig_basicConfig = logging.basicConfig
+    def _basic_config_wrapper(*args, **kwargs):
+        try:
+            _orig_basicConfig(*args, **kwargs)
+        finally:
+            _reinstall_intercept_handlers()
+    logging.basicConfig = _basic_config_wrapper  # type: ignore[assignment]
+
+    if hasattr(_logcfg, 'dictConfig'):
+        _orig_dictConfig = _logcfg.dictConfig
+        def _dict_config_wrapper(config):
+            try:
+                _orig_dictConfig(config)
+            finally:
+                _reinstall_intercept_handlers()
+        _logcfg.dictConfig = _dict_config_wrapper  # type: ignore[assignment]
+except Exception:
+    pass
+
+# Apply once now as well
+_reinstall_intercept_handlers()
+
+logger.info("Logging configured (Loguru + stdlib interception)")
+
+#
+# Auth Endpoint (NEW)
+#
 # Auth Endpoint (NEW)
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
-#
-# Audio Endpoint (includes WebSocket streaming transcription)
 try:
-    from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
-    _HAS_AUDIO = True
-except Exception as _audio_err:  # noqa: BLE001 - guard non-critical endpoints in tests
-    logger.warning(f"Audio endpoints unavailable; skipping import: {_audio_err}")
-    _HAS_AUDIO = False
-# Guard audio_jobs import to avoid unrelated test breakages (e.g., pydantic validator changes)
-try:
-    from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
-    _HAS_AUDIO_JOBS = True
-except Exception as _audio_jobs_err:  # noqa: BLE001 - log and continue for deterministic test startup
-    logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
-    _HAS_AUDIO_JOBS = False
+    from tldw_Server_API.app.api.v1.endpoints.auth_enhanced import router as auth_enhanced_router
+    _HAS_AUTH_ENHANCED = True
+except Exception as _auth_enh_import_err:  # noqa: BLE001
+    logger.warning(f"Enhanced auth endpoints unavailable; skipping import: {_auth_enh_import_err}")
+    _HAS_AUTH_ENHANCED = False
+
+# Minimal test-app gating: when enabled, skip importing heavy routers
+from os import getenv as _getenv_min
+_MINIMAL_TEST_APP = _getenv_min("MINIMAL_TEST_APP", "").lower() in {"1", "true", "yes", "on"}
+# Ultra-minimal diagnostic mode: only import health endpoints
+_ULTRA_MINIMAL_APP = _getenv_min("ULTRA_MINIMAL_APP", "").lower() in {"1", "true", "yes", "on"}
+# Opt-in startup tracing
+_STARTUP_TRACE = _getenv_min("STARTUP_TRACE", "").lower() in {"1", "true", "yes", "on"}
+
+def _startup_trace(msg: str) -> None:
+    if _STARTUP_TRACE:
+        try:
+            logger.info(f"[startup-trace] {msg}")
+        except Exception:
+            pass
+
+_startup_trace(f"Endpoint import gating: ULTRA_MINIMAL_APP={_ULTRA_MINIMAL_APP}, MINIMAL_TEST_APP={_MINIMAL_TEST_APP}")
 #
-# Chat Endpoint
-from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
-#
-# Character Endpoint
-from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
-# Character Chat Sessions Endpoint
-from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
-# Character Messages Endpoint
-from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
-#
-# Metrics Endpoint
-from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
-#
-# Chunking Endpoints
-from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
-from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
-#
-# Embedding Endpoint (v5 enhanced version with circuit breaker)
-from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
-from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
-from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
-#
-# Media Endpoint (guarded import; not critical for unrelated tests)
-try:
-    from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
-    _HAS_MEDIA = True
-except Exception as _media_import_err:  # noqa: BLE001 - log and continue for deterministic test startup
-    logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
-    _HAS_MEDIA = False
-# Media Embeddings Endpoint (for generating embeddings for uploaded media)
-from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
-#
-# Notes Endpoint
-from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
-#
-# Prompt Management Endpoint
-from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
-#
-# Prompt Studio Endpoints
-try:
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import router as prompt_studio_test_cases_router
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_optimization import router as prompt_studio_optimization_router
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_status import router as prompt_studio_status_router
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import router as prompt_studio_websocket_router
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import router as prompt_studio_evaluations_router
-    _HAS_PROMPT_STUDIO = True
-except Exception as _ps_import_err:  # noqa: BLE001 - log and continue, not critical for unrelated tests
-    logger.warning(f"Prompt Studio endpoints unavailable; skipping import: {_ps_import_err}")
-    _HAS_PROMPT_STUDIO = False
-#
-# RAG Endpoints
-from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router  # RAG health/caching/metrics endpoints
-from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router  # Unified RAG API with all features as parameters
-try:
-    from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_router
-    _HAS_WORKFLOWS = True
-except Exception as _wf_import_err:  # noqa: BLE001
-    logger.warning(f"Workflows endpoints unavailable; skipping import: {_wf_import_err}")
-    _HAS_WORKFLOWS = False
+if _ULTRA_MINIMAL_APP:
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+        _HAS_HEALTH = True
+    except Exception as _h_e:  # noqa: BLE001
+        logger.warning(f"Health endpoints unavailable; skipping import: {_h_e}")
+        _HAS_HEALTH = False
+elif not _MINIMAL_TEST_APP:
+    # Audio Endpoint (includes WebSocket streaming transcription)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+        _HAS_AUDIO = True
+    except Exception as _audio_err:  # noqa: BLE001 - guard non-critical endpoints in tests
+        logger.warning(f"Audio endpoints unavailable; skipping import: {_audio_err}")
+        _HAS_AUDIO = False
+    # Guard audio_jobs import to avoid unrelated test breakages
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
+        _HAS_AUDIO_JOBS = True
+    except Exception as _audio_jobs_err:  # noqa: BLE001
+        logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
+        _HAS_AUDIO_JOBS = False
+    # Chat Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+    # Character Endpoints
+    from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
+    from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    # Metrics Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
+    # Chunking Endpoints
+    from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
+    from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+    # Embeddings / Vector stores / Claims
+    from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
+    from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
+    from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
+    # Collections (stubs to anchor PRD)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
+        _HAS_OUTPUT_TEMPLATES = True
+    except Exception as _ot_err:
+        logger.warning(f"Outputs templates endpoints unavailable; skipping import: {_ot_err}")
+        _HAS_OUTPUT_TEMPLATES = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.outputs import router as outputs_router
+        _HAS_OUTPUTS = True
+    except Exception as _o_err:
+        logger.warning(f"Outputs endpoints unavailable; skipping import: {_o_err}")
+        _HAS_OUTPUTS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
+        _HAS_READING_HIGHLIGHTS = True
+    except Exception as _rh_err:
+        logger.warning(f"Reading highlights endpoints unavailable; skipping import: {_rh_err}")
+        _HAS_READING_HIGHLIGHTS = False
+    # Media Endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+        _HAS_MEDIA = True
+    except Exception as _media_import_err:  # noqa: BLE001
+        logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
+        _HAS_MEDIA = False
+    from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
+    # Unified items endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.items import router as items_router
+        _HAS_ITEMS = True
+    except Exception as _items_err:
+        logger.warning(f"Items endpoints unavailable; skipping import: {_items_err}")
+        _HAS_ITEMS = False
+    # Notes / Prompts
+    from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
+    from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
+    # Prompt Studio (guarded)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import router as prompt_studio_test_cases_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_optimization import router as prompt_studio_optimization_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_status import router as prompt_studio_status_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import router as prompt_studio_websocket_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import router as prompt_studio_evaluations_router
+        _HAS_PROMPT_STUDIO = True
+    except Exception as _ps_import_err:  # noqa: BLE001
+        logger.warning(f"Prompt Studio endpoints unavailable; skipping import: {_ps_import_err}")
+        _HAS_PROMPT_STUDIO = False
+    # RAG & Workflows
+    from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router
+    from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_router
+        _HAS_WORKFLOWS = True
+    except Exception as _wf_import_err:  # noqa: BLE001
+        logger.warning(f"Workflows endpoints unavailable; skipping import: {_wf_import_err}")
+        _HAS_WORKFLOWS = False
 # Legacy RAG Endpoint (Deprecated)
 # from tldw_Server_API.app.api.v1.endpoints.rag import router as retrieval_agent_router
 #
-# Research Endpoint
-from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
-# Paper Search Endpoint (provider-specific)
-from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
-#
-# Evaluation Endpoint (OLD - to be removed)
-# Legacy evaluation endpoint - replaced by unified router
-# from tldw_Server_API.app.api.v1.endpoints.evals import router as evaluation_router
-#
-# OpenAI-compatible Evaluation Endpoint (NEW)
-# Legacy OpenAI evaluation endpoint - replaced by unified router
-# from tldw_Server_API.app.api.v1.endpoints.evals_openai import router as openai_evals_router
-
-# Unified Evaluation endpoint (guarded; can be heavy and optional in some test contexts)
-try:
-    from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
-    _HAS_UNIFIED_EVALUATIONS = True
-except Exception as _evals_import_err:  # noqa: BLE001 - log and continue for deterministic test startup
-    logger.warning(f"Unified Evaluation endpoints unavailable; skipping import: {_evals_import_err}")
+# Research/Paper Search and heavy routers/imports
+# In minimal test-app mode, import only what is needed for lightweight tests.
+if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
+    # Research Endpoint (lightweight subset for tests)
+    from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    # Paper Search Endpoint (provider-specific)
+    from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     _HAS_UNIFIED_EVALUATIONS = False
-from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
-from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
-#
-# Benchmark Endpoint
-from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
-#
-# Sync Endpoint
-from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
-#
-# Tools Endpoint
-from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
-#
-# Users Endpoint (NEW)
-from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
-## Trash Endpoint
-#from tldw_Server_API.app.api.v1.endpoints.trash import router as trash_router
-#
-# MCP Unified Endpoint (Production-ready, secure implementation)
-from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
-# Note: Old MCP endpoints have been archived due to security vulnerabilities
-#
-# Chatbooks Endpoint
-from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
-#
-# Flashcards Endpoint (V5 - ChaChaNotes)
-from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
-#
-# LLM Providers Endpoint
-from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
-from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router, public_router as llamacpp_public_router
-from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
-# Web Scraping Management Endpoints
-from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
-#
-# Metrics and Telemetry
+else:
+    # Research Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    # Paper Search Endpoint (provider-specific)
+    from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
+    # Unified Evaluation endpoint (guarded; can be heavy and optional in some test contexts)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
+        _HAS_UNIFIED_EVALUATIONS = True
+    except Exception as _evals_import_err:  # noqa: BLE001 - log and continue for deterministic startup
+        logger.warning(f"Unified Evaluation endpoints unavailable; skipping import: {_evals_import_err}")
+        _HAS_UNIFIED_EVALUATIONS = False
+    from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
+    from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
+    # Benchmark Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
+    # Sync Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
+    # Tools Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+    # Users Endpoint (NEW)
+    from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+    ## Trash Endpoint
+    #from tldw_Server_API.app.api.v1.endpoints.trash import router as trash_router
+    # MCP Unified Endpoint (Production-ready, secure implementation)
+    from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
+    # Chatbooks Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+    # Flashcards Endpoint (V5 - ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+    # LLM Providers Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
+    from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router, public_router as llamacpp_public_router
+    from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
+    # Web Scraping Management Endpoints
+    from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
+
+# Metrics and Telemetry — import directly and fail fast on errors
 from tldw_Server_API.app.core.Metrics import (
     initialize_telemetry,
     shutdown_telemetry,
     get_metrics_registry,
     track_metrics,
-    OTEL_AVAILABLE
+    OTEL_AVAILABLE,
 )
-#
+
+# Core helpers — import directly (fail fast if missing)
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
 from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
@@ -184,135 +415,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 # Functions:
 
 
-# --- Loguru Configuration with Intercept Handler ---
-
-# Define a handler class to intercept standard logging messages
-class InterceptHandler(logging.Handler):
-    def emit(self, record):
-        # Get corresponding Loguru level if it exists
-        try:
-            level = logger.level(record.levelname).name
-        except ValueError:
-            level = record.levelno
-
-        # Find caller from where originated the logged message
-        frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
-            depth += 1
-
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
-
-# Remove default handler
-logger.remove()
-
-# Add your desired Loguru sink (e.g., stderr)
-log_level = "DEBUG"
-def _trace_log_patcher(record):
-    """Inject W3C trace context into Loguru records."""
-    try:
-        from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
-        span = _get_tm().get_current_span()
-        trace_id = span.get_span_context().trace_id if span else 0
-        span_id = span.get_span_context().span_id if span else 0
-        if "extra" not in record:
-            record["extra"] = {}
-        record["extra"].setdefault("trace_id", f"{trace_id:032x}" if trace_id else "")
-        record["extra"].setdefault("span_id", f"{span_id:016x}" if span_id else "")
-        if record["extra"].get("trace_id") and record["extra"].get("span_id"):
-            record["extra"].setdefault("traceparent", f"00-{record['extra']['trace_id']}-{record['extra']['span_id']}-01")
-        else:
-            record["extra"].setdefault("traceparent", "")
-        # Baggage extras
-        try:
-            req = _get_tm().get_baggage("request_id")
-            ses = _get_tm().get_baggage("session_id")
-            if req:
-                record["extra"].setdefault("request_id", req)
-            if ses:
-                record["extra"].setdefault("session_id", ses)
-        except Exception:
-            pass
-    except Exception:
-        # Ensure keys exist to avoid KeyError in formatter
-        record.setdefault("extra", {})
-        record["extra"].setdefault("trace_id", "")
-        record["extra"].setdefault("span_id", "")
-        record["extra"].setdefault("traceparent", "")
-        record["extra"].setdefault("request_id", "")
-        record["extra"].setdefault("session_id", "")
-
-    # Optional: redact secrets/PII from log message
-    try:
-        import re as _re
-        msg = record.get("message", "")
-        # Common token patterns (best-effort)
-        msg = _re.sub(r"sk-[A-Za-z0-9-_]{8,}", "sk-***REDACTED***", msg)
-        msg = _re.sub(r"(?i)(api[_-]?key|authorization|token|password)\s*[:=]\s*[^\s,;]+", r"\1=***REDACTED***", msg)
-        record["message"] = msg
-    except Exception:
-        pass
-
-# Use a safe formatter to avoid KeyError when extra keys are missing
-def _safe_log_format(record: dict) -> str:
-    try:
-        ts = record.get("time")
-        # Format timestamp with millisecond precision
-        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
-    except Exception:
-        ts_str = ""
-    level = record.get("level").name if record.get("level") else "INFO"
-    extra = record.get("extra") or {}
-    trace_id = extra.get("trace_id", "")
-    span_id = extra.get("span_id", "")
-    request_id = extra.get("request_id", "")
-    session_id = extra.get("session_id", "")
-    def _san(v: object) -> str:
-        try:
-            s = str(v)
-            # Remove angle brackets to avoid Loguru tag parser interpreting them
-            return s.replace("<", "").replace(">", "")
-        except Exception:
-            return ""
-    name = _san(record.get("name", ""))
-    function = _san(record.get("function", ""))
-    line = record.get("line", "")
-    message = _san(record.get("message", ""))
-    return f"{ts_str} | {level:<8} | trace={trace_id} span={span_id} req={request_id} ses={session_id} | {name}:{function}:{line} - {message}"
-
-logger.add(
-    sys.stderr,
-    level=log_level,
-    format=_safe_log_format,
-    colorize=False,
-)
-logger = logger.patch(_trace_log_patcher)
-
-# Configure standard logging to use the InterceptHandler
-loggers_to_intercept = ["uvicorn", "uvicorn.error", "uvicorn.access"] # Add other library names if needed
-for logger_name in loggers_to_intercept:
-    mod_logger = logging.getLogger(logger_name)
-    mod_logger.handlers = [InterceptHandler()]
-    mod_logger.propagate = False # Prevent messages from reaching the root logger
-    # Optionally set level if you only want certain levels from that lib
-    # mod_logger.setLevel(logging.DEBUG)
-
-logger.info("Loguru logger configured with SPECIFIC standard logging interception!")
-
-# Optional JSON-structured logs sink (enable with LOG_JSON=true)
+"""
+Optional JSON-structured logs sink (enable with LOG_JSON=true)
+- Adds an additional sink which serializes records as JSON to stdout.
+"""
 try:
     import os as _jsonlog_os
     if (_jsonlog_os.getenv("LOG_JSON", "").lower() in {"1", "true", "yes", "on"} or
         _jsonlog_os.getenv("ENABLE_JSON_LOGS", "").lower() in {"1", "true", "yes", "on"}):
         logger.add(
             sys.stdout,
-            level=log_level,
+            level=_log_level,
             serialize=True,
             backtrace=False,
             diagnose=False,
             filter=None,
+            enqueue=True,
         )
         logger.info("JSON logging enabled (serialize=True)")
 except Exception as _e:
@@ -334,6 +452,7 @@ READINESS_STATE = {"ready": True}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _startup_trace("lifespan: entered")
     # Test-aware flag to optionally skip heavy startup subsystems in tests
     import os as _startup_os
     _is_test_mode = (
@@ -343,6 +462,16 @@ async def lifespan(app: FastAPI):
     )
     _disable_heavy_startup = _startup_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}
     _skip_heavy = _is_test_mode or _disable_heavy_startup
+    # In test/CI or when explicitly disabled, skip all heavy startup initialization entirely.
+    # This keeps ASGI lifespan startup under a second for tests that import main.app.
+    if _skip_heavy:
+        try:
+            from loguru import logger as _lg
+            _lg.info("Test mode or DISABLE_HEAVY_STARTUP set: skipping startup initialization")
+        except Exception:
+            pass
+        yield
+        return
     chat_config = {}
     # Startup: Validate MCP configuration in production (fail fast)
     try:
@@ -380,7 +509,7 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:
         logger.debug(f"Setup status check failed during startup: {e}")
-    
+
     # Startup: Initialize auth services
     logger.info("App Startup: Initializing authentication services...")
     try:
@@ -389,13 +518,23 @@ async def lifespan(app: FastAPI):
         db_pool = await get_db_pool()
         logger.info("App Startup: Database pool initialized")
 
-        # Ensure SQLite AuthNZ schema (including RBAC) is migrated to latest
+        # Ensure AuthNZ schema/migrations
         try:
             if getattr(db_pool, 'pool', None) is None and getattr(db_pool, 'db_path', None):
+                # SQLite path: run migration manager
                 from pathlib import Path as _Path
                 from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz
                 _ensure_authnz(_Path(db_pool.db_path))
                 logger.info("App Startup: Ensured AuthNZ migrations (SQLite)")
+            else:
+                # Postgres path: ensure additive extras (tool catalogs) exist
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_tool_catalogs_tables_pg
+                    ok_pg = await ensure_tool_catalogs_tables_pg(db_pool)
+                    if ok_pg:
+                        logger.info("App Startup: Ensured PG tool catalogs tables")
+                except Exception as _pg_e:
+                    logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         except Exception as _e:
             logger.debug(f"App Startup: Skipped AuthNZ migration ensure: {_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
@@ -404,7 +543,7 @@ async def lifespan(app: FastAPI):
             logger.info("App Startup: Ensured single-user RBAC seed (baseline roles/permissions)")
         except Exception as _e:
             logger.debug(f"App Startup: RBAC single-user seed ensure skipped: {_e}")
-        
+
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
         session_manager = await get_session_manager()
@@ -425,7 +564,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize auth services: {e}")
         # Continue startup even if auth services fail (for backward compatibility)
-    
+
     # Initialize MCP Unified Server (secure, production-ready)
     if _skip_heavy:
         logger.info("Test mode/heavy-startup disabled: Skipping MCP Unified server initialization")
@@ -440,13 +579,13 @@ async def lifespan(app: FastAPI):
             logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
             logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
             # Continue startup even if MCP fails (for backward compatibility)
-    
+
     # Initialize Chat Module Components
     if _skip_heavy:
         logger.info("Test mode/heavy-startup disabled: Skipping Chat provider manager and request queue initialization")
     else:
         logger.info("App Startup: Initializing Chat module components...")
-        
+
         # Initialize Provider Manager
         try:
             from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
@@ -460,17 +599,17 @@ async def lifespan(app: FastAPI):
             logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
         except Exception as e:
             logger.error(f"App Startup: Failed to initialize provider manager: {e}")
-        
+
         # Initialize Request Queue
         try:
             from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
             from tldw_Server_API.app.core.config import load_comprehensive_config
-            
+
             config = load_comprehensive_config()
             chat_config = {}
             if config and config.has_section('Chat-Module'):
                 chat_config = dict(config.items('Chat-Module'))
-            
+
             request_queue = initialize_request_queue(
                 max_queue_size=int(chat_config.get('max_queue_size', 100)),
                 max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
@@ -481,11 +620,11 @@ async def lifespan(app: FastAPI):
             logger.info("App Startup: Request queue initialized with 4 workers")
         except Exception as e:
             logger.error(f"App Startup: Failed to initialize request queue: {e}")
-    
+
     # Initialize Rate Limiter
     try:
         from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
-        
+
         rate_config = RateLimitConfig(
             global_rpm=int(chat_config.get('rate_limit_per_minute', 60)),
             per_user_rpm=int(chat_config.get('rate_limit_per_user_per_minute', 20)),
@@ -496,7 +635,7 @@ async def lifespan(app: FastAPI):
         logger.info("App Startup: Rate limiter initialized")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize rate limiter: {e}")
-    
+
     # Initialize TTS Service
     if _skip_heavy:
         logger.info("Test mode/heavy-startup disabled: Skipping TTS service initialization")
@@ -505,11 +644,11 @@ async def lifespan(app: FastAPI):
         try:
             from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
             from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
-            
+
             # Load comprehensive config and extract TTS config dict
             cfg_obj = load_comprehensive_config_with_tts()
             tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
-            
+
             # Initialize the TTS service with configuration (falls back to internal loader if None)
             await get_tts_service_v2(config=tts_cfg_dict)
             logger.info("App Startup: TTS service initialized successfully")
@@ -517,7 +656,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"App Startup: Failed to initialize TTS service: {e}")
             logger.warning("TTS functionality will be unavailable")
             # Continue startup even if TTS fails (for backward compatibility)
-    
+
     # Initialize Chunking Templates
     if _skip_heavy:
         logger.info("Test mode/heavy-startup disabled: Skipping chunking template initialization")
@@ -525,7 +664,7 @@ async def lifespan(app: FastAPI):
         logger.info("App Startup: Initializing chunking templates...")
         try:
             from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
-            
+
             if ensure_templates_initialized():
                 logger.info("App Startup: Chunking templates initialized successfully")
             else:
@@ -533,7 +672,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
             # Continue startup even if template initialization fails
-    
+
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
@@ -969,12 +1108,12 @@ async def lifespan(app: FastAPI):
             claims_task = _asyncio.create_task(_claims_rebuild_loop())
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
-    
-    # Start usage aggregator (if enabled, and not disabled via env)
+
+    # Start usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
         _disable_usage_agg = _env_os.getenv("DISABLE_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
-        if _disable_usage_agg:
-            logger.info("Usage aggregator disabled via DISABLE_USAGE_AGGREGATOR env var")
+        if _skip_heavy or _disable_usage_agg:
+            logger.info("Usage aggregator disabled (test mode/heavy-startup disabled or env flag)")
         else:
             from tldw_Server_API.app.services.usage_aggregator import start_usage_aggregator
             usage_task = await start_usage_aggregator()
@@ -983,11 +1122,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start usage aggregator: {e}")
 
-    # Start LLM usage aggregator (if enabled, and not disabled via env)
+    # Start LLM usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
         _disable_llm_usage_agg = _env_os.getenv("DISABLE_LLM_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
-        if _disable_llm_usage_agg:
-            logger.info("LLM usage aggregator disabled via DISABLE_LLM_USAGE_AGGREGATOR env var")
+        if _skip_heavy or _disable_llm_usage_agg:
+            logger.info("LLM usage aggregator disabled (test mode/heavy-startup disabled or env flag)")
         else:
             from tldw_Server_API.app.services.llm_usage_aggregator import start_llm_usage_aggregator
             llm_usage_task = await start_llm_usage_aggregator()
@@ -1047,6 +1186,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start RAG quality eval scheduler: {e}")
 
+    # Start Outputs purge scheduler (daily maintenance)
+    try:
+        _enable_outputs_purge = _env_os.getenv("OUTPUTS_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if _skip_heavy or not _enable_outputs_purge:
+            logger.info("Outputs purge scheduler disabled (skip_heavy or OUTPUTS_PURGE_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.outputs_purge_scheduler import start_outputs_purge_scheduler
+            _purge_task = await start_outputs_purge_scheduler()
+            if _purge_task:
+                logger.info("Outputs purge scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start Outputs purge scheduler: {e}")
+
     # Start AuthNZ scheduler (retention/cleanup tasks) with env guard
     _authnz_sched_started = False
     try:
@@ -1088,7 +1240,7 @@ async def lifespan(app: FastAPI):
         logger.info("=" * 60)
         logger.info("🚀 TLDW Server Started Successfully")
         logger.info("=" * 60)
-        
+
         if is_single_user_mode():
             logger.info(f"🔐 Authentication Mode: SINGLE USER")
             # Never log full API key in production unless explicitly allowed
@@ -1111,7 +1263,7 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.info("JWT Bearer tokens required for authentication")
             logger.info("=" * 60)
-        
+
         logger.info(f"📍 API Documentation: http://127.0.0.1:8000/docs")
         logger.info(f"🌐 WebUI: http://127.0.0.1:8000/webui/")
         logger.info("=" * 60)
@@ -1169,11 +1321,28 @@ async def lifespan(app: FastAPI):
         logger.info(f"• Providers configured: {_providers}")
         logger.info(f"• OpenTelemetry available: {bool(_OTEL)}")
         logger.info("──────────────────────────────────────────────────────────────────────")
+
+        # Warn if test-mode gates/toggles are enabled in a production environment
+        try:
+            if _prod:
+                _test_flags = {
+                    "TEST_MODE": _os.getenv("TEST_MODE", ""),
+                    "TLDW_TEST_MODE": _os.getenv("TLDW_TEST_MODE", ""),
+                    "DISABLE_HEAVY_STARTUP": _os.getenv("DISABLE_HEAVY_STARTUP", ""),
+                    "WORKFLOWS_DISABLE_RATE_LIMITS": _os.getenv("WORKFLOWS_DISABLE_RATE_LIMITS", ""),
+                }
+                _enabled = [k for k, v in _test_flags.items() if str(v).lower() in {"1", "true", "yes", "on"}]
+                if _enabled:
+                    logger.warning(
+                        f"Test-mode toggles enabled in production: {', '.join(_enabled)} — disable these for secure deployments"
+                    )
+        except Exception:
+            pass
     except Exception as _pf_e:
         logger.warning(f"Preflight report could not be generated: {_pf_e}")
-    
+
     yield
-    
+
     # Flip readiness early and gate new job acquisitions for graceful shutdown
     try:
         READINESS_STATE["ready"] = False
@@ -1387,11 +1556,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: Clean up resources
     logger.info("App Shutdown: Cleaning up resources...")
-    
+
     # Note: Audit service cleanup handled via dependency injection
     # No global shutdown needed
     logger.info("App Shutdown: Audit services cleanup handled by dependency injection")
-    
+
     # Close auth database pool (skip in test contexts to avoid closing shared pool)
     try:
         if 'db_pool' in locals():
@@ -1404,7 +1573,7 @@ async def lifespan(app: FastAPI):
                 logger.info("App Shutdown: Skipping DB pool close in test context")
     except Exception as e:
         logger.error(f"App Shutdown: Error closing auth database pool: {e}")
-    
+
     # Shutdown session manager
     try:
         if 'session_manager' in locals():
@@ -1412,7 +1581,7 @@ async def lifespan(app: FastAPI):
             logger.info("App Shutdown: Session manager shutdown")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down session manager: {e}")
-    
+
     # Shutdown MCP Unified server
     try:
         if 'mcp_server' in locals():
@@ -1420,7 +1589,7 @@ async def lifespan(app: FastAPI):
             logger.info("App Shutdown: MCP Unified server shutdown")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down MCP Unified server: {e}")
-    
+
     # Shutdown TTS Service
     try:
         from tldw_Server_API.app.core.TTS.tts_service_v2 import close_tts_service_v2
@@ -1428,10 +1597,10 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: TTS service shutdown complete")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down TTS service: {e}")
-    
+
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")
-    
+
     # Shutdown Provider Manager
     try:
         if 'provider_manager' in locals():
@@ -1439,7 +1608,7 @@ async def lifespan(app: FastAPI):
             logger.info("App Shutdown: Provider manager stopped")
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping provider manager: {e}")
-    
+
     # Shutdown Request Queue
     try:
         if 'request_queue' in locals():
@@ -1447,7 +1616,7 @@ async def lifespan(app: FastAPI):
             logger.info("App Shutdown: Request queue stopped")
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping request queue: {e}")
-    
+
     # Shutdown Unified Audit Services (via DI cache)
     try:
         from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
@@ -1457,7 +1626,7 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Unified audit services stopped")
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping unified audit services: {e}")
-    
+
     # Cleanup CPU pools
     try:
         from tldw_Server_API.app.core.Utils.cpu_bound_handler import cleanup_pools
@@ -1465,7 +1634,7 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: CPU pools cleaned up")
     except Exception as e:
         logger.error(f"App Shutdown: Error cleaning up CPU pools: {e}")
-    
+
     # Stop usage aggregator
     try:
         if 'usage_task' in locals() and usage_task:
@@ -1500,7 +1669,7 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Telemetry shutdown")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down telemetry: {e}")
-    
+
     # Original test DB cleanup
     global test_db_instance_ref
     if test_db_instance_ref and hasattr(test_db_instance_ref, 'close_all_connections'):
@@ -1646,6 +1815,7 @@ _docs_url = "/docs" if _enable_openapi else None
 _redoc_url = "/redoc" if _enable_openapi else None
 _openapi_url = "/openapi.json" if _enable_openapi else None
 
+_startup_trace("Creating FastAPI app instance")
 app = FastAPI(
     title="tldw API",
     version="0.1.0",
@@ -1679,6 +1849,7 @@ app = FastAPI(
     openapi_url=_openapi_url,
     lifespan=lifespan,
 )
+_startup_trace("FastAPI app created")
 
 # Early middleware to guard workflow templates path traversal attempts
 from starlette.responses import JSONResponse  # noqa: E402
@@ -2200,204 +2371,133 @@ async def api_metrics():
     return registry.get_all_metrics()
 
 # Router for health monitoring endpoints (NEW)
-try:
-    from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
-    _HAS_HEALTH = True
-except Exception as _health_import_err:  # noqa: BLE001
-    logger.warning(f"Health endpoints unavailable; skipping import: {_health_import_err}")
-    _HAS_HEALTH = False
-from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
-from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring_router
-if _HAS_HEALTH:
-    app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
-    # Also expose liveness/readiness at root per ops conventions
-    app.include_router(health_router, prefix="", tags=["health"])  # /healthz, /readyz
-app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
-app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
-from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
-app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
-
-# Router for authentication endpoints (NEW)
-app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
-
-# Router for user management endpoints (NEW)
-app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
-
-# Router for admin endpoints (NEW)
-from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
-app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
-
-# Router for media endpoints/media file handling
-if _HAS_MEDIA:
-    app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
-
-# Router for /audio/ endpoints
-if _HAS_AUDIO:
-    app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
-if _HAS_AUDIO_JOBS:
-    app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
-
-# WebSocket router for audio streaming (separate to avoid authentication conflicts)
-if _HAS_AUDIO:
-    app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
-
-# Router for chat endpoints/chat temp-file handling
-app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
-
-
-# Router for character endpoints
-app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
-
-# Router for character chat sessions
-app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
-
-# Router for character messages (Note: uses multiple prefixes for different endpoints)
-app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-
-
-# Router for metrics endpoints
-app.include_router(metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
-
-
-# Router for Chunking Endpoint
-app.include_router(chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
-
-# Router for Chunking Templates
-app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
-
-
-# Router for Embedding Endpoint (OpenAI-compatible path)
-app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
-# Router for Vector Store (OpenAI-compatible) endpoints
-app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
-app.include_router(claims_router, prefix=f"{API_V1_PREFIX}")
-
-# Router for Media Embeddings Endpoint
-app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
-
-# Router for Note Management endpoints
-app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
-
-
-# Router for Prompt Management endpoints
-app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
-
-
-# Router for Prompt Studio endpoints
-if _HAS_PROMPT_STUDIO:
-    app.include_router(prompt_studio_projects_router, tags=["prompt-studio"])
-    app.include_router(prompt_studio_prompts_router, tags=["prompt-studio"])
-    app.include_router(prompt_studio_test_cases_router, tags=["prompt-studio"])
-    app.include_router(prompt_studio_optimization_router, tags=["prompt-studio"])
-    app.include_router(prompt_studio_status_router, tags=["prompt-studio"])
-    app.include_router(prompt_studio_evaluations_router, tags=["prompt-studio"])
-    app.include_router(prompt_studio_websocket_router, tags=["prompt-studio"])
-
-
-# Router for RAG endpoints
-# Register RAG health router unconditionally; independent of general health import
-app.include_router(rag_health_router, tags=["rag-health"])
-# RAG API - Production API using unified pipeline
-app.include_router(rag_unified_router, tags=["rag-unified"])
-
-
-# Workflows API (v0.1 scaffolding)
-if _HAS_WORKFLOWS:
-    app.include_router(workflows_router, tags=["workflows"])
-
-# Workflows Scheduler (CRUD for schedules)
-try:
-    from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
-    _HAS_SCHEDULER_WF = True
-except Exception as _sch_import_err:  # noqa: BLE001
-    logger.warning(f"Scheduler Workflows endpoints unavailable; skipping import: {_sch_import_err}")
-    _HAS_SCHEDULER_WF = False
-if _HAS_SCHEDULER_WF:
-    app.include_router(scheduler_workflows_router, tags=["scheduler"])
-
-
-# Router for Research endpoint
-app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
-
-# Router for Paper Search endpoints (arXiv, BioRxiv, Semantic Scholar)
-app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
-
-
-# Router for Unified Evaluation endpoint (combines both legacy endpoints)
-if _HAS_UNIFIED_EVALUATIONS:
-    app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
-app.include_router(vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
-
-# Router for Benchmark endpoint (NEW)
-app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"])
-
-# Router for Setup endpoints (first-time configuration)
-from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
-try:
-    from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
-    _HAS_JOBS_ADMIN = True
-except Exception as _e:
-    _HAS_JOBS_ADMIN = False
+if _MINIMAL_TEST_APP:
+    # Minimal set for paper_search tests
+    app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
+else:
     try:
-        from loguru import logger as _logger
-        _logger.warning(f"Skipping jobs_admin router due to import error: {_e}")
-    except Exception:
-        pass
-app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
-
-# Router for Configuration Info endpoint (for documentation)
-app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
-if _HAS_JOBS_ADMIN:
-    app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
-
-# Router for Sync endpoint
-app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
-
-
-# Router for Tools endpoint
-app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
-
-# Router for Flashcards
-app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
-
-# Routers for Personalization and Persona (new features; scaffold)
-from tldw_Server_API.app.api.v1.endpoints.personalization import (
-    router as personalization_router,
-)
-from tldw_Server_API.app.api.v1.endpoints.persona import (
-    router as persona_router,
-)
-app.include_router(
-    personalization_router,
-    prefix=f"{API_V1_PREFIX}/personalization",
-    tags=["personalization"],
-)
-app.include_router(
-    persona_router,
-    prefix=f"{API_V1_PREFIX}/persona",
-    tags=["persona"],
-)
-
-
-# Router for MCP Unified (Secure, production-ready implementation)
-app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
-# Note: Old MCP routers have been archived due to security vulnerabilities
-
-# Router for Chatbooks - import/export functionality
-app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
-# Router for LLM providers endpoint
-app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
-
-# Router for Llama.cpp (LLM inference helper)
-# Llama.cpp endpoints under /api/v1 and public aliases (/reranking, /v1/rerank, etc.)
-app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
-app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
-
-# Web Scraping management endpoints
-# Include both root-level (back-compat) and versioned paths (used by WebUI)
-app.include_router(web_scraping_router, tags=["web-scraping"])
-app.include_router(web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
+        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+        _HAS_HEALTH = True
+    except Exception as _health_import_err:  # noqa: BLE001
+        logger.warning(f"Health endpoints unavailable; skipping import: {_health_import_err}")
+        _HAS_HEALTH = False
+    from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
+    from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring_router
+    if _HAS_HEALTH:
+        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
+        app.include_router(health_router, prefix="", tags=["health"])  # /healthz, /readyz
+    app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
+    app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
+    from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
+    app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
+    app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    if _HAS_AUTH_ENHANCED:
+        app.include_router(auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
+    app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+    from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
+    app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
+    if _HAS_MEDIA:
+        app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+    if _HAS_AUDIO:
+        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+    if _HAS_AUDIO_JOBS:
+        app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
+    if _HAS_AUDIO:
+        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
+    app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
+    app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    app.include_router(metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
+    app.include_router(chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
+    app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
+    if _HAS_OUTPUT_TEMPLATES:
+        app.include_router(outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
+    try:
+        # Optional outputs artifacts endpoint
+        from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router
+        app.include_router(_outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
+    except Exception as _e:
+        logger.warning(f"Outputs endpoint not available: {_e}")
+    app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+    app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    app.include_router(claims_router, prefix=f"{API_V1_PREFIX}")
+    app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
+    try:
+        # Unified items endpoint
+        from tldw_Server_API.app.api.v1.endpoints.items import router as _items_router
+        app.include_router(_items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
+    except Exception as _e:
+        logger.warning(f"Items endpoint not available: {_e}")
+    # Watchlists endpoints (sources/groups/tags/jobs/runs)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.watchlists import router as _watchlists_router
+        app.include_router(_watchlists_router, prefix=f"{API_V1_PREFIX}", tags=["watchlists"])
+    except Exception as _e:
+        logger.warning(f"Watchlists endpoint not available: {_e}")
+    app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
+    if _HAS_READING_HIGHLIGHTS:
+        app.include_router(reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
+    if _HAS_PROMPT_STUDIO:
+        app.include_router(prompt_studio_projects_router, tags=["prompt-studio"])
+        app.include_router(prompt_studio_prompts_router, tags=["prompt-studio"])
+        app.include_router(prompt_studio_test_cases_router, tags=["prompt-studio"])
+        app.include_router(prompt_studio_optimization_router, tags=["prompt-studio"])
+        app.include_router(prompt_studio_status_router, tags=["prompt-studio"])
+        app.include_router(prompt_studio_evaluations_router, tags=["prompt-studio"])
+        app.include_router(prompt_studio_websocket_router, tags=["prompt-studio"])
+    app.include_router(rag_health_router, tags=["rag-health"])
+    app.include_router(rag_unified_router, tags=["rag-unified"])
+    if _HAS_WORKFLOWS:
+        app.include_router(workflows_router, tags=["workflows"])
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
+        _HAS_SCHEDULER_WF = True
+    except Exception as _sch_import_err:  # noqa: BLE001
+        logger.warning(f"Scheduler Workflows endpoints unavailable; skipping import: {_sch_import_err}")
+        _HAS_SCHEDULER_WF = False
+    if _HAS_SCHEDULER_WF:
+        app.include_router(scheduler_workflows_router, tags=["scheduler"])
+    app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
+    if _HAS_UNIFIED_EVALUATIONS:
+        app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+    app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
+    app.include_router(vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+    app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"])
+    from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+        _HAS_JOBS_ADMIN = True
+    except Exception as _e:
+        _HAS_JOBS_ADMIN = False
+        try:
+            from loguru import logger as _logger
+            _logger.warning(f"Skipping jobs_admin router due to import error: {_e}")
+        except Exception:
+            pass
+    app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
+    app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    if _HAS_JOBS_ADMIN:
+        app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+    app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
+    app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
+    app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
+    from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
+    from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)
+    app.include_router(personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"])
+    app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
+    app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
+    app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
+    app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
+    app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
+    app.include_router(web_scraping_router, tags=["web-scraping"])
+    app.include_router(web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
 
 # Router for trash endpoints - deletion of media items / trash file handling (FIXME: Secure delete vs lag on delete?)
 #app.include_router(trash_router, prefix=f"{API_V1_PREFIX}/trash", tags=["trash"])

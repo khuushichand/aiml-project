@@ -48,3 +48,11 @@ Queues
 
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.
+
+## Workflows (Auth & Scheduler)
+- `WORKFLOWS_DEFAULT_BEARER_TOKEN`: Default Authorization bearer token used by Workflows steps when not explicitly provided in headers.
+- `WORKFLOWS_DEFAULT_API_KEY`: Default `X-API-KEY` used by Workflows steps when bearer is not provided.
+- `WORKFLOWS_VALIDATE_DEFAULT_AUTH`: `true|false` — optionally validate the default token once per run against `/api/v1/workflows/auth/check`.
+- `WORKFLOWS_INTERNAL_BASE_URL`: Base URL for validation requests; defaults to `http://127.0.0.1:8000`.
+- `WORKFLOWS_MINT_VIRTUAL_KEYS`: `true|false` — when enabled, the scheduler mints a short‑lived scoped JWT (`scope=workflows`) per scheduled run and injects it as `secrets.jwt`.
+- `WORKFLOWS_VIRTUAL_KEY_TTL_MIN`: TTL (minutes) for per‑run tokens; default `15`.

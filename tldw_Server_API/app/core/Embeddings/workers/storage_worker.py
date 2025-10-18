@@ -291,7 +291,7 @@ class StorageWorker(BaseWorker):
                             # Schedule re-embed request sidecar
                             try:
                                 if self.redis_client:
-                                    await self.redis_client.xadd('embeddings:reembed:requests', {
+                                    _map = {
                                         'user_id': str(message.user_id),
                                         'collection': message.collection_name,
                                         'current_embedder_name': col_name,
@@ -299,7 +299,12 @@ class StorageWorker(BaseWorker):
                                         'new_embedder_name': cur_name,
                                         'new_embedder_version': cur_ver,
                                         'job_id': message.job_id,
-                                    })
+                                    }
+                                    try:
+                                        _enc = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in _map.items()}
+                                    except Exception:
+                                        _enc = {k: str(v) for k, v in _map.items()}
+                                    await self.redis_client.xadd('embeddings:reembed:requests', _enc)
                             except Exception:
                                 pass
                             if os.getenv('EMBEDDER_ENFORCE_NO_MIX', 'false').lower() in ('1','true','yes'):

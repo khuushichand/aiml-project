@@ -650,7 +650,8 @@ class MCPServer:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                 mgr = await get_api_key_manager()
-                info = await mgr.validate_api_key(api_key)
+                # Enforce allowed IPs for API keys by forwarding resolved client IP
+                info = await mgr.validate_api_key(api_key, ip_address=client_ip)
                 if info and info.get('user_id'):
                     user_id = str(info['user_id'])
                     # Attach org/team context

@@ -378,6 +378,11 @@ class APIKeyManager:
         budget_day_usd: Optional[float] = None,
         budget_month_usd: Optional[float] = None,
         parent_key_id: Optional[int] = None,
+        # Extra generic constraints (stored in metadata)
+        allowed_methods: Optional[list[str]] = None,
+        allowed_paths: Optional[list[str]] = None,
+        max_calls: Optional[int] = None,
+        max_runs: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Create a Virtual API Key with LLM endpoint scope and budgets."""
         if not self._initialized:
@@ -398,6 +403,16 @@ class APIKeyManager:
                     _endpoints = _json.dumps(allowed_endpoints) if allowed_endpoints is not None else None
                     _providers = _json.dumps(allowed_providers) if allowed_providers is not None else None
                     _models    = _json.dumps(allowed_models)    if allowed_models    is not None else None
+                    _meta_dict = {}
+                    if allowed_methods:
+                        _meta_dict['allowed_methods'] = [str(x).upper() for x in allowed_methods]
+                    if allowed_paths:
+                        _meta_dict['allowed_paths'] = [str(x) for x in allowed_paths]
+                    if max_calls is not None:
+                        _meta_dict['max_calls'] = int(max_calls)
+                    if max_runs is not None:
+                        _meta_dict['max_runs'] = int(max_runs)
+                    _metadata = _json.dumps(_meta_dict) if _meta_dict else None
 
                     # Detect column types to choose JSONB cast or plain text insert (compat across migrations)
                     try:
@@ -419,11 +434,13 @@ class APIKeyManager:
                                 is_virtual, parent_key_id, org_id, team_id,
                                 llm_budget_day_tokens, llm_budget_month_tokens,
                                 llm_budget_day_usd, llm_budget_month_usd,
-                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                                metadata
                             ) VALUES (
                                 $1,$2,$3,$4,$5,$6,'active',$7,
                                 TRUE,$8,$9,$10,
-                                $11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb
+                                $11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,
+                                ($18)::jsonb
                             ) RETURNING id
                             """,
                             user_id, key_hash, key_prefix, name, description, 'read', expires_at,
@@ -431,6 +448,7 @@ class APIKeyManager:
                             budget_day_tokens, budget_month_tokens,
                             budget_day_usd, budget_month_usd,
                             _endpoints, _providers, _models,
+                            _metadata,
                         )
                     else:
                         key_id = await conn.fetchval(
@@ -440,11 +458,13 @@ class APIKeyManager:
                                 is_virtual, parent_key_id, org_id, team_id,
                                 llm_budget_day_tokens, llm_budget_month_tokens,
                                 llm_budget_day_usd, llm_budget_month_usd,
-                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                                metadata
                             ) VALUES (
                                 $1,$2,$3,$4,$5,$6,'active',$7,
                                 TRUE,$8,$9,$10,
-                                $11,$12,$13,$14,$15,$16,$17
+                                $11,$12,$13,$14,$15,$16,$17,
+                                $18
                             ) RETURNING id
                             """,
                             user_id, key_hash, key_prefix, name, description, 'read', expires_at,
@@ -452,8 +472,20 @@ class APIKeyManager:
                             budget_day_tokens, budget_month_tokens,
                             budget_day_usd, budget_month_usd,
                             _endpoints, _providers, _models,
+                            _metadata,
                         )
                 else:
+                    import json
+                    _meta_dict = {}
+                    if allowed_methods:
+                        _meta_dict['allowed_methods'] = [str(x).upper() for x in allowed_methods]
+                    if allowed_paths:
+                        _meta_dict['allowed_paths'] = [str(x) for x in allowed_paths]
+                    if max_calls is not None:
+                        _meta_dict['max_calls'] = int(max_calls)
+                    if max_runs is not None:
+                        _meta_dict['max_runs'] = int(max_runs)
+                    _metadata = json.dumps(_meta_dict) if _meta_dict else None
                     cursor = await conn.execute(
                         """
                         INSERT INTO api_keys (
@@ -461,9 +493,10 @@ class APIKeyManager:
                             is_virtual, parent_key_id, org_id, team_id,
                             llm_budget_day_tokens, llm_budget_month_tokens,
                             llm_budget_day_usd, llm_budget_month_usd,
-                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                            metadata
                         ) VALUES (?,?,?,?,?,?,'active',?,
-                            1,?,?,?,?,?,?,?,?,?,?
+                            1,?,?,?,?,?,?,?,?,?,?,?
                         )
                         """,
                         (
@@ -475,6 +508,7 @@ class APIKeyManager:
                             (json.dumps(allowed_endpoints) if allowed_endpoints else None),
                             (json.dumps(allowed_providers) if allowed_providers else None),
                             (json.dumps(allowed_models) if allowed_models else None),
+                            _metadata,
                         )
                     )
                     key_id = cursor.lastrowid
@@ -538,7 +572,8 @@ class APIKeyManager:
                            parent_key_id, org_id, team_id,
                            llm_budget_day_tokens, llm_budget_month_tokens,
                            llm_budget_day_usd, llm_budget_month_usd,
-                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                           metadata
                     FROM api_keys
                     WHERE key_hash = $1 AND status = $2
                     """,
@@ -553,7 +588,8 @@ class APIKeyManager:
                            parent_key_id, org_id, team_id,
                            llm_budget_day_tokens, llm_budget_month_tokens,
                            llm_budget_day_usd, llm_budget_month_usd,
-                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                           metadata
                     FROM api_keys
                     WHERE key_hash = ? AND status = ?
                     """,

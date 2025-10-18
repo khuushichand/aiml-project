@@ -427,7 +427,18 @@ filterwarnings = [
     "ignore::DeprecationWarning:speechbrain.pretrained:",
     "ignore::DeprecationWarning:transformers:",
     "ignore::DeprecationWarning:torch:",
-    "ignore:.*swigvarlink.*:DeprecationWarning"
+    "ignore:.*swigvarlink.*:DeprecationWarning",
+    # Trim noisy deprecations from common deps used in tests
+    "ignore::DeprecationWarning:httpx:",
+    "ignore::DeprecationWarning:anyio:",
+    "ignore::DeprecationWarning:starlette:",
+    "ignore::DeprecationWarning:pydantic:",
+    "ignore::PendingDeprecationWarning:.*",
+    # Third-party optional libs warnings (reduce noise in CI)
+    "ignore::UserWarning:transformers:",
+    "ignore::UserWarning:torch:",
+    "ignore::UserWarning:torchaudio:",
+    "ignore::UserWarning:speechbrain:"
 ]
 markers = [
     "asyncio: mark test as async",

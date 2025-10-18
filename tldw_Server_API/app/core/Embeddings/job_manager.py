@@ -253,11 +253,13 @@ class EmbeddingJobManager:
             **({"trace_id": trace_id_hex} if trace_id_hex else {})
         )
         
-        # Add to chunking queue
-        await self.redis_client.xadd(
-            self.config.chunking_queue,
-            model_dump_compat(chunking_message)
-        )
+        # Add to chunking queue (ensure string values)
+        _payload = model_dump_compat(chunking_message)
+        try:
+            _fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in _payload.items()}
+        except Exception:
+            _fields = {k: str(v) for k, v in _payload.items()}
+        await self.redis_client.xadd(self.config.chunking_queue, _fields)
         
         logger.info(f"Created job {job_id} for user {user_id} with priority {effective_priority}")
         

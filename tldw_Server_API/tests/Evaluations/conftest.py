@@ -495,7 +495,12 @@ def evaluation_manager(temp_db_path, monkeypatch) -> EvaluationManager:
     
     # Ensure the manager uses our temp database, not production
     # Mock the config to return our temp path
-    def mock_get_db_path(self):
+    def mock_get_db_path(self, explicit_path=None):
+        if explicit_path is not None:
+            try:
+                return Path(explicit_path)
+            except Exception:
+                return temp_db_path
         return temp_db_path
     
     # Now create the manager with mocked path

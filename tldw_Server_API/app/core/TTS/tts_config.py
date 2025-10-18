@@ -232,7 +232,7 @@ class TTSConfigManager:
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
                     
-                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice']:
+                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts']:
                         if provider not in config_dict['providers']:
                             config_dict['providers'][provider] = {}
                         config_dict['providers'][provider]['device'] = tts_section['local_tts_device']
@@ -243,7 +243,7 @@ class TTSConfigManager:
                     auto_dl = val in ("1", "true", "yes", "on")
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
-                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice']:
+                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts']:
                         config_dict['providers'].setdefault(provider, {})['auto_download'] = auto_dl
 
                 # Provider-specific auto-download toggles
@@ -259,6 +259,7 @@ class TTSConfigManager:
                     ('dia', 'dia_auto_download'),
                     ('higgs', 'higgs_auto_download'),
                     ('chatterbox', 'chatterbox_auto_download'),
+                    ('neutts', 'neutts_auto_download'),
                 ):
                     bv = _bool_from_section(key)
                     if bv is not None:

@@ -149,6 +149,82 @@ def _finalize_login_diag(request: Request, response: Response):
     except Exception:
         pass
 
+
+# ---------------- Self-service virtual keys (scoped JWT) ----------------
+from pydantic import BaseModel, Field
+from typing import List
+
+
+class SelfVirtualKeyRequest(BaseModel):
+    ttl_minutes: int = Field(60, ge=1, le=1440)
+    scope: str = Field("workflows")
+    schedule_id: Optional[str] = None
+    allowed_endpoints: Optional[List[str]] = None
+    allowed_methods: Optional[List[str]] = None
+    allowed_paths: Optional[List[str]] = None
+    max_calls: Optional[int] = Field(None, ge=0)
+    max_runs: Optional[int] = Field(None, ge=0)
+    not_before: Optional[str] = Field(None, description="Optional ISO timestamp when token becomes valid")
+
+
+@router.post("/virtual-key")
+async def mint_self_virtual_key(
+    body: SelfVirtualKeyRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Mint a short‑lived, scoped JWT for the current user.
+
+    This is intended for automation and integrations to act on behalf of the
+    requesting user with constrained scope, time window, and optional endpoint
+    allowlists.
+    """
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(status_code=400, detail="Virtual keys require multi-user mode")
+    try:
+        svc = JWTService(settings)
+        add_claims: Dict[str, Any] = {}
+        if body.allowed_endpoints:
+            add_claims["allowed_endpoints"] = [str(x) for x in body.allowed_endpoints]
+        if body.allowed_methods:
+            add_claims["allowed_methods"] = [str(x).upper() for x in body.allowed_methods]
+        if body.allowed_paths:
+            add_claims["allowed_paths"] = [str(x) for x in body.allowed_paths]
+        if body.max_calls is not None:
+            add_claims["max_calls"] = int(body.max_calls)
+        if body.max_runs is not None:
+            add_claims["max_runs"] = int(body.max_runs)
+        if body.not_before:
+            # Store as standard JWT 'nbf' if parseable; otherwise ignore
+            try:
+                from datetime import datetime
+                nbf_dt = datetime.fromisoformat(str(body.not_before).replace("Z", "+00:00"))
+                add_claims["nbf"] = int(nbf_dt.timestamp())
+            except Exception:
+                pass
+        token = svc.create_virtual_access_token(
+            user_id=int(current_user.get("id")),
+            username=str(current_user.get("username") or current_user.get("email") or "user"),
+            role=("admin" if bool(current_user.get("is_admin")) else str(current_user.get("role") or "user")),
+            scope=str(body.scope or "workflows"),
+            ttl_minutes=int(body.ttl_minutes),
+            schedule_id=(str(body.schedule_id) if body.schedule_id else None),
+            additional_claims=add_claims or None,
+        )
+        from datetime import datetime, timedelta
+        exp = datetime.utcnow() + timedelta(minutes=int(body.ttl_minutes))
+        return {
+            "token": token,
+            "expires_at": exp.isoformat(),
+            "scope": str(body.scope or "workflows"),
+            "schedule_id": (str(body.schedule_id) if body.schedule_id else None),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to mint self virtual key: {e}")
+        raise HTTPException(status_code=500, detail="Failed to mint token")
+
 @router.post("/login", response_model=TokenResponse, dependencies=[Depends(check_auth_rate_limit)])
 async def login(
     request: Request,
@@ -762,6 +838,31 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise InvalidTokenError("Invalid or expired session for refresh token")
+
+            # Always blacklist the prior refresh token's JTI to prevent reuse
+            try:
+                from datetime import datetime as _dt
+                from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
+                old_jti = payload.get("jti") if isinstance(payload, dict) else None
+                old_exp = payload.get("exp") if isinstance(payload, dict) else None
+                if old_jti and isinstance(old_exp, (int, float)) and new_refresh_token != request.refresh_token:
+                    expires_at = _dt.utcfromtimestamp(old_exp)
+                    bl = _get_bl()
+                    # Best-effort revoke; do not fail refresh if blacklist write fails
+                    await bl.revoke_token(
+                        jti=old_jti,
+                        expires_at=expires_at,
+                        user_id=int(user['id']),
+                        token_type="refresh",
+                        reason="refresh-rotated",
+                        revoked_by=None,
+                        ip_address=(request.client.host if request and getattr(request, 'client', None) else None),
+                    )
+            except Exception as _bl_e:
+                try:
+                    logger.debug(f"Refresh: blacklist prior token best-effort failed: {_bl_e}")
+                except Exception:
+                    pass
         
         if settings.PII_REDACT_LOGS:
             logger.info("Token refreshed [redacted]")

@@ -153,23 +153,74 @@ def migrate_to_unified_evaluations(db_path: str) -> bool:
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='internal_evaluations'")
             if cursor.fetchone():
                 logger.info("Migrating data from 'internal_evaluations' table...")
-                cursor.execute("""
-                    INSERT INTO evaluations_unified (
-                        evaluation_id, name, eval_spec, evaluation_type, 
-                        created_at, input_data, results, metadata, user_id, status, 
-                        error_message, completed_at, embedding_provider, embedding_model
+                conn.row_factory = sqlite3.Row
+                legacy_cursor = conn.cursor()
+
+                # Determine which optional columns exist on older installs
+                legacy_cursor.execute("PRAGMA table_info('internal_evaluations')")
+                column_names = {row["name"] for row in legacy_cursor.fetchall()}
+                has_error_message = "error_message" in column_names
+                has_completed_at = "completed_at" in column_names
+                has_embedding_provider = "embedding_provider" in column_names
+                has_embedding_model = "embedding_model" in column_names
+
+                # Cache existing unified evaluation_ids to avoid duplicates
+                cursor.execute("SELECT evaluation_id FROM evaluations_unified")
+                existing_ids = {row[0] for row in cursor.fetchall() if row[0]}
+
+                legacy_cursor.execute("SELECT * FROM internal_evaluations")
+                migrated_count = 0
+                for legacy_row in legacy_cursor.fetchall():
+                    eval_id = legacy_row["evaluation_id"]
+                    if not eval_id or eval_id in existing_ids:
+                        continue
+
+                    evaluation_type = legacy_row["evaluation_type"]
+                    created_at = legacy_row["created_at"]
+                    input_data = legacy_row["input_data"]
+                    results = legacy_row["results"]
+                    metadata = legacy_row["metadata"]
+                    user_id = legacy_row["user_id"]
+                    status = legacy_row["status"]
+
+                    error_message = legacy_row["error_message"] if has_error_message else None
+                    completed_at = legacy_row["completed_at"] if has_completed_at else None
+                    embedding_provider = legacy_row["embedding_provider"] if has_embedding_provider else None
+                    embedding_model = legacy_row["embedding_model"] if has_embedding_model else None
+
+                    eval_spec = metadata if metadata is not None else "{}"
+                    name = f"Internal {evaluation_type} - {eval_id}"
+
+                    cursor.execute(
+                        """
+                        INSERT INTO evaluations_unified (
+                            evaluation_id, name, eval_spec, evaluation_type,
+                            created_at, input_data, results, metadata, user_id, status,
+                            error_message, completed_at, embedding_provider, embedding_model
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            eval_id,
+                            name,
+                            eval_spec,
+                            evaluation_type,
+                            created_at,
+                            input_data,
+                            results,
+                            metadata,
+                            user_id,
+                            status,
+                            error_message,
+                            completed_at,
+                            embedding_provider,
+                            embedding_model
+                        )
                     )
-                    SELECT 
-                        evaluation_id, 
-                        'Internal ' || evaluation_type || ' - ' || evaluation_id as name,
-                        COALESCE(metadata, '{}') as eval_spec,
-                        evaluation_type, 
-                        created_at, input_data, results, metadata, user_id, status, 
-                        error_message, completed_at, embedding_provider, embedding_model
-                    FROM internal_evaluations
-                    WHERE evaluation_id NOT IN (SELECT evaluation_id FROM evaluations_unified)
-                """)
-                logger.info(f"Migrated {cursor.rowcount} records from 'internal_evaluations' table")
+                    existing_ids.add(eval_id)
+                    migrated_count += 1
+
+                logger.info(f"Migrated {migrated_count} records from 'internal_evaluations' table")
             
             # Create user rate limits table for per-user rate limiting
             cursor.execute("""

@@ -1199,7 +1199,7 @@ async def create_embeddings_batch_async(
     import asyncio
     
     # Run the synchronous function in a thread pool to avoid blocking
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,  # Use default executor
         create_embeddings_batch,
