@@ -531,7 +531,7 @@ def unit_test_client(client, auth_token, isolated_db):
             headers["Token"] = token_with_bearer
         
         # Mock the LLM call
-        with patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call") as mock_llm, \
+        with patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_llm, \
              patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform:
             mock_llm.return_value = mock_response
             mock_perform.return_value = mock_response

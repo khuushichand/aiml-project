@@ -126,6 +126,7 @@ class Job(BaseModel):
     updated_at: str
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None
+    wf_schedule_id: Optional[str] = None
 
 
 class JobsListResponse(BaseModel):
@@ -147,3 +148,15 @@ class RunsListResponse(BaseModel):
     items: List[Run]
     total: int
 
+
+class RunDetail(BaseModel):
+    id: int
+    job_id: int
+    status: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    stats: Dict[str, int] = Field(default_factory=lambda: {"items_found": 0, "items_ingested": 0})
+    error_msg: Optional[str] = None
+    log_text: Optional[str] = None
+    log_path: Optional[str] = None
+    truncated: bool = False

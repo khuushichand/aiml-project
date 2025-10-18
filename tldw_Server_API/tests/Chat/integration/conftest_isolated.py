@@ -141,7 +141,7 @@ def isolated_chat_endpoint_mocks(mock_api_keys, mock_llm_response):
     """Create isolated mocks for chat endpoint without global modifications."""
     with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", mock_api_keys), \
          patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform, \
-         patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call") as mock_chat_call:
+         patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_chat_call:
         
         mock_perform.return_value = mock_llm_response
         mock_chat_call.return_value = mock_llm_response

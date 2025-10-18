@@ -1308,6 +1308,7 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
                     link = None
                     summary = None
                     published = None
+                    guid = None
                     # Namespaces
                     def _find_text(node, names):
                         for n in names:
@@ -1324,11 +1325,14 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
                         link = _find_text(it, ["link", "{http://www.w3.org/2005/Atom}link"]) or ""
                     summary = _find_text(it, ["description", "{http://www.w3.org/2005/Atom}summary", "{http://www.w3.org/2005/Atom}content"]) or ""
                     published = _find_text(it, ["pubDate", "{http://www.w3.org/2005/Atom}updated", "{http://www.w3.org/2005/Atom}published"]) or None
+                    guid = _find_text(it, ["guid", "{http://www.w3.org/2005/Atom}id"]) or None
                     rec = {"title": title, "link": link}
                     if include_content:
                         rec["summary"] = summary
                     if published:
                         rec["published"] = published
+                    if guid:
+                        rec["guid"] = guid
                     results.append(rec)
             except Exception:
                 continue

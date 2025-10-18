@@ -19,7 +19,8 @@ from loguru import logger
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime
+from datetime import datetime, timedelta
+import random
 
 from tldw_Server_API.app.core.Scheduler import create_scheduler, Scheduler
 from tldw_Server_API.app.core.Scheduler.handlers import workflows as _ensure_handlers  # noqa: F401  # register workflow_run
@@ -211,6 +212,29 @@ class _WFRecurringScheduler:
             misfire_grace_time = int(schedule.misfire_grace_sec or 300)
             # Pass user_id so run handler can pick correct per-user DB
             effective_uid = user_id if user_id is not None else int(schedule.user_id)
+            # Determine jitter: prefer enabling for watchlist jobs to avoid the "on the hour" thundering herd
+            jitter_sec = 0
+            try:
+                raw_inputs = __import__("json").loads(schedule.inputs_json or "{}")
+                is_watchlist = isinstance(raw_inputs, dict) and bool(raw_inputs.get("watchlist_job_id"))
+                if is_watchlist:
+                    try:
+                        jitter_env = os.getenv("WATCHLISTS_SCHEDULER_JITTER_SEC", "90")
+                        jitter_sec = int(jitter_env) if str(jitter_env).strip() else 90
+                        if jitter_sec < 0:
+                            jitter_sec = 0
+                    except Exception:
+                        jitter_sec = 90
+            except Exception:
+                jitter_sec = 0
+
+            # Persist jitter metadata for watchlist schedules
+            try:
+                if jitter_sec > 0:
+                    self._get_db(effective_uid).update_schedule(schedule.id, {"jitter_sec": jitter_sec})
+            except Exception:
+                pass
+
             self._aps.add_job(
                 self._run_schedule,
                 trigger=trigger,
@@ -219,13 +243,24 @@ class _WFRecurringScheduler:
                 max_instances=max_instances,
                 coalesce=coalesce,
                 misfire_grace_time=misfire_grace_time,
+                jitter=jitter_sec if jitter_sec > 0 else None,
             )
 
             # Compute and persist next run time
             try:
                 now = datetime.now(trigger.timezone)
                 nxt = trigger.get_next_fire_time(None, now)
-                next_iso = nxt.isoformat() if nxt else None
+                # Mild UI jitter for watchlists to avoid synchronized display
+                next_dt = nxt
+                try:
+                    if jitter_sec > 0:
+                        ui_jitter = int(os.getenv("WATCHLISTS_NEXT_RUN_UI_JITTER_SEC", "60") or 60)
+                        if ui_jitter > 0 and next_dt is not None:
+                            delta = random.randint(-ui_jitter, ui_jitter)
+                            next_dt = next_dt + timedelta(seconds=delta)
+                except Exception:
+                    pass
+                next_iso = next_dt.isoformat() if next_dt else None
                 self._get_db(effective_uid).set_history(schedule.id, next_run_at=next_iso)
             except Exception:
                 pass

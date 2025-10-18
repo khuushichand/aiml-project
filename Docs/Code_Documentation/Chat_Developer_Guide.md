@@ -24,7 +24,7 @@ This guide explains the Chat module’s architecture, key components, and how to
 ## Directory Map
 
  - `tldw_Server_API/app/core/Chat/`
-  - `Chat_Functions.py` – Legacy shim + utilities (e.g., ChatDictionary, helpers). The API endpoint dispatches via `chat_orchestrator`; this file forwards to it for test/backward compatibility. Provider mappings are not duplicated here.
+  - `Chat_Functions.py` – Minimal compatibility shim exporting only `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`. Import history/dictionary/character helpers from their dedicated modules.
   - `chat_orchestrator.py` – Primary dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
   - `chat_helpers.py` – Request shaping helpers, conversion from API schemas, dictionary/character hooks
   - `provider_manager.py` & `provider_config.py` – Provider health/fallback management and authoritative handler/parameter mappings
@@ -50,7 +50,7 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Mappings are sourced from `provider_config.py`. A compatibility shim remains in `Chat_Functions.chat_api_call` for legacy callers and tests.
+3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Mappings are sourced from `provider_config.py`. A minimal compatibility shim (`Chat_Functions.chat_api_call`) remains for legacy callers/tests; new code should import from `chat_orchestrator` directly.
 4. `LLM_Calls/*` executes the provider‑specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.

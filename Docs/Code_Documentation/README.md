@@ -17,7 +17,7 @@ Key Directories
 - tldw_Server_API/app/core/Chat/
   - streaming_utils.py: Normalizes upstream SSE, emits heartbeats, enforces timeouts. Always emits final `data: [DONE]` on normal end.
   - chat_metrics.py: Prometheus/OpenTelemetry metrics registry and helpers (request metrics, streaming metrics, moderation metrics).
-  - Chat_Functions.py, provider_config.py, provider_manager.py: LLM provider integrations (not modified here but used by chat.py).
+  - chat_orchestrator.py, provider_config.py, provider_manager.py: LLM provider integrations (Chat_Functions.py now serves only as a minimal compatibility shim).
 - tldw_Server_API/app/core/Moderation/
   - moderation_service.py: Central moderation/guardrails engine and persistence helpers.
 - tldw_Server_API/app/core/Audit/

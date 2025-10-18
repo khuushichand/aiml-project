@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     concurrency_mode TEXT NOT NULL DEFAULT 'skip', -- 'skip' or 'queue'
     misfire_grace_sec INTEGER DEFAULT 300,
     coalesce BOOLEAN NOT NULL DEFAULT TRUE,
+    jitter_sec INTEGER NOT NULL DEFAULT 0,
     -- History
     last_run_at TIMESTAMPTZ,
     next_run_at TIMESTAMPTZ,
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     concurrency_mode TEXT NOT NULL DEFAULT 'skip', -- 'skip' or 'queue'
     misfire_grace_sec INTEGER DEFAULT 300,
     coalesce INTEGER NOT NULL DEFAULT 1,
+    jitter_sec INTEGER NOT NULL DEFAULT 0,
     -- History
     last_run_at TEXT,
     next_run_at TEXT,
@@ -108,6 +110,7 @@ class WorkflowSchedule:
     concurrency_mode: str
     misfire_grace_sec: int
     coalesce: bool
+    jitter_sec: int
     last_run_at: Optional[str]
     next_run_at: Optional[str]
     last_status: Optional[str]
@@ -262,6 +265,11 @@ class WorkflowsSchedulerDB:
                     self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT", connection=conn)
                 except Exception:
                     pass
+                # Forward-add jitter_sec for pre-existing tables
+                try:
+                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER DEFAULT 0", connection=conn)
+                except Exception:
+                    pass
 
     def _rows(self, result: QueryResult) -> List[Dict[str, Any]]:
         cols = [c[0] for c in (result.description or [])]
@@ -321,6 +329,7 @@ class WorkflowsSchedulerDB:
             concurrency_mode,
             int(misfire_grace_sec),
             1 if coalesce else 0,
+            0,
             None,
             None,
             None,
@@ -330,8 +339,8 @@ class WorkflowsSchedulerDB:
         sql = (
             "INSERT INTO workflow_schedules("
             "id,tenant_id,user_id,workflow_id,name,cron,timezone,inputs_json,run_mode,validation_mode,enabled,require_online,"
-            "concurrency_mode,misfire_grace_sec,coalesce,last_run_at,next_run_at,last_status,created_at,updated_at"
-            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            "concurrency_mode,misfire_grace_sec,coalesce,jitter_sec,last_run_at,next_run_at,last_status,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         )
         with self.backend.transaction() as conn:
             self.backend.execute(sql, params, connection=conn)
@@ -383,7 +392,7 @@ class WorkflowsSchedulerDB:
             validation_mode=r.get("validation_mode") or "block", enabled=bool(r.get("enabled") in (1, True, "1")),
             require_online=bool(r.get("require_online") in (1, True, "1")),
             concurrency_mode=(r.get("concurrency_mode") or "skip"), misfire_grace_sec=int(r.get("misfire_grace_sec") or 300),
-            coalesce=bool(r.get("coalesce") in (1, True, "1")), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
+            coalesce=bool(r.get("coalesce") in (1, True, "1")), jitter_sec=int(r.get("jitter_sec") or 0), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
             last_status=r.get("last_status"), created_at=r.get("created_at"), updated_at=r.get("updated_at")
         )
 
@@ -413,7 +422,7 @@ class WorkflowsSchedulerDB:
                     validation_mode=r.get("validation_mode") or "block", enabled=bool(r.get("enabled") in (1, True, "1")),
                     require_online=bool(r.get("require_online") in (1, True, "1")),
                     concurrency_mode=(r.get("concurrency_mode") or "skip"), misfire_grace_sec=int(r.get("misfire_grace_sec") or 300),
-                    coalesce=bool(r.get("coalesce") in (1, True, "1")), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
+                    coalesce=bool(r.get("coalesce") in (1, True, "1")), jitter_sec=int(r.get("jitter_sec") or 0), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
                     last_status=r.get("last_status"), created_at=r.get("created_at"), updated_at=r.get("updated_at")
                 )
             )

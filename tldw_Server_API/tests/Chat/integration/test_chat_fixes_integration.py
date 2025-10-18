@@ -324,7 +324,7 @@ class TestErrorResponseStandardization:
     
     def test_5xx_errors_masked(self, setup_auth_override):
         """Test that 5xx errors don't expose internal details."""
-        from tldw_Server_API.app.core.Chat.Chat_Functions import (
+        from tldw_Server_API.app.core.Chat.Chat_Deps import (
             ChatProviderError,
             ChatAPIError,
             ChatConfigurationError
@@ -348,7 +348,7 @@ class TestErrorResponseStandardization:
     
     def test_4xx_errors_preserved(self):
         """Test that 4xx client errors can show details."""
-        from tldw_Server_API.app.core.Chat.Chat_Functions import (
+        from tldw_Server_API.app.core.Chat.Chat_Deps import (
             ChatAuthenticationError,
             ChatRateLimitError,
             ChatBadRequestError

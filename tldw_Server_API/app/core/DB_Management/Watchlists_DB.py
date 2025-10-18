@@ -50,7 +50,9 @@ class SourceRow:
     last_scraped_at: Optional[str]
     etag: Optional[str]
     last_modified: Optional[str]
+    defer_until: Optional[str]
     status: Optional[str]
+    consec_not_modified: Optional[int]
     created_at: str
     updated_at: str
     tags: List[str]
@@ -132,7 +134,9 @@ class WatchlistsDatabase:
             last_scraped_at TEXT,
             etag TEXT,
             last_modified TEXT,
+            defer_until TEXT,
             status TEXT,
+            consec_not_modified INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -204,11 +208,30 @@ class WatchlistsDatabase:
             media_id INTEGER NOT NULL,
             UNIQUE (run_id, media_id)
         );
+        
+        -- Track per-source seen RSS/Atom items for deduplication
+        CREATE TABLE IF NOT EXISTS source_seen_items (
+            source_id INTEGER NOT NULL,
+            item_key TEXT NOT NULL,
+            etag TEXT,
+            last_modified TEXT,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            UNIQUE (source_id, item_key)
+        );
         """
         self.backend.create_tables(ddl)
         # Backfill columns in case table existed
         try:
             self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
         except Exception:
             pass
 
@@ -265,11 +288,29 @@ class WatchlistsDatabase:
         group_ids: Optional[List[int]] = None,
     ) -> SourceRow:
         now = _utcnow_iso()
-        res = self.backend.execute(
-            "INSERT INTO sources (user_id, name, url, source_type, active, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
-        )
-        sid = int(res.lastrowid or 0)
+        # Try insert; if UNIQUE(user_id,url) violates, fetch existing id and proceed idempotently
+        sid: Optional[int] = None
+        try:
+            res = self.backend.execute(
+                "INSERT INTO sources (user_id, name, url, source_type, active, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
+            )
+            sid = int(res.lastrowid or 0)
+        except Exception:
+            # Look up existing source for idempotency
+            try:
+                row = self.backend.execute(
+                    "SELECT id FROM sources WHERE user_id = ? AND url = ?",
+                    (self.user_id, url),
+                ).first
+                if row and row.get("id") is not None:
+                    sid = int(row.get("id"))
+                else:
+                    raise
+            except Exception as e:
+                raise e
+        if sid is None:
+            raise RuntimeError("failed_to_create_or_lookup_source")
         if tags:
             tag_ids = self.ensure_tag_ids(tags)
             for tid in tag_ids:
@@ -287,7 +328,7 @@ class WatchlistsDatabase:
 
     def get_source(self, source_id: int) -> SourceRow:
         row = self.backend.execute(
-            "SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, status, created_at, updated_at FROM sources WHERE id = ? AND user_id = ?",
+            "SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, created_at, updated_at FROM sources WHERE id = ? AND user_id = ?",
             (source_id, self.user_id),
         ).first
         if not row:
@@ -317,7 +358,7 @@ class WatchlistsDatabase:
         where_sql = " AND ".join(where)
         total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM sources WHERE {where_sql}", tuple(params)).scalar or 0)
         rows = self.backend.execute(
-            f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, status, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             tuple(params + [limit, offset]),
         ).rows
         out: List[SourceRow] = []
@@ -354,6 +395,52 @@ class WatchlistsDatabase:
         # tags/group updates handled via separate helpers
         return self.get_source(source_id)
 
+    def update_source_scrape_meta(
+        self,
+        source_id: int,
+        *,
+        last_scraped_at: Optional[str] = None,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+        defer_until: Optional[str] = None,
+        status: Optional[str] = None,
+        consec_not_modified: Optional[int] = None,
+    ) -> None:
+        """Update scrape metadata fields for a source (idempotent, partial)."""
+        fields: list[str] = []
+        params: list[Any] = []
+        if last_scraped_at is not None:
+            fields.append("last_scraped_at = ?")
+            params.append(last_scraped_at)
+        if etag is not None:
+            fields.append("etag = ?")
+            params.append(etag)
+        if last_modified is not None:
+            fields.append("last_modified = ?")
+            params.append(last_modified)
+        if defer_until is not None:
+            fields.append("defer_until = ?")
+            params.append(defer_until)
+        if status is not None:
+            fields.append("status = ?")
+            params.append(status)
+        if consec_not_modified is not None:
+            fields.append("consec_not_modified = ?")
+            params.append(int(consec_not_modified))
+        if not fields:
+            return
+        params.extend([source_id, self.user_id])
+        self.backend.execute(
+            f"UPDATE sources SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(params),
+        )
+
+    def clear_source_defer_until(self, source_id: int) -> None:
+        self.backend.execute(
+            "UPDATE sources SET defer_until = NULL WHERE id = ? AND user_id = ?",
+            (source_id, self.user_id),
+        )
+
     def set_source_tags(self, source_id: int, tag_names: List[str]) -> List[str]:
         tag_ids = self.ensure_tag_ids(tag_names)
         self.backend.execute("DELETE FROM source_tags WHERE source_id = ?", (source_id,))
@@ -372,15 +459,58 @@ class WatchlistsDatabase:
         res = self.backend.execute("DELETE FROM sources WHERE id = ? AND user_id = ?", (source_id, self.user_id))
         return res.rowcount > 0
 
+    def list_sources_by_group_ids(self, group_ids: List[int], *, active_only: bool = True) -> List[SourceRow]:
+        """Return sources that belong to any of the provided group IDs (OR semantics)."""
+        if not group_ids:
+            return []
+        placeholders = ",".join(["?"] * len(group_ids))
+        active_clause = "AND s.active = 1" if active_only else ""
+        rows = self.backend.execute(
+            f"""
+            SELECT s.id, s.user_id, s.name, s.url, s.source_type, s.active, s.settings_json,
+                   s.last_scraped_at, s.etag, s.last_modified, s.defer_until, s.status, s.created_at, s.updated_at
+            FROM sources s
+            WHERE s.user_id = ? {active_clause}
+              AND EXISTS (
+                SELECT 1 FROM source_groups sg
+                WHERE sg.source_id = s.id AND sg.group_id IN ({placeholders})
+              )
+            ORDER BY s.created_at DESC
+            """,
+            tuple([self.user_id] + group_ids),
+        ).rows
+        out: List[SourceRow] = []
+        for r in rows:
+            sid = int(r.get("id"))
+            trows = self.backend.execute(
+                "SELECT t.name FROM source_tags st JOIN tags t ON st.tag_id = t.id WHERE st.source_id = ?",
+                (sid,),
+            ).rows
+            tags = [tr.get("name") for tr in trows if tr.get("name")]
+            out.append(SourceRow(tags=tags, **r))  # type: ignore[arg-type]
+        return out
+
     # ------------------------
     # Groups
     # ------------------------
     def create_group(self, name: str, description: Optional[str], parent_group_id: Optional[int]) -> GroupRow:
-        res = self.backend.execute(
-            "INSERT INTO groups (user_id, name, description, parent_group_id) VALUES (?, ?, ?, ?)",
-            (self.user_id, name, description, parent_group_id),
-        )
-        return self.get_group(int(res.lastrowid or 0))
+        # Idempotent by (user_id, name)
+        try:
+            res = self.backend.execute(
+                "INSERT INTO groups (user_id, name, description, parent_group_id) VALUES (?, ?, ?, ?)",
+                (self.user_id, name, description, parent_group_id),
+            )
+            return self.get_group(int(res.lastrowid or 0))
+        except Exception:
+            # On UNIQUE violation, fetch existing
+            row = self.backend.execute(
+                "SELECT id FROM groups WHERE user_id = ? AND name = ?",
+                (self.user_id, name),
+            ).first
+            if not row:
+                # Re-raise original path if not found
+                raise
+            return self.get_group(int(row.get("id")))
 
     def get_group(self, group_id: int) -> GroupRow:
         row = self.backend.execute(
@@ -632,3 +762,53 @@ class WatchlistsDatabase:
             tuple(params + [run_id]),
         )
         return self.get_run(run_id)
+
+    # ------------------------
+    # RSS item-level dedup helpers
+    # ------------------------
+    def has_seen_item(self, source_id: int, item_key: str) -> bool:
+        row = self.backend.execute(
+            "SELECT 1 FROM source_seen_items WHERE source_id = ? AND item_key = ?",
+            (source_id, item_key),
+        ).first
+        return bool(row)
+
+    def mark_seen_item(
+        self,
+        source_id: int,
+        item_key: str,
+        *,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+        seen_at: Optional[str] = None,
+    ) -> None:
+        ts = seen_at or _utcnow_iso()
+        # SQLite upsert pattern; backend handles SQL transparently in SQLite/Postgres where available
+        try:
+            self.backend.execute(
+                """
+                INSERT INTO source_seen_items (source_id, item_key, etag, last_modified, first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, item_key) DO UPDATE SET
+                    etag = COALESCE(excluded.etag, source_seen_items.etag),
+                    last_modified = COALESCE(excluded.last_modified, source_seen_items.last_modified),
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (source_id, item_key, etag, last_modified, ts, ts),
+            )
+        except Exception:
+            # Fallback for engines without ON CONFLICT support
+            row = self.backend.execute(
+                "SELECT 1 FROM source_seen_items WHERE source_id = ? AND item_key = ?",
+                (source_id, item_key),
+            ).first
+            if row:
+                self.backend.execute(
+                    "UPDATE source_seen_items SET etag = COALESCE(?, etag), last_modified = COALESCE(?, last_modified), last_seen_at = ? WHERE source_id = ? AND item_key = ?",
+                    (etag, last_modified, ts, source_id, item_key),
+                )
+            else:
+                self.backend.execute(
+                    "INSERT INTO source_seen_items (source_id, item_key, etag, last_modified, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (source_id, item_key, etag, last_modified, ts, ts),
+                )

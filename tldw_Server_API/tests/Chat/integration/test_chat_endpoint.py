@@ -29,7 +29,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ToolChoiceOption,
     ToolChoiceFunction
 )
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError,
     ChatConfigurationError, ChatProviderError, ChatAPIError
 )

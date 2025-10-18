@@ -32,6 +32,11 @@ from tldw_Server_API.app.core.Chat.provider_config import (
     PROVIDER_PARAM_MAP,
     ASYNC_API_CALL_HANDLERS,
 )
+from tldw_Server_API.app.core.Chat.chat_dictionary import (
+    ChatDictionary,
+    parse_user_dict_markdown_file,
+    process_user_input,
+)
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.config import load_and_log_configs
 #
@@ -388,22 +393,6 @@ async def chat_api_call_async(
 # Main Chat Function
 #
 
-# Import needed for chat dictionary processing
-# This creates a circular import that we'll fix in the refactored Chat_Functions.py
-# For now, we'll import it conditionally inside the function
-def process_user_input_wrapper(message, chatdict_entries, max_tokens=500, strategy="sorted_evenly"):
-    """Wrapper to avoid circular import during module refactoring."""
-    from tldw_Server_API.app.core.Chat.Chat_Functions import process_user_input
-    return process_user_input(message, chatdict_entries, max_tokens, strategy)
-
-def parse_user_dict_markdown_file_wrapper(file_path: str):
-    """Wrapper to avoid circular import during module refactoring."""
-    from tldw_Server_API.app.core.Chat.Chat_Functions import parse_user_dict_markdown_file, ChatDictionary
-    parsed_dict_entries = parse_user_dict_markdown_file(file_path)
-    if parsed_dict_entries:
-        return [ChatDictionary(key=k, content=str(v)) for k, v in parsed_dict_entries.items()]
-    return []
-
 # FIXME - thing is fucking big.
 # Break it down into smaller, logical async helper functions. For example:
 #
@@ -527,7 +516,7 @@ def chat(
         # Process message with Chat Dictionary (text only for now)
         processed_text_message = message
         if chatdict_entries and message:
-            processed_text_message = process_user_input_wrapper(
+            processed_text_message = process_user_input(
                 message, chatdict_entries, max_tokens=max_tokens, strategy=strategy
             )
 
@@ -697,16 +686,17 @@ def chat(
                 post_gen_replacement_dict_path = loaded_config_data.get('chat_dictionaries', {}).get('post_gen_replacement_dict')
                 if post_gen_replacement_dict_path and os.path.exists(post_gen_replacement_dict_path):
                     try:
-                        post_gen_chat_dict_objects = parse_user_dict_markdown_file_wrapper(post_gen_replacement_dict_path)
-                        if post_gen_chat_dict_objects:
-                            response = process_user_input_wrapper(response, post_gen_chat_dict_objects)
-                            # The original warning log can be removed or changed to a debug log if successfully applied.
+                        parsed_entries = parse_user_dict_markdown_file(post_gen_replacement_dict_path)
+                        if parsed_entries:
+                            post_gen_chat_dict_objects = [
+                                ChatDictionary(key=k, content=str(v)) for k, v in parsed_entries.items()
+                            ]
+                            response = process_user_input(response, post_gen_chat_dict_objects)
                             logging.debug(
-                                f"Response after post-gen replacement (first 500 chars): {str(response)[:500]}")
+                                f"Response after post-gen replacement (first 500 chars): {str(response)[:500]}"
+                            )
                         else:
                             logging.debug("Post-gen dictionary parsed but resulted in no ChatDictionary objects.")
-
-                        logging.debug(f"Response after post-gen replacement (first 500 chars): {str(response)[:500]}")
                     except Exception as e_post_gen:
                         logging.error(f"Error during post-generation replacement: {e_post_gen}", exc_info=True)
                 else:

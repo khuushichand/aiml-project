@@ -7,7 +7,7 @@ import time
 from typing import Dict, List, Any, Optional
 from loguru import logger
 
-from ....core.Chat.Chat_Functions import chat_api_call
+from ....core.Chat.chat_orchestrator import chat_api_call
 
 class TestRunner:
     """Runs test cases against prompts using LLM."""

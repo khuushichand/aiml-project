@@ -24,7 +24,7 @@ from App_Function_Libraries.Summarization.Summarization_General_Lib import summa
 # Local Imports
 from App_Function_Libraries.Utils.Utils import loaded_config_data, logging
 from App_Function_Libraries.Web_Scraping.Article_Extractor_Lib import scrape_article
-from App_Function_Libraries.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
 #

@@ -26,9 +26,9 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 | `request_queue.py` | Priority queue with backpressure, streaming pipe support, and worker pool management. |
 | `streaming_utils.py` | SSE utilities (heartbeat, idle timeout, chunk normalization, cancellation). |
 | `chat_metrics.py` | Prometheus/OpenTelemetry metric definitions specific to chat workflows. |
-| `Chat_Functions.py` | Backwards-compatible shim; delegates to `chat_orchestrator` while keeping historical API surface stable. |
+| `Chat_Functions.py` | Backwards-compatible shim that now only exposes `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`; import other helpers from their dedicated modules. |
 | `chat_exceptions.py` / `Chat_Deps.py` | Exception types used across the stack for consistent error handling. |
-| `chat_metrics.py`, `document_generator.py`, `Workflows.py` | Secondary features: telemetry, document production, legacy workflow scripts. |
+| `chat_metrics.py`, `document_generator.py`, `Workflows.py` | Secondary features: telemetry, document production, and workflow automation (delegating to `chat_orchestrator`). |
 
 ---
 
@@ -109,7 +109,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 - `chat_helpers.get_or_create_conversation` stores transcript metadata in `ChaChaNotes_DB`.
 - `chat_service.save_conversation_message` (see file) persists message payloads, with placeholder resolution and per-message metadata.
 - `document_generator.DocumentGeneratorService` uses chat history to produce timeline, study guide, briefing, summary, Q&A, and meeting notes documents, delegating to `chat_orchestrator.chat_api_call`.
-- Legacy `Workflows.py` still references older `App_Function_Libraries` paths; leave untouched until refactor (see `REFACTORING_PLAN.md`).
+- `Workflows.py` calls into `chat_orchestrator.chat` to execute legacy scripted flows without relying on deprecated `App_Function_Libraries` paths.
 
 ---
 
@@ -152,7 +152,7 @@ Set `TEST_MODE=1` in the environment when running tests to disable background lo
 5. **Streaming changes**: update `StreamingResponseHandler` to handle new SSE formats; keep `_extract_text_from_upstream_sse` tolerant to provider quirks.
 6. **Document generator**: extend `DocumentType` and default prompts, ensure chat history retrieval is efficient (batch DB reads).
 
-Always update this README and `REFACTORING_PLAN.md` when architectural decisions change, and keep compatibility shims (`Chat_Functions.py`) intact until all consumers are migrated.
+Always update this README and `REFACTORING_PLAN.md` when architectural decisions change. Treat `Chat_Functions.py` as a minimal compatibility shim; import from the focused modules (`chat_orchestrator`, `chat_history`, `chat_dictionary`, `chat_characters`) for new work and plan to retire the shim once remaining callers migrate.
 
 ---
 

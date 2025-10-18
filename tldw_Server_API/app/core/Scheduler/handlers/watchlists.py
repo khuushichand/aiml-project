@@ -22,6 +22,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Scheduler.base.registry import task
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 
 
 def _utcnow_iso() -> str:
@@ -58,29 +59,6 @@ async def watchlist_run(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         raise ValueError("watchlist_run: user_id must be int-like")
 
-    db = WatchlistsDatabase.for_user(uid_int)
-    # Ensure job exists
-    job = db.get_job(int(job_id))
-
-    # Create run and set running
-    run = db.create_run(job_id=int(job_id), status="running")
-
-    # Minimal stub: no network; simulate zero items processed
-    items_found = 0
-    items_ingested = 0
-    stats = {"items_found": items_found, "items_ingested": items_ingested}
-
-    # Mark run complete
-    db.update_run(
-        run.id,
-        status="succeeded",
-        finished_at=_utcnow_iso(),
-        stats_json=__import__("json").dumps(stats),
-    )
-
-    # Update job history
-    next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
-    db.set_job_history(job_id=int(job_id), last_run_at=_utcnow_iso(), next_run_at=next_run)
-
-    return {"run_id": run.id, "status": "succeeded", "items_ingested": items_ingested}
-
+    # Execute the real pipeline (handles run row creation, stats, and job history)
+    result = await run_watchlist_job(uid_int, int(job_id))
+    return {"run_id": result.get("run_id"), "status": "succeeded", "items_ingested": int(result.get("items_ingested", 0))}

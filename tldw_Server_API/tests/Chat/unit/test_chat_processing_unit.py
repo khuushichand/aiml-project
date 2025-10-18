@@ -10,14 +10,20 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
-    process_user_input,
-    update_chat_content,
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatRateLimitError,
     ChatAuthenticationError,
     ChatProviderError,
 )
+from tldw_Server_API.app.core.Chat.chat_dictionary import (
+    ChatDictionary,
+    TokenBudgetExceededWarning,
+    apply_strategy,
+    enforce_token_budget,
+    process_user_input,
+)
+from tldw_Server_API.app.core.Chat.chat_history import update_chat_content
 
 
 # ========================================================================
@@ -61,6 +67,27 @@ class TestProcessUserInput:
         assert result == json_input
 
 
+class TestChatDictionaryUtilities:
+    @pytest.mark.unit
+    def test_enforce_token_budget_truncates_entries(self):
+        small_entry = ChatDictionary(key="hello", content="hi there")
+        large_entry = ChatDictionary(key="world", content="this entry should be trimmed out")
+
+        with pytest.warns(TokenBudgetExceededWarning):
+            filtered = enforce_token_budget([small_entry, large_entry], max_tokens=3)
+
+        assert len(filtered) == 1
+        assert filtered[0].key_raw == "hello"
+
+    @pytest.mark.unit
+    def test_apply_strategy_prioritizes_global_group(self):
+        global_entry = ChatDictionary(key="alpha", content="global", group="global")
+        character_entry = ChatDictionary(key="beta", content="character", group="character")
+        default_entry = ChatDictionary(key="gamma", content="default")
+
+        ordered = apply_strategy([character_entry, default_entry, global_entry], strategy="global_lore_first")
+
+        assert [entry.key_raw for entry in ordered] == ["alpha", "beta", "gamma"]
 # ========================================================================
 # update_chat_content tests
 # ========================================================================
@@ -209,4 +236,3 @@ class TestMessageFormatting:
         parsed = json.loads(formatted)
         assert parsed["name"] == "Assistant"
         assert "metadata" in parsed
-

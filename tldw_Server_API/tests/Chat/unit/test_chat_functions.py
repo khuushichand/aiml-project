@@ -14,13 +14,22 @@ from tldw_Server_API.app.core.Chat.provider_config import (
     API_CALL_HANDLERS,
     PROVIDER_PARAM_MAP,
 )
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
-    chat,  # This is the multimodal chat coordinator
-    save_chat_history_to_db_wrapper,
+from tldw_Server_API.app.core.Chat.Chat_Functions import chat  # Multimodal chat coordinator via shim
+from tldw_Server_API.app.core.Chat.chat_characters import (
     load_characters,
     save_character,
+)
+from tldw_Server_API.app.core.Chat.chat_dictionary import (
     ChatDictionary,
     parse_user_dict_markdown_file,
+)
+from tldw_Server_API.app.core.Chat.chat_history import (
+    save_chat_history_to_db_wrapper,
+    save_chat_history,
+    get_conversation_name,
+    generate_chat_history_content,
+    extract_media_name,
+    update_chat_content,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError,
@@ -72,6 +81,29 @@ def mock_llm_api_call_handlers_for_chat_functions_unit():
     with patch("tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS", new=mocked_handlers_dict), \
          patch("tldw_Server_API.app.core.Chat.chat_orchestrator.API_CALL_HANDLERS", new=mocked_handlers_dict):
         yield mocked_handlers_dict
+
+
+@pytest.mark.unit
+def test_chat_history_helpers_reexport():
+    import tldw_Server_API.app.core.Chat.Chat_Functions as cf
+    import tldw_Server_API.app.core.Chat.chat_history as ch
+
+    assert cf.save_chat_history_to_db_wrapper is ch.save_chat_history_to_db_wrapper
+    assert cf.save_chat_history is ch.save_chat_history
+    assert cf.get_conversation_name is ch.get_conversation_name
+    assert cf.generate_chat_history_content is ch.generate_chat_history_content
+    assert cf.extract_media_name is ch.extract_media_name
+    assert cf.update_chat_content is ch.update_chat_content
+
+
+@pytest.mark.unit
+def test_chat_character_helpers_reexport():
+    import tldw_Server_API.app.core.Chat.Chat_Functions as cf
+    import tldw_Server_API.app.core.Chat.chat_characters as cc
+
+    assert cf.save_character is cc.save_character
+    assert cf.load_characters is cc.load_characters
+    assert cf.get_character_names is cc.get_character_names
 
 
 # --- Tests for chat_api_call ---
@@ -255,7 +287,7 @@ def test_chat_api_call_exception_propagation_and_mapping_unit(
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input")
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input")
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs")  # Patch it where `chat` uses it
 def test_chat_function_basic_text_call_unit(
         mock_load_configs_chat, mock_process_input, mock_chat_api_call_shim
@@ -292,7 +324,7 @@ def test_chat_function_basic_text_call_unit(
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input", side_effect=lambda x, *a, **kw: x)
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={"chat_dictionaries": {}})
 def test_chat_function_with_text_history_unit(mock_configs, mock_proc_input, mock_chat_shim):
     mock_chat_shim.return_value = "LLM Response with history"
@@ -321,7 +353,7 @@ def test_chat_function_with_text_history_unit(mock_configs, mock_proc_input, moc
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input", side_effect=lambda x, *a, **kw: x)
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={"chat_dictionaries": {}})
 def test_chat_function_with_current_image_unit(mock_configs, mock_proc_input, mock_chat_shim):
     mock_chat_shim.return_value = "LLM image Response"
@@ -345,7 +377,7 @@ def test_chat_function_with_current_image_unit(mock_configs, mock_proc_input, mo
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input", side_effect=lambda x, *a, **kw: x)
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={"chat_dictionaries": {}})
 def test_chat_function_image_history_tag_past_unit(mock_configs, mock_proc_input, mock_chat_shim):
     mock_chat_shim.return_value = "Tagged image history response"
@@ -382,7 +414,7 @@ def test_chat_function_image_history_tag_past_unit(mock_configs, mock_proc_input
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input")
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input")
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs")
 def test_chat_function_streaming_passthrough(mock_load_configs, mock_process_input, mock_chat_api_call_shim):
     mock_load_configs.return_value = {"chat_dictionaries": {}}
@@ -410,7 +442,7 @@ def test_chat_function_streaming_passthrough(mock_load_configs, mock_process_inp
 
 # --- Tests for save_chat_history_to_db_wrapper ---
 @pytest.mark.unit
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.DEFAULT_CHARACTER_NAME", "TestDefaultChar")
+@patch("tldw_Server_API.app.core.Chat.chat_history.DEFAULT_CHARACTER_NAME", "TestDefaultChar")
 def test_save_chat_history_new_conversation_default_char():
     mock_db = MagicMock(spec=CharactersRAGDB)
     mock_db.client_id = "unit_test_client"
@@ -570,7 +602,7 @@ def test_chat_api_call_tools_and_tool_choice_unit(mock_llm_api_call_handlers_for
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input", side_effect=lambda x, *a, **kw: x)
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 # mock_global_load_and_log_configs is already active via autouse=True
 def test_chat_function_image_history_send_all_unit(mock_process_input, mock_chat_api_call_shim):
     mock_chat_api_call_shim.return_value = "Response"
@@ -600,7 +632,7 @@ def test_chat_function_image_history_send_all_unit(mock_process_input, mock_chat
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input", side_effect=lambda x, *a, **kw: x)
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 def test_chat_function_image_history_send_last_user_image_unit(mock_process_input, mock_chat_api_call_shim):
     mock_chat_api_call_shim.return_value = "Response"
     history = [
@@ -639,7 +671,7 @@ def test_chat_function_image_history_send_last_user_image_unit(mock_process_inpu
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.process_user_input", side_effect=lambda x, *a, **kw: x)
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 def test_chat_function_with_rag_content_unit(mock_process_input, mock_chat_api_call_shim):
     mock_chat_api_call_shim.return_value = "RAG Response"
     media_content = {"summary": "This is a summary.", "content": "Full content here."}
@@ -704,7 +736,7 @@ def test_chat_dictionary_class_methods():
 
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs")
-@patch("tldw_Server_API.app.core.Chat.Chat_Functions.parse_user_dict_markdown_file")
+@patch("tldw_Server_API.app.core.Chat.chat_orchestrator.parse_user_dict_markdown_file")
 def test_chat_function_with_chat_dictionary_post_replacement(
         mock_parse_dict, mock_load_configs_chat_func, tmp_path
 ):
@@ -767,37 +799,52 @@ def test_save_character_new_and_update_unit():
         "name": "TestCharacter", "description": "An even braver hero.", "personality": "Bold"
     }
 
-    # Scenario 1: Add new character
-    mock_db.get_character_card_by_name.return_value = None  # Character does not exist
-    mock_db.add_character_card.return_value = 1  # Simulate new character ID
+    with patch(
+        "tldw_Server_API.app.core.Chat.chat_characters.character_db.create_new_character_from_data"
+    ) as mock_create, patch(
+        "tldw_Server_API.app.core.Chat.chat_characters.character_db.update_existing_character_details"
+    ) as mock_update:
+        # Scenario 1: Add new character
+        mock_db.get_character_card_by_name.return_value = None  # Character does not exist
+        mock_create.return_value = 1  # Simulate new character ID
 
-    returned_id_v1 = save_character(db=mock_db, character_data=char_data_v1)
-    assert returned_id_v1 == 1
-    mock_db.add_character_card.assert_called_once()
-    add_args = mock_db.add_character_card.call_args[0][0]
-    assert add_args["name"] == "TestCharacter"
-    assert add_args["description"] == "A brave hero."
-    assert isinstance(add_args["image"], bytes)
+        returned_id_v1 = save_character(db=mock_db, character_data=char_data_v1)
+        assert returned_id_v1 == 1
+        mock_create.assert_called_once()
+        create_args = mock_create.call_args[0]
+        assert create_args[0] is mock_db
+        create_payload = create_args[1]
+        assert create_payload["name"] == "TestCharacter"
+        assert create_payload["description"] == "A brave hero."
+        assert create_payload["system_prompt"] == "Be heroic."
+        assert create_payload["image_base64"].startswith("iVBORw0KGgo")
 
-    # Scenario 2: Update existing character
-    mock_db.reset_mock()
-    existing_char_from_db = {
-        "id": 1, "name": "TestCharacter", "description": "A brave hero.", "system_prompt": "Be heroic.",
-        "image": b"decoded_image_bytes", "version": 1, "personality": None
-    }
-    mock_db.get_character_card_by_name.return_value = existing_char_from_db
-    mock_db.update_character_card.return_value = True  # Simulate successful update
+        # Scenario 2: Update existing character
+        mock_db.reset_mock()
+        mock_create.reset_mock()
+        existing_char_from_db = {
+            "id": 1,
+            "name": "TestCharacter",
+            "description": "A brave hero.",
+            "system_prompt": "Be heroic.",
+            "image": b"decoded_image_bytes",
+            "version": 1,
+            "personality": None,
+        }
+        mock_db.get_character_card_by_name.return_value = existing_char_from_db
+        mock_update.return_value = True  # Simulate successful update
 
-    returned_id_v2 = save_character(db=mock_db, character_data=char_data_v2_update, expected_version=1)
-    assert returned_id_v2 == 1
-    mock_db.update_character_card.assert_called_once()
-    update_args = mock_db.update_character_card.call_args[0]  # (char_id, data_to_update, version)
-    assert update_args[0] == 1  # char_id
-    assert update_args[1]["description"] == "An even braver hero."
-    assert update_args[1]["personality"] == "Bold"
-    assert "system_prompt" not in update_args[1]  # Should not be in update_payload as it wasn't in char_data_v2_update
-    assert "image" not in update_args[1]  # Image wasn't in char_data_v2_update
-    assert update_args[2] == 1  # expected_version
+        returned_id_v2 = save_character(db=mock_db, character_data=char_data_v2_update, expected_version=1)
+        assert returned_id_v2 == 1
+        mock_update.assert_called_once()
+        update_args = mock_update.call_args[0]  # (db, char_id, payload, expected_version)
+        assert update_args[0] is mock_db
+        assert update_args[1] == 1  # char_id
+        update_payload = update_args[2]
+        assert update_payload["description"] == "An even braver hero."
+        assert update_payload["personality"] == "Bold"
+        assert "system_prompt" not in update_payload  # Should not be mapped when only update fields provided
+        assert update_args[3] == 1  # db version forwarded as expected_version
 
 
 @pytest.mark.unit

@@ -24,7 +24,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     Group, GroupCreateRequest, GroupUpdateRequest, GroupsListResponse,
     Tag, TagsListResponse,
     Job, JobCreateRequest, JobUpdateRequest, JobsListResponse,
-    Run, RunsListResponse,
+    Run, RunsListResponse, RunDetail,
 )
 
 
@@ -83,6 +83,13 @@ async def create_source(
             tags=payload.tags or [],
             group_ids=payload.group_ids or [],
         )
+        # Ensure tags reflect payload even when source pre-exists (idempotent create)
+        if payload.tags is not None:
+            try:
+                tags = db.set_source_tags(row.id, payload.tags)
+                row.tags = tags  # type: ignore[attr-defined]
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"create_source failed: {e}")
         raise HTTPException(status_code=400, detail="source_create_failed")
@@ -374,7 +381,34 @@ async def create_job(
             db.set_job_schedule_id(row.id, sid)
             row = db.get_job(row.id)
     except Exception as e:
-        logger.debug(f"Watchlists: schedule registration skipped: {e}")
+        logger.debug(f"Watchlists: schedule registration via service failed, falling back: {e}")
+        # Fallback: create a persisted schedule row directly so admin can inspect linkage
+        try:
+            if row.schedule_expr:
+                from uuid import uuid4
+                sid = uuid4().hex
+                from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import WorkflowsSchedulerDB
+                wfdb = WorkflowsSchedulerDB(user_id=int(current_user.id))
+                wfdb.create_schedule(
+                    id=sid,
+                    tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                    user_id=str(current_user.id),
+                    workflow_id=None,
+                    name=f"watchlist:{row.id}:{row.name}",
+                    cron=row.schedule_expr,
+                    timezone=_normalize_tz(row.schedule_timezone) or "UTC",
+                    inputs={"watchlist_job_id": row.id},
+                    run_mode="async",
+                    validation_mode="block",
+                    enabled=bool(row.active),
+                    concurrency_mode="queue",
+                    misfire_grace_sec=300,
+                    coalesce=True,
+                )
+                db.set_job_schedule_id(row.id, sid)
+                row = db.get_job(row.id)
+        except Exception as _e:
+            logger.debug(f"Watchlists: schedule DB fallback failed: {_e}")
 
     return Job(
         id=row.id,
@@ -433,6 +467,7 @@ async def list_jobs(
 @router.get("/jobs/{job_id}", response_model=Job, summary="Get job")
 async def get_job(
     job_id: int = Path(..., ge=1),
+    include_internal: bool = Query(False, description="Admin-only: include scheduler linkage fields"),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
@@ -440,6 +475,7 @@ async def get_job(
         r = db.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
     return Job(
         id=r.id,
         name=r.name,
@@ -456,6 +492,7 @@ async def get_job(
         updated_at=r.updated_at,
         last_run_at=r.last_run_at,
         next_run_at=r.next_run_at,
+        wf_schedule_id=(r.wf_schedule_id if include_internal and is_admin else None),
     )
 
 
@@ -501,23 +538,51 @@ async def update_job(
                 svc.update(r.wf_schedule_id, upd)
         else:
             if r.schedule_expr:
-                sid = svc.create(
-                    tenant_id=str(getattr(current_user, "tenant_id", "default")),
-                    user_id=str(current_user.id),
-                    workflow_id=None,
-                    name=f"watchlist:{r.id}:{r.name}",
-                    cron=r.schedule_expr,
-                    timezone=_normalize_tz(r.schedule_timezone) or "UTC",
-                    inputs={"watchlist_job_id": r.id},
-                    run_mode="async",
-                    validation_mode="block",
-                    enabled=bool(r.active),
-                    concurrency_mode="queue",
-                    misfire_grace_sec=300,
-                    coalesce=True,
-                )
-                db.set_job_schedule_id(r.id, sid)
-                r = db.get_job(r.id)
+                try:
+                    sid = svc.create(
+                        tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                        user_id=str(current_user.id),
+                        workflow_id=None,
+                        name=f"watchlist:{r.id}:{r.name}",
+                        cron=r.schedule_expr,
+                        timezone=_normalize_tz(r.schedule_timezone) or "UTC",
+                        inputs={"watchlist_job_id": r.id},
+                        run_mode="async",
+                        validation_mode="block",
+                        enabled=bool(r.active),
+                        concurrency_mode="queue",
+                        misfire_grace_sec=300,
+                        coalesce=True,
+                    )
+                    db.set_job_schedule_id(r.id, sid)
+                    r = db.get_job(r.id)
+                except Exception as _e:
+                    logger.debug(f"Watchlists: schedule create during update failed, fallback: {_e}")
+                    try:
+                        from uuid import uuid4
+                        sid = uuid4().hex
+                        from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import WorkflowsSchedulerDB
+                        wfdb = WorkflowsSchedulerDB(user_id=int(current_user.id))
+                        wfdb.create_schedule(
+                            id=sid,
+                            tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                            user_id=str(current_user.id),
+                            workflow_id=None,
+                            name=f"watchlist:{r.id}:{r.name}",
+                            cron=r.schedule_expr,
+                            timezone=_normalize_tz(r.schedule_timezone) or "UTC",
+                            inputs={"watchlist_job_id": r.id},
+                            run_mode="async",
+                            validation_mode="block",
+                            enabled=bool(r.active),
+                            concurrency_mode="queue",
+                            misfire_grace_sec=300,
+                            coalesce=True,
+                        )
+                        db.set_job_schedule_id(r.id, sid)
+                        r = db.get_job(r.id)
+                    except Exception as __e:
+                        logger.debug(f"Watchlists: schedule DB fallback during update failed: {__e}")
     except Exception as e:
         logger.debug(f"Watchlists: schedule sync skipped: {e}")
     return Job(
@@ -596,7 +661,13 @@ async def trigger_run(
                         "mode": s.run_mode,
                         "validation_mode": s.validation_mode,
                     }
-                    await core.submit("workflow_run", payload=payload, queue_name="workflows", metadata={"user_id": s.user_id})
+                    handler_name = "workflow_run"
+                    try:
+                        if isinstance(payload.get("inputs"), dict) and payload["inputs"].get("watchlist_job_id"):
+                            handler_name = "watchlist_run"
+                    except Exception:
+                        pass
+                    await core.submit(handler_name, payload=payload, queue_name=("workflows" if handler_name=="workflow_run" else "watchlists"), metadata={"user_id": s.user_id})
             except Exception as e:
                 logger.debug(f"Watchlists: run-now via scheduler skipped: {e}")
     except KeyError:
@@ -641,3 +712,55 @@ async def get_run(
     except KeyError:
         raise HTTPException(status_code=404, detail="run_not_found")
     return Run(id=r.id, job_id=r.job_id, status=r.status, started_at=r.started_at, finished_at=r.finished_at, stats=(json.loads(r.stats_json or "{}") if r.stats_json else None), error_msg=r.error_msg)
+
+
+@router.get("/runs/{run_id}/details", response_model=RunDetail, summary="Get run details with stats and logs")
+async def get_run_details(
+    run_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        r = db.get_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    # Stats defaulting
+    stats = {}
+    try:
+        stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
+    except Exception:
+        stats = {}
+    if not isinstance(stats, dict):
+        stats = {}
+    items_found = int(stats.get("items_found", 0) or 0)
+    items_ingested = int(stats.get("items_ingested", 0) or 0)
+    # Log content (best-effort; truncated)
+    log_text = None
+    truncated = False
+    if r.log_path:
+        try:
+            from pathlib import Path as _Path
+            p = _Path(r.log_path)
+            if p.exists():
+                content = p.read_text(encoding="utf-8", errors="replace")
+                max_len = 65536
+                if len(content) > max_len:
+                    log_text = content[-max_len:]
+                    truncated = True
+                else:
+                    log_text = content
+        except Exception:
+            log_text = None
+            truncated = False
+    return RunDetail(
+        id=r.id,
+        job_id=r.job_id,
+        status=r.status,
+        started_at=r.started_at,
+        finished_at=r.finished_at,
+        stats={"items_found": items_found, "items_ingested": items_ingested},
+        error_msg=r.error_msg,
+        log_text=log_text,
+        log_path=r.log_path,
+        truncated=truncated,
+    )

@@ -326,7 +326,7 @@ class ResponseRunner:
                         tool_results[tool] = {"error": str(e)}
             
             # 4. Generate response using existing chat infrastructure
-            from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+            from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
             
             # Prepare messages with tool results
             messages = request["messages"].copy()

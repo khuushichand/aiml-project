@@ -30,7 +30,7 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
     )
     
     # Mock the LLM call function and API_KEYS
-    with patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call") as mock_llm, \
+    with patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_llm, \
          patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"local-llm": "dummy-key"}), \
          patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform:
         # Set up the mock response

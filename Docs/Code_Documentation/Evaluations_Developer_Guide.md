@@ -383,7 +383,7 @@ def _calculate_custom_aggregate(self, results: List[Dict[str, Any]]) -> Dict[str
 
 ```python
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 # Use for model-graded evaluations
 response = await analyze(
@@ -490,7 +490,7 @@ async def test_evaluation_workflow():
 ### Mocking External Services
 
 ```python
-@patch('tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call')
+@patch('tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call')
 async def test_geval_with_mock(mock_chat):
     """Test G-Eval with mocked LLM"""
     mock_chat.return_value = "4.5"  # Mock score response

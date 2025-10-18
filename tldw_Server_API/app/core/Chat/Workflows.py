@@ -26,9 +26,9 @@ from typing import List, Dict, Tuple, Optional
 # 3rd-Party Imports
 #
 # Local Imports
-from App_Function_Libraries.Chat.Chat_Functions import chat
-from App_Function_Libraries.Metrics.metrics_logger import log_counter, log_histogram
-from App_Function_Libraries.Utils.Utils import logging
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 #
 #######################################################################################################################
