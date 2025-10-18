@@ -210,7 +210,7 @@ async def reset_singletons(request):
         try:
             from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
-            async def _override_audit_dep(*_args, **_kwargs):
+            async def _override_audit_dep(current_user=None):
                 return _StubAuditService()
 
             if not request.node.get_closest_marker("real_audit"):
