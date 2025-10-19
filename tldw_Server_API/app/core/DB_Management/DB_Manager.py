@@ -287,7 +287,11 @@ def get_paginated_files(*args, **kwargs):
             raise ValueError("get_paginated_files requires 'db_instance' (MediaDatabase)")
         page = kwargs.get('page', 1)
         results_per_page = kwargs.get('results_per_page', 50)
-        return db_instance.get_paginated_files(page=page, results_per_page=results_per_page)
+        if hasattr(db_instance, "get_paginated_files"):
+            return db_instance.get_paginated_files(page=page, results_per_page=results_per_page)
+        if hasattr(db_instance, "get_paginated_media_list"):
+            return db_instance.get_paginated_media_list(page=page, results_per_page=results_per_page)
+        raise AttributeError("MediaDatabase instance does not expose a paginated files API")
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")

@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,10 +7,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.core.PrivilegeMaps.service import PrivilegeMapService
-from tldw_Server_API.app.core.PrivilegeMaps.snapshots import (
-    PrivilegeSnapshotStore,
-    get_privilege_snapshot_store,
-)
+from tldw_Server_API.app.core.PrivilegeMaps.snapshots import PrivilegeSnapshotStore, get_privilege_snapshot_store
 from tldw_Server_API.app.core.PrivilegeMaps.service import get_privilege_map_service
 
 
@@ -19,9 +15,33 @@ class FakePrivilegeMapService(PrivilegeMapService):
     def __init__(self) -> None:
         super().__init__()
         self.sample_users = [
-            {"id": "user-1", "username": "Alex Rivera", "role": "admin"},
-            {"id": "user-2", "username": "Priya Patel", "role": "analyst"},
-            {"id": "user-3", "username": "Morgan Lee", "role": "viewer"},
+            {
+                "id": "user-1",
+                "username": "Alex Rivera",
+                "primary_role": "admin",
+                "roles": ["admin"],
+                "permissions": [],
+                "feature_flags": {flag.id for flag in self.catalog.feature_flags},
+                "allowed_scopes": {scope.id for scope in self.catalog.scopes},
+            },
+            {
+                "id": "user-2",
+                "username": "Priya Patel",
+                "primary_role": "analyst",
+                "roles": ["analyst"],
+                "permissions": {"rag.search"},
+                "feature_flags": {"media_ingest_beta"},
+                "allowed_scopes": {"rag.search"},
+            },
+            {
+                "id": "user-3",
+                "username": "Morgan Lee",
+                "primary_role": "viewer",
+                "roles": ["viewer"],
+                "permissions": {"media.catalog.view"},
+                "feature_flags": set(),
+                "allowed_scopes": {"media.catalog.view"},
+            },
         ]
         self.sample_memberships = [
             {"team_id": "team-1", "user_id": "user-1", "team_name": "Core Admins", "org_id": "acme"},
@@ -37,9 +57,9 @@ class FakePrivilegeMapService(PrivilegeMapService):
 
 
 @pytest.fixture()
-def privilege_test_client(tmp_path: Path):
+def privilege_test_client():
     fake_service = FakePrivilegeMapService()
-    snapshot_store = PrivilegeSnapshotStore(path=tmp_path / "snapshots.json")
+    snapshot_store = PrivilegeSnapshotStore()
 
     async def seed_snapshots():
         await snapshot_store.clear()
@@ -88,6 +108,7 @@ def privilege_test_client(tmp_path: Path):
     with TestClient(fastapi_app) as client:
         yield client
 
+    asyncio.run(snapshot_store.clear())
     fastapi_app.dependency_overrides.clear()
 
 

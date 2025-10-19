@@ -1,26 +1,21 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-
-DEFAULT_SNAPSHOT_PATH = Path("Databases/privilege_snapshots.json")
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 
 
 class PrivilegeSnapshotStore:
-    """Lightweight snapshot store backed by a JSON file."""
+    """Database-backed snapshot store for privilege maps."""
 
-    def __init__(self, path: Path = DEFAULT_SNAPSHOT_PATH) -> None:
-        self._path = path
-        self._lock = asyncio.Lock()
-        self._cache: Optional[List[Dict[str, Any]]] = None
-        self._ensure_path()
+    def __init__(self, pool: Optional[DatabasePool] = None) -> None:
+        self._pool = pool
+        self._initialized = False
 
     async def list_snapshots(
         self,
@@ -36,53 +31,97 @@ class PrivilegeSnapshotStore:
         scope: Optional[str],
         include_counts: bool,
     ) -> Dict[str, Any]:
-        data = await self._load()
-        filtered: List[Dict[str, Any]] = []
+        pool = await self._get_pool()
+        await self._ensure_schema(pool)
 
-        for entry in data:
-            if org_id and entry.get("org_id") != org_id:
-                continue
-            if team_id and entry.get("team_id") != team_id:
-                continue
-            if generated_by and entry.get("generated_by") != generated_by:
-                continue
-            if catalog_version and entry.get("catalog_version") != catalog_version:
-                continue
-            generated_at = self._parse_datetime(entry.get("generated_at"))
-            if date_from and generated_at and generated_at < date_from:
-                continue
-            if date_to and generated_at and generated_at > date_to:
-                continue
-            if scope:
-                scope_ids = entry.get("summary", {}).get("scope_ids", [])
-                if scope not in scope_ids:
-                    continue
-            filtered.append(entry)
+        filters: List[str] = []
+        params: List[Any] = []
 
-        filtered.sort(
-            key=lambda item: self._parse_datetime(item.get("generated_at")) or datetime.min,
-            reverse=True,
+        if org_id:
+            filters.append("org_id = ?")
+            params.append(org_id)
+        if team_id:
+            filters.append("team_id = ?")
+            params.append(team_id)
+        if generated_by:
+            filters.append("generated_by = ?")
+            params.append(generated_by)
+        if catalog_version:
+            filters.append("catalog_version = ?")
+            params.append(catalog_version)
+        if date_from:
+            filters.append("generated_at >= ?")
+            params.append(self._to_iso(date_from))
+        if date_to:
+            filters.append("generated_at <= ?")
+            params.append(self._to_iso(date_to))
+        if scope:
+            filters.append("scope_index LIKE ?")
+            params.append(f"%|{scope}|%")
+
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        count_row = await pool.fetchone(
+            f"SELECT COUNT(*) AS total FROM privilege_snapshots {where_clause}",
+            tuple(params),
         )
+        if not count_row:
+            total_items = 0
+        elif isinstance(count_row, dict):
+            total_items = int(count_row.get("total", 0))
+        elif hasattr(count_row, "keys"):
+            total_items = int(count_row["total"])
+        else:
+            total_items = int(count_row[0])
 
-        total_items = len(filtered)
         page = max(page, 1)
         page_size = max(min(page_size, 200), 1)
-        start = (page - 1) * page_size
-        paginated = filtered[start : start + page_size]
+        offset = (page - 1) * page_size
+        data_params = list(params) + [page_size, offset]
 
-        results: List[Dict[str, Any]] = []
-        for entry in paginated:
-            item = dict(entry)
-            item["generated_at"] = self._parse_datetime(item.get("generated_at"))
-            if not include_counts:
-                item.pop("summary", None)
-            results.append(item)
+        rows = await pool.fetchall(
+            f"""
+            SELECT snapshot_id, generated_at, generated_by, org_id, team_id,
+                   catalog_version, summary_json
+            FROM privilege_snapshots
+            {where_clause}
+            ORDER BY generated_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(data_params),
+        )
+
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            record = self._row_to_dict(row)
+            if not record:
+                continue
+            summary_obj = None
+            if include_counts and record.get("summary_json"):
+                try:
+                    summary_obj = json.loads(record["summary_json"])
+                except Exception as exc:
+                    logger.warning("Failed to parse snapshot summary JSON: %s", exc)
+                    summary_obj = None
+
+            generated_at_dt = self._parse_datetime(record.get("generated_at"))
+
+            items.append(
+                {
+                    "snapshot_id": record.get("snapshot_id"),
+                    "generated_at": generated_at_dt,
+                    "generated_by": record.get("generated_by"),
+                    "org_id": record.get("org_id"),
+                    "team_id": record.get("team_id"),
+                    "catalog_version": record.get("catalog_version"),
+                    "summary": summary_obj,
+                }
+            )
 
         return {
             "page": page,
             "page_size": page_size,
             "total_items": total_items,
-            "items": results,
+            "items": items,
             "filters": {
                 "date_from": date_from.isoformat() if date_from else None,
                 "date_to": date_to.isoformat() if date_to else None,
@@ -96,53 +135,135 @@ class PrivilegeSnapshotStore:
         }
 
     async def add_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        data = await self._load()
         snapshot_id = snapshot.get("snapshot_id")
         if not snapshot_id:
-            raise ValueError("snapshot must include snapshot_id.")
-        updated = False
-        for idx, entry in enumerate(data):
-            if entry.get("snapshot_id") == snapshot_id:
-                data[idx] = snapshot
-                updated = True
-                break
-        if not updated:
-            data.append(snapshot)
-        await self._write(data)
+            raise ValueError("snapshot must include snapshot_id")
+
+        pool = await self._get_pool()
+        await self._ensure_schema(pool)
+
+        generated_at = snapshot.get("generated_at")
+        generated_at_iso = self._to_iso(generated_at)
+        generated_by = snapshot.get("generated_by")
+        org_id = snapshot.get("org_id")
+        team_id = snapshot.get("team_id")
+        catalog_version = snapshot.get("catalog_version")
+        summary = snapshot.get("summary")
+        summary_json = json.dumps(summary) if summary is not None else None
+        scope_index = self._build_scope_index(summary)
+        now_iso = self._to_iso(datetime.now(timezone.utc))
+
+        async with pool.transaction() as conn:
+            await conn.execute(
+                """
+                INSERT INTO privilege_snapshots (
+                    snapshot_id,
+                    generated_at,
+                    generated_by,
+                    org_id,
+                    team_id,
+                    catalog_version,
+                    summary_json,
+                    scope_index,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapshot_id) DO UPDATE SET
+                    generated_at = excluded.generated_at,
+                    generated_by = excluded.generated_by,
+                    org_id = excluded.org_id,
+                    team_id = excluded.team_id,
+                    catalog_version = excluded.catalog_version,
+                    summary_json = excluded.summary_json,
+                    scope_index = excluded.scope_index,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    snapshot_id,
+                    generated_at_iso,
+                    generated_by,
+                    org_id,
+                    team_id,
+                    catalog_version,
+                    summary_json,
+                    scope_index,
+                    now_iso,
+                    now_iso,
+                ),
+            )
 
     async def clear(self) -> None:
-        await self._write([])
+        pool = await self._get_pool()
+        await self._ensure_schema(pool)
+        async with pool.transaction() as conn:
+            await conn.execute("DELETE FROM privilege_snapshots")
 
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
 
-    def _ensure_path(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        if not self._path.exists():
-            self._path.write_text("[]", encoding="utf-8")
+    async def _get_pool(self) -> DatabasePool:
+        if self._pool is None:
+            self._pool = await get_db_pool()
+        return self._pool
 
-    async def _load(self) -> List[Dict[str, Any]]:
-        async with self._lock:
-            if self._cache is None:
-                try:
-                    contents = await asyncio.to_thread(self._path.read_text, encoding="utf-8")
-                    self._cache = json.loads(contents or "[]")
-                except Exception as exc:
-                    logger.error("Failed to read privilege snapshot store: %s", exc)
-                    self._cache = []
-            # Return a shallow copy to prevent accidental mutation
-            return list(self._cache)
+    async def _ensure_schema(self, pool: DatabasePool) -> None:
+        if self._initialized:
+            return
+        async with pool.transaction() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS privilege_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    generated_at TEXT NOT NULL,
+                    generated_by TEXT NOT NULL,
+                    org_id TEXT,
+                    team_id TEXT,
+                    catalog_version TEXT NOT NULL,
+                    summary_json TEXT,
+                    scope_index TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
-    async def _write(self, data: List[Dict[str, Any]]) -> None:
-        async with self._lock:
-            try:
-                payload = json.dumps(data, indent=2, default=self._serialize)
-                await asyncio.to_thread(self._path.write_text, payload, encoding="utf-8")
-                self._cache = list(data)
-            except Exception as exc:
-                logger.error("Failed to write privilege snapshot store: %s", exc)
-                raise
+        # Ensure legacy deployments add scope_index column
+        try:
+            async with pool.transaction() as conn:
+                await conn.execute(
+                    "ALTER TABLE privilege_snapshots ADD COLUMN scope_index TEXT"
+                )
+        except Exception:
+            pass
+
+        try:
+            async with pool.transaction() as conn:
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_generated_at ON privilege_snapshots(generated_at)"
+                )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_org ON privilege_snapshots(org_id)"
+                )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_team ON privilege_snapshots(team_id)"
+                )
+        except Exception as exc:
+            logger.debug("Privilege snapshot index creation skipped: %s", exc)
+
+        self._initialized = True
+
+    @staticmethod
+    def _row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return row
+        if hasattr(row, "keys"):
+            return {key: row[key] for key in row.keys()}
+        if hasattr(row, "_mapping"):
+            return dict(row._mapping)  # type: ignore[attr-defined]
+        return None
 
     @staticmethod
     def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -151,15 +272,29 @@ class PrivilegeSnapshotStore:
         if isinstance(value, datetime):
             return value
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         except Exception:
             return None
 
     @staticmethod
-    def _serialize(value: Any) -> Any:
+    def _to_iso(value: Any) -> str:
         if isinstance(value, datetime):
-            return value.isoformat()
-        return value
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc).isoformat()
+        if isinstance(value, str):
+            return value
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _build_scope_index(summary: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not summary:
+            return None
+        scope_ids = summary.get("scope_ids")
+        if not scope_ids:
+            return None
+        ordered = sorted(set(scope_ids))
+        return "|" + "|".join(ordered) + "|"
 
 
 @lru_cache

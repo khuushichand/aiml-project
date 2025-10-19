@@ -24,6 +24,8 @@ class PrivilegeMapService:
         self._catalog: PrivilegeCatalog = load_catalog()
         self._role_scope_map: Dict[str, List[ScopeEntry]] = self._build_role_scope_map()
         self._admin_roles: Set[str] = {"admin", "owner", "platform_admin"}
+        self._feature_flag_map = {flag.id: flag for flag in self.catalog.feature_flags}
+        self._scope_lookup = {scope.id: scope for scope in self.catalog.scopes}
 
     @property
     def catalog(self) -> PrivilegeCatalog:
@@ -152,30 +154,66 @@ class PrivilegeMapService:
             rows = await pool.fetchall(
                 "SELECT id, username, role, is_active FROM users ORDER BY id"
             )
-            users: List[Dict[str, Any]] = []
+            if not rows:
+                raise ValueError("No users returned")
+
+            base_users: Dict[str, Dict[str, Any]] = {}
             for row in rows:
                 record = self._row_to_dict(row)
-                if record and record.get("is_active", 1):
-                    users.append(
-                        {
-                            "id": record.get("id"),
-                            "username": record.get("username", ""),
-                            "role": record.get("role") or "user",
-                        }
-                    )
-            if users:
-                return users
+                if not record or not record.get("is_active", 1):
+                    continue
+                user_id = str(record.get("id"))
+                base_users[user_id] = {
+                    "id": record.get("id"),
+                    "username": record.get("username", ""),
+                    "primary_role": (record.get("role") or "user"),
+                    "roles": [],
+                    "permissions": set(),
+                }
+
+            if not base_users:
+                raise ValueError("No active users found")
+
+            await self._hydrate_roles_and_permissions(pool, base_users)
+            users: List[Dict[str, Any]] = []
+            for payload in base_users.values():
+                roles = payload.get("roles") or [payload.get("primary_role")]
+                roles = sorted({role for role in roles if role})
+                permissions = {perm for perm in payload.get("permissions", set()) if perm}
+                feature_flags = self._feature_flags_for_user(roles, permissions)
+                allowed_scopes = self._resolve_scopes_for_user(roles, permissions)
+                primary_role = roles[0] if roles else payload.get("primary_role", "user")
+                users.append(
+                    {
+                        "id": payload["id"],
+                        "username": payload["username"],
+                        "primary_role": primary_role,
+                        "roles": roles,
+                        "permissions": sorted(permissions),
+                        "feature_flags": feature_flags,
+                        "allowed_scopes": allowed_scopes,
+                    }
+                )
+            return users
         except Exception as exc:
             logger.debug("Falling back to single-user privilege dataset: %s", exc)
 
         # Fallback: single-user mode or empty DB
         single_user = get_single_user_instance()
         default_role = "admin" if is_single_user_mode() else (single_user.roles[0] if single_user.roles else "admin")
+        feature_flags = self._feature_flags_for_user([default_role], set())
+        allowed_scopes = self._resolve_scopes_for_user([default_role], [])
+        if not allowed_scopes:
+            allowed_scopes = {scope.id for scope in self.catalog.scopes}
         return [
             {
                 "id": single_user.id,
                 "username": single_user.username,
-                "role": default_role or "admin",
+                "primary_role": default_role or "admin",
+                "roles": [default_role or "admin"],
+                "permissions": [],
+                "feature_flags": feature_flags,
+                "allowed_scopes": allowed_scopes,
             }
         ]
 
@@ -216,19 +254,178 @@ class PrivilegeMapService:
             return []
         return [user for user in users if str(user["id"]) in user_ids]
 
+    async def _hydrate_roles_and_permissions(
+        self,
+        pool: DatabasePool,
+        base_users: Dict[str, Dict[str, Any]],
+    ) -> None:
+        role_assignments: Dict[str, Set[str]] = defaultdict(set)
+        try:
+            rows = await pool.fetchall(
+                """
+                SELECT ur.user_id, r.name AS role_name
+                FROM user_roles ur
+                JOIN roles r ON ur.role_id = r.id
+                """
+            )
+            for row in rows:
+                record = self._row_to_dict(row)
+                if not record:
+                    continue
+                user_id = str(record.get("user_id"))
+                role_name = record.get("role_name")
+                if user_id in base_users and role_name:
+                    role_assignments[user_id].add(role_name)
+        except Exception as exc:
+            logger.debug("Unable to load role assignments: %s", exc)
+
+        role_permissions: Dict[str, Set[str]] = defaultdict(set)
+        try:
+            rows = await pool.fetchall(
+                """
+                SELECT r.name AS role_name, p.name AS permission_name
+                FROM role_permissions rp
+                JOIN roles r ON rp.role_id = r.id
+                JOIN permissions p ON rp.permission_id = p.id
+                """
+            )
+            for row in rows:
+                record = self._row_to_dict(row)
+                if not record:
+                    continue
+                role_name = record.get("role_name")
+                permission_name = record.get("permission_name")
+                if role_name and permission_name:
+                    role_permissions[role_name].add(permission_name)
+        except Exception as exc:
+            logger.debug("Unable to load role permissions: %s", exc)
+
+        user_permissions_direct: Dict[str, Set[str]] = defaultdict(set)
+        try:
+            rows = await pool.fetchall(
+                """
+                SELECT up.user_id, p.name AS permission_name, up.granted
+                FROM user_permissions up
+                JOIN permissions p ON up.permission_id = p.id
+                """
+            )
+            for row in rows:
+                record = self._row_to_dict(row)
+                if not record:
+                    continue
+                granted = record.get("granted")
+                if granted is not None and not bool(granted):
+                    continue
+                user_id = str(record.get("user_id"))
+                permission_name = record.get("permission_name")
+                if user_id in base_users and permission_name:
+                    user_permissions_direct[user_id].add(permission_name)
+        except Exception as exc:
+            logger.debug("Unable to load direct user permissions: %s", exc)
+
+        for user_id, payload in base_users.items():
+            roles = sorted(role_assignments.get(user_id, set())) or [payload.get("primary_role")]
+            payload["roles"] = roles
+            perms: Set[str] = set(user_permissions_direct.get(user_id, set()))
+            for role in roles:
+                perms.update(role_permissions.get(role, set()))
+            payload["permissions"] = perms
+
+    def _feature_flags_for_user(
+        self,
+        roles: Sequence[str],
+        permissions: Sequence[str],
+    ) -> Set[str]:
+        enabled: Set[str] = set()
+        role_set = {role.lower() for role in roles if role}
+        perm_set = {perm.lower() for perm in permissions if perm}
+        is_admin = bool(role_set & self._admin_roles)
+
+        for flag_id, flag in self._feature_flag_map.items():
+            if is_admin:
+                enabled.add(flag_id)
+                continue
+            if getattr(flag, "default_state", "disabled") == "enabled":
+                enabled.add(flag_id)
+                continue
+            allowed_roles = {r.lower() for r in getattr(flag, "allowed_roles", []) or []}
+            if role_set & allowed_roles:
+                enabled.add(flag_id)
+                continue
+            candidate_permissions = {
+                flag_id.lower(),
+                f"feature_flag:{flag_id}".lower(),
+                f"feature_flag.{flag_id}".lower(),
+            }
+            if perm_set & candidate_permissions:
+                enabled.add(flag_id)
+        return enabled
+
+    def _resolve_scopes_for_user(
+        self,
+        roles: Sequence[str],
+        permissions: Sequence[str],
+    ) -> Set[str]:
+        role_set = {role.lower() for role in roles if role}
+        perm_set = {perm.lower() for perm in permissions if perm}
+
+        if role_set & self._admin_roles:
+            return {scope.id for scope in self.catalog.scopes}
+
+        allowed: Set[str] = set()
+        for scope in self.catalog.scopes:
+            granted = False
+            for role in roles:
+                for mapped_scope in self._role_scope_map.get(role, []):
+                    if mapped_scope.id == scope.id:
+                        granted = True
+                        break
+                if granted:
+                    break
+
+            if not granted:
+                candidate_permissions = {
+                    scope.id.lower(),
+                    scope.id.replace(".", "_").lower(),
+                    f"scope:{scope.id}".lower(),
+                    f"scope.{scope.id}".lower(),
+                    f"{scope.id}:read".lower(),
+                    f"{scope.id}:write".lower(),
+                }
+                if perm_set & candidate_permissions:
+                    granted = True
+
+            if granted:
+                allowed.add(scope.id)
+        return allowed
+
+    def _scopes_from_ids(self, scope_ids: Sequence[str]) -> List[ScopeEntry]:
+        return [self._scope_lookup[sid] for sid in scope_ids if sid in self._scope_lookup]
+
     def _group_by_role(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         buckets: Dict[str, Dict[str, Any]] = {}
         for user in users:
-            role = user.get("role") or "user"
-            scopes = self._scopes_for_role(role)
+            role = user.get("primary_role") or "user"
+            scopes = user.get("allowed_scopes", set())
             bucket = buckets.setdefault(
                 role,
-                {"key": role, "users": 0, "endpoints": 0, "scopes": 0},
+                {"key": role, "users": 0, "scopes": set()},
             )
             bucket["users"] += 1
-            bucket["scopes"] = len(scopes)
-            bucket["endpoints"] = len(scopes)
-        return list(buckets.values())
+            bucket["scopes"].update(scopes)
+
+        results: List[Dict[str, Any]] = []
+        for role, payload in buckets.items():
+            scope_count = len(payload["scopes"])
+            results.append(
+                {
+                    "key": role,
+                    "users": payload["users"],
+                    "endpoints": scope_count,
+                    "scopes": scope_count,
+                }
+            )
+        return results
 
     async def _group_by_team(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         memberships = await self._fetch_team_memberships()
@@ -248,8 +445,7 @@ class PrivilegeMapService:
             team["users"].add(str(entry.get("user_id")))
             user = next((u for u in users if str(u["id"]) == str(entry.get("user_id"))), None)
             if user:
-                for scope in self._scopes_for_role(user.get("role")):
-                    team["scopes"].add(scope.id)
+                team["scopes"].update(user.get("allowed_scopes", set()))
 
         buckets: List[Dict[str, Any]] = []
         for team in by_team.values():
@@ -270,9 +466,7 @@ class PrivilegeMapService:
     def _group_by_resource(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         resource_access: Dict[str, Dict[str, Any]] = {}
         for user in users:
-            scopes = self._scopes_for_role(user.get("role"))
-            seen_scopes: Dict[str, Set[str]] = defaultdict(set)
-            for scope in scopes:
+            for scope in self._scopes_from_ids(user.get("allowed_scopes", set())):
                 tags = scope.resource_tags or [RESOURCE_FALLBACK]
                 for tag in tags:
                     bucket = resource_access.setdefault(
@@ -314,15 +508,23 @@ class PrivilegeMapService:
         items: List[Dict[str, Any]] = []
         resource_filter_lower = resource_filter.lower() if resource_filter else None
         for user in users:
-            role = user.get("role") or "user"
+            role = user.get("primary_role") or "user"
             if role_filter and role != role_filter:
                 continue
-            allowed_scopes = {scope.id for scope in self._scopes_for_role(role)}
+            allowed_scopes = user.get("allowed_scopes", set())
+            feature_flags = user.get("feature_flags", set())
             for scope in self.catalog.scopes:
                 tags = [tag.lower() for tag in (scope.resource_tags or [RESOURCE_FALLBACK])]
                 if resource_filter_lower and resource_filter_lower not in tags:
                     continue
-                status = "allowed" if scope.id in allowed_scopes else "blocked"
+                status = "allowed"
+                blocked_reason = None
+                if scope.feature_flag_id and scope.feature_flag_id not in feature_flags:
+                    status = "blocked"
+                    blocked_reason = "feature_flag_disabled"
+                elif scope.id not in allowed_scopes:
+                    status = "blocked"
+                    blocked_reason = "missing_scope"
                 items.append(
                     {
                         "user_id": str(user.get("id")),
@@ -335,7 +537,7 @@ class PrivilegeMapService:
                         "sensitivity_tier": scope.sensitivity_tier,
                         "ownership_predicates": scope.ownership_predicates or [],
                         "status": status,
-                        "blocked_reason": None if status == "allowed" else "missing_scope",
+                        "blocked_reason": blocked_reason,
                     }
                 )
         return items

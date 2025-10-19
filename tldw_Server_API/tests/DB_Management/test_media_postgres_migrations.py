@@ -44,29 +44,49 @@ def postgres_config() -> DatabaseConfig:
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
-    """Drop and recreate the public schema for a clean slate."""
+    """Ensure the test database exists and reset it to an empty public schema."""
 
     assert _PG_DRIVER is not None
-    if _PG_DRIVER == "psycopg":
-        conn = _psycopg_v3.connect(
+
+    def _connect(dbname: str):
+        if _PG_DRIVER == "psycopg":
+            return _psycopg_v3.connect(
+                host=config.pg_host,
+                port=config.pg_port,
+                dbname=dbname,
+                user=config.pg_user,
+                password=config.pg_password,
+            )
+        return _psycopg2.connect(
             host=config.pg_host,
             port=config.pg_port,
-            dbname=config.pg_database,
+            database=dbname,
             user=config.pg_user,
             password=config.pg_password,
         )
-    else:
-        conn = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database=config.pg_database,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
+
+    target_db = config.pg_database
+    admin_db = os.getenv("POSTGRES_TEST_ADMIN_DB", "postgres")
+
+    try:
+        conn = _connect(target_db)
+    except Exception:
+        admin_conn = _connect(admin_db)
+        admin_conn.autocommit = True
+        try:
+            with admin_conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target_db,))
+                exists = cur.fetchone() is not None
+                if not exists:
+                    cur.execute(f'CREATE DATABASE "{target_db}"')
+        finally:
+            admin_conn.close()
+        conn = _connect(target_db)
+
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+            cur.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
     finally:
         conn.close()
 
