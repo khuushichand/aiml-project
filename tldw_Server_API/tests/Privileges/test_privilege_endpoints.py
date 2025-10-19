@@ -1,0 +1,147 @@
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.core.PrivilegeMaps.service import PrivilegeMapService
+from tldw_Server_API.app.core.PrivilegeMaps.snapshots import (
+    PrivilegeSnapshotStore,
+    get_privilege_snapshot_store,
+)
+from tldw_Server_API.app.core.PrivilegeMaps.service import get_privilege_map_service
+
+
+class FakePrivilegeMapService(PrivilegeMapService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sample_users = [
+            {"id": "user-1", "username": "Alex Rivera", "role": "admin"},
+            {"id": "user-2", "username": "Priya Patel", "role": "analyst"},
+            {"id": "user-3", "username": "Morgan Lee", "role": "viewer"},
+        ]
+        self.sample_memberships = [
+            {"team_id": "team-1", "user_id": "user-1", "team_name": "Core Admins", "org_id": "acme"},
+            {"team_id": "team-1", "user_id": "user-2", "team_name": "Core Admins", "org_id": "acme"},
+            {"team_id": "team-2", "user_id": "user-3", "team_name": "Viewers", "org_id": "acme"},
+        ]
+
+    async def _fetch_users(self):
+        return list(self.sample_users)
+
+    async def _fetch_team_memberships(self):
+        return list(self.sample_memberships)
+
+
+@pytest.fixture()
+def privilege_test_client(tmp_path: Path):
+    fake_service = FakePrivilegeMapService()
+    snapshot_store = PrivilegeSnapshotStore(path=tmp_path / "snapshots.json")
+
+    async def seed_snapshots():
+        await snapshot_store.clear()
+        await snapshot_store.add_snapshot(
+            {
+                "snapshot_id": "snap-2025-01-15-001",
+                "generated_at": datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc).isoformat(),
+                "generated_by": "user-42",
+                "org_id": "acme",
+                "team_id": None,
+                "catalog_version": fake_service.catalog.version,
+                "summary": {
+                    "users": 2,
+                    "scopes": 3,
+                    "scope_ids": ["media.ingest", "chat.admin", "rag.search"],
+                    "sensitivity_breakdown": {"high": 1, "restricted": 1, "moderate": 1},
+                },
+            }
+        )
+        await snapshot_store.add_snapshot(
+            {
+                "snapshot_id": "snap-2025-01-12-001",
+                "generated_at": datetime(2025, 1, 12, 12, 30, tzinfo=timezone.utc).isoformat(),
+                "generated_by": "user-99",
+                "org_id": "beta",
+                "team_id": "team-2",
+                "catalog_version": fake_service.catalog.version,
+                "summary": {
+                    "users": 1,
+                    "scopes": 1,
+                    "scope_ids": ["media.catalog.view"],
+                    "sensitivity_breakdown": {"low": 1},
+                },
+            }
+        )
+
+    asyncio.run(seed_snapshots())
+
+    def override_current_user():
+        return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
+
+    fastapi_app.dependency_overrides[get_current_active_user] = override_current_user
+    fastapi_app.dependency_overrides[get_privilege_map_service] = lambda: fake_service
+    fastapi_app.dependency_overrides[get_privilege_snapshot_store] = lambda: snapshot_store
+
+    with TestClient(fastapi_app) as client:
+        yield client
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_get_org_summary_group_by_role(privilege_test_client: TestClient):
+    response = privilege_test_client.get("/api/v1/privileges/org")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["group_by"] == "role"
+    keys = {bucket["key"] for bucket in payload["buckets"]}
+    assert "admin" in keys
+    assert "analyst" in keys
+
+
+def test_get_org_detail_pagination(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/org",
+        params={"view": "detail", "page": 1, "page_size": 5},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 1
+    assert payload["page_size"] == 5
+    assert payload["items"], "Expected detail items to be present"
+    statuses = {item["status"] for item in payload["items"]}
+    assert statuses.issubset({"allowed", "blocked"})
+
+
+def test_team_detail_filters(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/teams/team-1",
+        params={"view": "detail", "page": 1, "page_size": 5, "resource": "media"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_items"] >= 1
+    for item in payload["items"]:
+        assert "media" in item["endpoint"]
+
+
+def test_snapshot_list_filters(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/snapshots",
+        params={"org_id": "acme", "include_counts": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_items"] == 1
+    assert payload["items"][0]["org_id"] == "acme"
+
+    response = privilege_test_client.get(
+        "/api/v1/privileges/snapshots",
+        params={"scope": "media.catalog.view"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_items"] == 1
+    assert payload["items"][0]["snapshot_id"] == "snap-2025-01-12-001"

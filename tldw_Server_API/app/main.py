@@ -394,6 +394,7 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
+    from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     _HAS_UNIFIED_EVALUATIONS = False
 else:
     # Research Endpoint
@@ -417,6 +418,8 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
     # Users Endpoint (NEW)
     from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+    # Privilege Maps Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     ## Trash Endpoint
     #from tldw_Server_API.app.api.v1.endpoints.trash import router as trash_router
     # MCP Unified Endpoint (Production-ready, secure implementation)
@@ -2379,6 +2382,7 @@ else:
     if _HAS_AUTH_ENHANCED:
         app.include_router(auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
     app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    app.include_router(privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
     from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
     from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
     app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])

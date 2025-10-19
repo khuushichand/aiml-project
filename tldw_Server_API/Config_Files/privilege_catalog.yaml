@@ -28,6 +28,33 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-admin
+  - id: rag.search
+    description: Execute RAG searches across organization knowledge bases.
+    resource_tags:
+      - rag
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/rag-search
+  - id: media.catalog.view
+    description: View indexed media catalog entries and metadata.
+    resource_tags:
+      - media
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/media-catalog-view
 feature_flags:
   - id: media_ingest_beta
     description: Enables new media ingestion pipeline with enhanced metadata extraction.

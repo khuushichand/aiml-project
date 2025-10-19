@@ -962,9 +962,31 @@ async def create_chat_completion(
         # ------------------------------------------------------------------------
         is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
         try:
-            queue = None if is_test_mode else get_request_queue()
+            queue_candidate = get_request_queue()
         except Exception:
-            queue = None
+            queue_candidate = None
+
+        queue = None
+        if queue_candidate is not None:
+            if is_test_mode:
+                allow_queue_env = os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", "").lower() in {"1", "true", "yes", "on"}
+                queue_module = getattr(queue_candidate.__class__, "__module__", "")
+                allow_queue_override = getattr(queue_candidate, "allow_in_test_mode", False)
+                allow_queue_stub = (
+                    ".tests." in queue_module
+                    or queue_module.startswith("tests.")
+                    or queue_module.startswith("tldw_Server_API.tests.")
+                    or queue_module.startswith("pytest.")
+                )
+                try:
+                    from tldw_Server_API.app.core.Chat.request_queue import RequestQueue as _RequestQueue  # type: ignore
+                except Exception:  # pragma: no cover
+                    _RequestQueue = None
+                is_real_queue = bool(_RequestQueue) and isinstance(queue_candidate, _RequestQueue)
+                if allow_queue_env or allow_queue_override or allow_queue_stub or not is_real_queue:
+                    queue = queue_candidate
+            else:
+                queue = queue_candidate
         if queue is not None and not QUEUED_EXECUTION:
             try:
                 # Estimate tokens for queue gating (reuse serialized JSON size)
