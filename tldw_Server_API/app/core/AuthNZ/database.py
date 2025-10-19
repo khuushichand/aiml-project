@@ -464,7 +464,30 @@ async def reset_db_pool():
             # The loop might already be closed by a TestClient; best-effort cleanup.
             logger.debug(f"reset_db_pool: ignoring close error: {e}")
     _db_pool = None
-
+    try:
+        from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import reset_rbac_policy as _reset_rbac_policy
+        _reset_rbac_policy()
+    except Exception:
+        pass
+    # Reset MCP cached configuration/filters so tests pick up new DB/config values
+    try:
+        from tldw_Server_API.app.core.MCP_unified.config import get_config as _get_mcp_config
+        if hasattr(_get_mcp_config, "cache_clear"):
+            _get_mcp_config.cache_clear()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _get_ip_controller
+        if hasattr(_get_ip_controller, "cache_clear"):
+            _get_ip_controller.cache_clear()
+    except Exception:
+        pass
+    try:
+        
+        from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server as _reset_mcp_server
+        await _reset_mcp_server()
+    except Exception:
+        pass
 
 async def get_db():
     """FastAPI dependency to get database connection"""

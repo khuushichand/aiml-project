@@ -809,10 +809,13 @@ class MCPProtocol:
 
         module_id = self.module_registry.get_module_id_for_tool(tool_name) or getattr(module, "name", None)
 
-        if not await self._has_module_permission(context, module_id):
+        module_allowed = await self._has_module_permission(context, module_id)
+        tool_allowed = await self._has_tool_permission(context, tool_name)
+
+        if not module_allowed and not tool_allowed:
             raise PermissionError(f"Permission denied for module: {module_id}")
 
-        if not await self._has_tool_permission(context, tool_name):
+        if not tool_allowed:
             raise PermissionError(f"Permission denied for tool: {tool_name}")
         
         # Harden arguments against cross-user/db overrides

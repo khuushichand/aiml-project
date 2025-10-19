@@ -1116,6 +1116,22 @@ def get_mcp_server() -> MCPServer:
     return _server
 
 
+async def reset_mcp_server() -> None:
+    """Reset MCP server singleton for test environments."""
+    global _server
+    if _server is not None:
+        try:
+            await _server.shutdown()
+        except Exception:
+            pass
+    _server = None
+    try:
+        from .modules.registry import reset_module_registry
+        await reset_module_registry()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app):
     """

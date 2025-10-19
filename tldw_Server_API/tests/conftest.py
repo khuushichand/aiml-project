@@ -296,3 +296,7 @@ def _join_non_daemon_threads(timeout: float = 0.1) -> None:
     if threads:
         names = ", ".join(t.name for t in threads)
         logger.debug(f"Non-daemon threads joined during cleanup: {names}")
+    stuck = [t for t in threads if t.is_alive()]
+    if stuck:
+        stuck_names = ", ".join(f"{t.name} (daemon={t.daemon})" for t in stuck)
+        logger.warning(f"Non-daemon threads still running after join attempt: {stuck_names}")

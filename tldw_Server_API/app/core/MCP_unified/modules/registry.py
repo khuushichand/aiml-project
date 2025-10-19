@@ -472,6 +472,17 @@ def get_module_registry() -> ModuleRegistry:
     return _module_registry
 
 
+async def reset_module_registry() -> None:
+    """Reset module registry singleton (used in tests)."""
+    global _module_registry
+    if _module_registry is not None:
+        try:
+            await _module_registry.shutdown_all()
+        except Exception:
+            pass
+    _module_registry = None
+
+
 async def register_module(
     module_id: str,
     module_type: Type[BaseModule],

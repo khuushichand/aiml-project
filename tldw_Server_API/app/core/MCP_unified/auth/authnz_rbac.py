@@ -187,3 +187,13 @@ def get_rbac_policy() -> AuthNZRBAC:
     if _authnz_rbac is None:
         _authnz_rbac = AuthNZRBAC()
     return _authnz_rbac
+
+
+def reset_rbac_policy() -> None:
+    """Reset cached RBAC policy (used in tests when DB/config changes)."""
+    global _authnz_rbac
+    _authnz_rbac = None
+    try:
+        _map_to_permission.cache_clear()
+    except Exception:
+        pass

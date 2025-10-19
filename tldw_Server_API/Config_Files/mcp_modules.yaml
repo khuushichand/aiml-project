@@ -17,6 +17,13 @@ modules:
     settings:
       db_path: ./Databases/Media_DB_v2.db
       cache_ttl: 300
+  - id: template
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule
+    enabled: true
+    name: Template
+    version: "1.0.0"
+    department: demo
+    settings: {}
 
 # Notes
 # - Only modules under tldw_Server_API.app.core.MCP_unified.modules.implementations are allowed.

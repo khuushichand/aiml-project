@@ -623,7 +623,8 @@ async def execute_tool(
         params={
             "name": request.tool_name,
             "arguments": request.arguments
-        }
+        },
+        id=f"http-tools-execute:{request.tool_name}"
     )
     
     server = get_mcp_server()
@@ -641,6 +642,10 @@ async def execute_tool(
         user_id=user.sub,
         metadata=metadata or None
     )
+    
+    if response is None:
+        logger.error("MCP server returned no response for tools/call", tool=request.tool_name)
+        raise HTTPException(status_code=502, detail="MCP tool execution returned no response")
     
     if response.error:
         # Map authorization failures to 403 with a helpful hint
