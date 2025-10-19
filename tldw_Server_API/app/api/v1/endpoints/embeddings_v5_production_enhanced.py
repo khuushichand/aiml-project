@@ -13,6 +13,7 @@ Key enhancements over v5:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import base64
 import hashlib
@@ -3504,6 +3505,7 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
     Includes: queues, dlq, ages, stages, flags, ts
     """
     require_admin(current_user)
+    client: Optional[aioredis.Redis] = None
     try:
         client = await _get_redis_client()
     except Exception:
@@ -3523,4 +3525,10 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
             pass
         return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
     finally:
-        await client.close()
+        if client is not None:
+            try:
+                maybe = client.close()
+                if inspect.isawaitable(maybe):
+                    await maybe  # redis.asyncio < 5 returns awaitable
+            except Exception:
+                pass

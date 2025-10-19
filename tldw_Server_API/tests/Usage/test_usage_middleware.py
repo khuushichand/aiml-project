@@ -22,10 +22,17 @@ async def _ensure_usage_tables():
             status INTEGER,
             latency_ms INTEGER,
             bytes INTEGER,
-            meta TEXT
+            bytes_in INTEGER,
+            meta TEXT,
+            request_id TEXT
         )
         """
     )
+    usage_log_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(usage_log)")}
+    if "bytes_in" not in usage_log_cols:
+        await pool.execute("ALTER TABLE usage_log ADD COLUMN bytes_in INTEGER")
+    if "request_id" not in usage_log_cols:
+        await pool.execute("ALTER TABLE usage_log ADD COLUMN request_id TEXT")
 
 
 async def _count_usage_rows():

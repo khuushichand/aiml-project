@@ -386,7 +386,8 @@ class RiskScorer:
         if event.event_type in [
             AuditEventType.SECURITY_VIOLATION,
             AuditEventType.PERMISSION_DENIED,
-            AuditEventType.SUSPICIOUS_ACTIVITY
+            AuditEventType.SUSPICIOUS_ACTIVITY,
+            AuditEventType.SYSTEM_ERROR,
         ]:
             score += 50
         elif event.event_type in [

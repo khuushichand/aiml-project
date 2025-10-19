@@ -44,7 +44,8 @@ def _shutdown_executor_blocking(name: str, executor: Executor, wait: bool, cance
         except TypeError:
             # Python <3.9 compatibility
             executor.shutdown(wait=wait)
-        logger.info("Executor '{name}' shutdown complete", name=name)
+        # Logging during interpreter shutdown frequently hits pytest's closed
+        # capture streams, so skip the informational log to avoid noisy errors.
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("Executor '{name}' shutdown raised: {exc}", name=name, exc=exc)
     finally:

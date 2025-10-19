@@ -172,6 +172,18 @@ class _SafeStreamWrapper:
         except Exception:
             return False
 
+# Ensure any subsequent logger.add calls wrap raw streams with SafeStreamWrapper
+_original_logger_add = logger.add
+def _safe_logger_add(sink, *args, **kwargs):
+    try:
+        if hasattr(sink, "write") and not isinstance(sink, _SafeStreamWrapper):
+            sink = _SafeStreamWrapper(sink)
+    except Exception:
+        # Fall back to original sink if inspection failed
+        pass
+    return _original_logger_add(sink, *args, **kwargs)
+logger.add = _safe_logger_add  # type: ignore[assignment]
+
 logger.add(
     _SafeStreamWrapper(_sink),
     level=_log_level,

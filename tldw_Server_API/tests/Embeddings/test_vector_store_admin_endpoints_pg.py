@@ -3,6 +3,8 @@ import pytest
 
 from tldw_Server_API.app.main import app
 
+pytestmark = pytest.mark.usefixtures("admin_user")
+
 
 class _FakeAdapterWithIndex:
     def __init__(self):

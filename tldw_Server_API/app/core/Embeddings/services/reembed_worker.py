@@ -215,6 +215,15 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
     backend, db_url = _jobs_backend()
     jm = JobManager(backend=backend, db_url=db_url)
     worker_id = f"reembed-expander"
+    _restore_gate = False
+    if _dev_shortcuts_enabled():
+        try:
+            from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+            if getattr(_JM, "_ACQUIRE_GATE_ENABLED", False):
+                _JM.set_acquire_gate(False)
+                _restore_gate = True
+        except Exception:
+            pass
     queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
     lease_seconds = int(os.getenv("REEMBED_LEASE_SECONDS", "60") or 60)
     renew_seconds = int(os.getenv("REEMBED_RENEW_SECONDS", "30") or 30)
@@ -546,6 +555,12 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
             await client.close()
         except Exception:
             pass
+        if _restore_gate:
+            try:
+                from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+                _JM.set_acquire_gate(True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
