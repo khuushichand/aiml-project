@@ -7,6 +7,16 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
+def _ensure_usage_middleware():
+    """Re-register usage logging middleware when TEST_MODE stripped it."""
+    from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
+
+    if not any(getattr(m, "cls", None) is UsageLoggingMiddleware for m in getattr(app, "user_middleware", [])):
+        app.add_middleware(UsageLoggingMiddleware)
+        # Starlette requires rebuilding the stack after manual mutation
+        app.middleware_stack = app.build_middleware_stack()
+
+
 async def _ensure_usage_tables():
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
@@ -61,6 +71,7 @@ async def test_middleware_logs_usage(monkeypatch):
     await reset_session_manager()
 
     headers = {"X-API-KEY": "middleware-test-key"}
+    _ensure_usage_middleware()
 
     with TestClient(app, headers=headers) as client:
         await _ensure_usage_tables()
@@ -94,6 +105,7 @@ async def test_middleware_excludes_prefix(monkeypatch):
     await reset_session_manager()
 
     headers = {"X-API-KEY": "middleware-test-key"}
+    _ensure_usage_middleware()
 
     with TestClient(app, headers=headers) as client:
         await _ensure_usage_tables()

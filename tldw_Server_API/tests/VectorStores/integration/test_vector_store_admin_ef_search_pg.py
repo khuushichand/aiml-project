@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 pytestmark = pytest.mark.pg_integration
 
 
-def test_admin_set_ef_search_persists_within_session(pgvector_dsn, monkeypatch):
+def test_admin_set_ef_search_persists_within_session(pgvector_dsn, monkeypatch, admin_user):
     # Create a single adapter instance to be returned on each call
     cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
@@ -55,4 +55,3 @@ def test_admin_set_ef_search_persists_within_session(pgvector_dsn, monkeypatch):
         await adapter.delete_collection(store_id)
 
     asyncio.run(_cleanup())
-

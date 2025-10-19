@@ -10,12 +10,86 @@ are shut down to avoid hanging the Python interpreter on exit.
 from __future__ import annotations
 
 import os
+import sys
 import asyncio
 import threading
 from typing import Iterable
 
 import pytest
 from loguru import logger
+from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+
+class _TestSafeStream:
+    """Wrap a stream to swallow write/flush failures during pytest teardown."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, message: str):
+        try:
+            self._stream.write(message)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        try:
+            return bool(getattr(self._stream, "isatty", lambda: False)())
+        except Exception:
+            return False
+
+
+if not getattr(logger, "_pytest_safe_add_installed", False):
+    _orig_add = logger.add
+
+    def _safe_add(sink, *args, **kwargs):
+        try:
+            if hasattr(sink, "write") and not isinstance(sink, _TestSafeStream):
+                sink = _TestSafeStream(sink)
+        except Exception:
+            pass
+        return _orig_add(sink, *args, **kwargs)
+
+    logger.add = _safe_add  # type: ignore[assignment]
+    setattr(logger, "_pytest_safe_add_installed", True)
+
+try:
+    logger.remove()
+except Exception:
+    pass
+logger.add(
+    _TestSafeStream(sys.stderr),
+    level=os.getenv("LOGURU_LEVEL", "INFO"),
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {message}",
+    enqueue=False,
+)
+
+
+@pytest.fixture
+def admin_user():
+    """Provide an authenticated admin context for tests that hit protected endpoints."""
+
+    async def _admin():
+        return User(
+            id=42,
+            username="admin",
+            email="admin@example.com",
+            is_active=True,
+            is_admin=True,
+        )
+
+    app.dependency_overrides[get_request_user] = _admin
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_request_user, None)
 
 # ----------------------------------------------------------------------------
 # Environment toggles (set at import time so they apply before module imports)

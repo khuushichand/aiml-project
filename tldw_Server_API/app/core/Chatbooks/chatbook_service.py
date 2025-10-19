@@ -945,8 +945,9 @@ class ChatbookService:
             from .chatbook_validators import ChatbookValidator
             ok, err = ChatbookValidator.validate_zip_file(file_path)
             if not ok:
-                # Tests expect a unified error message for invalid/missing archives
-                return False, "Error: Invalid or potentially malicious archive file", None
+                # Surface specific validator detail while keeping consistent prefix
+                detail = err or "Invalid or potentially malicious archive file"
+                return False, f"Error: {detail}", None
             
             # Extract chatbook to secure temp location
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

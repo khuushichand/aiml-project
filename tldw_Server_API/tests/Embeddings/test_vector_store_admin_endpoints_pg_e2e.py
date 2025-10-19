@@ -5,6 +5,8 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
 
+pytestmark = pytest.mark.usefixtures("admin_user")
+
 
 def test_admin_endpoints_e2e_pg(pgvector_dsn, monkeypatch):
 

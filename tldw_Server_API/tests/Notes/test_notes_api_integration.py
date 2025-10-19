@@ -198,9 +198,20 @@ def test_list_notes(client: TestClient):
     response = client.get("/api/v1/notes/?limit=10&offset=0")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert len(data) == 2
-    assert data[0]["id"] == note1_id
-    assert data[0]["content"] == "Content for Note 1"
+    # Endpoint now returns an object with pagination metadata;
+    # fall back to treating it as a bare list if needed.
+    if isinstance(data, dict):
+        items = data.get("items") or data.get("notes") or data.get("results") or []
+        count = data.get("count")
+    else:
+        items = data
+        count = len(items)
+
+    assert len(items) == 2
+    if count is not None:
+        assert count == 2
+    assert items[0]["id"] == note1_id
+    assert items[0]["content"] == "Content for Note 1"
     mock_chacha_db_instance.list_notes.assert_called_once_with(limit=10, offset=0)
 
 

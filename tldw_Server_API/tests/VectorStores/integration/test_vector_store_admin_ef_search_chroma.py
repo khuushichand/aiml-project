@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import Vecto
 pytestmark = pytest.mark.integration
 
 
-def test_admin_set_ef_search_is_noop_for_chroma(monkeypatch):
+def test_admin_set_ef_search_is_noop_for_chroma(monkeypatch, admin_user):
     # Force Chroma via factory settings and stub manager
     from tldw_Server_API.app.core.RAG.rag_service import vector_stores as _vs
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import ChromaDBAdapter
@@ -51,4 +51,3 @@ def test_admin_set_ef_search_is_noop_for_chroma(monkeypatch):
     r4 = client.get(f"/api/v1/vector_stores/{store_id}/admin/index_info")
     assert r4.status_code == 200
     assert "ef_search" not in r4.json()
-
