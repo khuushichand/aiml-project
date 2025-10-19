@@ -566,10 +566,16 @@ async def lifespan(app: FastAPI):
             else:
                 # Postgres path: ensure additive extras (tool catalogs) exist
                 try:
-                    from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_tool_catalogs_tables_pg
-                    ok_pg = await ensure_tool_catalogs_tables_pg(db_pool)
-                    if ok_pg:
+                    from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                        ensure_tool_catalogs_tables_pg,
+                        ensure_privilege_snapshots_table_pg,
+                    )
+                    ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
+                    if ok_catalogs:
                         logger.info("App Startup: Ensured PG tool catalogs tables")
+                    ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
+                    if ok_priv_snapshots:
+                        logger.info("App Startup: Ensured PG privilege_snapshots table")
                 except Exception as _pg_e:
                     logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         except Exception as _e:

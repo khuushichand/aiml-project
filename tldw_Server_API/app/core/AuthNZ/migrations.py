@@ -1068,6 +1068,40 @@ def migration_025_team_members_added_at(conn: sqlite3.Connection) -> None:
 
     conn.commit()
     logger.info("Migration 025: Ensured team_members.added_at column with backfill")
+
+
+def migration_026_create_privilege_snapshots_table(conn: sqlite3.Connection) -> None:
+    """Create privilege_snapshots table for snapshot storage."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS privilege_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            generated_at TEXT NOT NULL,
+            generated_by TEXT NOT NULL,
+            org_id TEXT,
+            team_id TEXT,
+            catalog_version TEXT NOT NULL,
+            summary_json TEXT,
+            scope_index TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_generated_at ON privilege_snapshots(generated_at)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_priv_snapshots_org ON privilege_snapshots(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_priv_snapshots_team ON privilege_snapshots(team_id)")
+    conn.commit()
+    logger.info("Migration 026: Created privilege_snapshots table")
+
+
+def rollback_026_drop_privilege_snapshots_table(conn: sqlite3.Connection) -> None:
+    """Drop privilege_snapshots table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS privilege_snapshots")
+    conn.commit()
+    logger.info("Rollback 026: Dropped privilege_snapshots table")
 #######################################################################################################################
 #
 # Migration Registry
@@ -1101,6 +1135,12 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(23, "Create virtual key counters tables", migration_023_create_virtual_key_counters),
         Migration(24, "Ensure api_keys status column before index", migration_024_ensure_api_keys_status_column),
         Migration(25, "Backfill team_members added_at column", migration_025_team_members_added_at),
+        Migration(
+            26,
+            "Create privilege_snapshots table",
+            migration_026_create_privilege_snapshots_table,
+            rollback_026_drop_privilege_snapshots_table,
+        ),
     ]
 
 

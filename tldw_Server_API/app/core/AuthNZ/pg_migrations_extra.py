@@ -51,6 +51,39 @@ _CREATE_TOOL_CATALOGS = [
 ]
 
 
+_CREATE_PRIVILEGE_SNAPSHOTS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS privilege_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            generated_at TIMESTAMPTZ NOT NULL,
+            generated_by TEXT NOT NULL,
+            org_id TEXT NULL,
+            team_id TEXT NULL,
+            catalog_version TEXT NOT NULL,
+            summary_json TEXT NULL,
+            scope_index TEXT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_generated_at ON privilege_snapshots(generated_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_org ON privilege_snapshots(org_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_team ON privilege_snapshots(team_id)",
+        (),
+    ),
+]
+
+
 async def ensure_tool_catalogs_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
 
@@ -72,3 +105,20 @@ async def ensure_tool_catalogs_tables_pg(pool: Optional[DatabasePool] = None) ->
         logger.warning(f"Failed to ensure PostgreSQL tool catalogs tables: {e}")
         return False
 
+
+async def ensure_privilege_snapshots_table_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure privilege_snapshots table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        for sql, params in _CREATE_PRIVILEGE_SNAPSHOTS:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                logger.debug(f"PG ensure privilege_snapshots DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL privilege_snapshots table (idempotent)")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL privilege_snapshots table: {exc}")
+        return False
