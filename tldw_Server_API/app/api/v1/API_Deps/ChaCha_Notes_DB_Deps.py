@@ -200,6 +200,7 @@ async def get_chacha_db_for_user(
             # This is a basic check; the CharactersRAGDB class handles more robust connection checks internally
             conn = db_instance.get_connection()
             conn.execute("SELECT 1")
+            db_instance.ensure_character_tables_ready()
             logger.debug(f"Using cached and active ChaChaNotesDB instance for user_id: {user_id}")
             return db_instance
         except (CharactersRAGDBError, AttributeError, Exception) as e:  # Catch broader errors if connection is dead

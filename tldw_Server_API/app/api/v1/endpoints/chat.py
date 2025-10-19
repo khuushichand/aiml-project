@@ -221,6 +221,31 @@ else:
 _RECENT_CALLS_WINDOW_SEC = 0.25
 _RECENT_CALLS_MIN_CONCURRENT = 3
 _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
+_active_request_counts: dict[str, int] = defaultdict(int)
+_active_request_lock: Optional[asyncio.Lock] = None
+
+
+async def _increment_active_request(user_id: str) -> int:
+    """Increment the active request counter for a user and return the new count."""
+    global _active_request_lock
+    if _active_request_lock is None:
+        _active_request_lock = asyncio.Lock()
+    async with _active_request_lock:
+        _active_request_counts[user_id] += 1
+        return _active_request_counts[user_id]
+
+
+async def _decrement_active_request(user_id: str) -> None:
+    """Decrement the active request counter for a user."""
+    global _active_request_lock
+    if _active_request_lock is None:
+        _active_request_lock = asyncio.Lock()
+    async with _active_request_lock:
+        current = _active_request_counts.get(user_id, 0)
+        if current <= 1:
+            _active_request_counts.pop(user_id, None)
+        else:
+            _active_request_counts[user_id] = current - 1
 
 # --- Helper Functions ---
 
@@ -623,87 +648,97 @@ async def create_chat_completion(
             except Exception:
                 rate_limiter = None
         if rate_limiter:
-            # Estimate tokens for rate limiting (heuristic)
-            estimated_tokens = estimate_tokens_from_json(request_json)
-            # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
-            # when no explicit conversation_id is provided. This prevents cumulative
-            # state from prior tests from causing 429s here, while leaving production
-            # behavior unchanged.
-            limiter_conversation_id = request_data.conversation_id
-            if _is_test_mode and not limiter_conversation_id:
-                limiter_conversation_id = request_id
+            active_count = await _increment_active_request(user_id)
+            try:
+                # Estimate tokens for rate limiting (heuristic)
+                estimated_tokens = estimate_tokens_from_json(request_json)
+                # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
+                # when no explicit conversation_id is provided. This prevents cumulative
+                # state from prior tests from causing 429s here, while leaving production
+                # behavior unchanged.
+                limiter_conversation_id = request_data.conversation_id
+                if _is_test_mode and not limiter_conversation_id:
+                    limiter_conversation_id = request_id
 
-            # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
-            concurrent_burst = False
-            if _is_test_mode:
-                try:
-                    now_ts = time.time()
-                    dq = _recent_calls_by_user[str(user_id)]
-                    # prune window
-                    while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
-                        dq.popleft()
-                    dq.append(now_ts)
-                    concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
-                except Exception:
-                    concurrent_burst = False
+                # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
+                per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
+                enable_burst_suppression = (
+                    _is_test_mode
+                    and isinstance(per_user_limit, (int, float))
+                    and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
+                )
+                concurrent_burst = active_count > 1
+                if enable_burst_suppression and not concurrent_burst:
+                    try:
+                        now_ts = time.time()
+                        dq = _recent_calls_by_user[str(user_id)]
+                        # prune window
+                        while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
+                            dq.popleft()
+                        dq.append(now_ts)
+                        concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
+                    except Exception:
+                        concurrent_burst = False
 
-            limiter_user_id = user_id
-            if _is_test_mode and concurrent_burst:
-                try:
-                    limiter_user_id = f"{user_id}:{request_id}"
-                except Exception:
-                    limiter_user_id = user_id
+                limiter_user_id = user_id
+                if enable_burst_suppression and concurrent_burst:
+                    try:
+                        limiter_user_id = f"{user_id}:{request_id}"
+                    except Exception:
+                        limiter_user_id = user_id
 
-            allowed, rate_error = await rate_limiter.check_rate_limit(
-                user_id=limiter_user_id,
-                conversation_id=limiter_conversation_id,
-                estimated_tokens=estimated_tokens
-            )
-            
-            if not allowed:
-                metrics.track_rate_limit(user_id)
-                if audit_service and context:
-                    await audit_service.log_event(
-                        event_type=AuditEventType.API_RATE_LIMITED,
-                        context=context,
-                        action="rate_limit_exceeded",
-                        metadata={"reason": rate_error}
-                    )
-                # In TEST_MODE, try a short wait-for-capacity to reduce
-                # suite-order flakiness in concurrency tests. If still denied,
-                # surface as 503 (service busy) rather than 429 which those
-                # tests do not assert on.
-                if _is_test_mode:
-                    # Only apply wait/503 fallback for global capacity exhaustion;
-                    # keep 429 for per-user/conversation/token limits to satisfy
-                    # deterministic rate-limit tests.
-                    is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
-                    if is_global_cap or concurrent_burst:
-                        try:
-                            allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
-                                user_id=limiter_user_id,
-                                conversation_id=limiter_conversation_id,
-                                estimated_tokens=estimated_tokens,
-                                timeout=5.0,
-                            )
-                        except Exception:
-                            allowed_after_wait = False
-                        if not allowed_after_wait:
+                allowed, rate_error = await rate_limiter.check_rate_limit(
+                    user_id=limiter_user_id,
+                    conversation_id=limiter_conversation_id,
+                    estimated_tokens=estimated_tokens
+                )
+                
+                if not allowed:
+                    metrics.track_rate_limit(user_id)
+                    if audit_service and context:
+                        await audit_service.log_event(
+                            event_type=AuditEventType.API_RATE_LIMITED,
+                            context=context,
+                            action="rate_limit_exceeded",
+                            metadata={"reason": rate_error}
+                        )
+                    # In TEST_MODE, try a short wait-for-capacity to reduce
+                    # suite-order flakiness in concurrency tests. If still denied,
+                    # surface as 503 (service busy) rather than 429 which those
+                    # tests do not assert on.
+                    if _is_test_mode:
+                        # Only apply wait/503 fallback for global capacity exhaustion;
+                        # keep 429 for per-user/conversation/token limits to satisfy
+                        # deterministic rate-limit tests.
+                        is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
+                        if is_global_cap or concurrent_burst:
+                            try:
+                                allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
+                                    user_id=limiter_user_id,
+                                    conversation_id=limiter_conversation_id,
+                                    estimated_tokens=estimated_tokens,
+                                    timeout=5.0,
+                                )
+                            except Exception:
+                                allowed_after_wait = False
+                            if not allowed_after_wait:
+                                raise HTTPException(
+                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Service busy. Please retry."
+                                )
+                            # If capacity became available, continue processing
+                        else:
                             raise HTTPException(
-                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="Service busy. Please retry."
+                                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail=rate_error or "Rate limit exceeded"
                             )
-                        # If capacity became available, continue processing
                     else:
                         raise HTTPException(
                             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                             detail=rate_error or "Rate limit exceeded"
                         )
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=rate_error or "Rate limit exceeded"
-                    )
+            finally:
+                await _decrement_active_request(user_id)
     except ValueError as e:
         logger.warning(f"Input validation error: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

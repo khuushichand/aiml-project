@@ -286,8 +286,12 @@ class CharacterChatManager:
     
     def count_tokens(self, text: str) -> int:
         """Count tokens in text (approximation)."""
-        # Simple approximation: 1 token ≈ 4 characters
-        return len(text) // 4
+        if not text:
+            return 0
+        # Simple approximation: 1 token ≈ 4 characters, but never under-count words.
+        char_based = max(1, (len(text) + 3) // 4)
+        word_based = len(text.split())
+        return max(char_based, word_based)
     
     def truncate_context(self, messages: List[Dict[str, Any]] = None, max_tokens: int = 4000) -> List[Dict[str, Any]]:
         """Truncate context to fit within token limit."""

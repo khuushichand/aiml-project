@@ -1,0 +1,58 @@
+version: 1.0.0
+updated_at: 2025-01-15T10:00:00Z
+scopes:
+  - id: media.ingest
+    description: Ingest new media assets via upload, URL fetch, or pipeline triggers.
+    resource_tags:
+      - media
+      - ingestion
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - media_manager
+    feature_flag_id: media_ingest_beta
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/media-ingest
+  - id: chat.admin
+    description: Manage chat sessions, transcripts, and system prompts for the organization.
+    resource_tags:
+      - chat
+      - admin
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-admin
+feature_flags:
+  - id: media_ingest_beta
+    description: Enables new media ingestion pipeline with enhanced metadata extraction.
+    default_state: disabled
+    allowed_roles:
+      - admin
+      - media_manager
+    expires_at: null
+rate_limit_classes:
+  - id: standard
+    requests_per_min: 120
+    burst: 240
+    notes: Default rate limit for general endpoints.
+  - id: elevated
+    requests_per_min: 240
+    burst: 480
+    notes: Higher quota for ingestion workflows.
+  - id: admin
+    requests_per_min: 60
+    burst: 120
+    notes: Low volume but high-privilege operations.
+ownership_predicates:
+  - id: same_org
+    evaluator: tldw_Server_API.app.core.AuthNZ.predicates.same_org
+    description: Accessible when requester and target belong to the same organization.
+  - id: same_team
+    evaluator: tldw_Server_API.app.core.AuthNZ.predicates.same_team
+    description: Accessible when requester and target share at least one team.

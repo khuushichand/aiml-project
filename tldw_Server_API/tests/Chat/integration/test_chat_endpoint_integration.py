@@ -77,8 +77,35 @@ def test_db():
 @pytest.fixture
 def test_client(test_db):
     """Create test client with database dependency override."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+    from tldw_Server_API.app.core.Chat.rate_limiter import (
+        RateLimitConfig,
+        initialize_rate_limiter,
+    )
+
+    # Guard against cross-suite overrides (Chat_NEW sets very low TEST_CHAT_* limits).
+    env_overrides = {
+        "TEST_CHAT_PER_USER_RPM": "24",
+        "TEST_CHAT_PER_CONVERSATION_RPM": "12",
+        "TEST_CHAT_GLOBAL_RPM": "120",
+        "TEST_CHAT_TOKENS_PER_MINUTE": "20000",
+    }
+    previous_env = {key: os.environ.get(key) for key in env_overrides}
+    for key, value in env_overrides.items():
+        os.environ[key] = value
+    try:
+        initialize_rate_limiter(
+            RateLimitConfig(
+                global_rpm=int(env_overrides["TEST_CHAT_GLOBAL_RPM"]),
+                per_user_rpm=int(env_overrides["TEST_CHAT_PER_USER_RPM"]),
+                per_conversation_rpm=int(env_overrides["TEST_CHAT_PER_CONVERSATION_RPM"]),
+                per_user_tokens_per_minute=int(env_overrides["TEST_CHAT_TOKENS_PER_MINUTE"]),
+                burst_multiplier=1.0,
+            )
+        )
+    except Exception:
+        pass
     
     # Create a test user for authentication
     test_user = User(
@@ -88,45 +115,52 @@ def test_client(test_db):
         is_active=True
     )
     
-    # Mock API keys to prevent 503 errors
-    with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}):
-        # Mock the actual chat API call
-        mock_response = {
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "created": 1234567890,
-            "model": "test-model",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "This is a test response"},
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15
+    try:
+        # Mock API keys to prevent 503 errors
+        with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}):
+            # Mock the actual chat API call
+            mock_response = {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "test-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "This is a test response"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15
+                }
             }
-        }
-        
-        with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=mock_response):
-            # Override authentication to use test user
-            async def mock_get_request_user(api_key=None, token=None):
-                return test_user
             
-            # Override the database and auth dependencies
-            app.dependency_overrides[get_chacha_db_for_user] = lambda: test_db
-            app.dependency_overrides[get_request_user] = mock_get_request_user
+            with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=mock_response):
+                # Override authentication to use test user
+                async def mock_get_request_user(api_key=None, token=None):
+                    return test_user
+                
+                # Override the database and auth dependencies
+                app.dependency_overrides[get_chacha_db_for_user] = lambda: test_db
+                app.dependency_overrides[get_request_user] = mock_get_request_user
 
-            with TestClient(app) as client:
-                # Get CSRF token
-                response = client.get("/api/v1/health")
-                csrf_token = response.cookies.get("csrf_token", "")
-                client.csrf_token = csrf_token
-                yield client
-            
-            # Cleanup - don't clear, let the autouse fixture handle it
-
-
+                with TestClient(app) as client:
+                    # Get CSRF token
+                    response = client.get("/api/v1/health")
+                    csrf_token = response.cookies.get("csrf_token", "")
+                    client.csrf_token = csrf_token
+                    yield client
+    finally:
+        for key, old_value in previous_env.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
+        try:
+            initialize_rate_limiter()
+        except Exception:
+            pass
 import pytest_asyncio
 @pytest_asyncio.fixture
 async def async_test_client():

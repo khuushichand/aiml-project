@@ -2213,6 +2213,8 @@ UPDATE db_schema_version
         This guard re-runs schema initialization if we detect that the character_cards
         table is missing.
         """
+        if not hasattr(self, "_schema_lock"):
+            self._schema_lock = threading.RLock()
         with self._schema_lock:
             try:
                 self.execute_query("SELECT 1 FROM character_cards LIMIT 1")
@@ -2251,6 +2253,19 @@ UPDATE db_schema_version
                 raise SchemaError(
                     "Character cards table missing after schema re-initialization."
                 ) from exc
+
+    @staticmethod
+    def _is_missing_character_table_error(error: CharactersRAGDBError) -> bool:
+        message = str(error).lower()
+        if "character_cards" not in message:
+            return False
+        missing_markers = (
+            "no such table",
+            "does not exist",
+            "missing relation",
+            "undefined table",
+        )
+        return any(marker in message for marker in missing_markers)
 
     def _initialize_schema_sqlite(self):
         """
@@ -3285,6 +3300,22 @@ UPDATE db_schema_version
             row = cursor.fetchone()
             return self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
         except CharactersRAGDBError as e:
+            if self._is_missing_character_table_error(e):
+                logger.warning(
+                    "Detected missing character_cards table while fetching by name; attempting schema recovery."
+                )
+                try:
+                    self.ensure_character_tables_ready()
+                    cursor = self.execute_query(query, (name,))
+                    row = cursor.fetchone()
+                    return self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
+                except (CharactersRAGDBError, SchemaError):
+                    logger.error(
+                        "Schema recovery failed while fetching character card by name '%s'.",
+                        name,
+                        exc_info=True,
+                    )
+                    raise
             logger.error(f"Database error fetching character card by name '{name}': {e}")
             raise
 
