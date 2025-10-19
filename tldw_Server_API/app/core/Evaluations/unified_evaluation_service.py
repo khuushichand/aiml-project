@@ -1157,11 +1157,12 @@ class UnifiedEvaluationService:
     async def list_datasets(
         self,
         limit: int = 20,
-        after: Optional[str] = None
+        after: Optional[str] = None,
+        offset: int = 0
     ) -> Tuple[List[Dict], bool]:
         """List datasets with pagination"""
         try:
-            return self.db.list_datasets(limit=limit, after=after)
+            return self.db.list_datasets(limit=limit, after=after, offset=offset)
         except Exception as e:
             logger.error(f"Failed to list datasets: {e}")
             raise

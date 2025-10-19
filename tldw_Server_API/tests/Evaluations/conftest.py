@@ -581,6 +581,12 @@ def override_unified_service(temp_db_path, monkeypatch):
     from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as service_module
     from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as router_module
 
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        _test_user_id = _DP.get_single_user_id()
+    except Exception:
+        _test_user_id = 1
+
     user_db_base = temp_db_path.parent / "user_eval_dbs"
     user_db_base.mkdir(parents=True, exist_ok=True)
 
@@ -611,11 +617,26 @@ def override_unified_service(temp_db_path, monkeypatch):
 
     service = UnifiedEvaluationService(db_path=str(temp_db_path))
     service_module._service_instance = service
+    try:
+        cache = getattr(service_module, "_service_instances_by_user")
+        cache.clear()
+        cache[_test_user_id] = service
+    except Exception:
+        try:
+            from collections import OrderedDict  # type: ignore
+            service_module._service_instances_by_user = OrderedDict(((_test_user_id, service),))
+        except Exception:
+            service_module._service_instances_by_user = {_test_user_id: service}  # type: ignore[assignment]
     router_module._evaluation_service = service
 
     yield service
 
     router_module._evaluation_service = None
+    try:
+        cache = getattr(service_module, "_service_instances_by_user")
+        cache.pop(_test_user_id, None)
+    except Exception:
+        pass
     service_module._service_instance = None
 
     # Restore the original webhook adapter to avoid leaking test state

@@ -363,7 +363,12 @@ class EvaluationManagerStateMachine(RuleBasedStateMachine):
 
         original_get_db_path = EvaluationManager._get_db_path
 
-        def _patched_get_db_path(instance):
+        def _patched_get_db_path(instance, explicit_path=None, **_ignored):
+            if explicit_path is not None:
+                try:
+                    return Path(explicit_path)
+                except Exception:
+                    return self._db_path
             return self._db_path
 
         EvaluationManager._get_db_path = _patched_get_db_path

@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from loguru import logger
 
 # Import unified schemas
@@ -685,7 +686,7 @@ async def get_rate_limit_status(
 
 
 from .evaluations_rag_pipeline import pipeline_router
-from .evaluations_datasets import datasets_router
+from .evaluations_datasets import datasets_router, _normalize_dataset_payload
 from .evaluations_webhooks import webhooks_router
 from .evaluations_crud import crud_router
 router.include_router(pipeline_router)
@@ -718,7 +719,7 @@ async def create_dataset(
                                 response.headers["Idempotency-Key"] = idempotency_key
                         except Exception:
                             pass
-                        return DatasetResponse(**existing)
+                        return DatasetResponse(**_normalize_dataset_payload(existing))
             except Exception:
                 pass
         dataset_id = await svc.create_dataset(
@@ -732,6 +733,7 @@ async def create_dataset(
         dataset = await svc.get_dataset(dataset_id)
         if not dataset:
             raise ValueError("Failed to retrieve created dataset")
+        dataset = _normalize_dataset_payload(dataset)
         
         # Record idempotency mapping
         try:
@@ -743,7 +745,7 @@ async def create_dataset(
         return DatasetResponse(**dataset)
         
     except Exception as e:
-        logger.error(f"Failed to create dataset: {e}")
+        logger.exception(f"Failed to create dataset: {e}")
         raise create_error_response(
             message=f"Failed to create dataset: {sanitize_error_message(e, 'creating dataset')}",
             error_type="server_error",
@@ -755,6 +757,7 @@ async def create_dataset(
 async def list_datasets(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
+    offset: int = Query(0, ge=0),
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
 ):
@@ -763,22 +766,25 @@ async def list_datasets(
         svc = get_unified_evaluation_service_for_user(current_user.id)
         datasets, has_more = await svc.list_datasets(
             limit=limit,
-            after=after
+            after=after,
+            offset=offset
         )
         
         first_id = datasets[0]["id"] if datasets else None
         last_id = datasets[-1]["id"] if datasets else None
         
+        normalized = [_normalize_dataset_payload(ds) for ds in datasets]
         return DatasetListResponse(
             object="list",
-            data=[DatasetResponse(**ds) for ds in datasets],
+            data=[DatasetResponse(**ds) for ds in normalized],
             has_more=has_more,
             first_id=first_id,
-            last_id=last_id
+            last_id=last_id,
+            total=len(normalized)
         )
         
     except Exception as e:
-        logger.error(f"Failed to list datasets: {e}")
+        logger.exception(f"Failed to list datasets: {e}")
         raise create_error_response(
             message=f"Failed to list datasets: {sanitize_error_message(e, 'listing datasets')}",
             error_type="server_error",
@@ -851,6 +857,7 @@ async def delete_dataset(
 @router.get("/health", response_model=HealthCheckResponse)
 async def health_check():
     """Check evaluation service health"""
+    logger.warning("Evaluations health endpoint invoked")
     try:
         # Default to single-user instance for health when no auth context
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
@@ -2279,3 +2286,25 @@ async def get_evaluation_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve history: {sanitize_error_message(e, 'retrieving history')}"
         )
+
+
+def _promote_static_routes(_router: APIRouter) -> None:
+    """Ensure static paths are registered before catch-all routes."""
+    try:
+        prioritized_suffixes = ("/health", "/metrics")
+        # Move each target to the front, preserving relative order
+        for suffix in reversed(prioritized_suffixes):
+            prefixed = f"{_router.prefix}{suffix}" if _router.prefix else suffix
+            for idx, route in enumerate(list(_router.routes)):
+                path = getattr(route, "path", "")
+                if path in {suffix, prefixed} and isinstance(route, APIRoute):
+                    _router.routes.insert(0, _router.routes.pop(idx))
+                    break
+    except Exception as exc:  # Safety: never fail import due to ordering tweak
+        try:
+            logger.debug(f"Failed to promote evaluation routes: {exc}")
+        except Exception:
+            pass
+
+
+_promote_static_routes(router)

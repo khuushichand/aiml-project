@@ -2,7 +2,8 @@
 Datasets endpoints extracted from evaluations_unified.
 """
 
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
@@ -23,6 +24,36 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
 datasets_router = APIRouter()
 
 
+def _normalize_dataset_payload(dataset: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure required dataset response fields are populated."""
+    # Work on a shallow copy to avoid mutating upstream caches
+    normalized = dict(dataset)
+    normalized.setdefault("object", "dataset")
+
+    created = normalized.get("created")
+    created_at = normalized.get("created_at")
+
+    timestamp: Optional[int] = None
+    if isinstance(created, (int, float)):
+        timestamp = int(created)
+    elif isinstance(created_at, (int, float)):
+        timestamp = int(created_at)
+    elif isinstance(created_at, str):
+        try:
+            # Support both ISO-8601 and SQLite timestamp formats
+            ts = created_at.replace("Z", "+00:00")
+            timestamp = int(datetime.fromisoformat(ts).timestamp())
+        except Exception:
+            timestamp = None
+
+    if timestamp is None:
+        timestamp = int(datetime.now(timezone.utc).timestamp())
+
+    normalized["created"] = timestamp
+    normalized["created_at"] = timestamp
+    return normalized
+
+
 @datasets_router.post("/datasets", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def create_dataset(
     dataset_request: CreateDatasetRequest,
@@ -38,18 +69,10 @@ async def create_dataset(
             created_by=user_id,
         )
         row = svc.db.get_dataset(dataset_id)
-        return DatasetResponse(
-            id=row["id"],
-            name=row["name"],
-            description=row.get("description"),
-            samples=row.get("samples"),
-            sample_count=row.get("sample_count") or 0,
-            created_at=row.get("created_at"),
-            created_by=row.get("created_by"),
-            metadata=row.get("metadata"),
-        )
+        normalized = _normalize_dataset_payload(row)
+        return DatasetResponse(**normalized)
     except Exception as e:
-        logger.error(f"Failed to create dataset: {e}")
+        logger.exception(f"Failed to create dataset: {e}")
         raise create_error_response(
             message=f"Failed to create dataset: {sanitize_error_message(e, 'creating dataset')}",
             error_type="server_error",
@@ -67,21 +90,10 @@ async def list_datasets(
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         items, total = svc.db.list_datasets(limit=limit, offset=offset)
-        resp = []
-        for r in items:
-            resp.append(DatasetResponse(
-                id=r["id"],
-                name=r["name"],
-                description=r.get("description"),
-                samples=r.get("samples"),
-                sample_count=r.get("sample_count") or 0,
-                created_at=r.get("created_at"),
-                created_by=r.get("created_by"),
-                metadata=r.get("metadata"),
-            ))
-        return DatasetListResponse(items=resp, total=total)
+        resp = [DatasetResponse(**_normalize_dataset_payload(r)) for r in items]
+        return DatasetListResponse(data=resp, total=total)
     except Exception as e:
-        logger.error(f"Failed to list datasets: {e}")
+        logger.exception(f"Failed to list datasets: {e}")
         raise create_error_response(
             message=f"Failed to list datasets: {sanitize_error_message(e, 'listing datasets')}",
             error_type="server_error",
@@ -104,16 +116,7 @@ async def get_dataset(
                 error_type="not_found_error",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
-        return DatasetResponse(
-            id=row["id"],
-            name=row["name"],
-            description=row.get("description"),
-            samples=row.get("samples"),
-            sample_count=row.get("sample_count") or 0,
-            created_at=row.get("created_at"),
-            created_by=row.get("created_by"),
-            metadata=row.get("metadata"),
-        )
+        return DatasetResponse(**_normalize_dataset_payload(row))
     except HTTPException:
         raise
     except Exception as e:
@@ -150,4 +153,3 @@ async def delete_dataset(
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-

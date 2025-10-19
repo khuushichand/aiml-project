@@ -301,6 +301,12 @@ def migrate_evaluations_database(db_path: Optional[Path] = None) -> None:
     """
     if db_path is None:
         db_path = Path("Databases/evaluations.db")
+    else:
+        try:
+            if not isinstance(db_path, Path):
+                db_path = Path(db_path)
+        except Exception as exc:
+            raise RuntimeError(f"Invalid evaluations database path: {db_path}") from exc
     
     # Ensure directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)

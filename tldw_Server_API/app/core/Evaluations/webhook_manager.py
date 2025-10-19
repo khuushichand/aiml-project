@@ -187,7 +187,9 @@ class WebhookManager:
         url: str,
         events: List[WebhookEvent],
         secret: Optional[str] = None,
-        skip_validation: bool = False
+        skip_validation: bool = False,
+        retry_count: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Register a webhook for a user with enhanced security validation.
@@ -241,6 +243,9 @@ class WebhookManager:
             events_json = json.dumps([e.value for e in events])
             
             # Register webhook in database
+            effective_retries = self.max_retries if retry_count is None else max(0, int(retry_count))
+            effective_timeout = self.timeout if timeout_seconds is None else max(1, int(timeout_seconds))
+
             with self.db_adapter.transaction():
                 # Check if webhook already exists
                 existing = self.db_adapter.fetch_one("""
@@ -257,9 +262,9 @@ class WebhookManager:
                     # Update existing webhook
                     self.db_adapter.update("""
                         UPDATE webhook_registrations
-                        SET events = ?, active = 1, updated_at = CURRENT_TIMESTAMP
+                        SET events = ?, active = 1, retry_count = ?, timeout_seconds = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
-                    """, (events_json, webhook_id))
+                    """, (events_json, effective_retries, effective_timeout, webhook_id))
                     
                     # Use existing secret if not provided
                     if not secret:
@@ -276,7 +281,7 @@ class WebhookManager:
                         ) VALUES (?, ?, ?, ?, ?, ?)
                     """, (
                         user_id, url, secret, events_json,
-                        self.max_retries, self.timeout
+                        effective_retries, effective_timeout
                     ))
                     action = "Registered"
                     logger.info(f"Registered webhook {webhook_id} for user {user_id}")
@@ -303,7 +308,9 @@ class WebhookManager:
                 "active": True,
                 "created_at": datetime.now(timezone.utc),
                 "status": "active",
-                "action": action.lower()
+                "action": action.lower(),
+                "retry_count": effective_retries,
+                "timeout_seconds": effective_timeout,
             }
             
             # Include validation results if available

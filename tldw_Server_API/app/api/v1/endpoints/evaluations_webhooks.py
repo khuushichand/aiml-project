@@ -2,7 +2,8 @@
 Webhook management endpoints extracted from evaluations_unified.
 """
 
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
@@ -15,7 +16,11 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
-from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager, WebhookEvent
+from tldw_Server_API.app.core.Evaluations.webhook_manager import (
+    WebhookManager,
+    WebhookEvent,
+    webhook_manager,
+)
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     WebhookRegistrationRequest, WebhookRegistrationResponse,
     WebhookUpdateRequest, WebhookStatusResponse,
@@ -27,9 +32,37 @@ webhooks_router = APIRouter()
 
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
-    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-    db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
-    return WebhookManager(db_path=db_path)
+    service = get_unified_evaluation_service_for_user(user_id)
+    manager = getattr(service, "webhook_manager", None)
+    if manager is None:
+        setattr(service, "webhook_manager", webhook_manager)
+        return webhook_manager
+    return manager
+
+
+def _normalize_webhook_status_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(record)
+    status = normalized.get("status")
+    if "active" not in normalized:
+        normalized["active"] = True if status is None else status == "active"
+
+    stats = normalized.get("statistics")
+    if not isinstance(stats, dict):
+        stats = {}
+
+    total = stats.get("total_deliveries", normalized.pop("total_deliveries", 0)) or 0
+    failed = stats.get("failed_deliveries", normalized.pop("failure_count", 0)) or 0
+    success = stats.get("successful_deliveries", total - failed)
+    stats.setdefault("total_deliveries", total)
+    stats.setdefault("failed_deliveries", failed)
+    stats.setdefault("successful_deliveries", success)
+    stats.setdefault("success_rate", (success / total) if total else 0.0)
+    normalized["statistics"] = stats
+
+    if "created_at" not in normalized or normalized["created_at"] is None:
+        normalized["created_at"] = datetime.now(timezone.utc)
+
+    return normalized
 
 
 @webhooks_router.post("/webhooks", response_model=WebhookRegistrationResponse)
@@ -40,16 +73,17 @@ async def register_webhook(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        webhook_id = wm.register_webhook(
+        url = str(request.url)
+        events = [WebhookEvent(e.value) if not isinstance(e, WebhookEvent) else e for e in request.events]
+        result = await wm.register_webhook(
             user_id=user_id,
-            url=request.url,
+            url=url,
             secret=request.secret,
-            events=request.events,
-            active=True,
+            events=events,
             retry_count=request.retry_count or 3,
             timeout_seconds=request.timeout_seconds or 30,
         )
-        return WebhookRegistrationResponse(webhook_id=webhook_id, status="registered")
+        return WebhookRegistrationResponse(**result)
     except Exception as e:
         logger.error(f"Failed to register webhook: {e}")
         raise HTTPException(
@@ -64,8 +98,10 @@ async def list_webhooks(
     current_user: User = Depends(get_request_user),
 ):
     try:
-        wm = _get_webhook_manager_for_user(current_user.id)
-        return [WebhookStatusResponse(**w) for w in wm.list_webhooks(user_id)]
+        _get_webhook_manager_for_user(current_user.id)
+        records = await webhook_manager.get_webhook_status(user_id=user_id)
+        normalized = [_normalize_webhook_status_record(w) for w in records]
+        return [WebhookStatusResponse(**w) for w in normalized]
     except Exception as e:
         logger.error(f"Failed to list webhooks: {e}")
         raise HTTPException(
@@ -82,7 +118,7 @@ async def unregister_webhook(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        wm.unregister_webhook(user_id, webhook_id)
+        await wm.unregister_webhook(user_id, webhook_id)
         return {"status": "unregistered", "webhook_id": webhook_id}
     except Exception as e:
         logger.error(f"Failed to unregister webhook: {e}")
@@ -99,18 +135,16 @@ async def test_webhook(
     current_user: User = Depends(get_request_user),
 ):
     try:
-        wm = _get_webhook_manager_for_user(current_user.id)
-        ok = await wm.send_webhook(
-            user_id=user_id,
-            event=WebhookEvent.EVALUATION_STARTED,
-            evaluation_id="test",
-            data=payload.data or {"message": "webhook test"}
-        )
-        return WebhookTestResponse(status="sent" if ok else "failed")
+        _get_webhook_manager_for_user(current_user.id)
+        result = await webhook_manager.test_webhook(user_id=user_id, url=str(payload.url))
+        if isinstance(result, WebhookTestResponse):
+            return result
+        if isinstance(result, dict):
+            return WebhookTestResponse(**result)
+        return WebhookTestResponse(success=bool(result))
     except Exception as e:
         logger.error(f"Failed to test webhook: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to test webhook: {sanitize_error_message(e, 'webhook testing')}"
         )
-

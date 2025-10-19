@@ -14,6 +14,7 @@ import pytest
 import asyncio
 import json
 import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
@@ -68,16 +69,51 @@ async def async_client():
 def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
     """Route all evaluation storage to the per-test temporary database."""
 
-    def _get_db_path(_self):
-        return temp_db_path
+    from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as _svc_module
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+
+    def _get_db_path(_self, explicit_path=None, **_ignored):
+        if explicit_path:
+            try:
+                return Path(explicit_path)
+            except Exception:
+                return Path(temp_db_path)
+        return Path(temp_db_path)
 
     monkeypatch.setattr(EvaluationManager, "_get_db_path", _get_db_path, raising=False)
+    monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(temp_db_path))
 
     service = UnifiedEvaluationService(
         db_path=str(temp_db_path),
         enable_webhooks=False,
         enable_caching=True
     )
+
+    # Ensure per-user service cache points at the test-scoped instance
+    try:
+        _svc_module._service_instance = service
+    except Exception:
+        pass
+
+    try:
+        cache = getattr(_svc_module, "_service_instances_by_user")
+        cache.clear()
+    except Exception:
+        cache = None
+
+    try:
+        user_id = _DP.get_single_user_id()
+    except Exception:
+        user_id = 1
+
+    if cache is not None:
+        cache[user_id] = service
+    else:
+        try:
+            from collections import OrderedDict  # type: ignore
+            _svc_module._service_instances_by_user = OrderedDict(((user_id, service),))
+        except Exception:
+            _svc_module._service_instances_by_user = {user_id: service}  # type: ignore[assignment]
 
     event_loop.run_until_complete(service.initialize())
 
@@ -89,6 +125,15 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
     try:
         yield
     finally:
+        try:
+            cache = getattr(_svc_module, "_service_instances_by_user")
+            cache.pop(user_id, None)
+        except Exception:
+            pass
+        try:
+            _svc_module._service_instance = None
+        except Exception:
+            pass
         event_loop.run_until_complete(service.shutdown())
         app.dependency_overrides.pop(get_unified_evaluation_service, None)
 

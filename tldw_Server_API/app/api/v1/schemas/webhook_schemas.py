@@ -34,12 +34,26 @@ class WebhookRegistrationRequest(BaseModel):
         description="Optional secret for HMAC signature (generated if not provided)",
         min_length=32
     )
+    retry_count: Optional[int] = Field(
+        3,
+        ge=0,
+        le=10,
+        description="Number of times to retry delivery when the receiver returns an error",
+    )
+    timeout_seconds: Optional[int] = Field(
+        30,
+        ge=1,
+        le=300,
+        description="HTTP timeout for webhook delivery attempts",
+    )
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "url": "https://example.com/webhook",
             "events": ["evaluation.completed", "evaluation.failed"],
-            "secret": None
+            "secret": None,
+            "retry_count": 3,
+            "timeout_seconds": 30,
         }
     })
 
@@ -52,6 +66,8 @@ class WebhookRegistrationResponse(BaseModel):
     secret: str = Field(..., description="Webhook secret (shown once)")
     active: bool = Field(..., description="Whether webhook is active")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
+    retry_count: int = Field(3, ge=0, le=10, description="Configured retry attempts")
+    timeout_seconds: int = Field(30, ge=1, le=300, description="Delivery timeout in seconds")
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -60,7 +76,9 @@ class WebhookRegistrationResponse(BaseModel):
             "events": ["evaluation.completed", "evaluation.failed"],
             "secret": "wh_secret_abc123...",
             "active": True,
-            "created_at": "2024-01-18T12:00:00Z"
+            "created_at": "2024-01-18T12:00:00Z",
+            "retry_count": 3,
+            "timeout_seconds": 30,
         }
     })
 
@@ -83,6 +101,8 @@ class WebhookStatusResponse(BaseModel):
     url: str = Field(..., description="Webhook URL")
     events: List[str] = Field(..., description="Subscribed events")
     active: bool = Field(..., description="Whether webhook is active")
+    retry_count: Optional[int] = Field(None, description="Configured retry attempts")
+    timeout_seconds: Optional[int] = Field(None, description="Delivery timeout in seconds")
     statistics: Dict[str, Any] = Field(
         ...,
         description="Delivery statistics"
@@ -103,6 +123,8 @@ class WebhookStatusResponse(BaseModel):
             "url": "https://example.com/webhook",
             "events": ["evaluation.completed"],
             "active": True,
+            "retry_count": 3,
+            "timeout_seconds": 30,
             "statistics": {
                 "total_deliveries": 100,
                 "successful_deliveries": 98,

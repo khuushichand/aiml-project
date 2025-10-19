@@ -303,17 +303,17 @@ class TestAuthentication:
         from fastapi import HTTPException
         from fastapi.security import HTTPAuthorizationCredentials
         
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_unified.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
             
             # Test with valid API key
-            with patch.dict(os.environ, {'API_BEARER': 'test-api-key'}):
+            with patch.dict(os.environ, {'API_BEARER': 'test-api-key', 'SINGLE_USER_API_KEY': 'test-api-key', 'TEST_MODE': 'false'}):
                 creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="test-api-key")
                 result = await verify_api_key(creds)
                 assert result == "test-api-key"
             
             # Test with invalid API key
-            with patch.dict(os.environ, {'API_BEARER': 'correct-key'}):
+            with patch.dict(os.environ, {'API_BEARER': 'correct-key', 'SINGLE_USER_API_KEY': 'correct-key', 'TEST_MODE': 'false'}):
                 creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="wrong-key")
                 with pytest.raises(HTTPException) as exc_info:
                     await verify_api_key(creds)
@@ -327,10 +327,10 @@ class TestAuthentication:
         
         mock_settings.AUTH_MODE = "multi_user"
         
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_unified.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
             
-            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_unified.JWTService') as MockJWTService:
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.JWTService') as MockJWTService:
                 mock_jwt = Mock()
                 mock_jwt.decode_access_token.return_value = {
                     'sub': '123',
@@ -339,8 +339,9 @@ class TestAuthentication:
                 }
                 MockJWTService.return_value = mock_jwt
                 
-                creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-jwt-token")
-                result = await verify_api_key(creds)
+                with patch.dict(os.environ, {'TEST_MODE': 'false'}):
+                    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-jwt-token")
+                    result = await verify_api_key(creds)
                 assert result == "user_123"
 
 

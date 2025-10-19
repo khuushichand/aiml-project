@@ -386,6 +386,7 @@ class ListResponse(BaseModel):
     has_more: bool = Field(False)
     first_id: Optional[str] = None
     last_id: Optional[str] = None
+    total: Optional[int] = Field(default=None, description="Total items available (if known)")
 
 
 class EvaluationListResponse(ListResponse):
@@ -793,6 +794,18 @@ class WebhookRegistrationRequest(BaseModel):
     url: HttpUrl = Field(..., description="Webhook endpoint URL")
     events: List[WebhookEventType] = Field(..., min_length=1)
     secret: Optional[str] = Field(None, min_length=32)
+    retry_count: Optional[int] = Field(
+        3,
+        ge=0,
+        le=10,
+        description="Number of retry attempts for failed webhook deliveries",
+    )
+    timeout_seconds: Optional[int] = Field(
+        30,
+        ge=1,
+        le=300,
+        description="Timeout in seconds for webhook delivery requests",
+    )
 
 
 class WebhookRegistrationResponse(BaseModel):
@@ -803,6 +816,8 @@ class WebhookRegistrationResponse(BaseModel):
     secret: str
     created_at: datetime
     status: str = "active"
+    retry_count: int = Field(3, ge=0, le=10)
+    timeout_seconds: int = Field(30, ge=1, le=300)
 
 
 class WebhookUpdateRequest(BaseModel):
@@ -818,6 +833,8 @@ class WebhookStatusResponse(BaseModel):
     url: str
     events: List[str]
     status: str
+    retry_count: Optional[int] = None
+    timeout_seconds: Optional[int] = None
     created_at: datetime
     last_triggered: Optional[datetime] = None
     failure_count: int = 0

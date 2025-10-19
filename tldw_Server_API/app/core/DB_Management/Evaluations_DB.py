@@ -1240,7 +1240,8 @@ class EvaluationsDatabase:
     def list_datasets(
         self,
         limit: int = 20,
-        after: Optional[str] = None
+        after: Optional[str] = None,
+        offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], bool]:
         """List datasets with pagination"""
         with self.get_connection() as conn:
@@ -1255,6 +1256,9 @@ class EvaluationsDatabase:
             
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
+            if offset:
+                query += " OFFSET ?"
+                params.append(offset)
             
             cursor.execute(query, params)
             rows = cursor.fetchall()
