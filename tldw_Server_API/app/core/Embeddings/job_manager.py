@@ -21,6 +21,10 @@ from .queue_schemas import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+    ensure_async_client_closed,
+)
 
 
 class JobManagerConfig(BaseModel):
@@ -150,17 +154,11 @@ class EmbeddingJobManager:
     
     async def initialize(self):
         """Initialize Redis connection and sub-managers"""
-        conn = redis.from_url(
-            self.config.redis_url,
-            decode_responses=True
+        self.redis_client = await create_async_redis_client(
+            preferred_url=self.config.redis_url,
+            decode_responses=True,
+            context="EmbeddingJobManager",
         )
-        try:
-            import inspect as _inspect
-            if _inspect.isawaitable(conn):
-                conn = await conn
-        except Exception:
-            pass
-        self.redis_client = conn
         self.quota_manager = UserQuotaManager(self.redis_client, self.config)
         self.priority_calculator = PriorityCalculator(self.redis_client)
         
@@ -171,8 +169,7 @@ class EmbeddingJobManager:
     
     async def close(self):
         """Close Redis connection"""
-        if self.redis_client:
-            await self.redis_client.close()
+        await ensure_async_client_closed(self.redis_client)
     
     async def create_job(
         self,

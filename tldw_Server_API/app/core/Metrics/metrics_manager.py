@@ -119,6 +119,21 @@ class MetricsRegistry:
                 buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5]
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_snapshots_table_bytes",
+                type=MetricType.GAUGE,
+                description="On-disk size of the privilege_snapshots table",
+                unit="bytes",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_snapshots_table_rows",
+                type=MetricType.GAUGE,
+                description="Number of rows stored in the privilege_snapshots table",
+            )
+        )
         
         # LLM metrics
         self.register_metric(
@@ -192,6 +207,42 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total number of tokens used by operation",
                 labels=["provider", "model", "type", "operation"],
+            )
+        )
+
+        # Infrastructure / Redis metrics
+        self.register_metric(
+            MetricDefinition(
+                name="infra_redis_connection_attempts_total",
+                type=MetricType.COUNTER,
+                description="Redis client connection attempts",
+                labels=["mode", "context", "outcome"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="infra_redis_connection_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Redis client connection duration in seconds",
+                unit="s",
+                labels=["mode", "context", "outcome"],
+                buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="infra_redis_connection_errors_total",
+                type=MetricType.COUNTER,
+                description="Redis client connection errors",
+                labels=["mode", "context", "error"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="infra_redis_fallback_total",
+                type=MetricType.COUNTER,
+                description="Redis client fallbacks to in-memory stub",
+                labels=["mode", "context", "reason"],
             )
         )
         

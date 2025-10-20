@@ -51,8 +51,19 @@ class _TestSafeStream:
             return False
 
 
+def _unwrap_logger_add(func):
+    seen = set()
+    candidate = func
+    while True:
+        next_candidate = getattr(candidate, "_tldw_safe_original", None) or getattr(candidate, "__wrapped__", None)
+        if not next_candidate or next_candidate is candidate or next_candidate in seen:
+            return candidate
+        seen.add(candidate)
+        candidate = next_candidate
+
+
 if not getattr(logger, "_pytest_safe_add_installed", False):
-    _orig_add = logger.add
+    _orig_add = _unwrap_logger_add(logger.add)
 
     def _safe_add(sink, *args, **kwargs):
         try:
@@ -62,6 +73,8 @@ if not getattr(logger, "_pytest_safe_add_installed", False):
             pass
         return _orig_add(sink, *args, **kwargs)
 
+    _safe_add._tldw_safe_original = _orig_add  # type: ignore[attr-defined]
+    _safe_add.__wrapped__ = _orig_add  # type: ignore[attr-defined]
     logger.add = _safe_add  # type: ignore[assignment]
     setattr(logger, "_pytest_safe_add_installed", True)
 

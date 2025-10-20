@@ -1240,9 +1240,9 @@ Notes
 - Useful env vars: `TLDW_PS_STRESS=1`, `TLDW_PS_TC_COUNT`, `TLDW_PS_ITERATIONS`, `TLDW_PS_OPT_COUNT`, `TLDW_TEST_POSTGRES_REQUIRED=1`, `TLDW_PS_SQLITE_WAL=1`.
 
 ### Prompt Studio Metrics (quick reference)
-- Gauges/counters: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.backlog{job_type}`, `prompt_studio.jobs.stale_processing`.
-- Histograms: `prompt_studio.jobs.duration_seconds{job_type}`, `prompt_studio.jobs.queue_latency_seconds{job_type}`.
-- Counters: `prompt_studio.jobs.retries_total{job_type}`, `prompt_studio.jobs.failures_total{job_type,reason}`, `prompt_studio.jobs.lease_renewals_total{job_type}`, `prompt_studio.jobs.reclaims_total{job_type}`.
+- Gauges/counters: `jobs.queued{job_type}`, `jobs.processing{job_type}`, `jobs.backlog{job_type}`, `jobs.stale_processing`.
+- Histograms: `jobs.duration_seconds{job_type}`, `jobs.queue_latency_seconds{job_type}`.
+- Counters: `jobs.retries_total{job_type}`, `jobs.failures_total{job_type,reason}`, `jobs.lease_renewals_total{job_type}`, `jobs.reclaims_total{job_type}`.
 - Idempotency counters: `prompt_studio.idempotency.hit_total{entity_type}`, `prompt_studio.idempotency.miss_total{entity_type}`.
 - Postgres advisory locks: `prompt_studio.pg_advisory.lock_attempts_total`, `locks_acquired_total`, `unlocks_total`.
 - See Docs: `Docs/API-related/Prompt_Studio_API.md` and `Docs/Postgres_Support_Status_and_Testing.md` for details.

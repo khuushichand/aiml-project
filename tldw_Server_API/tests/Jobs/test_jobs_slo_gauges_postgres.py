@@ -41,6 +41,6 @@ def test_slo_gauges_postgres(monkeypatch):
     asyncio.run(_run_once())
 
     reg = get_metrics_registry()
-    vals = list(reg.values.get("prompt_studio.jobs.queue_latency_p50_seconds", []))
+    vals = list(reg.values.get("jobs.queue_latency_p50_seconds", []))
     assert vals, "Expected SLO gauges to be set on PG"
     assert "owner_user_id" in vals[-1].labels

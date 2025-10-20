@@ -232,12 +232,12 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
 
     def _set_gauges(d: str, q: str, jt: str, owner: str, qlat_p: Tuple[float,float,float], dur_p: Tuple[float,float,float]):
         labels = {"domain": d, "queue": q, "job_type": jt or "", "owner_user_id": owner or ""}
-        reg.set_gauge("prompt_studio.jobs.queue_latency_p50_seconds", float(qlat_p[0]), labels)
-        reg.set_gauge("prompt_studio.jobs.queue_latency_p90_seconds", float(qlat_p[1]), labels)
-        reg.set_gauge("prompt_studio.jobs.queue_latency_p99_seconds", float(qlat_p[2]), labels)
-        reg.set_gauge("prompt_studio.jobs.duration_p50_seconds", float(dur_p[0]), labels)
-        reg.set_gauge("prompt_studio.jobs.duration_p90_seconds", float(dur_p[1]), labels)
-        reg.set_gauge("prompt_studio.jobs.duration_p99_seconds", float(dur_p[2]), labels)
+        reg.set_gauge("jobs.queue_latency_p50_seconds", float(qlat_p[0]), labels)
+        reg.set_gauge("jobs.queue_latency_p90_seconds", float(qlat_p[1]), labels)
+        reg.set_gauge("jobs.queue_latency_p99_seconds", float(qlat_p[2]), labels)
+        reg.set_gauge("jobs.duration_p50_seconds", float(dur_p[0]), labels)
+        reg.set_gauge("jobs.duration_p90_seconds", float(dur_p[1]), labels)
+        reg.set_gauge("jobs.duration_p99_seconds", float(dur_p[2]), labels)
 
     def _percentiles(values: List[float]) -> Tuple[float, float, float]:
         if not values:

@@ -31,8 +31,8 @@ def test_exemplar_labels_propagate_postgres(monkeypatch):
     jm.complete_job(int(acq["id"]))
 
     reg = get_metrics_registry()
-    ql = list(reg.values.get("prompt_studio.jobs.queue_latency_seconds", []))
-    dur = list(reg.values.get("prompt_studio.jobs.duration_seconds", []))
+    ql = list(reg.values.get("jobs.queue_latency_seconds", []))
+    dur = list(reg.values.get("jobs.duration_seconds", []))
     assert ql and dur
     assert ("trace_id" in ql[-1].labels) or ("request_id" in ql[-1].labels)
     assert ("trace_id" in dur[-1].labels) or ("request_id" in dur[-1].labels)

@@ -3,7 +3,7 @@
 #
 # Imports
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 #
 # 3rd-party imports
@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
+from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
 #
@@ -80,6 +81,8 @@ class AuthNZScheduler:
         # Daily aggregates pruning jobs
         self._register_usage_daily_cleanup()
         self._register_llm_usage_daily_cleanup()
+        # Privilege snapshot retention housekeeping
+        self._register_privilege_snapshot_retention()
         
         # Start the scheduler
         self.scheduler.start()
@@ -209,6 +212,18 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered llm_usage_daily cleanup job (daily at 03:45)")
+    
+    def _register_privilege_snapshot_retention(self):
+        """Register job to enforce privilege snapshot retention policy."""
+        self.scheduler.add_job(
+            self._prune_privilege_snapshots,
+            trigger=CronTrigger(hour=2, minute=20),  # Daily at 02:20
+            id='privilege_snapshot_retention',
+            name='Prune privilege snapshots per retention policy',
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.debug("Registered privilege snapshot retention job (daily at 02:20)")
     
     def _register_expired_registration_cleanup(self):
         """Register job to clean up expired registration codes"""
@@ -461,6 +476,143 @@ class AuthNZScheduler:
                 logger.info(f"Pruned {count} llm_usage_daily rows older than {retention_days} days")
         except Exception as e:
             logger.error(f"Failed to prune llm_usage_daily: {e}")
+    
+    async def _prune_privilege_snapshots(self):
+        """Enforce privilege snapshot retention (daily + weekly) and emit metrics."""
+        try:
+            db_pool = await get_db_pool()
+            retention_days = max(int(getattr(self.settings, "PRIVILEGE_SNAPSHOT_RETENTION_DAYS", 90)), 0)
+            weekly_retention_days = max(
+                int(getattr(self.settings, "PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS", 365)),
+                retention_days,
+            )
+            now = datetime.now(timezone.utc)
+            weekly_cutoff = now - timedelta(days=weekly_retention_days) if weekly_retention_days > 0 else None
+            primary_cutoff = now - timedelta(days=retention_days) if retention_days > 0 else None
+
+            def _normalize_rowcount(value: Optional[int]) -> int:
+                if value is None:
+                    return 0
+                try:
+                    count = int(value)
+                except (TypeError, ValueError):
+                    return 0
+                return count if count > 0 else 0
+
+            purged_legacy = 0
+            purged_duplicates = 0
+
+            async with db_pool.transaction() as conn:
+                is_postgres = hasattr(conn, "fetch")
+
+                # Purge anything older than the weekly retention window
+                if weekly_cutoff is not None:
+                    if is_postgres:
+                        result = await conn.execute(
+                            "DELETE FROM privilege_snapshots WHERE generated_at::timestamptz < $1",
+                            weekly_cutoff,
+                        )
+                        if isinstance(result, str):
+                            try:
+                                purged_legacy = int(result.split()[-1])
+                            except (ValueError, IndexError):
+                                purged_legacy = 0
+                    else:
+                        cursor = await conn.execute(
+                            "DELETE FROM privilege_snapshots WHERE datetime(generated_at) < datetime(?)",
+                            (weekly_cutoff.isoformat(),),
+                        )
+                        purged_legacy = _normalize_rowcount(getattr(cursor, "rowcount", None))
+
+                # Downsample older snapshots (retain first per ISO week per org/team)
+                if (
+                    primary_cutoff is not None
+                    and weekly_cutoff is not None
+                    and weekly_retention_days > retention_days
+                ):
+                    if is_postgres:
+                        dedupe_sql = """
+                        WITH ranked AS (
+                            SELECT
+                                snapshot_id,
+                                COALESCE(org_id, '__global__') AS org_bucket,
+                                COALESCE(team_id, '__none__') AS team_bucket,
+                                to_char(generated_at::timestamptz, 'IYYY-IW') AS iso_week,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY
+                                        COALESCE(org_id, '__global__'),
+                                        COALESCE(team_id, '__none__'),
+                                        to_char(generated_at::timestamptz, 'IYYY-IW')
+                                    ORDER BY generated_at::timestamptz ASC
+                                ) AS rn
+                            FROM privilege_snapshots
+                            WHERE generated_at::timestamptz < $1
+                              AND generated_at::timestamptz >= $2
+                        )
+                        DELETE FROM privilege_snapshots
+                        WHERE snapshot_id IN (
+                            SELECT snapshot_id FROM ranked WHERE rn > 1
+                        )
+                        """
+                        result = await conn.execute(dedupe_sql, primary_cutoff, weekly_cutoff)
+                        if isinstance(result, str):
+                            try:
+                                purged_duplicates = int(result.split()[-1])
+                            except (ValueError, IndexError):
+                                purged_duplicates = 0
+                    else:
+                        dedupe_sql = """
+                        WITH ranked AS (
+                            SELECT
+                                snapshot_id,
+                                COALESCE(org_id, '__global__') AS org_bucket,
+                                COALESCE(team_id, '__none__') AS team_bucket,
+                                strftime('%Y-%W', datetime(generated_at)) AS iso_week,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY
+                                        COALESCE(org_id, '__global__'),
+                                        COALESCE(team_id, '__none__'),
+                                        strftime('%Y-%W', datetime(generated_at))
+                                    ORDER BY datetime(generated_at) ASC
+                                ) AS rn
+                            FROM privilege_snapshots
+                            WHERE datetime(generated_at) < datetime(?)
+                              AND datetime(generated_at) >= datetime(?)
+                        )
+                        DELETE FROM privilege_snapshots
+                        WHERE snapshot_id IN (
+                            SELECT snapshot_id FROM ranked WHERE rn > 1
+                        )
+                        """
+                        cursor = await conn.execute(
+                            dedupe_sql,
+                            (primary_cutoff.isoformat(), weekly_cutoff.isoformat()),
+                        )
+                        purged_duplicates = _normalize_rowcount(getattr(cursor, "rowcount", None))
+
+            row_count = await db_pool.fetchval("SELECT COUNT(*) FROM privilege_snapshots") or 0
+            size_bytes = None
+            try:
+                size_bytes = await db_pool.fetchval(
+                    "SELECT pg_total_relation_size('privilege_snapshots')"
+                )
+            except Exception:
+                size_bytes = None
+
+            if size_bytes is not None:
+                set_gauge("privilege_snapshots_table_bytes", float(size_bytes))
+            set_gauge("privilege_snapshots_table_rows", float(row_count))
+
+            logger.info(
+                "Privilege snapshot retention pruned %s legacy rows (> %s days) and %s weekly duplicates (> %s days); remaining=%s rows",
+                purged_legacy,
+                weekly_retention_days,
+                purged_duplicates,
+                retention_days,
+                row_count,
+            )
+        except Exception as e:
+            logger.error(f"Failed to prune privilege snapshots: {e}")
     
     async def _cleanup_expired_registration_codes(self):
         """Clean up expired registration codes"""

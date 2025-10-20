@@ -172,8 +172,21 @@ class _SafeStreamWrapper:
         except Exception:
             return False
 
+
+def _unwrap_logger_add(func):
+    """Follow wrapper attributes to locate the underlying Loguru ``logger.add``."""
+    seen = set()
+    candidate = func
+    while True:
+        next_candidate = getattr(candidate, "_tldw_safe_original", None) or getattr(candidate, "__wrapped__", None)
+        if not next_candidate or next_candidate is candidate or next_candidate in seen:
+            return candidate
+        seen.add(candidate)
+        candidate = next_candidate
+
 # Ensure any subsequent logger.add calls wrap raw streams with SafeStreamWrapper
 _original_logger_add = logger.add
+_original_unwrapped_logger_add = _unwrap_logger_add(_original_logger_add)
 def _safe_logger_add(sink, *args, **kwargs):
     try:
         if hasattr(sink, "write") and not isinstance(sink, _SafeStreamWrapper):
@@ -181,8 +194,11 @@ def _safe_logger_add(sink, *args, **kwargs):
     except Exception:
         # Fall back to original sink if inspection failed
         pass
-    return _original_logger_add(sink, *args, **kwargs)
+    target = _unwrap_logger_add(_original_logger_add)
+    return target(sink, *args, **kwargs)
 logger.add = _safe_logger_add  # type: ignore[assignment]
+setattr(logger.add, "_tldw_safe_original", _original_unwrapped_logger_add)
+setattr(logger.add, "__wrapped__", _original_unwrapped_logger_add)
 
 logger.add(
     _SafeStreamWrapper(_sink),

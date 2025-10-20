@@ -46,7 +46,8 @@ Use these names across domains to keep operations consistent.
 - `JOBS_LEASE_RENEW_SECONDS` (default 30): Worker renewal cadence.
 - `JOBS_LEASE_RENEW_JITTER_SECONDS` (default 5): Renewal jitter to avoid herds.
 - `JOBS_LEASE_MAX_SECONDS` (default 3600): Cap for lease extension.
-- `JOBS_ENFORCE_LEASE_ACK` (default false): When true, `renew/complete/fail` require matching `worker_id` and `lease_id` (prevents stale workers from acking).
+- `JOBS_ENFORCE_LEASE_ACK` (default true): Explicit override that forces lease enforcement on (takes precedence over the disable flag).
+- `JOBS_DISABLE_LEASE_ENFORCEMENT` (default false): Compatibility switch that allows finalizing without `worker_id`/`lease_id`. Intended for legacy adapters and targeted tests; avoid enabling in production.
 - `JOBS_ALLOWED_QUEUES` / `JOBS_ALLOWED_QUEUES_<DOMAIN>`: Comma‑separated allowlists to restrict queue names (in addition to standard queues).
 - `JOBS_MAX_JSON_BYTES` (default 1048576): Max serialized bytes for `payload` and `result`.
 - `JOBS_JSON_TRUNCATE` (default false): If true, truncate oversize `payload`/`result` to a small marker instead of rejecting.
@@ -56,6 +57,10 @@ Use these names across domains to keep operations consistent.
 - Exactly-once finalize (optional):
   - `JOBS_REQUIRE_COMPLETION_TOKEN` (default false): When true, workers should pass `completion_token` (e.g., the `lease_id`) to `complete_job`/`fail_job` to enforce idempotency.
   - `completion_token` is stored on finalize; repeated finalize with the same token becomes a no‑op (returns True). A different token after finalization returns False.
+- Audit bridge (optional):
+  - `JOBS_AUDIT_ENABLED` (default false): Enable audit logging for job lifecycle events via `unified_audit_service`.
+  - `JOBS_AUDIT_DB_PATH`: Optional override for the audit SQLite DB storing job events (`Databases/jobs_audit.db` by default).
+  - `JOBS_AUDIT_RETENTION_DAYS`, `JOBS_AUDIT_BUFFER_SIZE`, `JOBS_AUDIT_FLUSH_SECONDS`: Tune retention and buffering for the audit bridge.
 - Poison quarantine (optional):
   - `JOBS_QUARANTINE_THRESHOLD` (default 3): On repeated retryable failures with the same `error_code`, the job transitions to `quarantined` instead of re‑queuing.
 - Integrity sweeper (optional):
@@ -166,6 +171,14 @@ jm.complete_job(job["id"], result={"path": "/path/to/file"}, worker_id=worker_id
 # Fail (retryable or terminal) with idempotent finalize token
 jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
 
+## Storage Architecture
+
+- `JobManager` keeps its SQL inline and connects directly via sqlite3/psycopg. This retains the tuned acquisition logic, counters, and quarantine flows without an intermediate adapter.
+- Schema includes supporting tables alongside `jobs`: `job_events` (outbox), `job_counters`, `job_queue_controls`, `job_sla_policies`, `job_attachments`, and optional `jobs_archive`. Dedicated tests cover each (`tests/Jobs/test_jobs_events_outbox_sqlite.py`, `test_jobs_admin_counters_sqlite.py`, `test_jobs_queue_controls_and_admin_sqlite.py`, `test_jobs_sla_gauges_sqlite.py`, `test_jobs_events_outbox_postgres.py`).
+- Schema creation lives in `migrations.py` / `pg_migrations.py`; `_connect()` applies the migrations and pragmas on demand.
+- When we add a dedicated storage wrapper it will reside at `app/core/Jobs/storage.py` and wrap the shared database adapters (`app/core/DB_Management/backends/`). Until then, the inline approach is the supported path.
+- Both backends are exercised in the Jobs test suite (`tests/Jobs/test_jobs_manager_sqlite.py`, `tests/Jobs/test_jobs_manager_postgres.py`, `tests/Jobs/test_jobs_pg_concurrency_stress.py`), so direct SQL remains coverage-protected.
+
 ## Idempotency Scoping
 
 - Idempotency is enforced per (domain, queue, job_type, idempotency_key).
@@ -186,7 +199,7 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 
 - Leases and Reclaim:
   - Expired `processing` leases are reclaimed on the next acquire.
-  - Set `JOBS_ENFORCE_LEASE_ACK=true` in production to enforce correct acknowledgements.
+- Lease enforcement is enabled by default. Only use `JOBS_DISABLE_LEASE_ENFORCEMENT=1` for legacy adapters or targeted tests that cannot pass `worker_id`/`lease_id`.
 
 - Priorities and Fairness:
   - Lower numeric `priority` means higher priority (default is 5).
@@ -232,13 +245,13 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
     - Admin → Jobs includes a Prune panel with a “Dry Run (count only)” toggle and a “Saved Filters” badge reflecting current Domain/Queue/Job Type filters. Use Reset Filters to clear.
 
 - Metrics:
-  - Gauges: `prompt_studio.jobs.queued{...}` (ready only), `prompt_studio.jobs.scheduled{...}`, `prompt_studio.jobs.processing{...}`, `prompt_studio.jobs.backlog{...}` (ready + scheduled).
-  - Histograms: `prompt_studio.jobs.duration_seconds{...}`, `prompt_studio.jobs.queue_latency_seconds{...}`, `prompt_studio.jobs.retry_after_seconds{...}`.
-  - Counters: `prompt_studio.jobs.created_total{...}`, `prompt_studio.jobs.completed_total{...}`, `prompt_studio.jobs.cancelled_total{...}`, `prompt_studio.jobs.retries_total{...}`, `prompt_studio.jobs.failures_total{...,reason}`, `prompt_studio.jobs.failures_by_code_total{...,error_code}`.
-  - Lease tuning: `prompt_studio.jobs.time_to_expiry_seconds{...}` histogram reflects remaining time on active leases.
+  - Gauges: `jobs.queued{...}` (ready only), `jobs.scheduled{...}`, `jobs.processing{...}`, `jobs.backlog{...}` (ready + scheduled).
+  - Histograms: `jobs.duration_seconds{...}`, `jobs.queue_latency_seconds{...}`, `jobs.retry_after_seconds{...}`.
+  - Counters: `jobs.created_total{...}`, `jobs.completed_total{...}`, `jobs.cancelled_total{...}`, `jobs.retries_total{...}`, `jobs.failures_total{...,reason}`, `jobs.failures_by_code_total{...,error_code}`.
+  - Lease tuning: `jobs.time_to_expiry_seconds{...}` histogram reflects remaining time on active leases.
   - Per-owner SLO gauges: queue latency and duration P50/P90/P99 per `{domain,queue,job_type,owner_user_id}`:
-    - `prompt_studio.jobs.queue_latency_p50_seconds` / `_p90_` / `_p99_`
-    - `prompt_studio.jobs.duration_p50_seconds` / `_p90_` / `_p99_`
+    - `jobs.queue_latency_p50_seconds` / `_p90_` / `_p99_`
+    - `jobs.duration_p50_seconds` / `_p90_` / `_p99_`
   - Structured failure timeline stored on job rows: `failure_timeline` JSON (last ~10 entries) with `{ts, error_code, retry_backoff}` for WebUI analytics.
 
 - Counters vs Reconcile:
@@ -374,7 +387,7 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 
 - When jobs repeatedly fail with the same `error_code`, they transition to `quarantined` after `JOBS_QUARANTINE_THRESHOLD` retryable failures. Quarantine prevents automatic re-queueing to stop hot loops.
 - Triage steps:
-  - Inspect top failure codes and affected domains/queues in logs and metrics (`prompt_studio.jobs.failures_by_code_total`).
+  - Inspect top failure codes and affected domains/queues in logs and metrics (`jobs.failures_by_code_total`).
   - Use `GET /api/v1/jobs/stats` to see `quarantined` counts by domain/queue/job_type.
   - Use `POST /api/v1/jobs/batch/requeue_quarantined` with `dry_run=true` to preview impact. Scope by `domain`, optionally `queue` and `job_type`.
   - Requeue with confirmation header when root cause is mitigated (e.g., fixed inputs, raised limits):

@@ -25,6 +25,8 @@ Example PromQL:
 - `db_connections_active{database}`: Gauge of active DB connections.
 - `db_queries_total{database,operation}`: Counter of DB queries.
 - `db_query_duration_seconds{database,operation}`: Histogram of DB latency.
+- `privilege_snapshots_table_rows`: Gauge of retained privilege snapshots (daily retention job).
+- `privilege_snapshots_table_bytes`: Gauge of on-disk size for privilege snapshots (Postgres only).
 Note: DB metrics are available when the corresponding operations use the instrumented DB wrappers; not all code paths emit these yet.
 
 ## LLM
@@ -152,7 +154,7 @@ Sample PromQL queries:
 - Tokens/Cost: `prompt_studio.tokens.used{provider,model,type}`, `prompt_studio.cost.total{provider,model}`.
 - Tests/Evals: `prompt_studio.tests.total{project,status}`, `prompt_studio.evaluations.score{project,metric_type}`, `prompt_studio.evaluations.duration_seconds{project}`.
 - Optimizations: `prompt_studio.optimizations.total{strategy,status}`, `prompt_studio.optimizations.improvement{strategy}`, `prompt_studio.optimizations.iterations{strategy}`.
-- Jobs: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.completed{job_type,status}`, `prompt_studio.jobs.duration_seconds{job_type}`.
+- Jobs: `jobs.queued{job_type}`, `jobs.processing{job_type}`, `jobs.completed{job_type,status}`, `jobs.duration_seconds{job_type}`.
 - WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.
 - DB: `prompt_studio.database.operations{operation,table}`, `prompt_studio.database.latency_ms{operation}`.
 

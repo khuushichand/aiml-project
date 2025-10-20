@@ -68,12 +68,14 @@ def privilege_test_client():
                 "snapshot_id": "snap-2025-01-15-001",
                 "generated_at": datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc).isoformat(),
                 "generated_by": "user-42",
+                "target_scope": "org",
                 "org_id": "acme",
                 "team_id": None,
                 "catalog_version": fake_service.catalog.version,
                 "summary": {
                     "users": 2,
                     "scopes": 3,
+                    "endpoints": 3,
                     "scope_ids": ["media.ingest", "chat.admin", "rag.search"],
                     "sensitivity_breakdown": {"high": 1, "restricted": 1, "moderate": 1},
                 },
@@ -84,12 +86,14 @@ def privilege_test_client():
                 "snapshot_id": "snap-2025-01-12-001",
                 "generated_at": datetime(2025, 1, 12, 12, 30, tzinfo=timezone.utc).isoformat(),
                 "generated_by": "user-99",
+                "target_scope": "team",
                 "org_id": "beta",
                 "team_id": "team-2",
                 "catalog_version": fake_service.catalog.version,
                 "summary": {
                     "users": 1,
                     "scopes": 1,
+                    "endpoints": 1,
                     "scope_ids": ["media.catalog.view"],
                     "sensitivity_breakdown": {"low": 1},
                 },
@@ -117,6 +121,8 @@ def test_get_org_summary_group_by_role(privilege_test_client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["group_by"] == "role"
+    assert "trends" in payload
+    assert isinstance(payload["trends"], list)
     keys = {bucket["key"] for bucket in payload["buckets"]}
     assert "admin" in keys
     assert "analyst" in keys
@@ -157,6 +163,7 @@ def test_snapshot_list_filters(privilege_test_client: TestClient):
     payload = response.json()
     assert payload["total_items"] == 1
     assert payload["items"][0]["org_id"] == "acme"
+    assert payload["items"][0]["target_scope"] == "org"
 
     response = privilege_test_client.get(
         "/api/v1/privileges/snapshots",
@@ -166,3 +173,35 @@ def test_snapshot_list_filters(privilege_test_client: TestClient):
     payload = response.json()
     assert payload["total_items"] == 1
     assert payload["items"][0]["snapshot_id"] == "snap-2025-01-12-001"
+
+
+def test_get_self_map(privilege_test_client: TestClient):
+    response = privilege_test_client.get("/api/v1/privileges/self")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+    assert "recommended_actions" in payload
+
+
+def test_get_snapshot_detail(privilege_test_client: TestClient):
+    response = privilege_test_client.get("/api/v1/privileges/snapshots/snap-2025-01-15-001")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["snapshot_id"] == "snap-2025-01-15-001"
+    assert payload["detail"]["items"] == []
+    assert payload["target_scope"] == "org"
+
+
+def test_create_snapshot_org(privilege_test_client: TestClient):
+    response = privilege_test_client.post(
+        "/api/v1/privileges/snapshots",
+        json={
+            "target_scope": "org",
+            "org_id": "acme",
+            "notes": "automation-test",
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["target_scope"] == "org"
+    assert payload["summary"]["users"] >= 1

@@ -13,7 +13,7 @@ def _prep(monkeypatch, tmp_path):
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
     # Reset metrics buffer for deterministic assertions
     reg = get_metrics_registry()
-    reg.values["prompt_studio.jobs.json_truncated_total"].clear()
+    reg.values["jobs.json_truncated_total"].clear()
     return reg
 
 
@@ -36,7 +36,7 @@ def test_json_truncation_emits_metrics_sqlite(monkeypatch, tmp_path):
         owner_user_id="u",
     )
     # Expect a truncation counter increment for payload
-    vals = list(reg.values["prompt_studio.jobs.json_truncated_total"])  # MetricValue deque
+    vals = list(reg.values["jobs.json_truncated_total"])  # MetricValue deque
     assert any(v.labels.get("kind") == "payload" and v.labels.get("domain") == "prompt_studio" for v in vals)
 
     # Result truncation on complete
@@ -44,7 +44,7 @@ def test_json_truncation_emits_metrics_sqlite(monkeypatch, tmp_path):
     assert acq and str(acq.get("status")) == "processing"
     ok = jm.complete_job(int(acq["id"]), result={"too": "y" * 1000})
     assert ok is True
-    vals2 = list(reg.values["prompt_studio.jobs.json_truncated_total"])
+    vals2 = list(reg.values["jobs.json_truncated_total"])
     assert any(v.labels.get("kind") == "result" and v.labels.get("domain") == "prompt_studio" for v in vals2)
 
 
@@ -65,4 +65,4 @@ def test_json_caps_reject_does_not_emit_truncation_sqlite(monkeypatch, tmp_path)
             owner_user_id="u",
         )
     # No truncation metric should be emitted when rejecting
-    assert len(reg.values["prompt_studio.jobs.json_truncated_total"]) == 0
+    assert len(reg.values["jobs.json_truncated_total"]) == 0

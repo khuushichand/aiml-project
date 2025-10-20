@@ -91,7 +91,7 @@ class WorkerSDK:
         """
         backoff = max(1, int(self.cfg.backoff_base_seconds))
         backoff_max = max(backoff, int(self.cfg.backoff_max_seconds))
-        enforce = os.getenv("JOBS_ENFORCE_LEASE_ACK", "").lower() in {"1","true","yes","y","on"}
+        enforce = self.jm.should_enforce_leases()
         while not self._stop.is_set():
             try:
                 job = self.jm.acquire_next_job(
@@ -112,6 +112,7 @@ class WorkerSDK:
 
             job_id = int(job.get('id'))
             lease_id = job.get('lease_id')
+            lease_id_str = str(lease_id) if lease_id is not None else None
             # Start auto-renew task
             renew_task = asyncio.create_task(self._auto_renew(job, progress_cb=progress_cb))
             try:
@@ -131,9 +132,10 @@ class WorkerSDK:
                 ok = self.jm.complete_job(
                     job_id,
                     result=result,
-                    worker_id=(self.cfg.worker_id if enforce else None),
-                    lease_id=(lease_id if enforce else None),
-                    completion_token=(lease_id if os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "").lower() in {"1","true","yes","y","on"} else None),
+                    worker_id=self.cfg.worker_id,
+                    lease_id=lease_id_str,
+                    completion_token=(lease_id_str if os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "").lower() in {"1","true","yes","y","on"} else None),
+                    enforce=enforce,
                 )
                 if not ok:
                     logger.debug(f"Complete returned False for job {job_id}")
@@ -147,9 +149,10 @@ class WorkerSDK:
                         error=str(e),
                         retryable=retryable,
                         backoff_seconds=backoff_s,
-                        worker_id=(self.cfg.worker_id if enforce else None),
-                        lease_id=(lease_id if enforce else None),
-                        completion_token=(lease_id if os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "").lower() in {"1","true","yes","y","on"} else None),
+                        worker_id=self.cfg.worker_id,
+                        lease_id=lease_id_str,
+                        completion_token=(lease_id_str if os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "").lower() in {"1","true","yes","y","on"} else None),
+                        enforce=enforce,
                         error_code="worker_exception",
                     )
                 except Exception:

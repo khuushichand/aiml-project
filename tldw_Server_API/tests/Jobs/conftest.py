@@ -19,6 +19,8 @@ def _reset_settings_and_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
+    # Default Jobs tests to compatibility mode unless individual cases opt in.
+    monkeypatch.setenv("JOBS_DISABLE_LEASE_ENFORCEMENT", "1")
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()

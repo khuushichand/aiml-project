@@ -172,6 +172,12 @@ docker run -d --name redis -p 6379:6379 redis:alpine
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
+> **Dev/Test Note**
+> When a Redis server is unavailable the API now falls back to an in-process
+> Redis stub automatically. This keeps local sandboxes and CI runs from failing,
+> but production deployments should still provision a real Redis service for
+> durability and multi-worker coordination.
+
 ### Environment and Orchestrator
 ```bash
 export REDIS_URL="redis://localhost:6379"

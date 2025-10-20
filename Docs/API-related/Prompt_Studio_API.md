@@ -396,16 +396,16 @@ ws.onmessage = (evt) => console.log("event", evt.data);
 Prompt Studio emits the following metrics (names, labels) and when they are updated:
 
 - Job queue gauges/counters
-  - `prompt_studio.jobs.queued{job_type}`: updated on job create/acquire/status refresh.
-  - `prompt_studio.jobs.processing{job_type}`: updated on acquire/complete/fail/retry/status refresh.
-  - `prompt_studio.jobs.backlog{job_type}`: computed as queued − processing; updated alongside gauges.
-  - `prompt_studio.jobs.stale_processing`: aggregate gauge from lease stats.
-  - `prompt_studio.jobs.duration_seconds{job_type}`: histogram observed when a job finishes (success/failure).
-  - `prompt_studio.jobs.queue_latency_seconds{job_type}`: histogram observed on acquire (started_at − created_at).
-  - `prompt_studio.jobs.retries_total{job_type}`: increments when a job is rescheduled for retry.
-  - `prompt_studio.jobs.failures_total{job_type,reason}`: increments on terminal failure with exception type.
-  - `prompt_studio.jobs.lease_renewals_total{job_type}`: increments on each lease heartbeat renewal.
-  - `prompt_studio.jobs.reclaims_total{job_type}`: increments when a processing job with expired lease is reclaimed.
+  - `jobs.queued{job_type}`: updated on job create/acquire/status refresh.
+  - `jobs.processing{job_type}`: updated on acquire/complete/fail/retry/status refresh.
+  - `jobs.backlog{job_type}`: computed as queued − processing; updated alongside gauges.
+  - `jobs.stale_processing`: aggregate gauge from lease stats.
+  - `jobs.duration_seconds{job_type}`: histogram observed when a job finishes (success/failure).
+  - `jobs.queue_latency_seconds{job_type}`: histogram observed on acquire (started_at − created_at).
+  - `jobs.retries_total{job_type}`: increments when a job is rescheduled for retry.
+  - `jobs.failures_total{job_type,reason}`: increments on terminal failure with exception type.
+  - `jobs.lease_renewals_total{job_type}`: increments on each lease heartbeat renewal.
+  - `jobs.reclaims_total{job_type}`: increments when a processing job with expired lease is reclaimed.
 
 - Idempotency
   - `prompt_studio.idempotency.hit_total{entity_type}`: increments when a duplicated request (same Idempotency-Key) returns the canonical entity.

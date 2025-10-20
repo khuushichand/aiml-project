@@ -256,7 +256,7 @@ class JobManager:
                 j = self.get_job(job_id)
                 jt = str(j.get("job_type")) if j else ""
                 self._metrics.metrics_manager.increment(
-                    "prompt_studio.jobs.retries_total",
+                    "jobs.retries_total",
                     labels={"job_type": jt},
                 )
             except Exception:
@@ -334,7 +334,7 @@ class JobManager:
                             if ok:
                                 try:
                                     self._metrics.metrics_manager.increment(
-                                        "prompt_studio.jobs.lease_renewals_total",
+                                        "jobs.lease_renewals_total",
                                         labels={"job_type": job_type.value},
                                     )
                                 except Exception:
@@ -374,7 +374,7 @@ class JobManager:
                 )
                 try:
                     self._metrics.metrics_manager.increment(
-                        "prompt_studio.jobs.failures_total",
+                        "jobs.failures_total",
                         labels={"job_type": job_type.value, "reason": type(e).__name__},
                     )
                 except Exception:
@@ -395,7 +395,7 @@ class JobManager:
             try:
                 duration = max(0.0, time.time() - started_at)
                 self._metrics.metrics_manager.observe(
-                    "prompt_studio.jobs.duration_seconds",
+                    "jobs.duration_seconds",
                     duration,
                     labels={"job_type": job_type.value},
                 )
@@ -419,7 +419,7 @@ class JobManager:
             pass
         try:
             self._metrics.metrics_manager.set_gauge(
-                "prompt_studio.jobs.processing",
+                "jobs.processing",
                 float(processing),
                 labels={"job_type": job_type},
             )
@@ -429,7 +429,7 @@ class JobManager:
         try:
             backlog = max(0, int(queued) - int(processing))
             self._metrics.metrics_manager.set_gauge(
-                "prompt_studio.jobs.backlog",
+                "jobs.backlog",
                 float(backlog),
                 labels={"job_type": job_type},
             )
@@ -439,7 +439,7 @@ class JobManager:
         try:
             lease_stats = self.db.get_lease_stats()
             self._metrics.metrics_manager.set_gauge(
-                "prompt_studio.jobs.stale_processing",
+                "jobs.stale_processing",
                 float(lease_stats.get("stale_processing", 0)),
             )
         except Exception:

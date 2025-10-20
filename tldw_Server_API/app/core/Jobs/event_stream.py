@@ -6,6 +6,8 @@ import json
 from typing import Optional, Dict, Any
 from loguru import logger
 
+from .audit_bridge import submit_job_audit_event
+
 
 def _events_enabled() -> bool:
     return str(os.getenv("JOBS_EVENTS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}
@@ -17,6 +19,11 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
     If `JOBS_EVENTS_ENABLED=true`, logs a compact event line. In future this can
     be extended to push to an SSE/Webhook bus with rate limiting.
     """
+    try:
+        submit_job_audit_event(event, job=job, attrs=attrs)
+    except Exception:
+        # Audit integration is best-effort. Errors should never break job flow.
+        pass
     # Only skip entirely when neither logging nor outbox are enabled
     if not (_events_enabled() or str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {"1","true","yes","y","on"}):
         return

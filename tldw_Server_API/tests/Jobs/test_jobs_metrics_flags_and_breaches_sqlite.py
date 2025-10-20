@@ -18,17 +18,17 @@ def test_queue_flag_metrics_sqlite(monkeypatch, tmp_path):
     _reset_env(monkeypatch, tmp_path)
     ensure_jobs_tables(tmp_path / "jobs.db")
     reg = get_metrics_registry()
-    reg.values["prompt_studio.jobs.queue_flag"].clear()
+    reg.values["jobs.queue_flag"].clear()
     jm = JobManager()
     # Pause
     flags = jm.set_queue_control("ps", "default", "pause")
     assert flags["paused"] is True
-    vals = list(reg.values["prompt_studio.jobs.queue_flag"])  # MetricValue deque
+    vals = list(reg.values["jobs.queue_flag"])  # MetricValue deque
     assert any(v.labels.get("domain") == "ps" and v.labels.get("queue") == "default" and v.labels.get("flag") == "paused" and v.value == 1.0 for v in vals)
     # Drain
     flags2 = jm.set_queue_control("ps", "default", "drain")
     assert flags2["paused"] is True and flags2["drain"] is True
-    vals2 = list(reg.values["prompt_studio.jobs.queue_flag"])  # includes paused & drain records
+    vals2 = list(reg.values["jobs.queue_flag"])  # includes paused & drain records
     assert any(v.labels.get("flag") == "drain" and v.value == 1.0 for v in vals2)
 
 
@@ -36,7 +36,7 @@ def test_sla_breaches_metrics_sqlite(monkeypatch, tmp_path):
     _reset_env(monkeypatch, tmp_path)
     ensure_jobs_tables(tmp_path / "jobs.db")
     reg = get_metrics_registry()
-    reg.values["prompt_studio.jobs.sla_breaches_total"].clear()
+    reg.values["jobs.sla_breaches_total"].clear()
     jm = JobManager()
     # Set SLA: force immediate breach
     jm.upsert_sla_policy(domain="ps", queue="default", job_type="slow", max_queue_latency_seconds=0, max_duration_seconds=0, enabled=True)
@@ -58,5 +58,5 @@ def test_sla_breaches_metrics_sqlite(monkeypatch, tmp_path):
     jm._record_sla_breach(int(j["id"]), "ps", "default", "slow", "queue_latency", 10.0, 0.0)
     # And a duration breach
     jm._record_sla_breach(int(j["id"]), "ps", "default", "slow", "duration", 20.0, 0.0)
-    vals = list(reg.values["prompt_studio.jobs.sla_breaches_total"])  # counters include labels
+    vals = list(reg.values["jobs.sla_breaches_total"])  # counters include labels
     assert len(vals) >= 1

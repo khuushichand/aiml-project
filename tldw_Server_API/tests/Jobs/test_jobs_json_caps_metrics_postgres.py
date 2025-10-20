@@ -24,7 +24,7 @@ def test_json_truncation_emits_metrics_postgres(monkeypatch):
     monkeypatch.setenv("JOBS_MAX_JSON_BYTES", "64")
     monkeypatch.setenv("JOBS_JSON_TRUNCATE", "true")
     reg = get_metrics_registry()
-    reg.values["prompt_studio.jobs.json_truncated_total"].clear()
+    reg.values["jobs.json_truncated_total"].clear()
 
     jm = JobManager(None, backend="postgres", db_url=pg_dsn)
     j = jm.create_job(
@@ -34,13 +34,13 @@ def test_json_truncation_emits_metrics_postgres(monkeypatch):
         payload={"big": "x" * 1000},
         owner_user_id="u",
     )
-    vals = list(reg.values["prompt_studio.jobs.json_truncated_total"])  # MetricValue deque
+    vals = list(reg.values["jobs.json_truncated_total"])  # MetricValue deque
     assert any(v.labels.get("kind") == "payload" for v in vals)
 
     acq = jm.acquire_next_job(domain="prompt_studio", queue="default", lease_seconds=10, worker_id="w")
     assert acq
     ok = jm.complete_job(int(acq["id"]), result={"too": "y" * 1000})
     assert ok is True
-    vals2 = list(reg.values["prompt_studio.jobs.json_truncated_total"])  # payload + result
+    vals2 = list(reg.values["jobs.json_truncated_total"])  # payload + result
     assert any(v.labels.get("kind") == "result" for v in vals2)
 

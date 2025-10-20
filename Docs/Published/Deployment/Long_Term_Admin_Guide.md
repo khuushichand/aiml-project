@@ -139,6 +139,10 @@ Rate limiting
 
 Auditing
 - Centralize and retain logs. Export audit logs periodically (see Multi‑User Deployment Guide examples).
+- Privilege snapshot retention
+  - Daily job keeps all org/team snapshots for 90 days and thins anything older to a single snapshot per ISO week (per org/team) out to 12 months.
+  - Snapshots older than 12 months are purged automatically. Tune via `PRIVILEGE_SNAPSHOT_RETENTION_DAYS` and `PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS`.
+  - Metrics: `privilege_snapshots_table_rows` gauge (all backends) plus `privilege_snapshots_table_bytes` on Postgres. Alert when growth trends upward or size exceeds 400 MB.
 
 ## 7) Routine Tasks (Checklist)
 

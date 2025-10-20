@@ -25,8 +25,8 @@ def test_exemplar_labels_propagate_sqlite(monkeypatch, tmp_path):
     jm.complete_job(int(acq["id"]))
 
     reg = get_metrics_registry()
-    ql = list(reg.values.get("prompt_studio.jobs.queue_latency_seconds", []))
-    dur = list(reg.values.get("prompt_studio.jobs.duration_seconds", []))
+    ql = list(reg.values.get("jobs.queue_latency_seconds", []))
+    dur = list(reg.values.get("jobs.duration_seconds", []))
     # At least one observation and labels should include correlation IDs
     assert ql, "Expected queue latency observations"
     assert dur, "Expected duration observations"

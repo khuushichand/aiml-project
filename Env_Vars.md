@@ -179,6 +179,8 @@ Runtime overrides (non‑persistent) are available via API:
 - `LLM_USAGE_AGGREGATOR_ENABLED`: Enable background aggregation of `llm_usage_log` into `llm_usage_daily` (`true|false`, default `true`).
 - `LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES`: Background LLM aggregation cadence in minutes (default `60`).
 - `LLM_USAGE_LOG_RETENTION_DAYS`: Retain `llm_usage_log` rows for this many days; daily job prunes older rows (default `180`).
+- `PRIVILEGE_SNAPSHOT_RETENTION_DAYS`: Keep privilege snapshots at full granularity for this many days before weekly downsampling (default `90`).
+- `PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS`: Retain the downsampled weekly snapshots for this many days before purging entirely (default `365`).
 - `DISABLE_LLM_USAGE_AGGREGATOR`: When `true`, skip starting the LLM usage background aggregator at startup (env-only override).
 
 ## LLM Pricing

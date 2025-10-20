@@ -57,43 +57,43 @@ def ensure_jobs_metrics_registered() -> None:
 
     defn = [
         MetricDefinition(
-            name="prompt_studio.jobs.queued",
+            name="jobs.queued",
             type=MetricType.GAUGE,
             description="Jobs queued gauge",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.sla_breaches_total",
+            name="jobs.sla_breaches_total",
             type=MetricType.COUNTER,
             description="Total SLA breaches (queue_latency/duration)",
             labels=["domain", "queue", "job_type", "kind"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.queue_flag",
+            name="jobs.queue_flag",
             type=MetricType.GAUGE,
             description="Queue control flags (paused/drain)",
             labels=["domain", "queue", "flag"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.scheduled",
+            name="jobs.scheduled",
             type=MetricType.GAUGE,
             description="Jobs scheduled gauge (available_at in the future)",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.processing",
+            name="jobs.processing",
             type=MetricType.GAUGE,
             description="Jobs processing gauge",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.backlog",
+            name="jobs.backlog",
             type=MetricType.GAUGE,
             description="Jobs backlog gauge (queued + scheduled)",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.duration_seconds",
+            name="jobs.duration_seconds",
             type=MetricType.HISTOGRAM,
             description="Job processing duration in seconds",
             unit="s",
@@ -101,7 +101,7 @@ def ensure_jobs_metrics_registered() -> None:
             buckets=duration_buckets,
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.queue_latency_seconds",
+            name="jobs.queue_latency_seconds",
             type=MetricType.HISTOGRAM,
             description="Latency from enqueue to acquisition",
             unit="s",
@@ -109,55 +109,55 @@ def ensure_jobs_metrics_registered() -> None:
             buckets=queue_buckets,
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.retries_total",
+            name="jobs.retries_total",
             type=MetricType.COUNTER,
             description="Total job retries",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.failures_total",
+            name="jobs.failures_total",
             type=MetricType.COUNTER,
             description="Total job failures",
             labels=["domain", "queue", "job_type", "reason"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.failures_by_code_total",
+            name="jobs.failures_by_code_total",
             type=MetricType.COUNTER,
             description="Total job failures by error_code",
             labels=["domain", "queue", "job_type", "error_code"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.created_total",
+            name="jobs.created_total",
             type=MetricType.COUNTER,
             description="Total jobs created",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.completed_total",
+            name="jobs.completed_total",
             type=MetricType.COUNTER,
             description="Total jobs completed",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.cancelled_total",
+            name="jobs.cancelled_total",
             type=MetricType.COUNTER,
             description="Total jobs cancelled",
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.json_truncated_total",
+            name="jobs.json_truncated_total",
             type=MetricType.COUNTER,
             description="Total JSON truncation events (payload/result)",
             labels=["domain", "queue", "job_type", "kind"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.stale_processing",
+            name="jobs.stale_processing",
             type=MetricType.GAUGE,
             description="Count of processing jobs with expired leases",
             labels=["domain", "queue"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.time_to_expiry_seconds",
+            name="jobs.time_to_expiry_seconds",
             type=MetricType.HISTOGRAM,
             description="Time remaining until lease expiry for processing jobs",
             unit="s",
@@ -165,7 +165,7 @@ def ensure_jobs_metrics_registered() -> None:
             buckets=[0.0, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.retry_after_seconds",
+            name="jobs.retry_after_seconds",
             type=MetricType.HISTOGRAM,
             description="Retry backoff seconds applied when rescheduling failures",
             unit="s",
@@ -174,42 +174,42 @@ def ensure_jobs_metrics_registered() -> None:
         ),
         # Per-owner SLO gauges (P50/P90/P99)
         MetricDefinition(
-            name="prompt_studio.jobs.queue_latency_p50_seconds",
+            name="jobs.queue_latency_p50_seconds",
             type=MetricType.GAUGE,
             description="P50 queue latency per owner and job_type",
             unit="s",
             labels=["domain", "queue", "job_type", "owner_user_id"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.queue_latency_p90_seconds",
+            name="jobs.queue_latency_p90_seconds",
             type=MetricType.GAUGE,
             description="P90 queue latency per owner and job_type",
             unit="s",
             labels=["domain", "queue", "job_type", "owner_user_id"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.queue_latency_p99_seconds",
+            name="jobs.queue_latency_p99_seconds",
             type=MetricType.GAUGE,
             description="P99 queue latency per owner and job_type",
             unit="s",
             labels=["domain", "queue", "job_type", "owner_user_id"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.duration_p50_seconds",
+            name="jobs.duration_p50_seconds",
             type=MetricType.GAUGE,
             description="P50 processing duration per owner and job_type",
             unit="s",
             labels=["domain", "queue", "job_type", "owner_user_id"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.duration_p90_seconds",
+            name="jobs.duration_p90_seconds",
             type=MetricType.GAUGE,
             description="P90 processing duration per owner and job_type",
             unit="s",
             labels=["domain", "queue", "job_type", "owner_user_id"],
         ),
         MetricDefinition(
-            name="prompt_studio.jobs.duration_p99_seconds",
+            name="jobs.duration_p99_seconds",
             type=MetricType.GAUGE,
             description="P99 processing duration per owner and job_type",
             unit="s",
@@ -253,7 +253,7 @@ def observe_queue_latency(job: Dict, acquired_at: Optional[datetime], created_at
                     labels["request_id"] = str(job.get("request_id"))
     except Exception:
         pass
-    get_metrics_registry().observe("prompt_studio.jobs.queue_latency_seconds", latency, labels)
+    get_metrics_registry().observe("jobs.queue_latency_seconds", latency, labels)
 
 
 def observe_duration(job: Dict, started_at: Optional[datetime], completed_at: Optional[datetime]) -> None:
@@ -282,14 +282,14 @@ def observe_duration(job: Dict, started_at: Optional[datetime], completed_at: Op
                     labels["request_id"] = str(job.get("request_id"))
     except Exception:
         pass
-    get_metrics_registry().observe("prompt_studio.jobs.duration_seconds", duration, labels)
+    get_metrics_registry().observe("jobs.duration_seconds", duration, labels)
 
 
 def increment_retries(job: Dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
-    get_metrics_registry().increment("prompt_studio.jobs.retries_total", 1, _labels(job))
+    get_metrics_registry().increment("jobs.retries_total", 1, _labels(job))
 
 
 def increment_failures(job: Dict, reason: str = "unknown") -> None:
@@ -299,7 +299,7 @@ def increment_failures(job: Dict, reason: str = "unknown") -> None:
     labels = _labels(job)
     labels = dict(labels)
     labels["reason"] = reason
-    get_metrics_registry().increment("prompt_studio.jobs.failures_total", 1, labels)
+    get_metrics_registry().increment("jobs.failures_total", 1, labels)
 
 
 def increment_failures_by_code(job: Dict, error_code: str) -> None:
@@ -309,14 +309,14 @@ def increment_failures_by_code(job: Dict, error_code: str) -> None:
     labels = _labels(job)
     labels = dict(labels)
     labels["error_code"] = str(error_code)
-    get_metrics_registry().increment("prompt_studio.jobs.failures_by_code_total", 1, labels)
+    get_metrics_registry().increment("jobs.failures_by_code_total", 1, labels)
 
 
 def observe_retry_after(job: Dict, seconds: float) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
-    get_metrics_registry().observe("prompt_studio.jobs.retry_after_seconds", float(seconds), _labels(job))
+    get_metrics_registry().observe("jobs.retry_after_seconds", float(seconds), _labels(job))
 
 
 def set_queue_gauges(domain: str, queue: str, job_type: Optional[str], queued: int, processing: int, backlog: Optional[int] = None, scheduled: Optional[int] = None) -> None:
@@ -324,12 +324,12 @@ def set_queue_gauges(domain: str, queue: str, job_type: Optional[str], queued: i
     if not get_metrics_registry:
         return
     labels = {"domain": domain, "queue": queue, "job_type": job_type or ""}
-    get_metrics_registry().set_gauge("prompt_studio.jobs.queued", float(queued), labels)
-    get_metrics_registry().set_gauge("prompt_studio.jobs.processing", float(processing), labels)
+    get_metrics_registry().set_gauge("jobs.queued", float(queued), labels)
+    get_metrics_registry().set_gauge("jobs.processing", float(processing), labels)
     if backlog is not None:
-        get_metrics_registry().set_gauge("prompt_studio.jobs.backlog", float(backlog), labels)
+        get_metrics_registry().set_gauge("jobs.backlog", float(backlog), labels)
     if scheduled is not None:
-        get_metrics_registry().set_gauge("prompt_studio.jobs.scheduled", float(scheduled), labels)
+        get_metrics_registry().set_gauge("jobs.scheduled", float(scheduled), labels)
 
 
 def set_stale_processing(domain: str, queue: str, count: int) -> None:
@@ -337,28 +337,28 @@ def set_stale_processing(domain: str, queue: str, count: int) -> None:
     if not get_metrics_registry:
         return
     labels = {"domain": domain, "queue": queue}
-    get_metrics_registry().set_gauge("prompt_studio.jobs.stale_processing", float(count), labels)
+    get_metrics_registry().set_gauge("jobs.stale_processing", float(count), labels)
 
 
 def increment_created(job: Dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
-    get_metrics_registry().increment("prompt_studio.jobs.created_total", 1, _labels(job))
+    get_metrics_registry().increment("jobs.created_total", 1, _labels(job))
 
 
 def increment_completed(job: Dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
-    get_metrics_registry().increment("prompt_studio.jobs.completed_total", 1, _labels(job))
+    get_metrics_registry().increment("jobs.completed_total", 1, _labels(job))
 
 
 def increment_cancelled(job: Dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
-    get_metrics_registry().increment("prompt_studio.jobs.cancelled_total", 1, _labels(job))
+    get_metrics_registry().increment("jobs.cancelled_total", 1, _labels(job))
 
 
 def increment_json_truncated(job: Dict, kind: str) -> None:
@@ -369,7 +369,7 @@ def increment_json_truncated(job: Dict, kind: str) -> None:
     labels = _labels(job)
     labels = dict(labels)
     labels["kind"] = str(kind)
-    get_metrics_registry().increment("prompt_studio.jobs.json_truncated_total", 1, labels)
+    get_metrics_registry().increment("jobs.json_truncated_total", 1, labels)
 
 
 def increment_sla_breach(job: Dict, kind: str) -> None:
@@ -379,11 +379,11 @@ def increment_sla_breach(job: Dict, kind: str) -> None:
     labels = _labels(job)
     labels = dict(labels)
     labels["kind"] = str(kind)
-    get_metrics_registry().increment("prompt_studio.jobs.sla_breaches_total", 1, labels)
+    get_metrics_registry().increment("jobs.sla_breaches_total", 1, labels)
 
 
 def set_queue_flag(domain: str, queue: str, flag: str, value: bool) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
-    get_metrics_registry().set_gauge("prompt_studio.jobs.queue_flag", 1.0 if value else 0.0, {"domain": domain, "queue": queue, "flag": flag})
+    get_metrics_registry().set_gauge("jobs.queue_flag", 1.0 if value else 0.0, {"domain": domain, "queue": queue, "flag": flag})

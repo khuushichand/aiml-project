@@ -90,7 +90,15 @@ async def test_jwt_quota_enforced_for_chat_and_rag_sqlite(monkeypatch, tmp_path)
         },
     )
     headers_rag = {"X-API-KEY": os.environ['SINGLE_USER_API_KEY'], "Authorization": f"Bearer {token_rag}"}
-    rag_body = {"query": "hello", "top_k": 1}
+    rag_body = {
+        "query": "hello",
+        "top_k": 1,
+        # Force FTS-only retrieval so the quota test avoids pulling vector models.
+        "search_mode": "fts",
+        "enable_generation": False,
+        "enable_reranking": False,
+        "enable_cache": False,
+    }
     r1 = client.post("/api/v1/rag/search", headers=headers_rag, json=rag_body)
     assert r1.status_code == 200, r1.text
     r2 = client.post("/api/v1/rag/search", headers=headers_rag, json=rag_body)
@@ -136,7 +144,15 @@ async def test_api_key_quota_enforced_for_rag_and_chat_sqlite(monkeypatch, tmp_p
     )
     key = vk['key']
     client = TestClient(_app())
-    rag_body = {"query": "hello", "top_k": 1}
+    rag_body = {
+        "query": "hello",
+        "top_k": 1,
+        # Match single-user quota test: avoid vector retrieval to keep this lightweight.
+        "search_mode": "fts",
+        "enable_generation": False,
+        "enable_reranking": False,
+        "enable_cache": False,
+    }
     headers = {"X-API-KEY": key}
     r1 = client.post("/api/v1/rag/search", headers=headers, json=rag_body)
     assert r1.status_code == 200, r1.text

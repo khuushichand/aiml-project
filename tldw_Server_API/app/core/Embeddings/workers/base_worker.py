@@ -23,6 +23,10 @@ from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 from ..messages import build_dedupe_key, classify_failure, validate_schema
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from ..dlq_crypto import encrypt_payload_if_configured
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+    ensure_async_client_closed,
+)
 
 
 T = TypeVar('T', bound=EmbeddingJobMessage)
@@ -133,22 +137,15 @@ class BaseWorker(ABC):
     async def _redis_connection(self):
         """Context manager for Redis connection"""
         try:
-            # Support both awaitable and non-awaitable redis.asyncio.from_url across versions/tests
-            conn = redis.from_url(
-                self.config.redis_url,
-                decode_responses=True
+            self.redis_client = await create_async_redis_client(
+                preferred_url=self.config.redis_url,
+                decode_responses=True,
+                context=f"embedding_worker:{self.config.worker_type}",
             )
-            try:
-                import inspect as _inspect
-                if _inspect.isawaitable(conn):
-                    conn = await conn
-            except Exception:
-                pass
-            self.redis_client = conn
             yield self.redis_client
         finally:
-            if self.redis_client:
-                await self.redis_client.close()
+            await ensure_async_client_closed(self.redis_client)
+            self.redis_client = None
     
     async def start(self):
         """Start the worker"""

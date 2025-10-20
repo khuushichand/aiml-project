@@ -2,7 +2,8 @@
 # Description: Rate limiting library for FastAPI endpoints
 #
 # Imports
-import time, json, redis.asyncio as redis
+import asyncio
+import time
 #
 # 3rd-party Libraries
 from fastapi import Request, HTTPException, status
@@ -10,13 +11,33 @@ from fastapi import Request, HTTPException, status
 # Local Imports
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 #
 #######################################################################################################################
 #
 # Functions:
 
 # --- Configuration (using imported settings dictionary) ---
-_R = redis.from_url(settings.get("REDIS_URL", "redis://localhost:6379/0"))
+_REDIS_CLIENT = None
+_REDIS_LOCK = asyncio.Lock()
+
+
+async def _get_redis_client():
+    global _REDIS_CLIENT
+    if _REDIS_CLIENT is not None:
+        return _REDIS_CLIENT
+    async with _REDIS_LOCK:
+        if _REDIS_CLIENT is not None:
+            return _REDIS_CLIENT
+        try:
+            url = settings.get("REDIS_URL", None)
+        except Exception:
+            url = None
+        _REDIS_CLIENT = await create_async_redis_client(
+            preferred_url=url,
+            context="rate_limit",
+        )
+        return _REDIS_CLIENT
 
 # --- simple sliding-window counter ---------------------------------------- #
 RATE   = 30                    # requests
@@ -25,8 +46,9 @@ TOKENS_DAILY = 100_000         # model tokens per user per UTC day
 
 async def ratelimit_dependency(request: Request):
     user: User = request.state.user                # populated by Auth middleware
+    client = await _get_redis_client()
     now = int(time.time())
-    pipe = _R.pipeline()
+    pipe = client.pipeline()
 
     # per-minute request count
     req_key = f"rl:req:{user.id}:{now//WINDOW}"
@@ -47,7 +69,7 @@ async def ratelimit_dependency(request: Request):
                             detail="rate-limit exceeded")
 
     if tokens_used:
-        curr = await _R.get(day_key) or b"0"
+        curr = await client.get(day_key) or b"0"
         if int(curr) > TOKENS_DAILY:
             raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED,
                                 detail="daily token quota exhausted")

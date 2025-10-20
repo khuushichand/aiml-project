@@ -2516,7 +2516,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             qlat = max(0.0, (sdt - cdt).total_seconds())
                             try:
                                 _psm.metrics_manager.observe(
-                                    "prompt_studio.jobs.queue_latency_seconds",
+                                    "jobs.queue_latency_seconds",
                                     qlat,
                                     labels={"job_type": str(record.get("job_type", ""))},
                                 )
@@ -2533,7 +2533,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             # positional
                             was_reclaim = bool(row[-1])
                         if was_reclaim:
-                            _psm.metrics_manager.increment("prompt_studio.jobs.reclaims_total", labels={"job_type": str(record.get("job_type", ""))})
+                            _psm.metrics_manager.increment("jobs.reclaims_total", labels={"job_type": str(record.get("job_type", ""))})
                     except Exception:
                         pass
                     return record
@@ -2599,7 +2599,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         try:
                             from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
                             _psm2.metrics_manager.observe(
-                                "prompt_studio.jobs.queue_latency_seconds",
+                                "jobs.queue_latency_seconds",
                                 qlat,
                                 labels={"job_type": str(job.get("job_type", ""))},
                             )
@@ -5737,7 +5737,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                                     try:
                                         from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
                                         _psm2.metrics_manager.observe(
-                                            "prompt_studio.jobs.queue_latency_seconds",
+                                            "jobs.queue_latency_seconds",
                                             qlat,
                                             labels={"job_type": str(job.get("job_type", ""))},
                                         )

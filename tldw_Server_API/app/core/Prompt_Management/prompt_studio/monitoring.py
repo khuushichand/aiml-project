@@ -131,7 +131,7 @@ class PromptStudioMetrics:
         # Job queue metrics
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.queued",
+                name="jobs.queued",
                 type=MetricType.GAUGE,
                 description="Number of queued jobs",
                 labels=["job_type"]
@@ -140,7 +140,7 @@ class PromptStudioMetrics:
         
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.processing",
+                name="jobs.processing",
                 type=MetricType.GAUGE,
                 description="Number of processing jobs",
                 labels=["job_type"]
@@ -149,7 +149,7 @@ class PromptStudioMetrics:
         
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.completed",
+                name="jobs.completed",
                 type=MetricType.COUNTER,
                 description="Total completed jobs",
                 labels=["job_type", "status"]
@@ -158,7 +158,7 @@ class PromptStudioMetrics:
         
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.duration_seconds",
+                name="jobs.duration_seconds",
                 type=MetricType.HISTOGRAM,
                 description="Job processing duration",
                 unit="s",
@@ -170,7 +170,7 @@ class PromptStudioMetrics:
         # Additional job metrics
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.queue_latency_seconds",
+                name="jobs.queue_latency_seconds",
                 type=MetricType.HISTOGRAM,
                 description="Time spent in queue before processing",
                 unit="s",
@@ -181,7 +181,7 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.retries_total",
+                name="jobs.retries_total",
                 type=MetricType.COUNTER,
                 description="Total job retries",
                 labels=["job_type"]
@@ -190,7 +190,7 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.failures_total",
+                name="jobs.failures_total",
                 type=MetricType.COUNTER,
                 description="Total job failures",
                 labels=["job_type", "reason"]
@@ -199,7 +199,7 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.lease_renewals_total",
+                name="jobs.lease_renewals_total",
                 type=MetricType.COUNTER,
                 description="Total lease renewals during processing",
                 labels=["job_type"]
@@ -208,7 +208,7 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.reclaims_total",
+                name="jobs.reclaims_total",
                 type=MetricType.COUNTER,
                 description="Total jobs reclaimed after lease expiry",
                 labels=["job_type"]
@@ -217,7 +217,7 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.stale_processing",
+                name="jobs.stale_processing",
                 type=MetricType.GAUGE,
                 description="Jobs in processing with missing/expired lease (aggregate)"
             )
@@ -225,7 +225,7 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
-                name="prompt_studio.jobs.backlog",
+                name="jobs.backlog",
                 type=MetricType.GAUGE,
                 description="Backlog = queued - processing",
                 labels=["job_type"]
@@ -405,7 +405,7 @@ class PromptStudioMetrics:
         
         # Increment processing gauge
         self.metrics_manager.increment(
-            "prompt_studio.jobs.processing",
+            "jobs.processing",
             labels={"job_type": job_type}
         )
         
@@ -413,27 +413,27 @@ class PromptStudioMetrics:
             yield
             # Success
             self.metrics_manager.increment(
-                "prompt_studio.jobs.completed",
+                "jobs.completed",
                 labels={"job_type": job_type, "status": "success"}
             )
         except Exception:
             # Failure
             self.metrics_manager.increment(
-                "prompt_studio.jobs.completed",
+                "jobs.completed",
                 labels={"job_type": job_type, "status": "failed"}
             )
             raise
         finally:
             # Decrement processing gauge
             self.metrics_manager.decrement(
-                "prompt_studio.jobs.processing",
+                "jobs.processing",
                 labels={"job_type": job_type}
             )
             
             # Record duration
             duration = time.time() - start_time
             self.metrics_manager.observe(
-                "prompt_studio.jobs.duration_seconds",
+                "jobs.duration_seconds",
                 duration,
                 labels={"job_type": job_type}
             )
@@ -498,7 +498,7 @@ class PromptStudioMetrics:
     def update_job_queue_size(self, job_type: str, queued_count: int):
         """Update job queue size."""
         self.metrics_manager.set_gauge(
-            "prompt_studio.jobs.queued",
+            "jobs.queued",
             queued_count,
             labels={"job_type": job_type}
         )
@@ -746,8 +746,8 @@ class PromptStudioHealthCheck:
             "prompt_studio.tests.total",
             "prompt_studio.evaluations.score",
             "prompt_studio.optimizations.total",
-            "prompt_studio.jobs.queued",
-            "prompt_studio.jobs.processing",
+            "jobs.queued",
+            "jobs.processing",
             "prompt_studio.websocket.connections"
         ])
 

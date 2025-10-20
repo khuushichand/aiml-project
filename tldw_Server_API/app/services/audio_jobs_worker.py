@@ -142,14 +142,32 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     count = 0
                 if count > max_jobs:
                     # Put job back with backoff to allow other owners to proceed
-                    jm.fail_job(int(job["id"]), error="owner concurrency cap", retryable=True, backoff_seconds=10)
+                    lease_id = str(job.get("lease_id"))
+                    jm.fail_job(
+                        int(job["id"]),
+                        error="owner concurrency cap",
+                        retryable=True,
+                        backoff_seconds=10,
+                        worker_id=worker_id,
+                        lease_id=lease_id,
+                        completion_token=lease_id,
+                    )
                     continue
 
             # Enforce per-user concurrent job cap
             ok_job, msg = await can_start_job(int(owner))
             if not ok_job:
                 # Reschedule with backoff using fail_job(retryable=True)
-                jm.fail_job(int(job["id"]), error=msg or "concurrency limit", retryable=True, backoff_seconds=15)
+                lease_id = str(job.get("lease_id"))
+                jm.fail_job(
+                    int(job["id"]),
+                    error=msg or "concurrency limit",
+                    retryable=True,
+                    backoff_seconds=15,
+                    worker_id=worker_id,
+                    lease_id=lease_id,
+                    completion_token=lease_id,
+                )
                 continue
             try:
                 await increment_jobs_started(int(owner))

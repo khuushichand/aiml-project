@@ -42,6 +42,10 @@ class PrivilegeMapService:
         generated_at = datetime.now(timezone.utc)
         buckets: List[Dict[str, Any]] = []
 
+        trends: List[Dict[str, Any]] = []
+        if include_trends:
+            trends = self._build_trends_placeholder(group_by=group_by, since=since)
+
         if group_by == "resource":
             buckets = self._group_by_resource(users)
         elif group_by == "team":
@@ -54,8 +58,10 @@ class PrivilegeMapService:
             "generated_at": generated_at,
             "group_by": group_by,
             "buckets": buckets,
+            "trends": trends,
             "metadata": {
                 "filters": {
+                    "group_by": group_by,
                     "include_trends": include_trends,
                     "since": since.isoformat() if since else None,
                 }
@@ -76,23 +82,30 @@ class PrivilegeMapService:
 
     async def get_team_summary(
         self,
-        *,
-        team_id: str,
-        include_trends: bool,
-        since: Optional[datetime],
+        *, team_id: str, group_by: str, include_trends: bool, since: Optional[datetime]
     ) -> Dict[str, Any]:
         users = await self._fetch_users()
         team_users = await self._filter_users_for_team(users, team_id=team_id)
         generated_at = datetime.now(timezone.utc)
-        buckets = self._group_by_role(team_users)
+        if group_by == "resource":
+            buckets = self._group_by_resource(team_users)
+        else:
+            buckets = self._group_by_member(team_users)
+
+        trends: List[Dict[str, Any]] = []
+        if include_trends:
+            trends = self._build_trends_placeholder(group_by=group_by, since=since, team_id=team_id)
+
         return {
             "catalog_version": self.catalog.version,
             "generated_at": generated_at,
-            "group_by": "role",
+            "group_by": group_by,
             "buckets": buckets,
+            "trends": trends,
             "metadata": {
                 "filters": {
                     "team_id": team_id,
+                    "group_by": group_by,
                     "include_trends": include_trends,
                     "since": since.isoformat() if since else None,
                 }
@@ -132,6 +145,79 @@ class PrivilegeMapService:
             logger.debug("Privilege detail requested for unknown user_id=%s", user_id)
         items = self._build_detail_items(filtered, resource_filter=resource)
         return self._paginate_detail(items, page=page, page_size=page_size)
+
+    async def get_self_map(
+        self,
+        *,
+        user_id: str,
+        resource: Optional[str],
+    ) -> Dict[str, Any]:
+        users = await self._fetch_users()
+        filtered = [u for u in users if str(u["id"]) == str(user_id)]
+        items = self._build_detail_items(filtered, resource_filter=resource)
+        condensed_items = [
+            {
+                "endpoint": item["endpoint"],
+                "method": item["method"],
+                "privilege_scope_id": item["privilege_scope_id"],
+                "feature_flag_id": item["feature_flag_id"],
+                "sensitivity_tier": item["sensitivity_tier"],
+                "ownership_predicates": item["ownership_predicates"],
+                "status": item["status"],
+                "blocked_reason": item["blocked_reason"],
+            }
+            for item in items
+        ]
+        recommended_actions = self._build_recommended_actions(items)
+        return {
+            "catalog_version": self.catalog.version,
+            "generated_at": datetime.now(timezone.utc),
+            "items": condensed_items,
+            "recommended_actions": recommended_actions,
+        }
+
+    async def build_snapshot_summary(
+        self,
+        *,
+        target_scope: str,
+        org_id: Optional[str],
+        team_id: Optional[str],
+        user_ids: Optional[Sequence[str]],
+    ) -> Dict[str, Any]:
+        users = await self._fetch_users()
+        if target_scope == "team":
+            if not team_id:
+                raise ValueError("team_id required for team scope snapshot")
+            users = await self._filter_users_for_team(users, team_id=team_id)
+        elif target_scope == "org":
+            if not org_id:
+                raise ValueError("org_id required for org scope snapshot")
+            users = await self._filter_users_for_org(users, org_id=org_id)
+        elif target_scope == "user":
+            target_ids = {str(uid) for uid in (user_ids or []) if uid}
+            if not target_ids:
+                raise ValueError("user_ids required for user scope snapshot")
+            users = [user for user in users if str(user.get("id")) in target_ids]
+
+        scope_ids: Set[str] = set()
+        sensitivity_breakdown: Dict[str, int] = defaultdict(int)
+        for user in users:
+            for scope_id in user.get("allowed_scopes", set()):
+                scope_ids.add(scope_id)
+
+        for scope_id in scope_ids:
+            scope = self._scope_lookup.get(scope_id)
+            if scope:
+                sensitivity_breakdown[scope.sensitivity_tier] += 1
+
+        summary = {
+            "users": len(users),
+            "scopes": len(scope_ids),
+            "endpoints": len(scope_ids),
+            "scope_ids": sorted(scope_ids),
+            "sensitivity_breakdown": dict(sensitivity_breakdown),
+        }
+        return summary
 
     # --------------------------------------------------------------------- #
     # Internal helpers
@@ -252,6 +338,22 @@ class PrivilegeMapService:
         }
         if not user_ids:
             return []
+        return [user for user in users if str(user["id"]) in user_ids]
+
+    async def _filter_users_for_org(
+        self,
+        users: List[Dict[str, Any]],
+        *,
+        org_id: str,
+    ) -> List[Dict[str, Any]]:
+        memberships = await self._fetch_team_memberships()
+        user_ids = {
+            str(m["user_id"])
+            for m in memberships
+            if str(m.get("org_id")) == str(org_id)
+        }
+        if not user_ids:
+            return users
         return [user for user in users if str(user["id"]) in user_ids]
 
     async def _hydrate_roles_and_permissions(
@@ -463,6 +565,25 @@ class PrivilegeMapService:
             )
         return buckets
 
+    def _group_by_member(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        buckets: List[Dict[str, Any]] = []
+        for user in users:
+            scopes = user.get("allowed_scopes", set())
+            buckets.append(
+                {
+                    "key": str(user.get("id")),
+                    "users": 1,
+                    "endpoints": len(scopes),
+                    "scopes": len(scopes),
+                    "metadata": {
+                        "username": user.get("username"),
+                        "primary_role": user.get("primary_role"),
+                        "roles": user.get("roles"),
+                    },
+                }
+            )
+        return buckets
+
     def _group_by_resource(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         resource_access: Dict[str, Dict[str, Any]] = {}
         for user in users:
@@ -475,7 +596,6 @@ class PrivilegeMapService:
                     )
                     bucket["users"].add(str(user["id"]))
                     bucket["scopes"].add(scope.id)
-                    seen_scopes[tag].add(scope.id)
 
         results: List[Dict[str, Any]] = []
         for tag, payload in resource_access.items():
@@ -569,6 +689,40 @@ class PrivilegeMapService:
             "total_items": total_items,
             "items": paginated,
         }
+
+    def _build_trends_placeholder(
+        self,
+        *,
+        group_by: str,
+        since: Optional[datetime],
+        team_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return []
+
+    def _build_recommended_actions(
+        self, items: Sequence[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        actions: Dict[str, Dict[str, Any]] = {}
+        for item in items:
+            if item.get("status") != "blocked":
+                continue
+            scope_id = item.get("privilege_scope_id")
+            reason = item.get("blocked_reason")
+            if reason == "feature_flag_disabled":
+                action_text = "Request org upgrade"
+                reason_text = "Feature flag disabled"
+            elif reason == "missing_scope":
+                action_text = "Request scope assignment"
+                reason_text = "Scope not assigned"
+            else:
+                continue
+            key = f"{scope_id}:{reason}"
+            actions[key] = {
+                "scope_id": scope_id,
+                "action": action_text,
+                "reason": reason_text,
+            }
+        return list(actions.values())
 
     @staticmethod
     def _scope_to_endpoint(scope: ScopeEntry) -> str:

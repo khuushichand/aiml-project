@@ -444,13 +444,13 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
         redis_client = None
         if settings.get("REDIS_ENABLED", False):
             try:
-                import redis
-                redis_client = redis.from_url(
-                    settings.get("REDIS_URL", "redis://localhost:6379/0"),
-                    decode_responses=False
+                from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
+
+                redis_client = create_sync_redis_client(
+                    preferred_url=settings.get("REDIS_URL", None),
+                    decode_responses=False,
+                    context="character_rate_limiter",
                 )
-                # Test connection
-                redis_client.ping()
                 logger.info("Redis connected for character rate limiting")
             except Exception as e:
                 logger.warning(f"Redis not available for rate limiting: {e}. Using in-memory fallback.")

@@ -60,5 +60,5 @@ def test_structured_error_fields_and_metrics_postgres(monkeypatch):
 
     # Check metric increment
     names = [name for (name, _v, _l) in stub.increments]
-    assert "prompt_studio.jobs.failures_by_code_total" in names
+    assert "jobs.failures_by_code_total" in names
 

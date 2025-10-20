@@ -57,5 +57,5 @@ def test_structured_error_fields_and_metrics_sqlite(monkeypatch, jobs_db):
 
     # Metrics: verify failures_by_code_total incremented
     names = [name for (name, _v, _l) in stub.increments]
-    assert "prompt_studio.jobs.failures_by_code_total" in names
+    assert "jobs.failures_by_code_total" in names
 

@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.api.v1.schemas.privileges import (
     PrivilegeDetailResponse,
     PrivilegeOrgResponse,
+    PrivilegeSelfResponse,
+    PrivilegeSnapshotAcceptedResponse,
+    PrivilegeSnapshotCreateRequest,
+    PrivilegeSnapshotDetailResponse,
     PrivilegeSnapshotListResponse,
+    PrivilegeSnapshotRecord,
 )
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.PrivilegeMaps import (
@@ -52,6 +60,21 @@ async def require_privilege_admin_or_self(
     )
 
 
+@router.get("/self", response_model=PrivilegeSelfResponse)
+async def get_self_privilege_map(
+    *,
+    resource: Optional[str] = Query(None),
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    service: PrivilegeMapService = Depends(get_privilege_map_service),
+) -> PrivilegeSelfResponse:
+    user_id = str(current_user.get("id"))
+    try:
+        return await service.get_self_map(user_id=user_id, resource=resource)
+    except ValueError as exc:
+        logger.warning("Invalid self privilege request: %s", exc)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.get("/org", response_model=PrivilegeOrgResponse)
 async def get_org_privilege_map(
     *,
@@ -89,6 +112,7 @@ async def get_org_privilege_map(
 async def get_team_privilege_map(
     *,
     team_id: str,
+    group_by: str = Query("member", pattern="^(member|resource)$"),
     view: str = Query("summary", pattern="^(summary|detail)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
@@ -111,6 +135,7 @@ async def get_team_privilege_map(
             )
         return await service.get_team_summary(
             team_id=team_id,
+            group_by=group_by,
             include_trends=include_trends,
             since=since,
         )
@@ -180,3 +205,82 @@ async def list_privilege_snapshots(
         include_counts=include_counts,
     )
     return payload
+
+
+@router.get("/snapshots/{snapshot_id}", response_model=PrivilegeSnapshotDetailResponse)
+async def get_privilege_snapshot(
+    *,
+    snapshot_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(500, ge=1, le=500),
+    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
+) -> PrivilegeSnapshotDetailResponse:
+    del current_user
+    snapshot = await store.get_snapshot(snapshot_id=snapshot_id, page=page, page_size=page_size)
+    if not snapshot:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
+    return snapshot
+
+
+@router.post(
+    "/snapshots",
+    response_model=PrivilegeSnapshotRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_privilege_snapshot(
+    *,
+    payload: PrivilegeSnapshotCreateRequest,
+    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    service: PrivilegeMapService = Depends(get_privilege_map_service),
+    store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
+):
+    generated_by = str(current_user.get("id") or "system")
+    if payload.async_job:
+        accepted = PrivilegeSnapshotAcceptedResponse(
+            request_id=f"snap-job-{uuid4()}",
+            status="queued",
+            estimated_ready_at=datetime.now(timezone.utc),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content=jsonable_encoder(accepted),
+        )
+    user_ids = payload.user_ids
+    if payload.target_scope == "user" and not user_ids:
+        user_ids = [generated_by]
+    try:
+        summary = await service.build_snapshot_summary(
+            target_scope=payload.target_scope,
+            org_id=payload.org_id,
+            team_id=payload.team_id,
+            user_ids=user_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    generated_at = datetime.now(timezone.utc)
+    snapshot_id = f"snap-{generated_at.strftime('%Y%m%d-%H%M%S')}"
+    record = PrivilegeSnapshotRecord(
+        snapshot_id=snapshot_id,
+        generated_at=generated_at,
+        generated_by=generated_by,
+        target_scope=payload.target_scope,
+        org_id=payload.org_id,
+        team_id=payload.team_id,
+        catalog_version=payload.catalog_version or service.catalog.version,
+        summary=summary,
+    )
+    await store.add_snapshot(
+        {
+            "snapshot_id": record.snapshot_id,
+            "generated_at": record.generated_at,
+            "generated_by": record.generated_by,
+            "target_scope": record.target_scope,
+            "org_id": record.org_id,
+            "team_id": record.team_id,
+            "catalog_version": record.catalog_version,
+            "summary": record.summary.dict() if record.summary else None,
+        }
+    )
+    return record

@@ -86,7 +86,23 @@ class JobManager:
     _RLS_DOMAIN_ALLOWLIST: ContextVar[Optional[str]] = ContextVar("jobs_rls_domain_allowlist", default=None)
     _RLS_OWNER_USER_ID: ContextVar[Optional[str]] = ContextVar("jobs_rls_owner_user_id", default=None)
 
-    def __init__(self, db_path: Optional[Path] = None, *, backend: Optional[str] = None, db_url: Optional[str] = None, clock: Optional["JobManager.Clock"] = None):
+    _TRUTHY = {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _is_truthy(val: Optional[str]) -> bool:
+        if val is None:
+            return False
+        return str(val).strip().lower() in JobManager._TRUTHY
+
+    def __init__(
+        self,
+        db_path: Optional[Path] = None,
+        *,
+        backend: Optional[str] = None,
+        db_url: Optional[str] = None,
+        clock: Optional["JobManager.Clock"] = None,
+        enforce_leases: Optional[bool] = None,
+    ):
         """Initialize JobManager.
 
         Currently supports SQLite. A future path will add Postgres support via db_url.
@@ -127,7 +143,7 @@ class JobManager:
                     self.db_path = ensure_jobs_tables(db_path)
         self._conn = None  # Lazily opened per operation
 
-    
+        self._enforce_override = enforce_leases
         try:
             ensure_jobs_metrics_registered()
         except Exception:
@@ -248,6 +264,20 @@ class JobManager:
             cls._RLS_OWNER_USER_ID.set(None)
         except Exception:
             pass
+
+    def _should_enforce_ack(self) -> bool:
+        if self._enforce_override is not None:
+            return bool(self._enforce_override)
+        env_force = os.getenv("JOBS_ENFORCE_LEASE_ACK")
+        if env_force is not None:
+            return JobManager._is_truthy(env_force)
+        env_disable = os.getenv("JOBS_DISABLE_LEASE_ENFORCEMENT")
+        if env_disable is not None:
+            return not JobManager._is_truthy(env_disable)
+        return True
+
+    def should_enforce_leases(self) -> bool:
+        return self._should_enforce_ack()
 
     # --- Queue controls (pause/drain) ---
     def _get_queue_flags(self, domain: str, queue: str) -> Dict[str, bool]:
@@ -1288,7 +1318,7 @@ class JobManager:
                                     "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
                                     "  )"
                                     + (" AND owner_user_id = %s" if owner_user_id else "") +
-                                    "  ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                                    "  ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                                     ")"
                                     "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
                                     "WHERE id IN (SELECT id FROM picked) RETURNING *"
@@ -1322,8 +1352,8 @@ class JobManager:
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
-                            # Stable ordering: priority DESC (higher numeric first), then available/created asc, then id asc
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            # Stable ordering: priority ASC (lower numeric first), then available/created asc, then id asc
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1421,9 +1451,9 @@ class JobManager:
                             params_sub.append(owner_user_id)
                         # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         else:
-                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1500,11 +1530,11 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Ordering: FIFO by default; when counters are enabled, prefer most recent
+                        # Ordering: always honor priority ASC, then available_at, then created_at
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         else:
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         row = conn.execute(base, params).fetchone()
                         if not row:
                             return None
@@ -1603,7 +1633,7 @@ class JobManager:
         max_lease = int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600")
         seconds = max(1, min(max_lease, int(seconds)))
         if enforce is None:
-            enforce = str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"}
+            enforce = self._should_enforce_ack()
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -1721,7 +1751,7 @@ class JobManager:
         if str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"} and not completion_token:
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")
         if enforce is None:
-            enforce = str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"}
+            enforce = self._should_enforce_ack()
         # Cap result size if configured
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
         truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
@@ -2010,7 +2040,7 @@ class JobManager:
 
     def batch_renew_leases(self, items: List[Dict[str, Any]], *, enforce: Optional[bool] = None) -> int:
         if enforce is None:
-            enforce = str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1","true","yes","y","on"}
+            enforce = self._should_enforce_ack()
         conn = self._connect()
         affected = 0
         try:
@@ -2069,7 +2099,7 @@ class JobManager:
 
     def batch_complete_jobs(self, items: List[Dict[str, Any]], *, enforce: Optional[bool] = None) -> int:
         if enforce is None:
-            enforce = str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1","true","yes","y","on"}
+            enforce = self._should_enforce_ack()
         conn = self._connect()
         done = 0
         try:
@@ -2139,7 +2169,7 @@ class JobManager:
                 if not it.get("completion_token"):
                     raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")
         if enforce is None:
-            enforce = str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1","true","yes","y","on"}
+            enforce = self._should_enforce_ack()
         conn = self._connect()
         cnt = 0
         try:
@@ -2204,7 +2234,7 @@ class JobManager:
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")
         import random
         if enforce is None:
-            enforce = str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"}
+            enforce = self._should_enforce_ack()
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -3229,17 +3259,17 @@ class JobManager:
                                                 labels = {"domain": r["domain"], "queue": r["queue"], "job_type": r["job_type"]}
                                                 cval = float(int(r["c"]))
                                                 if action == "cancel":
-                                                    reg.increment("prompt_studio.jobs.cancelled_total", cval, labels)
+                                                    reg.increment("jobs.cancelled_total", cval, labels)
                                                 else:
-                                                    labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", cval, labs)
+                                                    labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("jobs.failures_total", cval, labs)
                                             # Scheduled subset
                                             for r in grp_sched_rows:
                                                 labels = {"domain": r["domain"], "queue": r["queue"], "job_type": r["job_type"]}
                                                 cval = float(int(r["c"]))
                                                 if action == "cancel":
-                                                    reg.increment("prompt_studio.jobs.cancelled_total", cval, labels)
+                                                    reg.increment("jobs.cancelled_total", cval, labels)
                                                 else:
-                                                    labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", cval, labs)
+                                                    labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("jobs.failures_total", cval, labs)
                                     except Exception:
                                         pass
                             except Exception:
@@ -3290,9 +3320,9 @@ class JobManager:
                                                 labels = {"domain": r["domain"], "queue": r["queue"], "job_type": r["job_type"]}
                                                 cval = float(int(r["c"]))
                                                 if action == "cancel":
-                                                    reg.increment("prompt_studio.jobs.cancelled_total", cval, labels)
+                                                    reg.increment("jobs.cancelled_total", cval, labels)
                                                 else:
-                                                    labs = dict(labels); labs["reason"] = "ttl_runtime"; reg.increment("prompt_studio.jobs.failures_total", cval, labs)
+                                                    labs = dict(labels); labs["reason"] = "ttl_runtime"; reg.increment("jobs.failures_total", cval, labs)
                                     except Exception:
                                         pass
                             except Exception:
@@ -3373,15 +3403,15 @@ class JobManager:
                                         for d, q, jt, c in ready_rows:
                                             labels = {"domain": d, "queue": q, "job_type": jt}
                                             if action == "cancel":
-                                                reg.increment("prompt_studio.jobs.cancelled_total", float(int(c)), labels)
+                                                reg.increment("jobs.cancelled_total", float(int(c)), labels)
                                             else:
-                                                labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", float(int(c)), labs)
+                                                labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("jobs.failures_total", float(int(c)), labs)
                                         for d, q, jt, c in sched_rows:
                                             labels = {"domain": d, "queue": q, "job_type": jt}
                                             if action == "cancel":
-                                                reg.increment("prompt_studio.jobs.cancelled_total", float(int(c)), labels)
+                                                reg.increment("jobs.cancelled_total", float(int(c)), labels)
                                             else:
-                                                labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("prompt_studio.jobs.failures_total", float(int(c)), labs)
+                                                labs = dict(labels); labs["reason"] = "ttl_age"; reg.increment("jobs.failures_total", float(int(c)), labs)
                                 except Exception:
                                     pass
                         except Exception:
@@ -3424,9 +3454,9 @@ class JobManager:
                                         for d, q, jt, c in proc_rows:
                                             labels = {"domain": d, "queue": q, "job_type": jt}
                                             if action == "cancel":
-                                                reg.increment("prompt_studio.jobs.cancelled_total", float(int(c)), labels)
+                                                reg.increment("jobs.cancelled_total", float(int(c)), labels)
                                             else:
-                                                labs = dict(labels); labs["reason"] = "ttl_runtime"; reg.increment("prompt_studio.jobs.failures_total", float(int(c)), labs)
+                                                labs = dict(labels); labs["reason"] = "ttl_runtime"; reg.increment("jobs.failures_total", float(int(c)), labs)
                                 except Exception:
                                     pass
                         except Exception:

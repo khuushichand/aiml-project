@@ -353,6 +353,18 @@ class Settings(BaseSettings):
         le=3650,
         description="Retention window for llm_usage_daily rows (days)"
     )
+    PRIVILEGE_SNAPSHOT_RETENTION_DAYS: int = Field(
+        default=90,
+        ge=7,
+        le=3650,
+        description="Days to retain privilege snapshots at full fidelity before downsampling"
+    )
+    PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS: int = Field(
+        default=365,
+        ge=30,
+        le=3650,
+        description="Days to retain downsampled (weekly) privilege snapshots before purging"
+    )
 
     # ===== Virtual Keys / LLM Budgeting =====
     VIRTUAL_KEYS_ENABLED: bool = Field(

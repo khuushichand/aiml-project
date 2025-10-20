@@ -1492,6 +1492,7 @@ class ChatbookService:
                 if not job:
                     await asyncio.sleep(1)
                     continue
+                lease_id = str(job.get("lease_id")) if job.get("lease_id") else None
                 payload = job.get("payload") or {}
                 action = payload.get("action")
                 chatbooks_job_id = payload.get("chatbooks_job_id")
@@ -1535,7 +1536,13 @@ class ChatbookService:
                             ej.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
                             ej.download_url = self._build_download_url(ej.job_id, ej.expires_at)
                             self._save_export_job(ej)
-                        jm.complete_job(int(job["id"]), result={"path": file_path})
+                        jm.complete_job(
+                            int(job["id"]),
+                            result={"path": file_path},
+                            worker_id=worker_id,
+                            lease_id=lease_id,
+                            completion_token=lease_id,
+                        )
                     else:
                         ej = self._get_export_job(chatbooks_job_id)
                         if ej:
@@ -1543,7 +1550,14 @@ class ChatbookService:
                             ej.completed_at = datetime.utcnow()
                             ej.error_message = msg
                             self._save_export_job(ej)
-                        jm.fail_job(int(job["id"]), error=str(msg), retryable=False)
+                        jm.fail_job(
+                            int(job["id"]),
+                            error=str(msg),
+                            retryable=False,
+                            worker_id=worker_id,
+                            lease_id=lease_id,
+                            completion_token=lease_id,
+                        )
                 elif action == "import":
                     ij = self._get_import_job(chatbooks_job_id)
                     if ij:
@@ -1571,16 +1585,35 @@ class ChatbookService:
                             ij.status = ImportStatus.COMPLETED
                             ij.completed_at = datetime.utcnow()
                             self._save_import_job(ij)
-                        jm.complete_job(int(job["id"]))
+                        jm.complete_job(
+                            int(job["id"]),
+                            worker_id=worker_id,
+                            lease_id=lease_id,
+                            completion_token=lease_id,
+                        )
                     else:
                         if ij:
                             ij.status = ImportStatus.FAILED
                             ij.completed_at = datetime.utcnow()
                             ij.error_message = msg
                             self._save_import_job(ij)
-                        jm.fail_job(int(job["id"]), error=str(msg), retryable=False)
+                        jm.fail_job(
+                            int(job["id"]),
+                            error=str(msg),
+                            retryable=False,
+                            worker_id=worker_id,
+                            lease_id=lease_id,
+                            completion_token=lease_id,
+                        )
                 else:
-                    jm.fail_job(int(job["id"]), error="unknown action", retryable=False)
+                    jm.fail_job(
+                        int(job["id"]),
+                        error="unknown action",
+                        retryable=False,
+                        worker_id=worker_id,
+                        lease_id=lease_id,
+                        completion_token=lease_id,
+                    )
             except Exception as e:
                 logger.error(f"Core worker error: {e}")
                 await asyncio.sleep(1)

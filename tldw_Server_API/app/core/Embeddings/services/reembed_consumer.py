@@ -19,6 +19,11 @@ from typing import Dict, Any, List, Tuple
 from loguru import logger
 import redis.asyncio as aioredis
 
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+    ensure_async_client_closed,
+)
+
 
 REQUEST_STREAM = os.getenv("REEMBED_REQUEST_STREAM", "embeddings:reembed:requests")
 SCHEDULED_STREAM = os.getenv("REEMBED_SCHEDULED_STREAM", "embeddings:reembed:scheduled")
@@ -26,16 +31,8 @@ POLL_INTERVAL_MS = int(os.getenv("REEMBED_POLL_INTERVAL_MS", "1000") or 1000)
 BATCH = int(os.getenv("REEMBED_BATCH", "50") or 50)
 
 
-async def _get_client() -> aioredis.Redis:
-    url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    conn = aioredis.from_url(url, decode_responses=True)
-    try:
-        import inspect as _inspect
-        if _inspect.isawaitable(conn):
-            conn = await conn
-    except Exception:
-        pass
-    return conn
+async def _get_client():
+    return await create_async_redis_client(context="reembed_consumer")
 
 
 async def process_once(client: aioredis.Redis, max_items: int = BATCH) -> int:
@@ -75,10 +72,7 @@ async def run():
             if n == 0:
                 await asyncio.sleep(max(0.01, POLL_INTERVAL_MS / 1000.0))
     finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
+        await ensure_async_client_closed(client)
 
 
 if __name__ == "__main__":

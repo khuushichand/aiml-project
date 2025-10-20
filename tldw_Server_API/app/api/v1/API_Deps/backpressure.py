@@ -9,20 +9,16 @@ from fastapi import Request, Response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+    ensure_async_client_closed,
+)
 
 import redis.asyncio as aioredis
 
 
 async def _get_redis_client() -> aioredis.Redis:
-    url = settings.get('REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379'))
-    conn = aioredis.from_url(url, decode_responses=True)
-    try:
-        import inspect as _inspect
-        if _inspect.isawaitable(conn):
-            conn = await conn
-    except Exception:
-        pass
-    return conn
+    return await create_async_redis_client(context="ingest_backpressure")
 
 
 def _cfg_int(name: str, default_val: int) -> int:
@@ -107,7 +103,7 @@ async def guard_backpressure_and_quota(
     finally:
         try:
             if client is not None:
-                await client.close()
+                await ensure_async_client_closed(client)
         except Exception:
             pass
 
@@ -133,7 +129,7 @@ async def guard_backpressure_and_quota(
         finally:
             try:
                 if client2 is not None:
-                    await client2.close()
+                    await ensure_async_client_closed(client2)
             except Exception:
                 pass
 

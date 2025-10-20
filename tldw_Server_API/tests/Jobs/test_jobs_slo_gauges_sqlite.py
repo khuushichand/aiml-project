@@ -46,12 +46,12 @@ def test_slo_gauges_sqlite(monkeypatch, tmp_path):
     reg = get_metrics_registry()
     # Verify percentile gauges were produced (at least one sample)
     names = [
-        "prompt_studio.jobs.queue_latency_p50_seconds",
-        "prompt_studio.jobs.queue_latency_p90_seconds",
-        "prompt_studio.jobs.queue_latency_p99_seconds",
-        "prompt_studio.jobs.duration_p50_seconds",
-        "prompt_studio.jobs.duration_p90_seconds",
-        "prompt_studio.jobs.duration_p99_seconds",
+        "jobs.queue_latency_p50_seconds",
+        "jobs.queue_latency_p90_seconds",
+        "jobs.queue_latency_p99_seconds",
+        "jobs.duration_p50_seconds",
+        "jobs.duration_p90_seconds",
+        "jobs.duration_p99_seconds",
     ]
     seen_any = False
     for n in names:

@@ -19,6 +19,7 @@ class PrivilegeSummaryResponse(BaseModel):
     generated_at: datetime
     group_by: str
     buckets: List[PrivilegeBucket]
+    trends: List["PrivilegeTrend"] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -43,6 +44,7 @@ class PrivilegeDetailResponse(BaseModel):
     page_size: int
     total_items: int
     items: List[PrivilegeDetailItem]
+    recommended_actions: Optional[List["PrivilegeRecommendedAction"]] = None
 
 
 PrivilegeOrgResponse = Union[PrivilegeSummaryResponse, PrivilegeDetailResponse]
@@ -51,6 +53,7 @@ PrivilegeOrgResponse = Union[PrivilegeSummaryResponse, PrivilegeDetailResponse]
 class PrivilegeSnapshotSummary(BaseModel):
     users: int
     scopes: int
+    endpoints: Optional[int] = None
     sensitivity_breakdown: Dict[str, int] = Field(default_factory=dict)
     scope_ids: List[str] = Field(default_factory=list)
 
@@ -63,6 +66,7 @@ class PrivilegeSnapshotListItem(BaseModel):
     team_id: Optional[str] = None
     catalog_version: str
     summary: Optional[PrivilegeSnapshotSummary] = None
+    target_scope: Optional[Literal["org", "team", "user"]] = None
 
 
 class PrivilegeSnapshotListResponse(BaseModel):
@@ -71,3 +75,103 @@ class PrivilegeSnapshotListResponse(BaseModel):
     total_items: int
     items: List[PrivilegeSnapshotListItem]
     filters: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PrivilegeTrendWindow(BaseModel):
+    start: datetime
+    end: datetime
+
+
+class PrivilegeTrend(BaseModel):
+    key: str
+    window: PrivilegeTrendWindow
+    delta_users: int = 0
+    delta_endpoints: int = 0
+    delta_scopes: int = 0
+
+
+class PrivilegeRecommendedAction(BaseModel):
+    scope_id: Optional[str] = None
+    action: str
+    reason: Optional[str] = None
+
+
+class PrivilegeSelfItem(BaseModel):
+    endpoint: str
+    method: str
+    privilege_scope_id: str
+    feature_flag_id: Optional[str] = None
+    sensitivity_tier: Optional[str] = None
+    ownership_predicates: List[str] = Field(default_factory=list)
+    status: Literal["allowed", "blocked"]
+    blocked_reason: Optional[str] = None
+
+
+class PrivilegeSelfResponse(BaseModel):
+    catalog_version: str
+    generated_at: datetime
+    items: List[PrivilegeSelfItem]
+    recommended_actions: List[PrivilegeRecommendedAction] = Field(default_factory=list)
+
+
+class PrivilegeSnapshotCreateRequest(BaseModel):
+    target_scope: Literal["org", "team", "user"]
+    org_id: Optional[str] = None
+    team_id: Optional[str] = None
+    user_ids: Optional[List[str]] = None
+    catalog_version: Optional[str] = None
+    notes: Optional[str] = None
+    async_job: bool = Field(False, alias="async")
+
+    class Config:
+        allow_population_by_field_name = True
+        populate_by_name = True
+
+
+class PrivilegeSnapshotAcceptedResponse(BaseModel):
+    request_id: str
+    status: Literal["queued", "processing"]
+    estimated_ready_at: Optional[datetime] = None
+
+
+class PrivilegeSnapshotRecord(BaseModel):
+    snapshot_id: str
+    generated_at: datetime
+    generated_by: str
+    target_scope: Literal["org", "team", "user"]
+    org_id: Optional[str] = None
+    team_id: Optional[str] = None
+    catalog_version: str
+    summary: Optional[PrivilegeSnapshotSummary] = None
+
+
+class PrivilegeSnapshotDetailItem(BaseModel):
+    user_id: Optional[str] = None
+    endpoint: str
+    method: str
+    privilege_scope_id: str
+    feature_flag_id: Optional[str] = None
+    sensitivity_tier: Optional[str] = None
+    ownership_predicates: List[str] = Field(default_factory=list)
+    status: Literal["allowed", "blocked"]
+    blocked_reason: Optional[str] = None
+
+
+class PrivilegeSnapshotDetailMatrix(BaseModel):
+    page: int
+    page_size: int
+    total_items: int
+    items: List[PrivilegeSnapshotDetailItem]
+
+
+class PrivilegeSnapshotDetailResponse(BaseModel):
+    snapshot_id: str
+    catalog_version: str
+    generated_at: datetime
+    generated_by: str
+    target_scope: Literal["org", "team", "user"]
+    org_id: Optional[str] = None
+    team_id: Optional[str] = None
+    summary: Optional[PrivilegeSnapshotSummary] = None
+    detail: Optional[PrivilegeSnapshotDetailMatrix] = None
+    etag: Optional[str] = None

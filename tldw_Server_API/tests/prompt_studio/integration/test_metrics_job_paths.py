@@ -51,12 +51,12 @@ async def test_metrics_update_on_job_lifecycle(prompt_studio_dual_backend_db):
     picked = jm.get_next_job()
     assert picked is not None and picked.get("id") == job.get("id")
 
-    proc_calls = [c for c in stub.metrics_manager.set_gauge_calls if c[0] == "prompt_studio.jobs.processing"]
+    proc_calls = [c for c in stub.metrics_manager.set_gauge_calls if c[0] == "jobs.processing"]
     assert proc_calls, f"no processing gauge set calls captured (backend={label})"
     assert any((c[2] or {}).get("job_type") == "optimization" for c in proc_calls), "processing gauge labels missing job_type=optimization"
 
     # Queue latency observation should be recorded with non-negative value
-    qlat_calls = [c for c in stub.metrics_manager.observe_calls if c[0] == "prompt_studio.jobs.queue_latency_seconds"]
+    qlat_calls = [c for c in stub.metrics_manager.observe_calls if c[0] == "jobs.queue_latency_seconds"]
     assert qlat_calls, f"no queue latency observation recorded (backend={label})"
     assert all(c[1] >= 0 for c in qlat_calls), "queue latency must be non-negative"
 
@@ -68,6 +68,6 @@ async def test_metrics_update_on_job_lifecycle(prompt_studio_dual_backend_db):
     jm.register_handler(JobType.OPTIMIZATION, handler)
     await jm.process_job(picked)
 
-    duration_calls = [c for c in stub.metrics_manager.observe_calls if c[0] == "prompt_studio.jobs.duration_seconds"]
+    duration_calls = [c for c in stub.metrics_manager.observe_calls if c[0] == "jobs.duration_seconds"]
     assert duration_calls, f"no job duration observation recorded (backend={label})"
     assert any((c[2] or {}).get("job_type") == "optimization" for c in duration_calls), "duration histogram labels missing job_type=optimization"

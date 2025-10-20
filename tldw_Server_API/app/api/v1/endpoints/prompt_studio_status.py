@@ -95,15 +95,15 @@ async def get_prompt_studio_status(
                     # Update Prompt Studio gauges
                     prompt_studio_metrics.update_job_queue_size(jt, int(q))
                     prompt_studio_metrics.metrics_manager.set_gauge(
-                        "prompt_studio.jobs.processing", float(p), labels={"job_type": jt}
+                        "jobs.processing", float(p), labels={"job_type": jt}
                     )
                     backlog = max(0, int(q) - int(p))
                     prompt_studio_metrics.metrics_manager.set_gauge(
-                        "prompt_studio.jobs.backlog", float(backlog), labels={"job_type": jt}
+                        "jobs.backlog", float(backlog), labels={"job_type": jt}
                     )
                 # Aggregate stale processing value
                 prompt_studio_metrics.metrics_manager.set_gauge(
-                    "prompt_studio.jobs.stale_processing",
+                    "jobs.stale_processing",
                     float(leases.get("stale_processing", 0)),
                 )
             except Exception as e:

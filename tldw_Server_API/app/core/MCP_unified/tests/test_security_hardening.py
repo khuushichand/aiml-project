@@ -173,6 +173,20 @@ def test_redis_limiter_fallback_on_error():
 
 
 @pytest.mark.asyncio
+async def test_distributed_limiter_uses_stub_when_unavailable(monkeypatch):
+    # Use an unreachable Redis URL; factory should fallback to the in-process stub
+    limiter = DistributedRateLimiter(rate=2, window=60, redis_url="redis://127.0.0.1:6399")
+
+    allowed1, _ = await limiter.is_allowed("fallback-key")
+    allowed2, _ = await limiter.is_allowed("fallback-key")
+    allowed3, _ = await limiter.is_allowed("fallback-key")
+
+    assert allowed1 is True
+    assert allowed2 is True
+    assert allowed3 is False
+
+
+@pytest.mark.asyncio
 async def test_rbac_denies_unmapped_permissions(monkeypatch):
     policy = AuthNZRBAC(db_pool=None)
     monkeypatch.setattr(

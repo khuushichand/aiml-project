@@ -7,6 +7,7 @@ Supports both in-memory and distributed (Redis) rate limiting.
 import time
 import os
 import asyncio
+import inspect
 from typing import Optional, Dict, Any
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
@@ -14,6 +15,9 @@ from abc import ABC, abstractmethod
 from loguru import logger
 
 from ..config import get_config
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+)
 
 
 class RateLimitExceeded(Exception):
@@ -234,19 +238,35 @@ class DistributedRateLimiter(BaseRateLimiter):
     Uses Redis Lua scripts for atomic operations.
     """
     
-    def __init__(self, rate: int, window: int, redis_client=None):
+    def __init__(
+        self,
+        rate: int,
+        window: int,
+        redis_client=None,
+        redis_url: Optional[str] = None,
+        redis_kwargs: Optional[Dict[str, Any]] = None,
+        context: str = "mcp_rate_limiter",
+    ):
         """
         Initialize distributed rate limiter.
         
         Args:
             rate: Number of requests allowed
             window: Time window in seconds
-            redis_client: Redis client instance
+            redis_client: Optional pre-configured Redis client
+            redis_url: Redis URL for lazy initialization when client not supplied
+            redis_kwargs: Additional kwargs for redis.from_url (password, ssl, etc.)
+            context: Human-readable label for logging/fallback traces
         """
         self.rate = rate
         self.window = window
         self.redis = redis_client
+        self._redis_url = redis_url
+        self._redis_kwargs = dict(redis_kwargs or {})
+        self._context = context
         self._fallback = None  # lazy TokenBucketRateLimiter fallback
+        self.script_sha = None
+        self._ensure_lock = asyncio.Lock()
         
         # Lua script for atomic rate limit check
         self.lua_script = """
@@ -277,29 +297,81 @@ class DistributedRateLimiter(BaseRateLimiter):
             end
         end
         """
-        
-        if self.redis:
-            self.script_sha = self.redis.script_load(self.lua_script)
+    
+    async def _ensure_redis(self) -> bool:
+        """Ensure Redis client and Lua script are prepared before use."""
+        if self.redis and self.script_sha:
+            return True
+        async with self._ensure_lock:
+            if self.redis and self.script_sha:
+                return True
+            if not self.redis and self._redis_url:
+                try:
+                    self.redis = await create_async_redis_client(
+                        preferred_url=self._redis_url,
+                        context=self._context,
+                        redis_kwargs=self._redis_kwargs,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Redis unavailable for {self._context}: {exc}")
+                    self.redis = None
+                    self.script_sha = None
+                    return False
+            if not self.redis:
+                return False
+            try:
+                maybe_sha = self.redis.script_load(self.lua_script)
+                if inspect.isawaitable(maybe_sha):
+                    maybe_sha = await maybe_sha
+                self.script_sha = maybe_sha
+                return True
+            except Exception as exc:
+                logger.error(f"Failed to initialize Redis rate limiter script: {exc}")
+                self.redis = None
+                self.script_sha = None
+                return False
+
+    async def _fallback_limiter(self):
+        """Lazily initialize in-memory fallback limiter."""
+        if self._fallback is None:
+            try:
+                self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
+                logger.warning("Redis not available; using in-memory rate limiting fallback")
+            except Exception:
+                self._fallback = None
+        return self._fallback
+
+    def _record_fallback_metric(self) -> None:
+        """Record metric for Redis fallback usage (best-effort)."""
+        try:
+            from ..monitoring.metrics import get_metrics_collector
+            get_metrics_collector().record_rate_limit_fallback("redis")
+        except Exception:
+            pass
+
+    async def _use_fallback(self, key: str) -> tuple[bool, int]:
+        limiter = await self._fallback_limiter()
+        self._record_fallback_metric()
+        if limiter:
+            return await limiter.is_allowed(key)
+        return (True, 0)
+
+    async def _fallback_reset(self, key: str) -> None:
+        limiter = await self._fallback_limiter()
+        if limiter:
+            await limiter.reset(key)
+
+    async def _fallback_get_usage(self, key: str) -> Dict[str, Any]:
+        limiter = await self._fallback_limiter()
+        if limiter:
+            return await limiter.get_usage(key)
+        return {"error": "Redis not available"}
     
     async def is_allowed(self, key: str) -> tuple[bool, int]:
         """Check if request is allowed using Redis"""
-        if not self.redis:
-            # Fallback to in-memory if Redis not available
-            if self._fallback is None:
-                try:
-                    self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
-                    logger.warning("Redis not available; using in-memory rate limiting fallback")
-                except Exception:
-                    pass
-            try:
-                from ..monitoring.metrics import get_metrics_collector
-                get_metrics_collector().record_rate_limit_fallback("redis")
-            except Exception:
-                pass
-            if self._fallback:
-                return await self._fallback.is_allowed(key)
-            return (True, 0)
-        
+        if not await self._ensure_redis() or not self.redis or not self.script_sha:
+            return await self._use_fallback(key)
+
         try:
             # Execute Lua script
             result = await self.redis.evalsha(
@@ -310,68 +382,46 @@ class DistributedRateLimiter(BaseRateLimiter):
                 self.window,  # window
                 time.time()  # current time
             )
-            
+
             return (bool(result[0]), int(result[1]))
-            
+
         except Exception as e:
             logger.error(f"Redis rate limit error: {e}; falling back to in-memory limiter")
-            if self._fallback is None:
-                try:
-                    self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
-                except Exception:
-                    pass
-            try:
-                from ..monitoring.metrics import get_metrics_collector
-                get_metrics_collector().record_rate_limit_fallback("redis")
-            except Exception:
-                pass
-            if self._fallback:
-                return await self._fallback.is_allowed(key)
-            return (True, 0)
+            return await self._use_fallback(key)
     
     async def reset(self, key: str):
         """Reset rate limit for a key in Redis"""
-        if self.redis:
+        has_redis = await self._ensure_redis()
+        if has_redis and self.redis:
             try:
                 await self.redis.delete(f"rate_limit:{key}")
             except Exception as e:
                 logger.error(f"Redis reset error: {e}")
-        if self._fallback:
-            try:
-                await self._fallback.reset(key)
-            except Exception:
-                pass
+        await self._fallback_reset(key)
     
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics from Redis"""
-        if not self.redis:
-            if self._fallback:
-                return await self._fallback.get_usage(key)
-            return {"error": "Redis not available"}
-        
+        if not await self._ensure_redis() or not self.redis:
+            return await self._fallback_get_usage(key)
+
         try:
             redis_key = f"rate_limit:{key}"
             current_time = time.time()
-            
+
             # Remove old entries and count current
             await self.redis.zremrangebyscore(redis_key, 0, current_time - self.window)
             count = await self.redis.zcard(redis_key)
-            
+
             return {
                 "requests_in_window": count,
                 "limit": self.rate,
                 "window": f"{self.window}s",
                 "remaining": max(0, self.rate - count)
             }
-            
+
         except Exception as e:
             logger.error(f"Redis usage error: {e}; using in-memory usage stats if available")
-            if self._fallback:
-                try:
-                    return await self._fallback.get_usage(key)
-                except Exception:
-                    pass
-            return {"error": str(e)}
+            return await self._fallback_get_usage(key)
 
 
 class RateLimiter:
@@ -384,6 +434,8 @@ class RateLimiter:
     def __init__(self):
         self.config = get_config()
         self.limiters = {}
+        self._using_distributed = False
+        self._defer_cleanup = False
         self._init_limiters()
         # Optional category-specific limiters (e.g., ingestion vs read)
         # Defaults fall back to the main limiter rates
@@ -401,22 +453,34 @@ class RateLimiter:
 
         # If Redis is enabled, we reuse DistributedRateLimiter with window=60
         if self.config.rate_limit_use_redis and self.config.redis_url:
-            try:
-                import redis.asyncio as redis  # type: ignore
-                params = self.config.get_redis_connection_params()
-                rc = redis.from_url(**params)
-                self.ingestion_limiter = DistributedRateLimiter(rate=rpm_ing, window=60, redis_client=rc)
-                self.read_limiter = DistributedRateLimiter(rate=rpm_read, window=60, redis_client=rc)
-            except Exception:
-                # Fallback to memory
+            params = self.config.get_redis_connection_params() or {}
+            redis_url = params.get("url")
+            redis_kwargs = {k: v for k, v in params.items() if k != "url"}
+            if redis_url:
+                self.ingestion_limiter = DistributedRateLimiter(
+                    rate=rpm_ing,
+                    window=60,
+                    redis_url=redis_url,
+                    redis_kwargs=dict(redis_kwargs),
+                    context="mcp_ingestion_limiter",
+                )
+                self.read_limiter = DistributedRateLimiter(
+                    rate=rpm_read,
+                    window=60,
+                    redis_url=redis_url,
+                    redis_kwargs=dict(redis_kwargs),
+                    context="mcp_read_limiter",
+                )
+                self._using_distributed = True
+            else:
                 self.ingestion_limiter = TokenBucketRateLimiter(rate=rpm_ing, per=60, burst=burst_ing)
                 self.read_limiter = TokenBucketRateLimiter(rate=rpm_read, per=60, burst=burst_read)
         else:
             self.ingestion_limiter = TokenBucketRateLimiter(rate=rpm_ing, per=60, burst=burst_ing)
             self.read_limiter = TokenBucketRateLimiter(rate=rpm_read, per=60, burst=burst_read)
-        
+
         # Start cleanup task for in-memory limiters; defer if no running loop
-        if not self.config.rate_limit_use_redis:
+        if not self._using_distributed:
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._cleanup_task())
@@ -428,30 +492,27 @@ class RateLimiter:
     def _init_limiters(self):
         """Initialize rate limiters based on configuration"""
         if self.config.rate_limit_use_redis and self.config.redis_url:
-            # Initialize Redis client
-            try:
-                import redis.asyncio as redis
-                redis_params = self.config.get_redis_connection_params()
-                redis_client = redis.from_url(**redis_params)
-                
-                # Create distributed limiter
+            params = self.config.get_redis_connection_params() or {}
+            redis_url = params.get("url")
+            redis_kwargs = {k: v for k, v in params.items() if k != "url"}
+            if redis_url:
                 self.default_limiter = DistributedRateLimiter(
                     rate=self.config.rate_limit_requests_per_minute,
                     window=60,
-                    redis_client=redis_client
+                    redis_url=redis_url,
+                    redis_kwargs=redis_kwargs,
+                    context="mcp_default_limiter",
                 )
                 logger.info("Using Redis-backed distributed rate limiting")
-            except ImportError:
-                logger.warning("Redis not installed, falling back to in-memory rate limiting")
-                self._init_memory_limiter()
-            except Exception as e:
-                logger.error(f"Failed to initialize Redis: {e}")
-                self._init_memory_limiter()
-        else:
-            self._init_memory_limiter()
+                self._using_distributed = True
+                return
+            logger.warning("Redis URL not configured; falling back to in-memory rate limiting")
+        self._using_distributed = False
+        self._init_memory_limiter()
     
     def _init_memory_limiter(self):
         """Initialize in-memory rate limiter"""
+        self._using_distributed = False
         self.default_limiter = TokenBucketRateLimiter(
             rate=self.config.rate_limit_requests_per_minute,
             per=60,

@@ -57,7 +57,7 @@ def test_pg_ttl_cancel_updates_counters(monkeypatch):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
             reg = get_metrics_registry()
-            vals = list(reg.values.get("prompt_studio.jobs.cancelled_total", []))
+            vals = list(reg.values.get("jobs.cancelled_total", []))
             saw = False
             for mv in vals:
                 if mv.labels.get("domain") == domain and mv.labels.get("queue") == queue and mv.labels.get("job_type") == jt:
@@ -104,7 +104,7 @@ def test_pg_ttl_fail_updates_counters(monkeypatch):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
             reg = get_metrics_registry()
-            vals = list(reg.values.get("prompt_studio.jobs.failures_total", []))
+            vals = list(reg.values.get("jobs.failures_total", []))
             saw_age = False; saw_runtime = False
             for mv in vals:
                 if mv.labels.get("domain") == domain and mv.labels.get("queue") == queue and mv.labels.get("job_type") == jt:

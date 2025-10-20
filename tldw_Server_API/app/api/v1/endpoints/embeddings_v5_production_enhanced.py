@@ -74,6 +74,10 @@ from slowapi.util import get_remote_address
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
 import redis.asyncio as aioredis
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+    ensure_async_client_closed,
+)
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
@@ -386,7 +390,7 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
     finally:
         try:
             if client is not None:
-                await client.close()
+                    await ensure_async_client_closed(client)
         except Exception:
             pass
 
@@ -445,7 +449,7 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
                             pass
             finally:
                 try:
-                    await client2.close()
+                    await ensure_async_client_closed(client2)
                 except Exception:
                     pass
     except Exception:
@@ -458,15 +462,7 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
 # ============================================================================
 
 async def _get_redis_client() -> aioredis.Redis:
-    url = settings.get('REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379'))
-    conn = aioredis.from_url(url, decode_responses=True)
-    try:
-        import inspect as _inspect
-        if _inspect.isawaitable(conn):
-            conn = await conn
-    except Exception:
-        pass
-    return conn
+    return await create_async_redis_client(context="embeddings_api")
 
 def _dlq_stream_name(stage: str) -> str:
     stage = stage.strip().lower()
@@ -2137,7 +2133,7 @@ async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> T
         ts = int(time.time())
         key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}:{ts}"
         val = await client.get(key)
-        await client.close()
+        await ensure_async_client_closed(client)
         used = int(val or 0)
         return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=max(0, TENANT_RPS - used))
     except Exception:
@@ -2162,7 +2158,7 @@ async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depen
         key = f"embeddings:priority:override:{req.job_id}"
         await client.set(key, pr)
         await client.expire(key, int(req.ttl_seconds or 600))
-        await client.close()
+        await ensure_async_client_closed(client)
         return {"status": "ok", "job_id": req.job_id, "priority": pr, "ttl_seconds": int(req.ttl_seconds or 600)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}")
@@ -2695,7 +2691,7 @@ async def list_dlq_items(
                 dlq_state=dlq_state,
                 operator_note=operator_note,
             ))
-        await client.close()
+        await ensure_async_client_closed(client)
         return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
     except HTTPException:
         raise
@@ -2800,7 +2796,7 @@ async def requeue_dlq_item(
         dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
         raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}")
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 class DLQRequeueBulkRequest(BaseModel):
@@ -2908,7 +2904,7 @@ async def requeue_dlq_bulk(
             pass
         return {"from": dlq_stream, "to": live_stream, "results": results}
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 @router.get(
@@ -2970,7 +2966,7 @@ async def get_dlq_stats(
 
         return {"queues": depths, "dlq": dlq_depths, "total_dlq": total_dlq, "stages": stages}
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 # ---------------------------------------------------------------------------
@@ -3034,7 +3030,7 @@ async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(ge
             pass
         return {"ok": True, "stream": dlq_stream, "entry_id": req.entry_id, "state": st}
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 # ---------------------------------------------------------------------------
@@ -3071,7 +3067,7 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
             }
         return out
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 @router.post(
@@ -3116,7 +3112,7 @@ async def control_stage(req: StageControlRequest, current_user: User = Depends(g
             pass
         return {"ok": True, "stages": stages, "action": req.action}
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 # ---------------------------------------------------------------------------
@@ -3162,7 +3158,7 @@ async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get
             pass
         return {"ok": True, "job_id": req.job_id, "ttl_seconds": req.ttl_seconds}
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 @router.get(
@@ -3176,7 +3172,7 @@ async def get_job_skip_status(job_id: str = Query(..., description="Job ID to ch
         val = await client.get(_skip_key(job_id))
         return {"job_id": job_id, "skipped": str(val).lower() in ("1", "true", "yes")}
     finally:
-        await client.close()
+        await ensure_async_client_closed(client)
 
 
 # ---------------------------------------------------------------------------
@@ -3248,10 +3244,7 @@ async def get_ledger_status(
             out["dedupe"] = entry
         return out
     finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
+        await ensure_async_client_closed(client)
 
 
 # ---------------------------------------------------------------------------
@@ -3487,10 +3480,7 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
                 orchestrator_sse_disconnects_total.inc()
             except Exception:
                 pass
-            try:
-                await client.close()
-            except Exception:
-                pass
+            await ensure_async_client_closed(client)
     # The client will keep the connection; we don't close Redis here (shared)
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
@@ -3525,10 +3515,4 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
             pass
         return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
     finally:
-        if client is not None:
-            try:
-                maybe = client.close()
-                if inspect.isawaitable(maybe):
-                    await maybe  # redis.asyncio < 5 returns awaitable
-            except Exception:
-                pass
+        await ensure_async_client_closed(client)

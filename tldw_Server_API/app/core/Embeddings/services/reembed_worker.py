@@ -40,8 +40,8 @@ import asyncio
 import hashlib
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import redis.asyncio as aioredis
 from loguru import logger
@@ -63,21 +63,17 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     VectorStoreFactory,
     create_from_settings_for_user,
 )
+from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+    create_async_redis_client,
+    ensure_async_client_closed,
+)
 
 
 EMBEDDING_QUEUE = os.getenv("EMBEDDING_LIVE_QUEUE", "embeddings:embedding")
 
 
 async def _redis_client() -> aioredis.Redis:
-    url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    conn = aioredis.from_url(url, decode_responses=True)
-    try:
-        import inspect as _inspect
-        if _inspect.isawaitable(conn):
-            conn = await conn
-    except Exception:
-        pass
-    return conn
+    return await create_async_redis_client(context="reembed_worker")
 
 
 def _is_test_env() -> bool:
@@ -253,7 +249,7 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
             payload: Dict[str, Any] = job.get("payload") or {}
             media_id = payload.get("media_id")
             if not owner or media_id is None:
-                jm.fail_job(int(job["id"]), error="missing owner_user_id or media_id", retryable=False, worker_id=worker_id, lease_id=lease_id)
+                jm.fail_job(int(job["id"]), error="missing owner_user_id or media_id", retryable=False, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
                 return True
             job_uuid = str(job.get("uuid") or job.get("id"))
             cur = jm.get_job(int(job["id"])) or {}
@@ -392,7 +388,7 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
                 payload: Dict[str, Any] = job.get("payload") or {}
                 media_id = payload.get("media_id")
                 if not owner or media_id is None:
-                    jm.fail_job(int(job["id"]), error="missing owner_user_id or media_id", retryable=False, worker_id=worker_id, lease_id=lease_id)
+                    jm.fail_job(int(job["id"]), error="missing owner_user_id or media_id", retryable=False, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
                     continue
                 job_uuid = str(job.get("uuid") or job.get("id"))
                 # Pre-flight cancel
@@ -554,10 +550,7 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
             finally:
                 first_iteration = False
     finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
+        await ensure_async_client_closed(client)
         if _restore_gate:
             try:
                 from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM

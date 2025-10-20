@@ -80,7 +80,7 @@ class PrivilegeSnapshotStore:
 
         rows = await pool.fetchall(
             f"""
-            SELECT snapshot_id, generated_at, generated_by, org_id, team_id,
+            SELECT snapshot_id, generated_at, generated_by, target_scope, org_id, team_id,
                    catalog_version, summary_json
             FROM privilege_snapshots
             {where_clause}
@@ -110,6 +110,7 @@ class PrivilegeSnapshotStore:
                     "snapshot_id": record.get("snapshot_id"),
                     "generated_at": generated_at_dt,
                     "generated_by": record.get("generated_by"),
+                    "target_scope": record.get("target_scope"),
                     "org_id": record.get("org_id"),
                     "team_id": record.get("team_id"),
                     "catalog_version": record.get("catalog_version"),
@@ -145,6 +146,7 @@ class PrivilegeSnapshotStore:
         generated_at = snapshot.get("generated_at")
         generated_at_iso = self._to_iso(generated_at)
         generated_by = snapshot.get("generated_by")
+        target_scope = snapshot.get("target_scope")
         org_id = snapshot.get("org_id")
         team_id = snapshot.get("team_id")
         catalog_version = snapshot.get("catalog_version")
@@ -160,6 +162,7 @@ class PrivilegeSnapshotStore:
                     snapshot_id,
                     generated_at,
                     generated_by,
+                    target_scope,
                     org_id,
                     team_id,
                     catalog_version,
@@ -167,10 +170,11 @@ class PrivilegeSnapshotStore:
                     scope_index,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     generated_at = excluded.generated_at,
                     generated_by = excluded.generated_by,
+                    target_scope = excluded.target_scope,
                     org_id = excluded.org_id,
                     team_id = excluded.team_id,
                     catalog_version = excluded.catalog_version,
@@ -182,6 +186,7 @@ class PrivilegeSnapshotStore:
                     snapshot_id,
                     generated_at_iso,
                     generated_by,
+                    target_scope,
                     org_id,
                     team_id,
                     catalog_version,
@@ -197,6 +202,62 @@ class PrivilegeSnapshotStore:
         await self._ensure_schema(pool)
         async with pool.transaction() as conn:
             await conn.execute("DELETE FROM privilege_snapshots")
+
+    async def get_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        page: int,
+        page_size: int,
+    ) -> Optional[Dict[str, Any]]:
+        pool = await self._get_pool()
+        await self._ensure_schema(pool)
+        row = await pool.fetchone(
+            """
+            SELECT snapshot_id,
+                   generated_at,
+                   generated_by,
+                   target_scope,
+                   org_id,
+                   team_id,
+                   catalog_version,
+                   summary_json
+            FROM privilege_snapshots
+            WHERE snapshot_id = ?
+            """,
+            (snapshot_id,),
+        )
+        record = self._row_to_dict(row)
+        if not record:
+            return None
+
+        summary_obj = None
+        if record.get("summary_json"):
+            try:
+                summary_obj = json.loads(record["summary_json"])
+            except Exception as exc:
+                logger.warning("Failed to parse snapshot summary JSON: %s", exc)
+                summary_obj = None
+
+        detail = {
+            "page": page,
+            "page_size": page_size,
+            "total_items": 0,
+            "items": [],
+        }
+
+        return {
+            "snapshot_id": record.get("snapshot_id"),
+            "catalog_version": record.get("catalog_version"),
+            "generated_at": self._parse_datetime(record.get("generated_at")),
+            "generated_by": record.get("generated_by"),
+            "target_scope": record.get("target_scope"),
+            "org_id": record.get("org_id"),
+            "team_id": record.get("team_id"),
+            "summary": summary_obj,
+            "detail": detail,
+            "etag": f'W/"{record.get("snapshot_id")}-v1"',
+        }
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -217,6 +278,7 @@ class PrivilegeSnapshotStore:
                     snapshot_id TEXT PRIMARY KEY,
                     generated_at TEXT NOT NULL,
                     generated_by TEXT NOT NULL,
+                    target_scope TEXT,
                     org_id TEXT,
                     team_id TEXT,
                     catalog_version TEXT NOT NULL,
@@ -233,6 +295,14 @@ class PrivilegeSnapshotStore:
             async with pool.transaction() as conn:
                 await conn.execute(
                     "ALTER TABLE privilege_snapshots ADD COLUMN scope_index TEXT"
+                )
+        except Exception:
+            pass
+
+        try:
+            async with pool.transaction() as conn:
+                await conn.execute(
+                    "ALTER TABLE privilege_snapshots ADD COLUMN target_scope TEXT"
                 )
         except Exception:
             pass
