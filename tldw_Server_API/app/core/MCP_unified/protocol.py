@@ -604,7 +604,7 @@ class MCPProtocol:
         # No user context means no auth
         if not context.user_id:
             return False
-        
+
         # tools/list: allow any authenticated user (deny if unauthenticated)
         if method == "tools/list":
             return bool(context.user_id)
@@ -763,6 +763,12 @@ class MCPProtocol:
         modules = await self.module_registry.get_all_modules()
         
         for module_id, module in modules.items():
+            if catalog_filter is not None:
+                context.logger.info(
+                    "Catalog filter applied",
+                    catalog=catalog_filter,
+                    module_count=len(modules),
+                )
             try:
                 if not await self._has_module_permission(context, module_id):
                     continue
@@ -1163,6 +1169,8 @@ class MCPProtocol:
         
         for module_id, module in modules.items():
             try:
+                if catalog_filter is not None:
+                    context.logger.info(f"Catalog filter applied: {sorted(catalog_filter)}")
                 if not await self._has_module_permission(context, module_id):
                     continue
                 module_resources = await module.get_resources()

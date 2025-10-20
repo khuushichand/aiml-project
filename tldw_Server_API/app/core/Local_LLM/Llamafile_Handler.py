@@ -22,12 +22,27 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelDow
     ModelNotFoundError, InferenceError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamafileConfig
 from tldw_Server_API.app.core.Utils.Utils import download_file, verify_checksum
-from tldw_Server_API.app.core.Local_LLM.http_utils import (
-    redact_cmd_args,
-    create_async_client,
-    request_json,
-    wait_for_http_ready,
-)
+from tldw_Server_API.app.core.Local_LLM import http_utils
+
+
+def redact_cmd_args(*args, **kwargs):
+    """Proxy command redaction for easier monkeypatching in tests."""
+    return http_utils.redact_cmd_args(*args, **kwargs)
+
+
+def create_async_client(*args, **kwargs):
+    """Proxy AsyncClient factory to respect patched targets."""
+    return http_utils.create_async_client(*args, **kwargs)
+
+
+async def request_json(*args, **kwargs):
+    """Proxy JSON request helper."""
+    return await http_utils.request_json(*args, **kwargs)
+
+
+async def wait_for_http_ready(*args, **kwargs):
+    """Proxy readiness poller preserving test expectations."""
+    return await http_utils.wait_for_http_ready(*args, **kwargs)
 # from .base_handler import BaseLLMHandler
 # from .exceptions import ModelNotFoundError, ModelDownloadError, ServerError, InferenceError
 # from .utils_loader import logging, project_utils # From the loader
@@ -291,8 +306,11 @@ class LlamafileHandler(BaseLLMHandler):
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
         args = server_args or {}
-        port = self._pick_port(host, int(args.get("port", self.config.default_port)))
         host = args.get("host", self.config.default_host)
+        if not host:
+            host = self.config.default_host or "127.0.0.1"
+        host = str(host)
+        port = self._pick_port(host, int(args.get("port", self.config.default_port)))
 
         # Corrected check using .returncode for asyncio.subprocess.Process
         if port in self._active_servers and self._active_servers[port].returncode is None:
@@ -338,6 +356,8 @@ class LlamafileHandler(BaseLLMHandler):
             "lora_base": lambda v: ["--lora-base", str(v)],
             "cache_type_k": lambda v: ["--cache-type-k", str(v)],
             "cache_type_v": lambda v: ["--cache-type-v", str(v)],
+            "hf_token": lambda v: ["--hf-token", str(v)],
+            "token": lambda v: ["--token", str(v)],
             # Paths
             "grammar_file": lambda v: ["--grammar-file", str(v)],
             "json_schema_file": lambda v: ["--json-schema-file", str(v)],

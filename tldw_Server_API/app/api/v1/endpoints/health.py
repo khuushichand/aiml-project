@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from typing import Any, Dict
+
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -7,6 +10,14 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler
+
+try:
+    from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService as _UnifiedAuditService
+except Exception:  # pragma: no cover - defensive import guard for optional dependencies
+    _UnifiedAuditService = None  # type: ignore[assignment]
+
+# Expose symbol for tests to monkeypatch (see test_security_health_thresholds.py)
+UnifiedAuditService = _UnifiedAuditService  # type: ignore[assignment]
 
 router = APIRouter()
 
@@ -170,3 +181,85 @@ async def api_health_metrics():
     except Exception as e:
         logger.warning(f"health/metrics unavailable: {e}")
         return {"cpu": {"percent": 0.0}, "memory": {"total": 0, "available": 0, "percent": 0.0, "used": 0, "free": 0}, "disk": {"total": 0, "used": 0, "free": 0, "percent": 0.0}}
+
+
+def _int_env(name: str, default: int) -> int:
+    """Parse an environment variable into an int with a safe default."""
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid integer for {name!r}: {value!r}. Using default {default}.")
+        return default
+
+
+def _calculate_security_status(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Derive human-readable security posture from the audit summary."""
+    thresholds = {
+        "critical_high_risk_min": _int_env("AUDIT_SEC_CRITICAL_HIGH_RISK_MIN", 1),
+        "elevated_failure_min": _int_env("AUDIT_SEC_ELEVATED_FAILURE_MIN", 50),
+    }
+    high_risk = int(summary.get("high_risk_events") or 0)
+    failures = int(summary.get("failure_events") or 0)
+
+    risk_level = "low"
+    status_text = "secure"
+
+    if thresholds["critical_high_risk_min"] > 0 and high_risk >= thresholds["critical_high_risk_min"]:
+        risk_level = "critical"
+        status_text = "at_risk"
+    elif thresholds["elevated_failure_min"] > 0 and failures >= thresholds["elevated_failure_min"]:
+        risk_level = "high"
+        status_text = "elevated"
+    return {
+        "risk_level": risk_level,
+        "status": status_text,
+        "thresholds": thresholds,
+        "high_risk_events": high_risk,
+        "failure_events": failures,
+    }
+
+
+@router.get("/health/security", tags=["health"], summary="Security posture overview")
+async def api_security_health():
+    """Summarize recent security audit activity and map to a risk posture."""
+    response: Dict[str, Any] = {
+        "timestamp": _utcnow_iso(),
+        "risk_level": "unknown",
+        "status": "unknown",
+        "summary": {},
+    }
+
+    if UnifiedAuditService is None:
+        response.update({
+            "error": "UnifiedAuditService unavailable",
+        })
+        return JSONResponse(response, status_code=503)
+
+    service_instance = None
+    try:
+        service_instance = UnifiedAuditService()  # type: ignore[operator]
+        initialize = getattr(service_instance, "initialize", None)
+        if callable(initialize):
+            await initialize()
+        summary = await service_instance.get_security_summary()  # type: ignore[assignment]
+        response["summary"] = summary
+        status_bits = _calculate_security_status(summary)
+        response.update(status_bits)
+    except Exception as exc:
+        logger.error(f"health/security failed: {exc}")
+        response.update({
+            "error": str(exc),
+        })
+        return JSONResponse(response, status_code=503)
+    finally:
+        shutdown = getattr(service_instance, "stop", None)
+        if callable(shutdown):
+            try:
+                await shutdown()
+            except Exception as exc:
+                logger.debug(f"UnifiedAuditService stop() ignored: {exc}")
+
+    return JSONResponse(response, status_code=200)

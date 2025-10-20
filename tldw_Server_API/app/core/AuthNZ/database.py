@@ -488,6 +488,11 @@ async def reset_db_pool():
         await _reset_mcp_server()
     except Exception:
         pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager as _reset_api_manager
+        await _reset_api_manager()
+    except Exception:
+        pass
 
 async def get_db():
     """FastAPI dependency to get database connection"""

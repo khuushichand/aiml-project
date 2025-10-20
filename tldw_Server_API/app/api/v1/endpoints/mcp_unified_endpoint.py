@@ -136,6 +136,21 @@ async def get_current_user(
                             permissions=[],
                             token_type="access",
                         )
+                    # TEST_MODE convenience: honor SINGLE_USER_TEST_API_KEY for deterministic automation
+                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+                    if test_mode:
+                        allowed = {
+                            os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345"),
+                            settings.SINGLE_USER_API_KEY,
+                        }
+                        if x_api_key in {a for a in allowed if a}:
+                            return TokenData(
+                                sub=str(settings.SINGLE_USER_FIXED_ID),
+                                username="single_user",
+                                roles=[UserRole.ADMIN.value],
+                                permissions=["*"],
+                                token_type="access",
+                            )
             except Exception:
                 # Fall through to multi-user API key validation
                 pass

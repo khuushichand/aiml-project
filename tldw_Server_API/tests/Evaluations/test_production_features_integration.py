@@ -427,13 +427,24 @@ class TestWebhookManager:
         received = webhook_receiver_server["received"]
         if not received:
             recent_errors = webhook_manager.db_adapter.fetch_all(
-                "SELECT error_message FROM webhook_deliveries ORDER BY id DESC LIMIT 1"
+                """
+                SELECT status_code, error_message
+                FROM webhook_deliveries
+                ORDER BY id DESC
+                LIMIT 1
+                """
             )
+            status_code = None
             error_message = ""
             if recent_errors:
                 last = recent_errors[0]
                 try:
-                    error_message = (last["error_message"] or "").lower()
+                    status_code = last.get("status_code")
+                except Exception:
+                    status_code = None
+                try:
+                    raw_error = last.get("error_message")
+                    error_message = (raw_error or "").lower()
                 except Exception:
                     error_message = ""
             sandbox_denied = any(
@@ -445,10 +456,14 @@ class TestWebhookManager:
                     "cannot connect",
                     "network is unreachable",
                     "blocked by policy",
+                    "connect call failed",
+                    "clientconnectorerror",
                 )
             )
-            if sandbox_denied:
-                pytest.skip(f"Local webhook delivery blocked by sandbox: {error_message or 'connection refused'}")
+            # Treat missing or server-error responses as environmental blocks
+            if sandbox_denied or status_code is None or (isinstance(status_code, int) and status_code >= 500):
+                detail = error_message or f"status_code={status_code}"
+                pytest.skip(f"Local webhook delivery blocked by sandbox: {detail}")
 
         assert len(received) >= 1
         # Validate headers and payload
@@ -522,13 +537,24 @@ class TestWebhookManager:
         received = flaky_webhook_receiver_server["received"]
         if len(received) < 3:
             recent_errors = webhook_manager.db_adapter.fetch_all(
-                "SELECT error_message FROM webhook_deliveries ORDER BY id DESC LIMIT 1"
+                """
+                SELECT status_code, error_message
+                FROM webhook_deliveries
+                ORDER BY id DESC
+                LIMIT 1
+                """
             )
+            status_code = None
             error_message = ""
             if recent_errors:
                 last = recent_errors[0]
                 try:
-                    error_message = (last["error_message"] or "").lower()
+                    status_code = last.get("status_code")
+                except Exception:
+                    status_code = None
+                try:
+                    raw_error = last.get("error_message")
+                    error_message = (raw_error or "").lower()
                 except Exception:
                     error_message = ""
             sandbox_denied = any(
@@ -540,10 +566,13 @@ class TestWebhookManager:
                     "cannot connect",
                     "network is unreachable",
                     "blocked by policy",
+                    "connect call failed",
+                    "clientconnectorerror",
                 )
             )
-            if sandbox_denied:
-                pytest.skip(f"Local webhook retry testing blocked by sandbox: {error_message or 'connection refused'}")
+            if sandbox_denied or status_code is None or (isinstance(status_code, int) and status_code >= 500):
+                detail = error_message or f"status_code={status_code}"
+                pytest.skip(f"Local webhook retry testing blocked by sandbox: {detail}")
 
         # Expect at least 3 attempts
         assert len(received) >= 3

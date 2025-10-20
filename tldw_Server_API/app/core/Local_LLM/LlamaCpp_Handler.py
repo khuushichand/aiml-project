@@ -19,7 +19,22 @@ import httpx  # For making API calls to the Llama.cpp server
 from .LLM_Base_Handler import BaseLLMHandler
 from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
 from .LLM_Inference_Schemas import LlamaCppConfig
-from .http_utils import create_async_client, request_json, wait_for_http_ready
+from tldw_Server_API.app.core.Local_LLM import http_utils
+
+
+def create_async_client(*args, **kwargs):
+    """Proxy create_async_client so tests can monkeypatch either module."""
+    return http_utils.create_async_client(*args, **kwargs)
+
+
+async def request_json(*args, **kwargs):
+    """Proxy request_json for test monkeypatching."""
+    return await http_utils.request_json(*args, **kwargs)
+
+
+async def wait_for_http_ready(*args, **kwargs):
+    """Proxy wait_for_http_ready preserving signature expectations."""
+    return await http_utils.wait_for_http_ready(*args, **kwargs)
 # from .Utils import download_file, verify_checksum # If you need model downloading later
 #########################################################################################################################
 #

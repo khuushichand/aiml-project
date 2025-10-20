@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from loguru import logger
 from starlette import status
+from typing import Optional
 
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
@@ -99,7 +100,10 @@ async def verify_token(
         elif x_api_key:
             try:
                 api_mgr = await get_api_key_manager()
-                client_ip = request.client.host if getattr(request, "client", None) else None
+                client_ip = None
+                client = getattr(request, "client", None)
+                if client is not None:
+                    client_ip = getattr(client, "host", None)
                 key_info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
                 if not key_info:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")

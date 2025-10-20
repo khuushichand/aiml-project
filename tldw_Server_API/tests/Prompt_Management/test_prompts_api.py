@@ -76,7 +76,7 @@ async def test_verify_token_success_single_user_mode(monkeypatch, actual_test_ap
     monkeypatch.setitem(settings, "SINGLE_USER_MODE", True)
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_test_api_key)
     try:
-        assert await verify_token(Token=actual_test_api_key) is True
+        assert await verify_token(request=None, Token=actual_test_api_key) is True
     finally:
         # Restore original settings
         monkeypatch.setitem(settings, "SINGLE_USER_MODE", original_single_user_mode)
@@ -89,7 +89,7 @@ async def test_verify_token_success_single_user_mode(monkeypatch, actual_test_ap
 @pytest.mark.asyncio
 async def test_verify_token_missing_token_header_direct(): # Renamed for clarity
     with pytest.raises(HTTPException) as excinfo:
-        await verify_token(Token=None) # FastAPI would pass None if Header is missing
+        await verify_token(request=None, Token=None) # FastAPI would pass None if Header is missing
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Missing authentication token" in excinfo.value.detail
 
@@ -103,7 +103,7 @@ async def test_verify_token_invalid_token_single_user_mode(monkeypatch, actual_t
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_test_api_key)
     try:
         with pytest.raises(HTTPException) as excinfo:
-            await verify_token(Token="completely-wrong-token")
+            await verify_token(request=None, Token="completely-wrong-token")
         assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
         assert "Invalid authentication token" in excinfo.value.detail
     finally:
@@ -122,7 +122,7 @@ async def test_verify_token_server_misconfigured_key_missing_single_user(monkeyp
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", None) # Simulate API key not set
     try:
         with pytest.raises(HTTPException) as excinfo:
-            await verify_token(Token="any-token-will-do-for-this-check")
+            await verify_token(request=None, Token="any-token-will-do-for-this-check")
         assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert "Server authentication misconfigured (API key missing)" in excinfo.value.detail
     finally:
@@ -335,7 +335,7 @@ Dict[str, Any]:
 async def test_verify_token_missing_token(monkeypatch, actual_api_token_value: str):
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_api_token_value)
     with pytest.raises(HTTPException) as exc_info:
-        await verify_token(Token=None)
+        await verify_token(request=None, Token=None)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Missing authentication token" in exc_info.value.detail
 
@@ -344,7 +344,7 @@ async def test_verify_token_missing_token(monkeypatch, actual_api_token_value: s
 async def test_verify_token_invalid_token(monkeypatch, actual_api_token_value: str):
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_api_token_value)
     with pytest.raises(HTTPException) as exc_info:
-        await verify_token(Token="Bearer invalid")
+        await verify_token(request=None, Token="Bearer invalid")
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Invalid authentication token" in exc_info.value.detail
 
@@ -360,7 +360,7 @@ async def test_verify_token_server_misconfigured(monkeypatch):
 
     try:
         with pytest.raises(HTTPException) as exc_info:
-            await verify_token(Token="anytoken")
+            await verify_token(request=None, Token="anytoken")
         assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert "Server authentication misconfigured (API key missing)." in exc_info.value.detail
     finally:

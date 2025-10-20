@@ -80,6 +80,11 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {decl}")
                 columns.add(name)
 
+        # Legacy schemas may lack critical columns; add safe defaults where possible
+        add_col('token_hash', "token_hash TEXT")
+        add_col('refresh_token_hash', "refresh_token_hash TEXT")
+        add_col('encrypted_token', "encrypted_token TEXT")
+        add_col('encrypted_refresh', "encrypted_refresh TEXT")
         add_col('refresh_expires_at', "refresh_expires_at TIMESTAMP")
         add_col('access_jti', "access_jti TEXT")
         add_col('refresh_jti', "refresh_jti TEXT")

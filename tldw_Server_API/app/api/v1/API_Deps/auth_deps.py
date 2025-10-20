@@ -358,6 +358,8 @@ async def get_current_user(
                     "username": "single_user",
                     "email": None,
                     "role": "admin",
+                    "roles": ["admin"],
+                    "permissions": ["*"],
                     "is_active": True,
                     "is_verified": True,
                 }
@@ -379,6 +381,8 @@ async def get_current_user(
                         "username": "single_user",
                         "email": None,
                         "role": "admin",
+                        "roles": ["admin"],
+                        "permissions": ["*"],
                         "is_active": True,
                         "is_verified": True,
                     }
@@ -395,6 +399,42 @@ async def get_current_user(
 
     # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
     if not credentials and x_api_key:
+        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        if test_mode:
+            try:
+                settings = get_settings()
+            except Exception:
+                settings = None
+            allowed_keys = {os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")}
+            if settings and settings.SINGLE_USER_API_KEY:
+                allowed_keys.add(settings.SINGLE_USER_API_KEY)
+            if x_api_key in allowed_keys:
+                try:
+                    if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
+                        from pathlib import Path as _Path
+                        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
+                        db_path = settings.DATABASE_URL.replace("sqlite:///", "")
+                        _ensure_authnz_tables(_Path(db_path))
+                except Exception as _ensure_err:
+                    logger.debug(f"AuthNZ test fallback: ensure_authnz_tables skipped/failed: {_ensure_err}")
+                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
+                user = {
+                    "id": fixed_id,
+                    "username": "single_user",
+                    "email": None,
+                    "role": "admin",
+                    "roles": ["admin"],
+                    "permissions": ["*"],
+                    "is_active": True,
+                    "is_verified": True,
+                }
+                try:
+                    request.state.user_id = fixed_id
+                    request.state.team_ids = []
+                    request.state.org_ids = []
+                except Exception:
+                    pass
+                return user
         try:
             api_mgr = await get_api_key_manager()
             # Forward client IP for allowed_ips enforcement

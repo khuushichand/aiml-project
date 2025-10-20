@@ -517,8 +517,40 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
     environments where migrations or bootstrap did not seed RBAC yet.
     """
     settings = get_settings()
+    # In test suites we may switch DATABASE_URL or AUTH_MODE between runs (e.g., SQLite → Postgres).
+    # Detect and realign settings/pools so the seed targets the active backend.
+    try:
+        effective_db_url = os.getenv("DATABASE_URL")
+    except Exception:
+        effective_db_url = None
+    try:
+        effective_auth_mode = os.getenv("AUTH_MODE")
+    except Exception:
+        effective_auth_mode = None
+
+    need_reset = False
+    if effective_db_url and settings.DATABASE_URL != effective_db_url:
+        need_reset = True
+    if effective_auth_mode and effective_auth_mode.lower() != settings.AUTH_MODE:
+        need_reset = True
+
+    if need_reset:
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+
+            await reset_db_pool()
+        except Exception as reset_err:
+            logger.debug(f"ensure_single_user_rbac_seed_if_needed: reset_db_pool skipped: {reset_err}")
+        reset_settings()
+        settings = get_settings()
+
+    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
     if settings.AUTH_MODE != "single_user":
-        return
+        if not test_mode:
+            return
+        logger.debug(
+            "RBAC seed forced in TEST_MODE despite AUTH_MODE=%s", settings.AUTH_MODE
+        )
     try:
         # Acquire a connection via pool/transaction abstraction
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -526,6 +558,20 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         async with pool.transaction() as conn:
             # Postgres path: asyncpg connections expose fetch(), SQLite shims do not
             if hasattr(conn, "fetch"):
+                single_user_id = settings.SINGLE_USER_FIXED_ID
+                # Ensure the single-user account row exists so FK relations succeed
+                await conn.execute(
+                    """
+                    INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+                    VALUES ($1, $2, $3, $4, TRUE, TRUE, 'admin')
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    single_user_id, 'single_user', 'single_user@example.local', '',
+                )
+                await conn.execute(
+                    "UPDATE users SET role='admin', is_active=TRUE, is_verified=TRUE WHERE id = $1",
+                    single_user_id,
+                )
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS roles (
                         id SERIAL PRIMARY KEY,
@@ -558,17 +604,19 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     ('media.read','Read media','media'),
                     ('media.create','Create media','media'),
                     ('users.manage_roles','Manage user roles','users'),
+                    ('modules.read','Read MCP modules','modules'),
+                    ('tools.execute:*','Execute any MCP tool','tools'),
                 ):
                     await conn.execute(
                         "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
                         _name, _desc, _cat,
                     )
                 role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
-                perm_rows = await conn.fetch("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles')")
+                perm_rows = await conn.fetch("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*')")
                 role_id = {r['name']: r['id'] for r in role_rows}
                 perm_id = {p['name']: p['id'] for p in perm_rows}
                 # Grant user baseline perms
-                for pname in ('media.read','media.create'):
+                for pname in ('media.read','media.create','modules.read'):
                     if pname in perm_id and 'user' in role_id:
                         await conn.execute(
                             "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
@@ -582,12 +630,45 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     )
                 # Admin elevated
                 if 'admin' in role_id:
-                    for pname in ('media.read','media.create','users.manage_roles'):
+                    for pname in ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*'):
                         if pname in perm_id:
                             await conn.execute(
                                 "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
                                 role_id['admin'], perm_id[pname]
                             )
+
+                # Ensure single-user is assigned the admin role
+                try:
+                    single_user_id = settings.SINGLE_USER_FIXED_ID
+                    if 'admin' in role_id:
+                        await conn.execute(
+                            "INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                            single_user_id, role_id['admin']
+                        )
+
+                    # Seed deterministic API key for test contexts if missing
+                    test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                    if test_api_key:
+                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+                        api_manager = APIKeyManager(db_pool=pool)
+                        key_hash = api_manager.hash_api_key(test_api_key)
+                        key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
+                        await conn.execute(
+                            """
+                            INSERT INTO api_keys (user_id, key_hash, key_prefix, name, description, scope, status, is_virtual)
+                            VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE)
+                            ON CONFLICT (key_hash) DO NOTHING
+                            """,
+                            single_user_id,
+                            key_hash,
+                            key_prefix,
+                            "single-user test key",
+                            "Deterministic API key for test automation",
+                            "admin",
+                        )
+                except Exception as role_assign_err:
+                    logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
                 return
 
         # SQLite path (pool adapters expose .execute returning cursor-like)
@@ -620,23 +701,37 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             except Exception:
                 pass
 
+            single_user_id = settings.SINGLE_USER_FIXED_ID
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO users (id, username, email, password_hash, is_active, is_verified, role)
+                VALUES (?, ?, ?, ?, 1, 1, 'admin')
+                """,
+                (single_user_id, 'single_user', 'single_user@example.local', ''),
+            )
+            await conn.execute(
+                "UPDATE users SET role='admin', is_active=1, is_verified=1 WHERE id = ?",
+                (single_user_id,),
+            )
             await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('admin','Administrator',1)")
             await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('user','Standard User',1)")
             await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('viewer','Read-only User',1)")
             await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.read','Read media','media')")
             await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.create','Create media','media')")
             await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('users.manage_roles','Manage user roles','users')")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('modules.read','Read MCP modules','modules')")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('tools.execute:*','Execute any MCP tool','tools')")
 
             # Map role names → ids
             cur = await conn.execute("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
             rows = await cur.fetchall()
             role_id = {r[1]: r[0] for r in rows}
-            cur = await conn.execute("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles')")
+            cur = await conn.execute("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*')")
             rows = await cur.fetchall()
             perm_id = {r[1]: r[0] for r in rows}
 
             # Baselines
-            for pname in ('media.read','media.create'):
+            for pname in ('media.read','media.create','modules.read'):
                 if pname in perm_id and 'user' in role_id:
                     await conn.execute(
                         "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
@@ -648,12 +743,38 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     (role_id['viewer'], perm_id['media.read'])
                 )
             if 'admin' in role_id:
-                for pname in ('media.read','media.create','users.manage_roles'):
+                for pname in ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*'):
                     if pname in perm_id:
                         await conn.execute(
                             "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
                             (role_id['admin'], perm_id[pname])
                         )
+            if 'admin' in role_id:
+                try:
+                    single_user_id = settings.SINGLE_USER_FIXED_ID
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
+                        (single_user_id, role_id['admin'])
+                    )
+
+                    test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                    if test_api_key:
+                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+                        api_manager = APIKeyManager()
+                        key_hash = api_manager.hash_api_key(test_api_key)
+                        key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
+                        await conn.execute(
+                            """
+                            INSERT OR IGNORE INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description,
+                                scope, status, is_virtual
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1)
+                            """,
+                            (single_user_id, key_hash, key_prefix, "single-user test key", "Deterministic API key for test automation", "admin")
+                        )
+                except Exception as role_assign_err:
+                    logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
             # Commit if adapter requires it
             try:
                 await conn.commit()  # type: ignore[attr-defined]

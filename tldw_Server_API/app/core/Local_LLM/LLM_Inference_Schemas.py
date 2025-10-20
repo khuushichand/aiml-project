@@ -26,8 +26,8 @@ class HuggingFaceConfig(BaseHandlerConfig):
 
 
 class LlamafileConfig(BaseHandlerConfig):
-    llamafile_dir: DirectoryPath = Path("models/llamafile_exec") # Directory to store/find llamafile executable
-    models_dir: DirectoryPath = Path("models/llamafile_models") # Directory to store llamafile models
+    llamafile_dir: Path = Path("models/llamafile_exec") # Directory to store/find llamafile executable
+    models_dir: Path = Path("models/llamafile_models") # Directory to store llamafile models
     default_port: int = 8080
     default_host: str = "127.0.0.1"
     allow_unvalidated_args: bool = False

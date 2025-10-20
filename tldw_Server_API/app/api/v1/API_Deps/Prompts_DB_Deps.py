@@ -11,6 +11,7 @@ from fastapi import Request
 # Third-party imports
 from fastapi import Depends, HTTPException, status
 from cachetools import LRUCache # Assuming cachetools is available
+from loguru import logger
 
 #
 # Local Imports
