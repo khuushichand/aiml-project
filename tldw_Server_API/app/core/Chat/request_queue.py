@@ -109,6 +109,23 @@ class RequestQueue:
         self._workers.clear()
         
         logger.info("Stopped queue workers")
+
+    def is_running(self) -> bool:
+        """Return True if the queue has active worker tasks processing items."""
+        if not self._running:
+            return False
+        alive = False
+        for worker in list(self._workers):
+            try:
+                if not worker.done():
+                    alive = True
+                    break
+            except Exception:
+                alive = True
+                break
+        if not alive:
+            self._running = False
+        return alive
     
     async def _worker(self, worker_id: str):
         """

@@ -238,6 +238,34 @@ async def _shutdown_all() -> None:
     except Exception as e:
         logger.debug(f"Personalization consolidation cleanup skipped: {e}")
 
+    # Chat request queue workers
+    try:
+        import tldw_Server_API.app.core.Chat.request_queue as _rq_mod
+
+        queue = _rq_mod.get_request_queue()
+        if queue is not None and hasattr(queue, "stop"):
+            try:
+                running = False
+                try:
+                    is_running = getattr(queue, "is_running", None)
+                    if callable(is_running):
+                        running = bool(is_running())
+                    elif hasattr(queue, "_running"):
+                        running = bool(getattr(queue, "_running"))
+                    else:
+                        running = True
+                except Exception:
+                    running = True
+                if running:
+                    await queue.stop()
+            finally:
+                try:
+                    _rq_mod._request_queue = None  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug(f"Chat request queue cleanup skipped: {e}")
+
     # Cancel any lingering async tasks on this loop
     await _cancel_pending_tasks()
 

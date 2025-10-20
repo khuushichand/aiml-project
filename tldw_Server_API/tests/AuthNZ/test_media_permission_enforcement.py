@@ -4,7 +4,8 @@ import hmac
 import asyncio
 
 import asyncpg
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 
 
@@ -51,6 +52,46 @@ def test_media_add_requires_media_create(isolated_test_environment):
                 "perm test",
                 "read",
             )
+            # Ensure RBAC tables exist for permission overrides (tests run against ephemeral DB)
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS permissions (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) UNIQUE NOT NULL,
+                    description TEXT,
+                    category VARCHAR(100)
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_permissions (
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                    granted BOOLEAN NOT NULL DEFAULT TRUE,
+                    expires_at TIMESTAMP,
+                    PRIMARY KEY (user_id, permission_id)
+                )
+                """
+            )
+            await conn.execute(
+                """
+                INSERT INTO permissions (name, description, category)
+                VALUES ('media.create', 'Create media', 'media')
+                ON CONFLICT (name) DO NOTHING
+                """
+            )
+            await conn.execute(
+                """
+                INSERT INTO user_permissions (user_id, permission_id, granted)
+                SELECT $1, id, FALSE
+                FROM permissions
+                WHERE name = 'media.create'
+                ON CONFLICT (user_id, permission_id)
+                DO UPDATE SET granted = EXCLUDED.granted
+                """,
+                user_id,
+            )
             return user_id, full_key
         finally:
             await conn.close()
@@ -59,5 +100,27 @@ def test_media_add_requires_media_create(isolated_test_environment):
 
     # Attempt to call media add without media.create permission -> expect 403
     headers = {"X-API-KEY": api_key}
-    r = client.post("/api/v1/media/add", headers=headers, json={})
-    assert r.status_code == 403, r.text
+    previous_mode = os.environ.get("AUTH_MODE")
+    config = AuthDatabaseConfig()
+    try:
+        os.environ["AUTH_MODE"] = "multi_user"
+        reset_settings()
+        config.settings = get_settings()
+        config.reset()
+        assert get_settings().AUTH_MODE == "multi_user"
+        # Provide minimal valid payload so request passes validation and hits permission check
+        payload = {
+            "media_type": "video",
+            "urls": "https://example.com/test.mp4",
+        }
+        # Endpoint expects multipart/form-data, so submit via form fields
+        r = client.post("/api/v1/media/add", headers=headers, data=payload)
+        assert r.status_code == 403, r.text
+    finally:
+        if previous_mode is None:
+            os.environ.pop("AUTH_MODE", None)
+        else:
+            os.environ["AUTH_MODE"] = previous_mode
+        reset_settings()
+        config.settings = get_settings()
+        config.reset()

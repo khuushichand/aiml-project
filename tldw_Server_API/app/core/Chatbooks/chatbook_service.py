@@ -151,6 +151,36 @@ class ChatbookService:
         
         for directory in [self.export_dir, self.import_dir, self.temp_dir]:
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+        # Jobs backend selection (domain override > module default), legacy flag supported
+        backend = (os.getenv("CHATBOOKS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
+        legacy_ps_flag = str(os.getenv("TLDW_USE_PROMPT_STUDIO_QUEUE", "false")).lower() in {"1", "true", "yes"}
+        if not backend:
+            backend = "prompt_studio" if legacy_ps_flag else "core"
+            if legacy_ps_flag:
+                logger.warning("TLDW_USE_PROMPT_STUDIO_QUEUE is deprecated; use CHATBOOKS_JOBS_BACKEND=prompt_studio")
+        self._jobs_backend = backend if backend in {"prompt_studio", "core"} else "core"
+
+        # Optional Prompt Studio JobManager adapter
+        self._ps_job_adapter = None
+        self._jobs_db_path: Optional[Path] = None
+        if self._jobs_backend == "prompt_studio":
+            try:
+                from .ps_job_adapter import ChatbooksPSJobAdapter
+                self._ps_job_adapter = ChatbooksPSJobAdapter()
+                logger.info("Chatbooks: Prompt Studio JobManager adapter enabled (backend=prompt_studio)")
+            except Exception as exc:
+                logger.warning(
+                    f"Chatbooks: Failed to initialize PS Job adapter, falling back to core backend: {exc}"
+                )
+                self._jobs_backend = "core"
+                self._ps_job_adapter = None
+        if self._jobs_backend == "core":
+            try:
+                from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
+                self._jobs_db_path = ensure_jobs_tables()
+            except Exception as exc:
+                logger.debug(f"Jobs core backend migrations skipped: {exc}")
         
         # Initialize job tracking tables
         self._init_job_tables()
@@ -314,34 +344,6 @@ class ChatbookService:
             "image/gif": ".gif"
         }
         return mapping.get(mime_type.lower(), ".bin")
-
-        # Jobs backend selection (domain override > module default), legacy flag supported
-        backend = (os.getenv("CHATBOOKS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
-        legacy_ps_flag = str(os.getenv("TLDW_USE_PROMPT_STUDIO_QUEUE", "false")).lower() in {"1", "true", "yes"}
-        if not backend:
-            backend = "prompt_studio" if legacy_ps_flag else "core"
-            if legacy_ps_flag:
-                logger.warning("TLDW_USE_PROMPT_STUDIO_QUEUE is deprecated; use CHATBOOKS_JOBS_BACKEND=prompt_studio")
-        self._jobs_backend = backend if backend in {"prompt_studio", "core"} else "core"
-
-        # Optional Prompt Studio JobManager adapter
-        self._ps_job_adapter = None
-        if self._jobs_backend == "prompt_studio":
-            try:
-                from .ps_job_adapter import ChatbooksPSJobAdapter
-                self._ps_job_adapter = ChatbooksPSJobAdapter()
-                logger.info("Chatbooks: Prompt Studio JobManager adapter enabled (backend=prompt_studio)")
-            except Exception as e:
-                logger.warning(f"Chatbooks: Failed to initialize PS Job adapter, falling back to core backend: {e}")
-                self._jobs_backend = "core"
-                self._ps_job_adapter = None
-        else:
-            # Core backend: ensure Jobs schema exists (future use)
-            try:
-                from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
-                self._jobs_db_path = ensure_jobs_tables()
-            except Exception as e:
-                logger.debug(f"Jobs core backend migrations skipped: {e}")
     
     def _fetch_results(self, cursor_or_list):
         """

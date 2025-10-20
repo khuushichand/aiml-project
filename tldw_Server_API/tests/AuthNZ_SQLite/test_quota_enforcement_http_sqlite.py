@@ -68,41 +68,40 @@ async def test_jwt_quota_enforced_for_chat_and_rag_sqlite(monkeypatch, tmp_path)
     )
 
     headers = {"X-API-KEY": os.environ['SINGLE_USER_API_KEY'], "Authorization": f"Bearer {token_chat}"}
-    client = TestClient(_app())
     body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}
 
-    r1 = client.post("/api/v1/chat/completions", headers=headers, json=body)
-    assert r1.status_code == 200, r1.text
-    r2 = client.post("/api/v1/chat/completions", headers=headers, json=body)
-    assert r2.status_code == 403
-
-    # Mint a virtual JWT for RAG search with max_calls=1
-    token_rag = svc.create_virtual_access_token(
-        user_id=1,
-        username="su",
-        role="user",
-        scope="any",
-        ttl_minutes=10,
-        additional_claims={
-            "allowed_endpoints": ["rag.search"],
-            "allowed_paths": ["/api/v1/rag/search"],
-            "max_calls": 1,
-        },
-    )
-    headers_rag = {"X-API-KEY": os.environ['SINGLE_USER_API_KEY'], "Authorization": f"Bearer {token_rag}"}
-    rag_body = {
-        "query": "hello",
-        "top_k": 1,
-        # Force FTS-only retrieval so the quota test avoids pulling vector models.
-        "search_mode": "fts",
-        "enable_generation": False,
-        "enable_reranking": False,
-        "enable_cache": False,
-    }
-    r1 = client.post("/api/v1/rag/search", headers=headers_rag, json=rag_body)
-    assert r1.status_code == 200, r1.text
-    r2 = client.post("/api/v1/rag/search", headers=headers_rag, json=rag_body)
-    assert r2.status_code == 403
+    with TestClient(_app()) as client:
+        r1 = client.post("/api/v1/chat/completions", headers=headers, json=body)
+        assert r1.status_code == 200, r1.text
+        r2 = client.post("/api/v1/chat/completions", headers=headers, json=body)
+        assert r2.status_code == 403
+        # Mint a virtual JWT for RAG search with max_calls=1
+        token_rag = svc.create_virtual_access_token(
+            user_id=1,
+            username="su",
+            role="user",
+            scope="any",
+            ttl_minutes=10,
+            additional_claims={
+                "allowed_endpoints": ["rag.search"],
+                "allowed_paths": ["/api/v1/rag/search"],
+                "max_calls": 1,
+            },
+        )
+        headers_rag = {"X-API-KEY": os.environ['SINGLE_USER_API_KEY'], "Authorization": f"Bearer {token_rag}"}
+        rag_body = {
+            "query": "hello",
+            "top_k": 1,
+            # Force FTS-only retrieval so the quota test avoids pulling vector models.
+            "search_mode": "fts",
+            "enable_generation": False,
+            "enable_reranking": False,
+            "enable_cache": False,
+        }
+        r1 = client.post("/api/v1/rag/search", headers=headers_rag, json=rag_body)
+        assert r1.status_code == 200, r1.text
+        r2 = client.post("/api/v1/rag/search", headers=headers_rag, json=rag_body)
+        assert r2.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -143,7 +142,6 @@ async def test_api_key_quota_enforced_for_rag_and_chat_sqlite(monkeypatch, tmp_p
         max_calls=1,
     )
     key = vk['key']
-    client = TestClient(_app())
     rag_body = {
         "query": "hello",
         "top_k": 1,
@@ -154,30 +152,31 @@ async def test_api_key_quota_enforced_for_rag_and_chat_sqlite(monkeypatch, tmp_p
         "enable_cache": False,
     }
     headers = {"X-API-KEY": key}
-    r1 = client.post("/api/v1/rag/search", headers=headers, json=rag_body)
-    assert r1.status_code == 200, r1.text
-    r2 = client.post("/api/v1/rag/search", headers=headers, json=rag_body)
-    assert r2.status_code == 403
+    with TestClient(_app()) as client:
+        r1 = client.post("/api/v1/rag/search", headers=headers, json=rag_body)
+        assert r1.status_code == 200, r1.text
+        r2 = client.post("/api/v1/rag/search", headers=headers, json=rag_body)
+        assert r2.status_code == 403
 
-    # Chat with API key: monkeypatch orchestrator and enforce max_calls=1
-    import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
-    monkeypatch.setattr(chat_endpoint, 'perform_chat_api_call', lambda **kwargs: _chat_stub_response())
-    os.environ['OPENAI_API_KEY'] = 'test'
-    import tldw_Server_API.app.api.v1.schemas.chat_request_schemas as schema_chat
-    chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), 'openai': 'test'}
-    schema_chat.API_KEYS = {**(schema_chat.API_KEYS or {}), 'openai': 'test'}
-    vk2 = await mgr.create_virtual_key(
-        user_id=int(user_id),
-        name="vk-chat",
-        allowed_endpoints=["chat.completions"],
-        allowed_paths=["/api/v1/chat/completions"],
-        allowed_methods=["POST"],
-        max_calls=1,
-    )
-    key2 = vk2['key']
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}
-    headers2 = {"X-API-KEY": key2}
-    r1 = client.post("/api/v1/chat/completions", headers=headers2, json=body)
-    assert r1.status_code == 200, r1.text
-    r2 = client.post("/api/v1/chat/completions", headers=headers2, json=body)
-    assert r2.status_code == 403
+        # Chat with API key: monkeypatch orchestrator and enforce max_calls=1
+        import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
+        monkeypatch.setattr(chat_endpoint, 'perform_chat_api_call', lambda **kwargs: _chat_stub_response())
+        os.environ['OPENAI_API_KEY'] = 'test'
+        import tldw_Server_API.app.api.v1.schemas.chat_request_schemas as schema_chat
+        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), 'openai': 'test'}
+        schema_chat.API_KEYS = {**(schema_chat.API_KEYS or {}), 'openai': 'test'}
+        vk2 = await mgr.create_virtual_key(
+            user_id=int(user_id),
+            name="vk-chat",
+            allowed_endpoints=["chat.completions"],
+            allowed_paths=["/api/v1/chat/completions"],
+            allowed_methods=["POST"],
+            max_calls=1,
+        )
+        key2 = vk2['key']
+        body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}
+        headers2 = {"X-API-KEY": key2}
+        r1 = client.post("/api/v1/chat/completions", headers=headers2, json=body)
+        assert r1.status_code == 200, r1.text
+        r2 = client.post("/api/v1/chat/completions", headers=headers2, json=body)
+        assert r2.status_code == 403

@@ -55,6 +55,29 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
+def queue_is_active(queue: Any) -> bool:
+    """Return True when the request queue is running and able to process work."""
+    try:
+        status = getattr(queue, "is_running")
+    except AttributeError:
+        status = None
+    if callable(status):
+        try:
+            result = status()
+            if result is not None:
+                return bool(result)
+        except Exception:
+            pass
+    elif status is not None:
+        return bool(status)
+
+    fallback_state = getattr(queue, "_running", None)
+    if fallback_state is not None:
+        return bool(fallback_state)
+    # Assume truthy for lightweight test stubs that do not expose state
+    return True
+
+
 def parse_provider_model_for_metrics(
     request_data: Any,
     default_provider: str,
@@ -570,13 +593,19 @@ async def execute_streaming_call(
     llm_start_time = time.time()
     raw_stream_iter: Optional[AsyncIterator[str] | Iterator[str]] = None
     queue_for_exec = None
+    queue_enabled = False
     try:
         try:
             queue_for_exec = get_request_queue()
         except Exception:
             queue_for_exec = None
+        queue_enabled = (
+            queue_execution_enabled
+            and queue_for_exec is not None
+            and queue_is_active(queue_for_exec)
+        )
 
-        if queue_execution_enabled and queue_for_exec is not None:
+        if queue_enabled:
             # Submit streaming job to the queue and bridge chunks via channel
             stream_channel: asyncio.Queue = asyncio.Queue(maxsize=100)
             est_tokens_for_queue = max(1, len(request_json) // 4)
@@ -672,7 +701,7 @@ async def execute_streaming_call(
             success=False,
             error_type=type(e).__name__,
         )
-        if provider_manager and not (queue_execution_enabled and queue_for_exec is not None):
+        if provider_manager and not queue_enabled:
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
             name_lower_e = type(e).__name__.lower()
@@ -978,13 +1007,19 @@ async def execute_non_stream_call(
     llm_start_time = time.time()
     llm_response = None
     metrics_recorded = False
+    queue_enabled = False
     try:
         queue_for_exec = None
         try:
             queue_for_exec = get_request_queue()
         except Exception:
             queue_for_exec = None
-        if queue_execution_enabled and queue_for_exec is not None:
+        queue_enabled = (
+            queue_execution_enabled
+            and queue_for_exec is not None
+            and queue_is_active(queue_for_exec)
+        )
+        if queue_enabled:
             est_tokens_for_queue = max(1, len(request_json) // 4)
             def _queued_processor():
                 local_start = time.time()

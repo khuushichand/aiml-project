@@ -138,9 +138,10 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     estimate_tokens_from_json,
     moderate_input_messages,
     build_context_and_messages,
-    apply_prompt_templating,
-    execute_streaming_call,
-    execute_non_stream_call,
+   apply_prompt_templating,
+   execute_streaming_call,
+   execute_non_stream_call,
+    queue_is_active,
 )
 import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
@@ -987,6 +988,8 @@ async def create_chat_completion(
                     queue = queue_candidate
             else:
                 queue = queue_candidate
+        if queue is not None and not queue_is_active(queue):
+            queue = None
         if queue is not None and not QUEUED_EXECUTION:
             try:
                 # Estimate tokens for queue gating (reuse serialized JSON size)
