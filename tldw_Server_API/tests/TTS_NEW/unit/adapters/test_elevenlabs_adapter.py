@@ -48,12 +48,14 @@ class TestElevenLabsAdapterInitialization:
         assert adapter.api_key == "test-elevenlabs-key"
     
     @pytest.mark.unit
-    def test_adapter_initialization_without_api_key(self):
+    def test_adapter_initialization_without_api_key(self, monkeypatch):
         """Test adapter initialization without API key."""
         config = {
             "base_url": "https://api.elevenlabs.io/v1"
         }
-        
+
+        monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+
         with pytest.raises(TTSProviderNotConfiguredError):
             ElevenLabsTTSAdapter(config)
     

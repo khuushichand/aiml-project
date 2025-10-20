@@ -297,7 +297,7 @@ class TestAdapterRegistry:
         """Test registry initialization"""
         registry = TTSAdapterRegistry({"test_config": "value"})
         assert registry.config["test_config"] == "value"
-        assert len(registry._adapter_specs) == 7  # Default adapters (now includes VibeVoice and ElevenLabs)
+        assert len(registry._adapter_specs) == 8  # Default adapters (includes NeuTTS, VibeVoice, ElevenLabs)
     
     async def test_register_custom_adapter(self):
         """Test registering a custom adapter"""

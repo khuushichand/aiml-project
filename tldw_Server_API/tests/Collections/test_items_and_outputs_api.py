@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import hashlib
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from importlib import import_module, reload
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 
 
@@ -20,16 +22,30 @@ def client_with_user(monkeypatch, tmp_path):
 
     # Force per-user DB dir into project Databases/ for sandbox write allowance
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
+    shutil.rmtree(base_dir, ignore_errors=True)
     base_dir.mkdir(parents=True, exist_ok=True)
+    prev_base_dir = settings.get("USER_DB_BASE_DIR")
+    settings.USER_DB_BASE_DIR = str(base_dir)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
 
-    # Import app after env vars to honor minimal test mode
-    mod = import_module("tldw_Server_API.app.main")
-    app = getattr(mod, "app")
-    app.dependency_overrides[get_request_user] = override_user
-    with TestClient(app) as client:
-        yield client
-    app.dependency_overrides.clear()
+    app = None
+    try:
+        # Import app after env vars to honor minimal test mode
+        mod = import_module("tldw_Server_API.app.main")
+        app = getattr(mod, "app")
+        app.dependency_overrides[get_request_user] = override_user
+        with TestClient(app) as client:
+            yield client
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        if prev_base_dir is not None:
+            settings.USER_DB_BASE_DIR = prev_base_dir
+        else:
+            try:
+                del settings.USER_DB_BASE_DIR
+            except AttributeError:
+                pass
 
 
 def test_items_endpoint_minimal(client_with_user):

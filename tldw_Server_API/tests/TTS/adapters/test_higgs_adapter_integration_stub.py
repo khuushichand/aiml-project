@@ -87,10 +87,11 @@ async def test_voice_reference_integration_message_injection():
                 "tldw_Server_API.app.core.TTS.streaming_audio_writer.StreamingAudioWriter.write_chunk",
                 side_effect=lambda *a, **k: b"chunk",
             ):
+                minimal_wav = b"RIFF" + b"\x00" * 4 + b"WAVEfmt " + b"\x00" * 32
                 request = TTSRequest(
                     text="Hello world",
                     voice="narrator",
-                    voice_reference=b"fakebytes",
+                    voice_reference=minimal_wav,
                     format=AudioFormat.WAV,
                     stream=True,
                 )

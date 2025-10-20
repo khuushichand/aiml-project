@@ -86,7 +86,7 @@ class ContentItemRow:
     word_count: Optional[int]
     published_at: Optional[str]
     status: Optional[str]
-    favorite: int
+    favorite: bool
     metadata_json: Optional[str]
     media_id: Optional[int]
     job_id: Optional[int]
@@ -441,7 +441,7 @@ class CollectionsDatabase:
             word_count=(int(row.get("word_count")) if row.get("word_count") is not None else None),
             published_at=row.get("published_at"),
             status=row.get("status"),
-            favorite=int(row.get("favorite", 0) or 0),
+            favorite=bool(row.get("favorite", 0)),
             metadata_json=row.get("metadata_json"),
             media_id=(int(row.get("media_id")) if row.get("media_id") is not None else None),
             job_id=(int(row.get("job_id")) if row.get("job_id") is not None else None),

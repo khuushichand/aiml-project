@@ -14,6 +14,8 @@ import pytest
 from fastapi import status
 from unittest.mock import patch, AsyncMock, MagicMock
 
+from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
+
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 # ========================================================================
@@ -221,6 +223,8 @@ class TestTTSStreamingEndpoint:
         """Streaming quota exceeded should ideally map to HTTP 402."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
 
+        audio_endpoints.limiter._storage.reset()
+
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = TTSQuotaExceededError("Character quota exceeded")
 
@@ -392,7 +396,9 @@ class TestErrorHandling:
     async def test_rate_limit_error_handling(self, test_client, auth_headers):
         """Test handling of rate limit errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import rate_limit_error
-        
+
+        audio_endpoints.limiter._storage.reset()
+
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = rate_limit_error("OpenAITTS", retry_after=60)
             
@@ -413,7 +419,9 @@ class TestErrorHandling:
     async def test_quota_exceeded_error(self, test_client, auth_headers):
         """Test handling of quota exceeded errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
-        
+
+        audio_endpoints.limiter._storage.reset()
+
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = TTSQuotaExceededError("Character quota exceeded")
             

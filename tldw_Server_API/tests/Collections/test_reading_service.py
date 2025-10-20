@@ -1,8 +1,10 @@
 import pytest
+import shutil
 from pathlib import Path
 
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.config import settings
 
 TEST_USER_ID = 456
 
@@ -10,10 +12,22 @@ TEST_USER_ID = 456
 @pytest.fixture()
 def reading_env(monkeypatch):
     base_dir = Path.cwd() / "Databases" / "test_reading_service"
+    shutil.rmtree(base_dir, ignore_errors=True)
     base_dir.mkdir(parents=True, exist_ok=True)
+    prev_base_dir = settings.get("USER_DB_BASE_DIR")
+    settings.USER_DB_BASE_DIR = str(base_dir)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("TEST_MODE", "1")
-    return base_dir
+    try:
+        yield base_dir
+    finally:
+        if prev_base_dir is not None:
+            settings.USER_DB_BASE_DIR = prev_base_dir
+        else:
+            try:
+                del settings.USER_DB_BASE_DIR
+            except AttributeError:
+                pass
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,8 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSModelNotFoundError,
     TTSModelLoadError,
-    TTSInsufficientMemoryError
+    TTSInsufficientMemoryError,
+    TTSProviderNotConfiguredError,
 )
 #
 #######################################################################################################################
@@ -247,8 +248,9 @@ class TestHiggsAdapterMock:
             format=AudioFormat.WAV
         )
         
-        with pytest.raises(Exception):  # Should raise provider not configured
-            await adapter.generate(request)
+        with patch.object(adapter, "ensure_initialized", new=AsyncMock(return_value=False)):
+            with pytest.raises(TTSProviderNotConfiguredError):
+                await adapter.generate(request)
     
     async def test_voice_cloning_with_reference(self):
         """Test voice cloning with reference audio"""

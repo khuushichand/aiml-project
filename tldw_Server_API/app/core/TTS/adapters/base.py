@@ -381,9 +381,14 @@ class TTSAdapter(ABC):
                 audio_data = normalizer.normalize(audio_data, target_dtype=np.int16)
             
             # Write and finalize
-            writer.write_chunk(audio_data)
-            final_bytes = writer.write_chunk(finalize=True)
-            return final_bytes
+            chunk_bytes = writer.write_chunk(audio_data) or b""
+            final_bytes = writer.write_chunk(finalize=True) or b""
+
+            if target_format == AudioFormat.PCM:
+                # PCM returns raw payload during the initial write
+                return chunk_bytes
+
+            return chunk_bytes + final_bytes
         finally:
             writer.close()
     

@@ -369,12 +369,16 @@ class OpenAITTSAdapter(OpenAIAdapter):
         mapped_cfg: Dict[str, Any] = {}
         if "api_key" in cfg:
             mapped_cfg["openai_api_key"] = cfg.get("api_key")
+        if "openai_api_key" in cfg and "openai_api_key" not in mapped_cfg:
+            mapped_cfg["openai_api_key"] = cfg.get("openai_api_key")
         if "base_url" in cfg:
             # The base class expects the speech endpoint URL
             base = cfg.get("base_url")
             if base and base.endswith("/v1"):
                 base = base + "/audio/speech"
             mapped_cfg["openai_base_url"] = base or cfg.get("openai_base_url")
+        elif "openai_base_url" in cfg:
+            mapped_cfg["openai_base_url"] = cfg.get("openai_base_url")
         if "timeout" in cfg:
             mapped_cfg["timeout"] = cfg.get("timeout")
 

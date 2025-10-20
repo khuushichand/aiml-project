@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path as PathlibPath
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path
+from fastapi import APIRouter, Body, Depends, HTTPException, Path as FastAPIPath
 from pydantic import BaseModel
 from loguru import logger
 
@@ -245,7 +245,7 @@ async def create_output(
 
 @router.get("/{output_id}", response_model=OutputArtifact, summary="Get output metadata")
 async def get_output(
-    output_id: int = Path(..., ge=1),
+    output_id: int = FastAPIPath(..., ge=1),
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
@@ -265,7 +265,7 @@ async def get_output(
 
 @router.get("/{output_id}/download", summary="Download output artifact")
 async def download_output(
-    output_id: int = Path(..., ge=1),
+    output_id: int = FastAPIPath(..., ge=1),
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
@@ -274,7 +274,7 @@ async def download_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
 
-    path = Path(row.storage_path)
+    path = PathlibPath(row.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
 
@@ -302,7 +302,7 @@ async def download_output_by_name(
         row = cdb.get_output_artifact_by_title(title, format_=(format if format else None))
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    path = Path(row.storage_path)
+    path = PathlibPath(row.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
     media_types = {
@@ -320,7 +320,7 @@ async def download_output_by_name(
 
 @router.head("/{output_id}/download", summary="Check output artifact availability")
 async def head_download_output(
-    output_id: int = Path(..., ge=1),
+    output_id: int = FastAPIPath(..., ge=1),
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
@@ -328,7 +328,7 @@ async def head_download_output(
         row = cdb.get_output_artifact(output_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    path = Path(row.storage_path)
+    path = PathlibPath(row.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
     # Return headers; FastAPI will send no body
@@ -345,7 +345,7 @@ async def head_download_output(
 
 @router.delete("/{output_id}", summary="Delete output metadata (and file)")
 async def delete_output(
-    output_id: int = Path(..., ge=1),
+    output_id: int = FastAPIPath(..., ge=1),
     hard: bool = False,
     delete_file: bool = False,
     current_user: User = Depends(get_request_user),
@@ -356,7 +356,7 @@ async def delete_output(
     if hard and delete_file:
         try:
             row = cdb.get_output_artifact(output_id)
-            p = Path(row.storage_path)
+            p = PathlibPath(row.storage_path)
             if p.exists():
                 p.unlink()
                 fs_deleted = True
@@ -378,7 +378,7 @@ def _sanitize_title_for_filename(title: str) -> str:
 
 @router.patch("/{output_id}", response_model=OutputArtifact, summary="Rename/change format/update metadata for an output")
 async def update_output(
-    output_id: int = Path(..., ge=1),
+    output_id: int = FastAPIPath(..., ge=1),
     payload: OutputUpdateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
@@ -393,7 +393,7 @@ async def update_output(
     new_format: str | None = None
     if payload.title and payload.title != row.title:
         # Attempt to rename the file keeping timestamp suffix if present
-        p = Path(row.storage_path)
+        p = PathlibPath(row.storage_path)
         ext = p.suffix
         stem = p.stem
         m = re.search(r"_(\d{8}_\d{6})$", stem)
@@ -415,7 +415,7 @@ async def update_output(
     if payload.format and payload.format != row.format:
         if row.format not in ("md", "html") or payload.format not in ("md", "html"):
             raise HTTPException(status_code=422, detail="unsupported_format_change")
-        source_path = Path(new_path or row.storage_path)
+        source_path = PathlibPath(new_path or row.storage_path)
         try:
             src_text = source_path.read_text(encoding="utf-8")
         except Exception:
@@ -530,7 +530,7 @@ async def purge_outputs(
     if payload.delete_files and ids:
         for rid, pth in list(paths.items()):
             try:
-                p = Path(pth)
+                p = PathlibPath(pth)
                 if p.exists():
                     p.unlink()
                     files_deleted += 1

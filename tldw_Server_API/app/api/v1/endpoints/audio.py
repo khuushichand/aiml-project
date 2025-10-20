@@ -206,71 +206,84 @@ async def create_speech(
             detail=f"Unsupported response_format: {request_data.response_format}. Supported formats are: {', '.join(content_type_map.keys())}",
         )
 
-    # 4. Streaming Logic (using V2 service)
-    async def audio_chunk_generator():
-        try:
-            # V2 service uses generate_speech with different parameters
-            # The service will handle additional validation internally
-            async for audio_chunk_bytes in tts_service.generate_speech(
-                request_data, 
-                provider=None,  # Let service determine provider from model
-                fallback=True   # Enable fallback to other providers
-            ):
-                if await request.is_disconnected():
-                    logger.info("Client disconnected, stopping audio generation.")
-                    break
-                yield audio_chunk_bytes
-        except TTSValidationError as e:
-            logger.warning(f"TTS validation error during streaming: {e}")
-            # Map validation failures to 400 for both stream and non-stream
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
-        except HTTPException: # Re-raise HTTPExceptions directly
-            raise
-        except TTSProviderNotConfiguredError as e:
-            logger.error(f"TTS provider not configured: {e}")
+    def _raise_for_tts_error(exc: Exception) -> None:
+        if isinstance(exc, TTSValidationError):
+            logger.warning(f"TTS validation error: {exc}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        if isinstance(exc, TTSProviderNotConfiguredError):
+            logger.error(f"TTS provider not configured: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"TTS service unavailable: {str(e)}"
+                detail=f"TTS service unavailable: {str(exc)}"
             )
-        except TTSAuthenticationError as e:
-            logger.error(f"TTS authentication error: {e}")
+        if isinstance(exc, TTSAuthenticationError):
+            logger.error(f"TTS authentication error: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="TTS provider authentication failed"
             )
-        except TTSRateLimitError as e:
-            logger.warning(f"TTS rate limit exceeded: {e}")
+        if isinstance(exc, TTSRateLimitError):
+            logger.warning(f"TTS rate limit exceeded: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="TTS provider rate limit exceeded. Please try again later."
             )
-        except TTSQuotaExceededError as e:
-            logger.warning(f"TTS quota exceeded: {e}")
+        if isinstance(exc, TTSQuotaExceededError):
+            logger.warning(f"TTS quota exceeded: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="TTS quota exceeded. Please review your plan or quota."
             )
-        except TTSError as e:
-            # Handle other TTS-specific errors
-            logger.error(f"TTS error during streaming: {e}")
+        if isinstance(exc, TTSError):
+            logger.error(f"TTS error: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"TTS error: {str(e)}"
+                detail=f"TTS error: {str(exc)}"
             )
-        except Exception as e:
-            logger.error(f"Unexpected error during audio streaming: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred during audio generation"
-            )
+        logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred during audio generation"
+        )
+
+    speech_iter = tts_service.generate_speech(
+        request_data,
+        provider=None,
+        fallback=True,
+    )
+
+    async def _pull_first_chunk() -> bytes:
+        try:
+            return await speech_iter.__anext__()
+        except StopAsyncIteration:
+            return b""
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_for_tts_error(exc)
+
+    async def _stream_chunks(initial_chunk: bytes):
+        try:
+            if initial_chunk:
+                if await request.is_disconnected():
+                    logger.info("Client disconnected before streaming could start.")
+                    return
+                yield initial_chunk
+            async for chunk in speech_iter:
+                if await request.is_disconnected():
+                    logger.info("Client disconnected, stopping audio generation.")
+                    break
+                yield chunk
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_for_tts_error(exc)
 
 
     if request_data.stream:
+        first_chunk = await _pull_first_chunk()
         return StreamingResponse(
-            audio_chunk_generator(),
+            _stream_chunks(first_chunk),
             media_type=content_type,
             headers={
                 "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
@@ -278,72 +291,37 @@ async def create_speech(
                 "Cache-Control": "no-cache",
             },
         )
+
     if not is_multi_user_mode():
-        # Non-streaming: Collect all chunks and send as a single response
+        first_chunk = await _pull_first_chunk()
         all_audio_bytes = b""
+        if first_chunk:
+            all_audio_bytes += first_chunk
         try:
-            async for chunk in audio_chunk_generator():
+            async for chunk in speech_iter:
                 all_audio_bytes += chunk
-            # Remove any "final boundary" placeholder if it was added by the dummy service
-            all_audio_bytes = all_audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
-
-            if not all_audio_bytes: # Handle case where generation yielded nothing
-                 logger.error("Non-streaming generation resulted in empty audio data.")
-                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Audio generation failed to produce data.")
-
-            return Response(
-                content=all_audio_bytes,
-                media_type=content_type,
-                headers={
-                    "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-                    "Cache-Control": "no-cache",
-                },
-            )
-        except TTSValidationError as e:
-            logger.warning(f"TTS validation error (non-streaming): {e}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
         except HTTPException:
             raise
-        except TTSProviderNotConfiguredError as e:
-            logger.error(f"TTS provider not configured: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"TTS service unavailable: {str(e)}"
-            )
-        except TTSAuthenticationError as e:
-            logger.error(f"TTS authentication error: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="TTS provider authentication failed"
-            )
-        except TTSRateLimitError as e:
-            logger.warning(f"TTS rate limit exceeded: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="TTS provider rate limit exceeded. Please try again later."
-            )
-        except TTSQuotaExceededError as e:
-            logger.warning(f"TTS quota exceeded: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="TTS quota exceeded. Please review your plan or quota."
-            )
-        except TTSError as e:
-            # Handle other TTS-specific errors
-            logger.error(f"TTS error during non-streaming generation: {e}")
+        except Exception as exc:
+            _raise_for_tts_error(exc)
+
+        all_audio_bytes = all_audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
+
+        if not all_audio_bytes:
+            logger.error("Non-streaming generation resulted in empty audio data.")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"TTS error: {str(e)}"
+                detail="Audio generation failed to produce data."
             )
-        except Exception as e:
-            logger.error(f"Unexpected error during non-streaming audio generation: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred during audio generation"
-            )
+
+        return Response(
+            content=all_audio_bytes,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
+                "Cache-Control": "no-cache",
+            },
+        )
 
 
 @router.post(
@@ -859,7 +837,12 @@ async def get_tts_health(
     
     try:
         # Get service status
-        status = tts_service.get_status()
+        status_data = tts_service.get_status()
+        if not isinstance(status_data, dict):
+            logger.warning("TTS service returned non-mapping status; falling back to defaults")
+            status = {}
+        else:
+            status = status_data
         
         # Get capabilities
         capabilities = await tts_service.get_capabilities()
