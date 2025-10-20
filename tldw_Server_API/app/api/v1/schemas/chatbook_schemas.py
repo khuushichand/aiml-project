@@ -175,6 +175,9 @@ class ChatbookManifestResponse(BaseModel):
     total_notes: int = 0
     total_characters: int = 0
     total_media_items: int = 0
+    total_prompts: int = 0
+    total_evaluations: int = 0
+    total_embeddings: int = 0
     total_world_books: int = 0
     total_dictionaries: int = 0
     total_documents: int = 0

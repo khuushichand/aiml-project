@@ -556,7 +556,7 @@ class DocumentGeneratorService:
     
     def _save_generated_document(
         self,
-        conversation_id: int,
+        conversation_id: Optional[int],
         document_type: DocumentType,
         title: str,
         content: str,
@@ -602,6 +602,43 @@ class DocumentGeneratorService:
         except Exception as e:
             logger.error(f"Failed to save generated document: {e}")
             raise CharactersRAGDBError(f"Failed to save document: {e}")
+
+    def create_manual_document(
+        self,
+        *,
+        title: str,
+        content: str,
+        document_type: DocumentType = DocumentType.BRIEFING,
+        metadata: Optional[Dict[str, Any]] = None,
+        provider: str = "watchlists",
+        model: str = "watchlists",
+        conversation_id: Optional[int] = None,
+        token_count: Optional[int] = None,
+    ) -> int:
+        """
+        Persist an externally generated document (e.g., watchlist output) into the user's Chatbook DB.
+        """
+        doc_id = self._save_generated_document(
+            conversation_id,
+            document_type,
+            title,
+            content,
+            provider,
+            model,
+            generation_time_ms=0,
+            token_count=token_count,
+        )
+        if metadata:
+            try:
+                with self.db.get_connection() as conn:
+                    conn.execute(
+                        "UPDATE generated_documents SET metadata = ? WHERE id = ?",
+                        (json.dumps(metadata), doc_id),
+                    )
+                    conn.commit()
+            except Exception as exc:
+                logger.warning(f"Failed to store metadata for generated document {doc_id}: {exc}")
+        return doc_id
     
     def get_generated_documents(
         self,

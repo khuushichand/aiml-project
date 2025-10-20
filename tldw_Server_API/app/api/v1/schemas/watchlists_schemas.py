@@ -160,3 +160,115 @@ class RunDetail(BaseModel):
     log_text: Optional[str] = None
     log_path: Optional[str] = None
     truncated: bool = False
+
+
+class ScrapedItem(BaseModel):
+    id: int
+    run_id: int
+    job_id: int
+    source_id: int
+    media_id: Optional[int] = None
+    media_uuid: Optional[str] = None
+    url: Optional[str] = None
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    published_at: Optional[str] = None
+    tags: List[str] = []
+    status: str
+    reviewed: bool
+    created_at: str
+
+
+class ScrapedItemsListResponse(BaseModel):
+    items: List[ScrapedItem]
+    total: int
+
+
+class ScrapedItemUpdateRequest(BaseModel):
+    reviewed: Optional[bool] = None
+    status: Optional[str] = Field(None, description="Optional status override (e.g., reviewed, ignored)")
+
+
+class WatchlistOutputEmailDelivery(BaseModel):
+    enabled: bool = True
+    recipients: Optional[List[str]] = Field(default=None, description="Explicit recipient emails; defaults to user email when empty")
+    subject: Optional[str] = Field(default=None, description="Overrides default subject (defaults to output title)")
+    attach_file: bool = Field(default=True, description="Attach rendered content as a file")
+    body_format: Literal["auto", "text", "html"] = Field(default="auto", description="Controls email body format")
+
+
+class WatchlistOutputChatbookDelivery(BaseModel):
+    enabled: bool = True
+    title: Optional[str] = Field(default=None, description="Override Chatbook document title")
+    description: Optional[str] = Field(default=None, description="Optional description stored alongside the document")
+    conversation_id: Optional[int] = Field(default=None, description="Optional conversation association")
+    provider: Optional[str] = Field(default="watchlists", description="Provider marker for the generated document")
+    model: Optional[str] = Field(default="watchlists", description="Model marker for the generated document")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata stored with the document")
+
+
+class WatchlistOutputDeliveries(BaseModel):
+    email: Optional[WatchlistOutputEmailDelivery] = None
+    chatbook: Optional[WatchlistOutputChatbookDelivery] = None
+
+
+class WatchlistOutputCreateRequest(BaseModel):
+    run_id: int = Field(..., description="Run identifier the output is based on")
+    item_ids: Optional[List[int]] = Field(None, description="Explicit list of scraped item IDs to include")
+    title: Optional[str] = Field(None, description="Optional title to embed in the generated output")
+    type: str = Field("briefing_markdown", description="Output template/type identifier")
+    format: Optional[Literal["md", "html"]] = Field(None, description="Rendered output format (overrides template)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata stored alongside the output")
+    template_name: Optional[str] = Field(None, description="Name of a stored template to render with")
+    retention_seconds: Optional[int] = Field(None, ge=60, description="Optional custom retention in seconds (0 = no expiry)")
+    temporary: Optional[bool] = Field(False, description="Whether to use temporary retention defaults")
+    deliveries: Optional[WatchlistOutputDeliveries] = Field(
+        default=None,
+        description="Optional delivery configuration (email, chatbook). Overrides job defaults when provided.",
+    )
+
+
+class WatchlistOutput(BaseModel):
+    id: int
+    run_id: int
+    job_id: int
+    type: str
+    format: str
+    title: Optional[str] = None
+    content: Optional[str] = None
+    storage_path: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    media_item_id: Optional[int] = None
+    chatbook_path: Optional[str] = None
+    version: int
+    expires_at: Optional[str] = None
+    expired: bool = False
+    created_at: str
+
+
+class WatchlistOutputsListResponse(BaseModel):
+    items: List[WatchlistOutput]
+    total: int
+
+
+class WatchlistTemplateSummary(BaseModel):
+    name: str
+    format: Literal["md", "html"]
+    description: Optional[str] = None
+    updated_at: str
+
+
+class WatchlistTemplateDetail(WatchlistTemplateSummary):
+    content: str
+
+
+class WatchlistTemplateListResponse(BaseModel):
+    items: List[WatchlistTemplateSummary]
+
+
+class WatchlistTemplateCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    format: Literal["md", "html"] = "md"
+    content: str = Field(..., description="Template content")
+    description: Optional[str] = Field(None, description="Optional human-readable description")
+    overwrite: bool = Field(False, description="If false, creation fails when template already exists")

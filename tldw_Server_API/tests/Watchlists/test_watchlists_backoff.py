@@ -17,6 +17,8 @@ def _env(monkeypatch):
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_backoff"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    # Force real pipeline fetch path even if other suites enabled TEST_MODE
+    monkeypatch.delenv("TEST_MODE", raising=False)
     # Lower the threshold to speed up the test and keep defaults small
     monkeypatch.setenv("WATCHLISTS_304_BACKOFF_THRESHOLD", "2")
     monkeypatch.setenv("WATCHLISTS_304_BACKOFF_BASE_SEC", "60")
@@ -98,4 +100,3 @@ async def test_backoff_defer_until_after_consecutive_304s(monkeypatch):
     # Immediate third run should skip calling fetch due to deferral
     await wl_pipeline.run_watchlist_job(user_id, job.id)
     assert calls["n"] == 2  # unchanged
-

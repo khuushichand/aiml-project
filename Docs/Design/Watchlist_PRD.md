@@ -1,11 +1,11 @@
 # Watchlists PRD (tldw_server)
 
-Status: Draft v0.1
+Status: MVP snapshot (v0.2 codebase) – outputs now include TTL + delivery support
 Owner: Core Maintainers
 Target Release: 0.2.x
 
 ## 1) Summary
-A Watchlists feature that lets a user maintain categorized collections of media sources (websites, blogs, news sites, RSS feeds, forums) and schedule scraping/ingestion jobs. Each run detects new content since the last scrape, parses it using existing ingestion pipelines, and produces configurable outputs (e.g., newsletter, briefing, MECE summaries, or audio briefings via TTS). Results can be delivered, downloaded, exported as Chatbooks, and/or ingested into the Media DB.
+A Watchlists feature that lets a user maintain categorized collections of media sources (websites, blogs, news sites, RSS feeds) and schedule scraping/ingestion jobs. The v0.2 implementation ships an end‑to‑end pipeline: jobs resolve scope (tags/groups/sources), fetch RSS feeds or site front pages, deduplicate items, ingest new content into the Media DB, and persist structured `scraped_items`. Users can review items, mark them as reviewed, generate Markdown or HTML briefings with per-job defaults, and optionally deliver outputs via email or Chatbook generated documents. Audio/TTS, Media DB aggregation exports, and forum ingestion remain future work.
 
 ## 2) Problem Statement
 Users want recurring, customizable content collection without manual effort. Today, users can ingest URLs one-off, but cannot:
@@ -15,13 +15,18 @@ Users want recurring, customizable content collection without manual effort. Tod
 - Aggregate and transform fresh items into briefings/newsletters/audio
 
 ## 3) Goals and Non‑Goals
-### Goals (MVP → v1)
-- Create and manage sources (URL + type + settings) and logical groupings/tags
-- Schedule scraping jobs for selected sources, groups, or entire watchlists
-- Detect and ingest only new/changed items since last scrape
-- Parse text/content with existing pipelines and extract key metadata
-- Generate configured outputs (Markdown/HTML; briefing/newsletter/MECE); optional TTS
-- Provide API + WebUI to manage sources, jobs, runs, and outputs
+### Goals (implemented MVP → v1 roadmap)
+- ✅ Create and manage sources (URL + type + settings) and logical groupings/tags
+- ✅ Schedule scraping jobs for selected sources, groups, or tag combinations
+- ✅ Detect and ingest only new/changed items since last scrape (ETag/Last‑Modified, dedupe table)
+- ✅ Parse text/content with existing ingestion pipeline and capture run stats
+- ✅ Generate Markdown/HTML briefings from scraped items; download via API
+- ✅ Provide API to manage sources, jobs, runs, items, and outputs
+- ✅ File-backed template management API plus per-job defaults (v0.2.1)
+- ✅ Output retention/versioning with configurable TTLs, email + Chatbook delivery hooks
+- 🟡 Watchlists tab in WebUI for items/outputs/templates management (admin console view)
+- 🚧 WebUI authoring for rich template creation; MECE/newsletter presets and deeper per-job defaults
+- 🚧 Optional TTS/audio briefings and Chatbook/Media DB aggregation exports
 
 ### Non‑Goals (initial)
 - Full headless browser automation (Playwright/Puppeteer) for heavy JS sites
@@ -42,14 +47,15 @@ Users want recurring, customizable content collection without manual effort. Tod
 
 ## 6) Scope
 ### In-Scope
-- Sources: websites/blogs, news sites, RSS feeds, forums (basic patterns)
+- Sources: websites/blogs, news sites, RSS feeds (forums are deferred)
 - Grouping: categories, tags; many-to-many
 - Scheduling: interval/cron; per-host rate limits; retries
 - Scraping: HTTP requests with ETag/Last-Modified when available; RSS polling
 - Parsing: HTML article extraction; RSS item parsing; reuse existing ingestion
 - Dedup/change detection: URL canonicalization + content hash
-- Output generation: Markdown/HTML briefings; optional MECE summaries; optional TTS
-- Delivery: save as files; ingest aggregated artifact; Chatbook export
+- Output generation: Markdown/HTML briefings with template store; MECE/HTML variants and TTS are future increments
+- Delivery: Download rendered output; configurable email + Chatbook deliveries (generated-document backing) with per-job defaults; Media DB aggregation planned
+- Admin WebUI slice: watchlists tab for listing items, creating outputs (with delivery options), and managing templates
 
 ### Out-of-Scope (initial)
 - Headless browser rendering for SPA-only sites
@@ -57,15 +63,16 @@ Users want recurring, customizable content collection without manual effort. Tod
 - Multi-tenant sharing of watchlists (post‑MVP)
 
 ## 7) User Stories
-MVP
+MVP (implemented)
 - As a user, I can add a list of URLs (RSS and sites) to my catalog, assign tags, and put them into groups/sections.
 - As a user, I can create a job selecting multiple categories/tags or specific sources; set a schedule; and run it on demand.
 - As a user, when a job runs, it only collects items that are new/updated since the last run.
 - As a user, I can preview scrape results before saving the job.
 - As a user, I can view run logs, counts of new items, and any errors.
 - As a user, I can generate a Markdown briefing from the collected items and download it.
+- As a user, I can review scraped items, filter them (status/reviewed), and mark them as reviewed or ignored.
 
-v1 Enhancements
+v1 Enhancements (not yet implemented)
 - As a user, I can pick templates (newsletter, MECE, narrative) and store defaults per job.
 - As a user, I can create an audio briefing using TTS and download or ingest it.
 - As a user, I can export the run as a Chatbook or ingest into Media DB as a single artifact.
@@ -101,10 +108,9 @@ v1 Enhancements
   - Compute normalized URL and SHA256 of stripped main content to detect new/updated
   - Ignore “stale” if unchanged since last run
 - Outputs
-  - Types: `newsletter_markdown`, `briefing_markdown`, `mece_markdown`, `newsletter_html`
-  - Templating: configurable templates with variables (job, date range, items)
-  - Optional TTS audio briefing via existing TTS module
-  - Export as Chatbook; ingest output into Media DB
+  - Current types: Markdown (`md`) and HTML (`html`) briefings generated from scraped items
+  - Stored inline (`content` column) with metadata (item ids, counts)
+  - Future: templating, MECE/newsletter variants, TTS audio, Chatbook export
 - Observability & Logs
   - Per-run stats: items discovered/new/updated/ignored; errors; duration
   - View run logs; WebSocket stream for live status (optional v1)
@@ -119,51 +125,26 @@ v1 Enhancements
 - Resource Use: bounded concurrency; per-host delays; cache ETag/Last-Modified
 - Privacy: no telemetry; logs are local; do not store credentials
 
-## 11) Data Model (Conceptual)
-Tables are persisted in `Databases/Media_DB_v2.db` via project DB abstractions.
+## 11) Data Model (Current Implementation)
+All tables live in each user’s primary SQLite Media DB (`Databases/Media_DB_v2.db`). Postgres parity is future work.
 
-Entities
-- watchlists
-  - id, user_id, name, description, tags (optional JSON), created_at, updated_at
-- sources
-  - id, user_id, name, url, source_type[`rss`|`site`|`forum`], active, settings_json,
-    last_scraped_at, etag, last_modified, status, created_at, updated_at
-  - settings_json examples:
-    - rss: { "accept_categories": [..] }
-    - site: { "index_url": "https://...", "article_link_selector": "a.headline", "max_items": 10,
-              "content_selector": "article", "follow_sitemap": false }
-    - forum: { "index_url": "https://...", "item_selector": "a.topic", "pagination_selector": "a.next" }
-- groups
-  - id, user_id, name, description, parent_group_id (nullable)
-- source_groups (join)
-  - source_id, group_id
-- tags
-  - id, user_id, name
-- source_tags (join)
-  - source_id, tag_id
-- scrape_jobs
-  - id, user_id, watchlist_id (nullable), name, description, scope_json (sources|groups|tags),
-    schedule_expr (cron or interval), active, max_concurrency, per_host_delay_ms,
-    retry_policy_json, output_prefs_json, created_at, updated_at, last_run_at, next_run_at
-- scrape_runs
-  - id, job_id, status[`queued`|`running`|`success`|`partial`|`failed`], started_at, finished_at,
-    stats_json, error_msg, log_path
-- scraped_items
-  - id, source_id, job_id, run_id, url, canonical_url, title, author, published_at,
-    content_text, content_html, fingerprint_sha256, metadata_json, status, created_at,
-    updated_at, media_item_id (nullable, if ingested)
-- outputs
-  - id, job_id, run_id, type, title, format[`md`|`html`|`mp3`], storage_path,
-    metadata_json, created_at, media_item_id (nullable), chatbook_path (nullable)
+| Table | Purpose | Key Columns |
+| --- | --- | --- |
+| `sources` | Source catalog | `id`, `user_id`, `name`, `url`, `source_type` (`rss` \| `site`), `settings_json`, `last_scraped_at`, `etag`, `last_modified`, `consec_not_modified`, `defer_until`, `status` |
+| `groups` | Logical groupings | `id`, `user_id`, `name`, `description`, `parent_group_id` |
+| `source_groups` | Source ↔ group join | `source_id`, `group_id` |
+| `tags` | Normalized tag names | `id`, `user_id`, `name` |
+| `source_tags` | Source ↔ tag join | `source_id`, `tag_id` |
+| `scrape_jobs` | Job definitions | `id`, `user_id`, `name`, `scope_json`, `schedule_expr`, `schedule_timezone`, `active`, `max_concurrency`, `per_host_delay_ms`, `retry_policy_json`, `output_prefs_json`, `last_run_at`, `next_run_at`, `wf_schedule_id` |
+| `scrape_runs` | Run history | `id`, `job_id`, `status`, `started_at`, `finished_at`, `stats_json`, `error_msg`, `log_path` |
+| `scrape_run_items` | Run → ingested media | `run_id`, `media_id`, `source_id` |
+| `source_seen_items` | RSS dedupe cache | `source_id`, `item_key`, `etag`, `last_modified`, `first_seen_at`, `last_seen_at` |
+| `scraped_items` | Structured run items | `id`, `run_id`, `job_id`, `source_id`, `media_id`, `media_uuid`, `url`, `title`, `summary`, `published_at`, `tags_json`, `status`, `reviewed`, `created_at` |
+| `watchlist_outputs` | Generated outputs | `id`, `run_id`, `job_id`, `type`, `format`, `title`, `content`, `storage_path`, `metadata_json`, `media_item_id`, `chatbook_path`, `version`, `expires_at`, `created_at` |
 
-Indexes
-- sources.url, scraped_items.canonical_url, scraped_items.fingerprint_sha256
-- scrape_runs.job_id, outputs.run_id
+Retention: per-user SQLite (default). TTL is enforced via `expires_at` with env defaults (`WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS`, `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`) and per-job overrides. Expired rows are purged on access. Postgres parity is still planned.
 
-Retention
-- Keep runs and logs for configurable time window; items retained unless user deletes
-
-## 12) APIs (FastAPI, OpenAPI 3.0)
+## 12) APIs (FastAPI, OpenAPI 3.0 – implemented)
 Base: `/api/v1/watchlists/...`
 
 Sources
@@ -191,12 +172,21 @@ Jobs
 - `GET /api/v1/watchlists/runs/{run_id}/log` log text
 - `WS  /api/v1/watchlists/runs/{run_id}/stream` live status (optional v1)
 
-Items & Outputs
-- `GET /api/v1/watchlists/items` list (filters: date, source, group, tag, job, status)
-- `GET /api/v1/watchlists/items/{id}` get; `PATCH .../items/{id}` mark reviewed
-- `POST /api/v1/watchlists/outputs` generate output from a set (body: item ids + template)
-- `GET /api/v1/watchlists/outputs/{id}` metadata; `.../download` file
-- Integrations: `POST /api/v1/chatbooks/export` (existing), `POST /api/v1/media/process` for ingest
+Items
+- `GET  /api/v1/watchlists/items` (filters: `run_id`, `job_id`, `source_id`, `status`, `reviewed`, `q`, `since`, `until`)
+- `GET  /api/v1/watchlists/items/{id}` retrieve item
+- `PATCH /api/v1/watchlists/items/{id}` mark reviewed / update status
+
+Outputs
+- `POST /api/v1/watchlists/outputs` generate Markdown or HTML output from the most recent items (optional explicit item IDs) with support for TTL overrides and delivery configs (`deliveries.email`, `deliveries.chatbook`)
+- `GET  /api/v1/watchlists/outputs` list outputs (filter by `run_id`, `job_id`)
+- `GET  /api/v1/watchlists/outputs/{id}` fetch metadata/content
+- `GET  /api/v1/watchlists/outputs/{id}/download` download rendered content (`text/markdown` or `text/html`)
+
+Settings
+- `GET /api/v1/watchlists/settings` returns default TTLs/environment info used by WebUI
+
+Not yet implemented: watchlist-level CRUD, WS streams, Chatbook export, audio output, preview/dry-run endpoints.
 
 Schemas
 - Pydantic in `tldw_Server_API/app/api/v1/schemas/watchlists.py`
@@ -206,16 +196,18 @@ Modules
 - Core: `tldw_Server_API/app/core/Watchlists/`
   - `manager.py` (CRUD + orchestration), `scraper.py` (fetchers), `parser.py` (dispatch to existing ingestion),
     `dedupe.py`, `outputs.py` (templating + TTS), `scheduler.py` (APScheduler or async tasks), `models.py` (DB ops)
+- Notifications: `tldw_Server_API/app/core/Notifications/service.py` (email + Chatbook delivery bridge using AuthNZ email service and Chatbook document generator)
 - API: `tldw_Server_API/app/api/v1/endpoints/watchlists.py`
 - Services: `tldw_Server_API/app/services/watchlist_jobs.py` (background runs, queues)
-- WebUI: `tldw_Server_API/WebUI/watchlists/*` (pages, components)
+- WebUI: `tldw_Server_API/WebUI/tabs/watchlists_content.html` + helpers in `WebUI/js/tab-functions.js` (items/outputs/templates panel)
 
 Key Flows
 - Fetch: HTTP client with per-host delay and ETag/Last-Modified cache
 - Parse: For RSS, parse feed entries → items; For site/forum, get index → extract links → fetch articles → extract main content
 - Dedupe: Normalize URL + SHA256 main text; skip unchanged
 - Persist: Write items and run stats; optional ingest via existing Media DB path
-- Output: Render Markdown/HTML; optional MECE summarization via LLM; optional TTS via `/api/v1/audio/speech`
+- Output & Delivery: Render Markdown/HTML, apply template store, enforce retention, and hand off to NotificationsService for email/Chatbook delivery (Media DB aggregation pending); optional MECE summarization via LLM; optional TTS via `/api/v1/audio/speech`
+- Collections Bridge: Stage 1 of Content Collections will introduce a shared `content_items` layer inside Collections DB. Watchlists will dual-write to this layer (in addition to Media DB) to power unified `/items` queries without altering existing Media DB schemas.
 
 Concurrency & Scheduling
 - Use bounded worker pool; per-host delay; max concurrent fetches per job
@@ -226,6 +218,7 @@ Concurrency & Scheduling
   - `WATCHLIST_MAX_CONCURRENCY`, `WATCHLIST_PER_HOST_DELAY_MS`, `WATCHLIST_MAX_ITEMS_PER_SOURCE`, `WATCHLIST_OBEY_ROBOTS=true`
 - Env overrides permitted
 - Templates in `tldw_Server_API/Config_Files/templates/watchlists/`
+- TTL overrides via env: `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS`, `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS` (per-job `output_prefs.retention` takes precedence)
 
 ## 15) Security & Compliance
 - Respect robots.txt by default; explicit opt-out shows warning
@@ -239,9 +232,9 @@ Concurrency & Scheduling
 - Retries with backoff for transient network failures; hard-fail on 4xx (except 429 with retry)
 
 ## 17) Migration Plan
-- Add new tables via DB management layer (`app/core/DB_Management`)
-- Data migration script: create tables + indexes; idempotent
-- No changes to existing tables required initially; link final outputs to Media DB by `media_item_id` when ingested
+- SQLite: handled via `WatchlistsDatabase.ensure_schema()` (idempotent `CREATE TABLE IF NOT EXISTS` plus column backfills).
+- Postgres: not supported yet; requires dedicated schema patch and SQL adjustments (`INSERT ... ON CONFLICT` etc.).
+- Future migrations: outputs templating, watchlist collections, retention TTL.
 
 ## 18) Testing Strategy
 - Unit
@@ -265,9 +258,9 @@ Concurrency & Scheduling
 - Run logs and stats visible; errors surfaced clearly
 
 ## 20) Rollout Plan
-- Phase 1 (MVP): RSS + site (front page + top‑N) support; Markdown briefing; manual + interval schedule; WebUI basics
-- Phase 2 (v1): MECE template + HTML newsletter; TTS audio; Chatbook export integration
-- Phase 3: Forum patterns; cron expressions; live WS logs; richer templates
+- Phase 1 (complete): RSS + site (front page/top‑N) support; Markdown/HTML briefing; manual + interval schedule; API review tools.
+- Phase 2 (planned): Templated variants (MECE/newsletter), per-job output defaults, optional HTML/Markdown custom templates, UI integration.
+- Phase 3 (planned): TTS audio, Chatbook export, forum patterns, WS live logs, multi-tenant sharing, optional Postgres backend.
 
 ## 21) Risks & Mitigations
 - Dynamic JS sites: mark unsupported initially; later headless rendering option
@@ -275,13 +268,22 @@ Concurrency & Scheduling
 - Content variability: allow per-source selectors; robust defaults
 - Legal/compliance: user acknowledgment for scraping settings; documentation
 
-## 22) Open Questions
-- Should outputs be versioned per job with retention policy defaults?
-- Template editor in WebUI or file-based only initially?
-- Do we support email delivery natively (SMTP) or leave to user export?
+## 22) Open Questions / Next Steps
+- Outputs retention/versioning strategy and storage limits.  
+  **Answer:** Shipped: every output is versioned and stamped with `expires_at`. Global defaults are driven by `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, and jobs can override via `output_prefs.retention`. Naming convention `<RUN_NAME>-Output-<n>` holds; add admin UX for managing expirations.
+- Template/editor experience (file-based vs. UI-driven), templating language.  
+  **Answer:** File-based templates + CRUD API are live (Jinja2 sandbox). Next iteration: UI-driven editor built atop the same endpoints. Template language remains Jinja2; validation hooks exist server-side.
+- Delivery mechanisms (email, Chatbook, Media DB aggregation).  
+  **Answer:** Email delivery (mockable SMTP) and Chatbook generated-document storage ship in v0.2.1 with per-job defaults. Media DB aggregation remains roadmap work.
+- Per-job rate limiting UI; per-user Postgres backend support.  
+  **Answer:** Expose rate-limit controls via API first; surface UI later. Postgres backend is deferred until the broader DB abstraction is ready.
+- WebUI parity for new items/outputs endpoints.  
+  **Answer:** WebUI should achieve full parity with the API for listing items, updating status, generating/downloading outputs, and viewing run stats.
+- Content Collections alignment.  
+  **Answer:** When the Collections `content_items` tables land, update Watchlists ingestion to dual-write (Media DB + Collections DB) and ensure `/watchlists/items` and `/items` endpoints stay consistent. Postgres enablement remains deferred to Stage 2 so both modules migrate together.
 
 ---
 Implementation should follow project conventions:
 - Core logic in `app/core/Watchlists/`, endpoints in `app/api/v1/endpoints/`, schemas in `app/api/v1/schemas/`, services in `app/services/`
-- Tests in `tldw_Server_API/tests/watchlists/` with unit/integration split
+- Tests in `tldw_Server_API/tests/watchlists/` with unit/integration split (pipeline, scheduler jitter, TTL/delivery integration)
 - Use `MediaDatabase` abstractions for DB access; avoid raw SQL outside DB layer

@@ -212,6 +212,9 @@ class ChatbookManifest:
     total_notes: int = 0
     total_characters: int = 0
     total_media_items: int = 0
+    total_prompts: int = 0
+    total_evaluations: int = 0
+    total_embeddings: int = 0
     total_world_books: int = 0
     total_dictionaries: int = 0
     total_documents: int = 0
@@ -247,6 +250,9 @@ class ChatbookManifest:
                 "total_notes": self.total_notes,
                 "total_characters": self.total_characters,
                 "total_media_items": self.total_media_items,
+                "total_prompts": self.total_prompts,
+                "total_evaluations": self.total_evaluations,
+                "total_embeddings": self.total_embeddings,
                 "total_world_books": self.total_world_books,
                 "total_dictionaries": self.total_dictionaries,
                 "total_documents": self.total_documents,
@@ -290,6 +296,9 @@ class ChatbookManifest:
             total_notes=stats.get("total_notes", 0),
             total_characters=stats.get("total_characters", 0),
             total_media_items=stats.get("total_media_items", 0),
+            total_prompts=stats.get("total_prompts", 0),
+            total_evaluations=stats.get("total_evaluations", 0),
+            total_embeddings=stats.get("total_embeddings", 0),
             total_world_books=stats.get("total_world_books", 0),
             total_dictionaries=stats.get("total_dictionaries", 0),
             total_documents=stats.get("total_documents", 0),

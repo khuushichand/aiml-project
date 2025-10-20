@@ -9,6 +9,8 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.items_schemas import Item, ItemsListResponse
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
 
 
 router = APIRouter(prefix="/items", tags=["items"])
@@ -32,25 +34,67 @@ async def list_items(
     domain: Optional[str] = Query(None, description="Filter by domain (hostname)"),
     date_from: Optional[str] = Query(None, description="ISO start date inclusive"),
     date_to: Optional[str] = Query(None, description="ISO end date inclusive"),
-    job_id: Optional[int] = Query(None, description="Filter by job_id (placeholder; no-op until jobs tables exist)"),
-    run_id: Optional[int] = Query(None, description="Filter by run_id (placeholder; no-op until runs tables exist)"),
+    status_filter: Optional[List[str]] = Query(None, description="Filter by status (e.g., saved, read)"),
+    favorite: Optional[bool] = Query(None, description="Filter by favorite flag"),
+    origin: Optional[str] = Query(None, description="Filter by origin (watchlist, reading, etc.)"),
+    job_id: Optional[int] = Query(None, description="Filter by job_id"),
+    run_id: Optional[int] = Query(None, description="Filter by run_id"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     current_user: User = Depends(get_request_user),
     db = Depends(get_media_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
 ):
     must_have_keywords = tags or []
     # Prepare date range
     dr = None
+    date_from_iso = None
+    date_to_iso = None
     try:
         start_dt = datetime.fromisoformat(date_from) if date_from else None
         end_dt = datetime.fromisoformat(date_to) if date_to else None
         if start_dt or end_dt:
             dr = {"start_date": start_dt, "end_date": end_dt}
+        if start_dt:
+            date_from_iso = start_dt.isoformat()
+        if end_dt:
+            date_to_iso = end_dt.isoformat()
     except Exception:
         raise HTTPException(status_code=422, detail="invalid_date_range")
 
-    # Query media DB
+    # Query collections layer first
+    try:
+        coll_rows, coll_total = collections_db.list_content_items(
+            ids=ids,
+            q=q,
+            tags=tags,
+            domain=domain,
+            date_from=date_from_iso,
+            date_to=date_to_iso,
+            status=status_filter,
+            favorite=favorite,
+            job_id=job_id,
+            run_id=run_id,
+            origin=origin,
+            page=page,
+            size=size,
+        )
+    except Exception as e:
+        logger.error(f"collections items query failed: {e}")
+        raise HTTPException(status_code=500, detail="items_query_failed")
+
+    if coll_total > 0:
+        return ItemsListResponse(
+            items=[_content_item_to_schema(r) for r in coll_rows],
+            total=coll_total,
+            page=page,
+            size=size,
+        )
+
+    if origin or (status_filter and len(status_filter) > 0) or favorite is not None:
+        return ItemsListResponse(items=[], total=0, page=page, size=size)
+
+    # Legacy fallback to Media DB when collections layer has no data
     try:
         rows, total = db.search_media_db(
             search_query=q,
@@ -121,3 +165,28 @@ async def list_items(
         )
 
     return ItemsListResponse(items=items, total=total, page=page, size=size)
+
+
+def _content_item_to_schema(row: ContentItemRow) -> Item:
+    domain = row.domain or _domain_from_url(row.url)
+    summary = row.summary
+    if not summary:
+        metadata = {}
+        if row.metadata_json:
+            try:
+                import json as _json
+                metadata = _json.loads(row.metadata_json)
+            except Exception:
+                metadata = {}
+        summary = metadata.get("summary")
+    item_id = row.media_id if row.media_id is not None else row.id
+    return Item(
+        id=int(item_id),
+        title=row.title or "Untitled",
+        url=row.url,
+        domain=domain or "",
+        summary=summary,
+        published_at=row.published_at,
+        tags=row.tags,
+        type=row.origin,
+    )

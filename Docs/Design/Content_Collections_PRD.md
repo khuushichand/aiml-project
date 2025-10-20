@@ -1,9 +1,9 @@
-# PRD: Content Collections (Watchlists + Reading List) for tldw_server
+ # PRD: Content Collections (Watchlists + Reading List) for tldw_server
 
-Version: 0.1
+Version: 0.2
 Owner: Core Maintainers (Server/API + WebUI)
-Status: Draft for Review
-Updated: 2025-10-18
+Status: In Progress
+Updated: 2025-10-19
 
 Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py
 
@@ -12,10 +12,10 @@ Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py
 ## 1. Summary
 
 Content Collections unify two complementary workflows:
-- Watchlists: Source‑centric, scheduled collection from websites/news sites/RSS (forums in Phase 3) with jobs, runs, and aggregated outputs (newsletter/briefing/MECE/TTS).
-- Reading List: Ad‑hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, highlights/notes, import/export.
+- **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented in `app/core/Watchlists` and related APIs.*
+- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, highlights/notes, import/export. *Status: highlights persistence/API scaffold exists; capture + reader experience pending.*
 
-Both flows write to a single normalized content item model, share ingestion, dedupe, FTS5 search, and embeddings (ChromaDB). Outputs can be generated from either scheduled runs or filtered item sets. Artifacts can be exported as Chatbooks or ingested into the Media DB.
+Both flows will share a normalized collections layer that references (but does not replace) the existing Media DB. Media DB remains the canonical artifact store; the collections layer will provide dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
 
 ## 2. Goals and Non‑Goals
 
@@ -49,16 +49,18 @@ Primary value: one local‑first place to capture → read → organize → sear
 ## 5. Scope
 
 ### In‑Scope
-- Ad‑hoc link capture and reader UI.
-- Source catalog with tags/groups; scheduled scraping jobs and runs.
-- RSS polling; simple site extraction (front page + top‑N). Forums moved to Phase 3.
-- Dedupe by canonical URL and content hash; change detection.
-- Outputs (Markdown/HTML) and optional TTS; Chatbooks; Media DB ingest.
-- FTS5 search and ChromaDB embeddings per user.
+- Watchlists sources/groups/tags/jobs/runs with ingestion pipeline, template store, retention/versioning, and delivery (implemented).
+- File-based template management and API-driven template CRUD (implemented).
+- Ad-hoc link capture and reader UI with statuses/favorites/highlights (planned).
+- Unified collections data layer that references Media DB while enabling dedupe and metadata across origins (planned).
+- RSS polling; simple site extraction (front page + top-N). Forums remain Phase 3 (planned).
+- Canonical URL/content-hash dedupe and change detection (planned).
+- Outputs in Markdown/HTML plus MECE/TTS variants; Chatbook delivery; optional Media DB ingestion (partially implemented—MECE/TTS automation and ingest toggles planned).
+- FTS5 search and ChromaDB embeddings per user over collections data (planned).
 
 ### Out‑of‑Scope (initial)
 - Paywall bypass; authenticated scraping; heavy JS rendering.
-- Email delivery (may be added later) and social sharing.
+- Social/public sharing; multi-tenant sharing of collections.
 
 ## 6. User Stories (MVP + v1)
 
@@ -295,18 +297,39 @@ Scheduling
 
 - Scheduler persistence/timezone: time‑freezing tests verifying APScheduler with SQLAlchemyJobStore persists jobs across restarts and interprets cron/interval triggers using timezone `UTC+8` (including DST and boundary conditions). Validate `next_run_at` computation and on‑restart rehydration.
 
-## 18. Acceptance Criteria (MVP)
+## 18. Implementation Roadmap (Media DB remains separate)
 
-- Unified items model persists content from both reading saves and watchlist runs.
-- Reading: save URL, readable text appears; tag/favorite; basic search filters.
-- Watchlists: create sources and a job; run on schedule; store only new/updated items; view logs/stats.
-- Outputs: generate Markdown briefing from a run or filtered items; downloadable file works.
+1. **Unified Collections Layer**
+   - Add `content_items` + linkage tables within Collections DB for normalized metadata (URL, canonical URL, provenance, status) while referencing Media DB IDs.
+   - Modify watchlist ingestion to populate the collections layer alongside existing Media DB writes.
+   - Expand `/api/v1/items` to query the collections layer so watchlist and upcoming reading items share filters without altering Media DB schema.
+
+2. **Reading Workflow**
+   - Implement URL capture/import APIs, Readability extraction, status/favorite/tag management, and reader endpoints.
+   - Integrate highlights lifecycle (including stale marking when content hash changes) and wire the WebUI reader experience.
+   - Add import/export (Pocket/Instapaper) flows to meet v1 parity.
+
+3. **Search & Retrieval Enhancements**
+   - Introduce FTS5 indices (SQLite) and Chroma queueing for `content_items`, ensuring new/updated items enqueue embeddings.
+   - Extend `/items` filters (status, origin, tags, domain, date) and expose provenance metadata for downstream RAG/LLM services.
+
+4. **Outputs & Delivery Expansion**
+   - Add MECE/narrative template variants and one-click TTS rendering leveraging existing audio APIs.
+   - Support multiple output artifacts per run with deterministic naming, optional Media DB ingestion, and retention enforcement (including temporary storage defaults).
+
+5. **WebUI & Admin UX**
+   - Wire WebUI items/reading/watchlists screens to the new endpoints, including per-job defaults (templates, TTLs, delivery) and admin settings.
+   - Provide configuration UX for default retention values and template directories.
+
+6. **Stage 2 – Postgres Enablement**
+   - Refactor schema creation/migration scripts for Postgres compatibility (separate statements, explicit `ON CONFLICT` handling).
+   - Validate Watchlists/Collections DB backends against Postgres and update tooling/documentation accordingly.
 
 ## 19. Rollout Plan
 
-- Phase 1: Unified content_items + Reading capture/search UI; FTS5; dedupe; embeddings queueing.
-- Phase 2: Watchlists sources/jobs/runs; RSS + simple site extraction; interval schedules.
-- Phase 3 (v1): MECE + HTML newsletter; TTS outputs; Pocket/Instapaper import; highlights/notes; WS run stream; Forums support (feature‑flagged).
+- **Phase 1:** Unified collections schema, ingestion bridge, reading capture/search UI.
+- **Phase 2:** Advanced outputs (MECE/TTS automation), forums (feature-flag), delivery UX, embeddings/search parity.
+- **Phase 3:** Reader enhancements (highlights/notes UX), third-party imports, WebSocket run streaming, Postgres enablement (Stage 2).
 
 ## 20. Risks & Mitigations
 

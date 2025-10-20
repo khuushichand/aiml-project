@@ -59,7 +59,8 @@ def get_chatbook_service(
     db: CharactersRAGDB = Depends(get_chacha_db)
 ) -> ChatbookService:
     """Get chatbook service for the current user."""
-    return ChatbookService(str(user.id), db)
+    user_int = user.id_int if hasattr(user, "id_int") else None
+    return ChatbookService(user.id, db, user_id_int=user_int)
 
 
 @router.get("/health", summary="Chatbooks service health")

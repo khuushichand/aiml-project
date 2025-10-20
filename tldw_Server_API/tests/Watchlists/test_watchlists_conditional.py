@@ -17,6 +17,8 @@ def _env(monkeypatch):
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_cond"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    # Ensure pipeline does not fall back to TEST_MODE short-circuit
+    monkeypatch.delenv("TEST_MODE", raising=False)
     # not using TEST_MODE here; we mock fetcher
     yield
 

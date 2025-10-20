@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 
 
@@ -71,6 +72,12 @@ async def test_pipeline_happy_path_test_mode():
     assert res.get("items_found", 0) >= 3
     # items_ingested: expect at least 2 (rss once, site first link; duplicates skipped by URL uniqueness)
     assert res.get("items_ingested", 0) >= 2
+
+    collections_db = CollectionsDatabase.for_user(user_id)
+    coll_items, coll_total = collections_db.list_content_items(page=1, size=10)
+    assert coll_total >= 1
+    assert any(item.origin == "watchlist" for item in coll_items)
+    assert any("news" in item.tags for item in coll_items)
 
     # Validate run row updated
     runs, total = db.list_runs_for_job(job.id, limit=10, offset=0)
@@ -181,4 +188,3 @@ async def test_rss_dedup_and_meta_and_stats():
     # Source meta updated
     srow = db.get_source(src.id)
     assert srow.last_scraped_at is not None
-

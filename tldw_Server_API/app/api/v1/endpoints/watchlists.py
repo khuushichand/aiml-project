@@ -10,28 +10,93 @@ Implements minimal CRUD and semantics per PRD:
 Scraping and scheduling are stubbed; runs are created on trigger.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import json
-
+import os
+import re
+from datetime import datetime, timezone, timedelta
+from html import escape
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
+from fastapi.responses import PlainTextResponse, HTMLResponse
 from loguru import logger
+from jinja2.sandbox import SandboxedEnvironment
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
+from tldw_Server_API.app.core.Watchlists import template_store
+from tldw_Server_API.app.core.Notifications import NotificationsService
 from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     Source, SourceCreateRequest, SourceUpdateRequest, SourcesListResponse, SourcesBulkCreateRequest,
     Group, GroupCreateRequest, GroupUpdateRequest, GroupsListResponse,
     Tag, TagsListResponse,
     Job, JobCreateRequest, JobUpdateRequest, JobsListResponse,
     Run, RunsListResponse, RunDetail,
+    ScrapedItem, ScrapedItemsListResponse, ScrapedItemUpdateRequest,
+    WatchlistOutput, WatchlistOutputCreateRequest, WatchlistOutputsListResponse,
+    WatchlistTemplateCreateRequest, WatchlistTemplateDetail, WatchlistTemplateListResponse, WatchlistTemplateSummary,
 )
 
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 
+DEFAULT_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0") or 0)
+TEMP_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "86400") or 86400)
+
+_TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _is_expired(expires_at: Optional[str]) -> bool:
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at).astimezone(timezone.utc) <= datetime.now(timezone.utc)
+    except Exception:
+        return False
+
 
 # ---- Helpers ----
+_EMAIL_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _safe_int(value: Any, fallback: int) -> int:
+    try:
+        if value is None:
+            return fallback
+        return int(value)
+    except Exception:
+        return fallback
+
+
+def _deep_merge_dict(base: Optional[Dict[str, Any]], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    result: Dict[str, Any] = dict(base or {})
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge_dict(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _build_email_bodies(content: Optional[str], fmt: str, title: str, preferred: str = "auto") -> Tuple[str, str]:
+    raw = content or ""
+    mode = preferred.lower()
+    if mode == "auto":
+        mode = "html" if fmt.lower() == "html" else "text"
+    if mode == "html":
+        html_body = raw or f"<p>{escape(title)}</p>"
+        text_body = _EMAIL_TAG_RE.sub(" ", raw) if raw else title
+        text_body = re.sub(r"\s+", " ", text_body).strip()
+        return html_body, text_body or title
+    text_body = raw or title
+    html_body = f"<pre>{escape(raw)}</pre>" if raw else f"<p>{escape(title)}</p>"
+    return html_body, text_body
+
+
 def _normalize_tz(tz: Optional[str]) -> str:
     # Accept PRD-style 'UTC+8' and 'UTC-5' and map to IANA Etc/GMT offsets
     if not tz or tz.upper() == "UTC":
@@ -62,6 +127,224 @@ def _compute_next_run(cron: Optional[str], timezone: Optional[str]) -> Optional[
         return nxt.isoformat() if nxt else None
     except Exception:
         return None
+
+
+def _row_to_scraped_item(row) -> ScrapedItem:
+    tags: List[str] = []
+    try:
+        tags = row.tags()
+    except Exception:
+        raw = getattr(row, "tags_json", None)
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    tags = [str(t) for t in data if isinstance(t, str)]
+            except Exception:
+                tags = []
+    reviewed_flag = bool(getattr(row, "reviewed", 0))
+    return ScrapedItem(
+        id=row.id,
+        run_id=row.run_id,
+        job_id=row.job_id,
+        source_id=row.source_id,
+        media_id=getattr(row, "media_id", None),
+        media_uuid=getattr(row, "media_uuid", None),
+        url=getattr(row, "url", None),
+        title=getattr(row, "title", None),
+        summary=getattr(row, "summary", None),
+        published_at=getattr(row, "published_at", None),
+        tags=tags,
+        status=row.status,
+        reviewed=reviewed_flag,
+        created_at=row.created_at,
+    )
+
+
+def _row_to_output(row) -> WatchlistOutput:
+    metadata: Dict[str, Any] = {}
+    try:
+        metadata = row.metadata()
+    except Exception:
+        raw = getattr(row, "metadata_json", None)
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    metadata = data
+            except Exception:
+                metadata = {}
+    version = getattr(row, "version", 1)
+    expires_at = getattr(row, "expires_at", None)
+    if isinstance(metadata, dict):
+        metadata.setdefault("version", version)
+    return WatchlistOutput(
+        id=row.id,
+        run_id=row.run_id,
+        job_id=row.job_id,
+        type=row.type,
+        format=row.format,
+        title=getattr(row, "title", None),
+        content=getattr(row, "content", None),
+        storage_path=getattr(row, "storage_path", None),
+        metadata=metadata if isinstance(metadata, dict) else {},
+        media_item_id=getattr(row, "media_item_id", None),
+        chatbook_path=getattr(row, "chatbook_path", None),
+        version=version,
+        expires_at=expires_at,
+        expired=_is_expired(expires_at),
+        created_at=row.created_at,
+    )
+
+
+def _items_to_markdown_lines(items: List[ScrapedItem]) -> List[str]:
+    lines: List[str] = []
+    for idx, itm in enumerate(items, 1):
+        entry_title = itm.title or f"Item {idx}"
+        if itm.url:
+            line = f"{idx}. [{entry_title}]({itm.url})"
+        else:
+            line = f"{idx}. {entry_title}"
+        if itm.summary:
+            line += f" — {itm.summary}"
+        lines.append(line)
+    return lines
+
+
+def _items_to_html_entries(items: List[ScrapedItem]) -> List[str]:
+    entries: List[str] = []
+    for idx, itm in enumerate(items, 1):
+        title_text = escape(itm.title or f"Item {idx}")
+        summary_text = escape(itm.summary or "")
+        url = itm.url
+        if url:
+            entry = f'<li><a href="{escape(url)}">{title_text}</a>'
+        else:
+            entry = f"<li>{title_text}"
+        if summary_text:
+            entry += f" — {summary_text}"
+        entry += "</li>"
+        entries.append(entry)
+    return entries
+
+
+def _render_default_markdown(title: str, items: List[ScrapedItem]) -> str:
+    lines = [f"# {title}", ""]
+    lines.extend(_items_to_markdown_lines(items))
+    return "\n".join(lines)
+
+
+def _render_default_html(title: str, items: List[ScrapedItem]) -> str:
+    body_parts = [f"<h1>{escape(title)}</h1>", "<ol>"]
+    body_parts.extend(_items_to_html_entries(items))
+    body_parts.append("</ol>")
+    return "\n".join(body_parts)
+
+
+def _job_payload(job_row: Any) -> Dict[str, Any]:
+    scope = {}
+    try:
+        scope = json.loads(job_row.scope_json or "{}") if getattr(job_row, "scope_json", None) else {}
+    except Exception:
+        scope = {}
+    retry_policy = {}
+    try:
+        retry_policy = (
+            json.loads(job_row.retry_policy_json or "{}") if getattr(job_row, "retry_policy_json", None) else {}
+        )
+    except Exception:
+        retry_policy = {}
+    output_prefs = {}
+    try:
+        output_prefs = (
+            json.loads(job_row.output_prefs_json or "{}") if getattr(job_row, "output_prefs_json", None) else {}
+        )
+    except Exception:
+        output_prefs = {}
+    return {
+        "id": job_row.id,
+        "name": job_row.name,
+        "description": getattr(job_row, "description", None),
+        "scope": scope,
+        "schedule_expr": getattr(job_row, "schedule_expr", None),
+        "schedule_timezone": getattr(job_row, "schedule_timezone", None),
+        "active": bool(getattr(job_row, "active", True)),
+        "max_concurrency": getattr(job_row, "max_concurrency", None),
+        "per_host_delay_ms": getattr(job_row, "per_host_delay_ms", None),
+        "retry_policy": retry_policy,
+        "output_prefs": output_prefs,
+    }
+
+
+def _run_payload(run_row: Any) -> Dict[str, Any]:
+    stats = {}
+    try:
+        stats = json.loads(run_row.stats_json or "{}") if getattr(run_row, "stats_json", None) else {}
+    except Exception:
+        stats = {}
+    return {
+        "id": run_row.id,
+        "job_id": run_row.job_id,
+        "status": run_row.status,
+        "started_at": getattr(run_row, "started_at", None),
+        "finished_at": getattr(run_row, "finished_at", None),
+        "stats": stats,
+        "error_msg": getattr(run_row, "error_msg", None),
+    }
+
+
+def _build_output_context(
+    title: str,
+    job_row: Any,
+    run_row: Any,
+    items: List[ScrapedItem],
+) -> Dict[str, Any]:
+    markdown_lines = _items_to_markdown_lines(items)
+    html_entries = _items_to_html_entries(items)
+    items_payload: List[Dict[str, Any]] = []
+    for idx, itm in enumerate(items, 1):
+        if hasattr(itm, "model_dump"):
+            payload = itm.model_dump()
+        else:
+            payload = {
+                "id": itm.id,
+                "run_id": itm.run_id,
+                "job_id": itm.job_id,
+                "source_id": itm.source_id,
+                "media_id": itm.media_id,
+                "media_uuid": itm.media_uuid,
+                "url": itm.url,
+                "title": itm.title,
+                "summary": itm.summary,
+                "published_at": itm.published_at,
+                "tags": itm.tags,
+                "status": itm.status,
+                "reviewed": itm.reviewed,
+                "created_at": itm.created_at,
+            }
+        payload.setdefault("index", idx)
+        payload.setdefault("markdown_line", markdown_lines[idx - 1])
+        payload.setdefault("html_entry", html_entries[idx - 1])
+        items_payload.append(payload)
+
+    context = {
+        "title": title,
+        "generated_at": _utcnow_iso(),
+        "job": _job_payload(job_row),
+        "run": _run_payload(run_row),
+        "items": items_payload,
+        "items_markdown": markdown_lines,
+        "items_html": html_entries,
+        "item_count": len(items_payload),
+    }
+    return context
+
+
+def _render_template_with_context(template_str: str, context: Dict[str, Any]) -> str:
+    env = SandboxedEnvironment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
+    env.filters["markdown_link"] = lambda text, url: f"[{text}]({url})" if url else text
+    template = env.from_string(template_str)
+    return template.render(**context)
 
 
 # --------------------
@@ -328,6 +611,16 @@ async def delete_group(
 # --------------------
 # Jobs and runs
 # --------------------
+@router.get("/settings", summary="Get watchlists defaults")
+async def get_watchlist_settings(
+    current_user: User = Depends(get_request_user),
+):
+    return {
+        "default_output_ttl_seconds": DEFAULT_OUTPUT_TTL_SECONDS,
+        "temporary_output_ttl_seconds": TEMP_OUTPUT_TTL_SECONDS,
+    }
+
+
 @router.post("/jobs", response_model=Job, summary="Create job")
 async def create_job(
     payload: JobCreateRequest,
@@ -624,64 +917,39 @@ async def delete_job(
     return {"success": True}
 
 
-@router.post("/jobs/{job_id}/run", response_model=Run, summary="Trigger a run (stub)")
+@router.post("/jobs/{job_id}/run", response_model=Run, summary="Trigger a run (executes pipeline)")
 async def trigger_run(
     job_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
-    media_db = Depends(get_media_db_for_user),
 ):
-    # Minimal stub: create a run row, set queued status.
     try:
-        # Ensure job exists
-        job = db.get_job(job_id)
-        run = db.create_run(job_id, status="queued")
-        # Update job history (last_run_at now, next_run_at by cron)
-        from datetime import datetime, timezone as _tz
-        last = datetime.utcnow().replace(tzinfo=_tz.utc).isoformat()
-        next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
-        db.set_job_history(job_id, last_run_at=last, next_run_at=next_run)
-        # Optionally submit via workflows scheduler (best-effort)
-        if getattr(job, "wf_schedule_id", None):
-            try:
-                from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import run_now as _run_now_handler  # for scope checks we bypass API
-            except Exception:
-                pass
-            try:
-                from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
-                svc = get_workflows_scheduler()
-                s = svc.get(job.wf_schedule_id)
-                if s:
-                    core = await __import__("tldw_Server_API.app.core.Scheduler", fromlist=["create_scheduler"]).create_scheduler()
-                    payload = {
-                        "workflow_id": s.workflow_id,
-                        "inputs": __import__("json").loads(s.inputs_json or "{}"),
-                        "user_id": s.user_id,
-                        "tenant_id": s.tenant_id,
-                        "mode": s.run_mode,
-                        "validation_mode": s.validation_mode,
-                    }
-                    handler_name = "workflow_run"
-                    try:
-                        if isinstance(payload.get("inputs"), dict) and payload["inputs"].get("watchlist_job_id"):
-                            handler_name = "watchlist_run"
-                    except Exception:
-                        pass
-                    await core.submit(handler_name, payload=payload, queue_name=("workflows" if handler_name=="workflow_run" else "watchlists"), metadata={"user_id": s.user_id})
-            except Exception as e:
-                logger.debug(f"Watchlists: run-now via scheduler skipped: {e}")
+        # Ensure job exists before execution
+        db.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found")
+
+    try:
+        result = await run_watchlist_job(int(current_user.id), job_id)
+        run_id = int(result.get("run_id"))
+        run = db.get_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=500, detail="run_lookup_failed")
     except Exception as e:
         logger.error(f"trigger_run failed: {e}")
         raise HTTPException(status_code=500, detail="run_trigger_failed")
+    stats_dict: Optional[Dict[str, Any]] = None
+    try:
+        stats_dict = json.loads(run.stats_json or "{}") if run.stats_json else None
+    except Exception:
+        stats_dict = None
     return Run(
         id=run.id,
         job_id=run.job_id,
         status=run.status,
         started_at=run.started_at,
         finished_at=run.finished_at,
-        stats=None,
+        stats=stats_dict,
         error_msg=run.error_msg,
     )
 
@@ -764,3 +1032,446 @@ async def get_run_details(
         log_path=r.log_path,
         truncated=truncated,
     )
+
+
+# --------------------
+# Scraped items
+# --------------------
+@router.get("/items", response_model=ScrapedItemsListResponse, summary="List scraped items across runs")
+async def list_scraped_items(
+    run_id: Optional[int] = Query(None),
+    job_id: Optional[int] = Query(None),
+    source_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    reviewed: Optional[bool] = Query(None),
+    q: Optional[str] = Query(None, description="Search by title/summary substring"),
+    since: Optional[str] = Query(None, description="ISO date filter (created_at >= since)"),
+    until: Optional[str] = Query(None, description="ISO date filter (created_at <= until)"),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    limit = size
+    offset = (page - 1) * limit
+    rows, total = db.list_items(
+        run_id=run_id,
+        job_id=job_id,
+        source_id=source_id,
+        status=status,
+        reviewed=reviewed,
+        search=q,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+    )
+    return ScrapedItemsListResponse(items=[_row_to_scraped_item(r) for r in rows], total=total)
+
+
+@router.get("/items/{item_id}", response_model=ScrapedItem, summary="Get a scraped item")
+async def get_scraped_item(
+    item_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        row = db.get_item(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    return _row_to_scraped_item(row)
+
+
+@router.patch("/items/{item_id}", response_model=ScrapedItem, summary="Update item flags")
+async def update_scraped_item(
+    item_id: int = Path(..., ge=1),
+    payload: ScrapedItemUpdateRequest = Body(...),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        row = db.update_item_flags(
+            item_id,
+            reviewed=payload.reviewed,
+            status=payload.status,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    return _row_to_scraped_item(row)
+
+
+# --------------------
+# Outputs
+# --------------------
+@router.post("/outputs", response_model=WatchlistOutput, summary="Generate an output from scraped items")
+async def create_output(
+    payload: WatchlistOutputCreateRequest,
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    db.purge_expired_outputs()
+    try:
+        run = db.get_run(payload.run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    try:
+        job = db.get_job(run.job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    job_prefs: Dict[str, Any] = {}
+    try:
+        job_prefs = (
+            json.loads(job.output_prefs_json or "{}") if getattr(job, "output_prefs_json", None) else {}
+        )
+    except Exception:
+        job_prefs = {}
+    retention_spec = job_prefs.get("retention") or {}
+    job_default_retention = _safe_int(retention_spec.get("default_seconds"), DEFAULT_OUTPUT_TTL_SECONDS)
+    job_temp_retention = _safe_int(retention_spec.get("temporary_seconds"), TEMP_OUTPUT_TTL_SECONDS)
+    template_defaults = job_prefs.get("template") or {}
+    delivery_defaults = job_prefs.get("deliveries") or {}
+
+    job_id = run.job_id
+    items: List[Any]
+    if payload.item_ids:
+        items = db.get_items_by_ids(payload.item_ids)
+        if not items:
+            raise HTTPException(status_code=400, detail="items_not_found")
+        if any(it.run_id != payload.run_id for it in items):
+            raise HTTPException(status_code=400, detail="items_must_belong_to_run")
+    else:
+        items, _ = db.list_items(run_id=payload.run_id, status="ingested", limit=1000, offset=0)
+
+    if not items:
+        raise HTTPException(status_code=400, detail="no_items_available")
+
+    item_models = [_row_to_scraped_item(it) for it in items]
+    version = db.next_output_version(payload.run_id)
+    job_name = getattr(job, "name", None) or f"Job-{job.id}"
+    default_title = f"{job_name}-Output-{version}"
+    title = payload.title or default_title
+
+    template_name = payload.template_name or template_defaults.get("default_name")
+    template_record = None
+    if template_name:
+        if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+            raise HTTPException(status_code=400, detail="invalid_template_name")
+        try:
+            template_record = template_store.load_template(template_name)
+        except template_store.TemplateNotFoundError:
+            raise HTTPException(status_code=404, detail="template_not_found")
+    output_format = (
+        payload.format
+        or template_defaults.get("default_format")
+        or (template_record.format if template_record else "md")
+    )
+    if output_format not in {"md", "html"}:
+        raise HTTPException(status_code=400, detail="invalid_format")
+
+    context = _build_output_context(title, job, run, item_models)
+    if template_record:
+        context["template_name"] = template_record.name
+        if template_record.description:
+            context["template_description"] = template_record.description
+        try:
+            content = _render_template_with_context(template_record.content, context)
+        except Exception as exc:
+            logger.error(f"Watchlists template render failed: {exc}")
+            raise HTTPException(status_code=400, detail=f"template_render_failed: {exc}")
+    else:
+        if output_format == "html":
+            content = _render_default_html(title, item_models)
+        else:
+            content = _render_default_markdown(title, item_models)
+
+    metadata: Dict[str, Any] = {}
+    if payload.metadata:
+        try:
+            metadata.update(payload.metadata)
+        except Exception:
+            pass
+    metadata.update(
+        {
+            "item_count": len(item_models),
+            "item_ids": [itm.id for itm in item_models],
+            "format": output_format,
+            "type": payload.type,
+        }
+    )
+    if template_record:
+        metadata["template_name"] = template_record.name
+        if template_record.description:
+            metadata["template_description"] = template_record.description
+    metadata["version"] = version
+
+    delivery_override = (
+        payload.deliveries.model_dump(exclude_none=True) if payload.deliveries else {}
+    )
+    delivery_plan = (
+        _deep_merge_dict(delivery_defaults, delivery_override)
+        if (delivery_defaults or delivery_override)
+        else {}
+    )
+    if delivery_plan:
+        metadata["delivery_plan"] = delivery_plan
+
+    retention = payload.retention_seconds
+    if retention is None:
+        retention = job_temp_retention if payload.temporary else job_default_retention
+    expires_at = None
+    if retention and retention > 0:
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=retention)).isoformat()
+        metadata["retention_seconds"] = retention
+        metadata["expires_at"] = expires_at
+    metadata["temporary"] = bool(payload.temporary)
+    metadata = {k: v for k, v in metadata.items() if v is not None}
+
+    row = db.create_output(
+        run_id=payload.run_id,
+        job_id=job_id,
+        type=payload.type,
+        format=output_format,
+        title=title,
+        content=content,
+        metadata=metadata,
+        version=version,
+        expires_at=expires_at,
+    )
+    output = _row_to_output(row)
+
+    notifications = NotificationsService(
+        user_id=int(current_user.id or 0),
+        user_email=getattr(current_user, "email", None),
+    )
+    delivery_results: List[Dict[str, Any]] = []
+    chatbook_path_update: Optional[str] = None
+    metadata_update_needed = False
+
+    if isinstance(delivery_plan, dict):
+        email_cfg = delivery_plan.get("email") if isinstance(delivery_plan.get("email"), dict) else None
+        if email_cfg and bool(email_cfg.get("enabled", True)):
+            html_body, text_body = _build_email_bodies(
+                output.content or "",
+                (output.format or output_format),
+                title,
+                email_cfg.get("body_format", "auto"),
+            )
+            attachments = None
+            if email_cfg.get("attach_file", True) and output.content:
+                ext = "html" if (output.format or output_format) == "html" else "md"
+                safe_base = (title or f"watchlist-output-{output.id}").replace("/", "_")
+                attachments = [
+                    {
+                        "filename": f"{safe_base}.{ext}",
+                        "content": (output.content or "").encode("utf-8"),
+                    }
+                ]
+            email_result = await notifications.deliver_email(
+                subject=email_cfg.get("subject") or title,
+                html_body=html_body,
+                text_body=text_body or None,
+                recipients=email_cfg.get("recipients"),
+                attachments=attachments,
+                fallback_to_user_email=True,
+            )
+            delivery_results.append(
+                {
+                    "channel": email_result.channel,
+                    "status": email_result.status,
+                    **email_result.details,
+                }
+            )
+            metadata_update_needed = True
+
+        chat_cfg = delivery_plan.get("chatbook") if isinstance(delivery_plan.get("chatbook"), dict) else None
+        if chat_cfg and bool(chat_cfg.get("enabled", True)):
+            chat_metadata = dict(chat_cfg.get("metadata") or {})
+            chat_metadata.update(
+                {
+                    "job_id": job_id,
+                    "run_id": payload.run_id,
+                    "output_id": output.id,
+                    "version": version,
+                }
+            )
+            chat_result = notifications.deliver_chatbook(
+                title=chat_cfg.get("title") or title,
+                content=output.content or "",
+                description=chat_cfg.get("description"),
+                metadata=chat_metadata,
+                provider=chat_cfg.get("provider", "watchlists"),
+                model=chat_cfg.get("model", "watchlists"),
+                conversation_id=chat_cfg.get("conversation_id"),
+            )
+            delivery_results.append(
+                {
+                    "channel": chat_result.channel,
+                    "status": chat_result.status,
+                    **chat_result.details,
+                }
+            )
+            doc_id = chat_result.details.get("document_id")
+            if chat_result.status == "stored" and doc_id is not None:
+                chatbook_path_update = f"generated_document:{doc_id}"
+                metadata.setdefault("chatbook_document_id", doc_id)
+                metadata_update_needed = True
+
+    if delivery_results:
+        metadata["deliveries"] = delivery_results
+        metadata_update_needed = True
+    if metadata.get("delivery_plan") == {}:
+        metadata.pop("delivery_plan", None)
+        metadata_update_needed = True
+
+    metadata_for_update: Optional[Dict[str, Any]] = None
+    if metadata_update_needed:
+        metadata_for_update = {k: v for k, v in metadata.items() if v is not None}
+
+    if metadata_for_update is not None or chatbook_path_update:
+        updated_row = db.update_output_record(
+            output.id,
+            metadata=metadata_for_update,
+            chatbook_path=chatbook_path_update,
+        )
+        output = _row_to_output(updated_row)
+
+    return output
+
+
+@router.get("/outputs", response_model=WatchlistOutputsListResponse, summary="List generated outputs")
+async def list_outputs(
+    run_id: Optional[int] = Query(None),
+    job_id: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    limit = size
+    offset = (page - 1) * limit
+    rows, total = db.list_outputs(run_id=run_id, job_id=job_id, limit=limit, offset=offset)
+    return WatchlistOutputsListResponse(items=[_row_to_output(r) for r in rows], total=total)
+
+
+@router.get("/outputs/{output_id}", response_model=WatchlistOutput, summary="Get output metadata")
+async def get_output(
+    output_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    db.purge_expired_outputs()
+    try:
+        row = db.get_output(output_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="output_not_found")
+    output = _row_to_output(row)
+    if output.expired:
+        db.purge_expired_outputs()
+        raise HTTPException(status_code=404, detail="output_not_found")
+    return output
+
+
+@router.get("/outputs/{output_id}/download", summary="Download rendered output")
+async def download_output(
+    output_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    db.purge_expired_outputs()
+    try:
+        row = db.get_output(output_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="output_not_found")
+    output = _row_to_output(row)
+    if output.expired:
+        db.purge_expired_outputs()
+        raise HTTPException(status_code=404, detail="output_not_found")
+    content = output.content or ""
+    fmt = output.format or "md"
+    filename = (output.title or f"watchlist-output-{output_id}").replace("/", "_")
+    if fmt == "html":
+        headers = {"Content-Disposition": f'attachment; filename="{filename}.html"'}
+        return HTMLResponse(content=content, headers=headers)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}.md"'}
+    return PlainTextResponse(content=content, media_type="text/markdown", headers=headers)
+
+
+# --------------------
+# Templates
+# --------------------
+@router.get("/templates", response_model=WatchlistTemplateListResponse, summary="List available templates")
+async def list_templates(
+    current_user: User = Depends(get_request_user),
+):
+    records = template_store.list_templates()
+    items = [
+        WatchlistTemplateSummary(
+            name=rec.name,
+            format=rec.format,
+            description=rec.description,
+            updated_at=rec.updated_at,
+        )
+        for rec in records
+    ]
+    return WatchlistTemplateListResponse(items=items)
+
+
+@router.get("/templates/{template_name}", response_model=WatchlistTemplateDetail, summary="Fetch a template")
+async def get_template(
+    template_name: str,
+    current_user: User = Depends(get_request_user),
+):
+    if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+        raise HTTPException(status_code=400, detail="invalid_template_name")
+    try:
+        record = template_store.load_template(template_name)
+    except template_store.TemplateNotFoundError:
+        raise HTTPException(status_code=404, detail="template_not_found")
+    return WatchlistTemplateDetail(
+        name=record.name,
+        format=record.format,
+        description=record.description,
+        updated_at=record.updated_at,
+        content=record.content,
+    )
+
+
+@router.post("/templates", response_model=WatchlistTemplateDetail, summary="Create or update a template")
+async def create_template(
+    payload: WatchlistTemplateCreateRequest,
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        record = template_store.save_template(
+            name=payload.name,
+            fmt=payload.format,
+            content=payload.content,
+            description=payload.description,
+            overwrite=payload.overwrite,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except template_store.TemplateExistsError:
+        raise HTTPException(status_code=409, detail="template_exists")
+    return WatchlistTemplateDetail(
+        name=record.name,
+        format=record.format,
+        description=record.description,
+        updated_at=record.updated_at,
+        content=record.content,
+    )
+
+
+@router.delete("/templates/{template_name}", summary="Delete a template")
+async def delete_template(
+    template_name: str,
+    current_user: User = Depends(get_request_user),
+):
+    if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+        raise HTTPException(status_code=400, detail="invalid_template_name")
+    try:
+        template_store.delete_template(template_name)
+    except template_store.TemplateNotFoundError:
+        raise HTTPException(status_code=404, detail="template_not_found")
+    return {"deleted": True}

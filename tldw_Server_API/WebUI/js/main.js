@@ -224,6 +224,10 @@ class WebUI {
         Utils.saveToStorage('active-sub-tab', contentId);
 
         // Initialize specific tab functionality if needed
+        if (contentId && contentId.startsWith('tabWatchlists') && typeof initializeWatchlistsTab === 'function') {
+            initializeWatchlistsTab(contentId);
+        }
+
         if (contentId === 'tabChatCompletions' && typeof initializeChatCompletionsTab === 'function') {
             initializeChatCompletionsTab();
         }

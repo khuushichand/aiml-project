@@ -61,7 +61,12 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                 continue
             # Build a per-user service
             db = _build_chacha_db_for_user(str(owner))
-            svc = ChatbookService(str(owner), db)
+            owner_int: Optional[int] = None
+            try:
+                owner_int = int(owner)
+            except (TypeError, ValueError):
+                owner_int = None
+            svc = ChatbookService(owner, db, user_id_int=owner_int)
 
             payload: Dict = job.get("payload") or {}
             action = payload.get("action")

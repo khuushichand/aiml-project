@@ -1,0 +1,359 @@
+<!-- Watchlists Items Tab -->
+<div id="tabWatchlistsItems" class="tab-content" role="tabpanel" aria-labelledby="tabWatchlistsItems">
+    <div class="endpoint-section" id="watchlists-items-list">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/watchlists/items</span>
+        </h2>
+        <p>List scraped items with optional filters (run/job/source/status/date).</p>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="watchlistsItems_runId">Run ID</label>
+                <input type="number" id="watchlistsItems_runId" min="1" placeholder="123">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_jobId">Job ID</label>
+                <input type="number" id="watchlistsItems_jobId" min="1" placeholder="42">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_sourceId">Source ID</label>
+                <input type="number" id="watchlistsItems_sourceId" min="1" placeholder="7">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_status">Status</label>
+                <input type="text" id="watchlistsItems_status" placeholder="ingested">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_reviewed">Reviewed</label>
+                <select id="watchlistsItems_reviewed">
+                    <option value="">Any</option>
+                    <option value="true">Reviewed</option>
+                    <option value="false">Not Reviewed</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_query">Search (title/summary)</label>
+                <input type="text" id="watchlistsItems_query" placeholder="keyword">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_since">Since (ISO)</label>
+                <input type="text" id="watchlistsItems_since" placeholder="2025-01-01T00:00:00Z">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_until">Until (ISO)</label>
+                <input type="text" id="watchlistsItems_until" placeholder="2025-01-31T23:59:59Z">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_page">Page</label>
+                <input type="number" id="watchlistsItems_page" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsItems_size">Page Size</label>
+                <input type="number" id="watchlistsItems_size" value="50" min="1" max="200">
+            </div>
+        </div>
+
+        <button class="api-button" onclick="watchlistsListItems()">List Items</button>
+
+        <h3>Response</h3>
+        <pre id="watchlistsItems_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-items-update">
+        <h2>
+            <span class="endpoint-method patch">PATCH</span>
+            <span class="endpoint-path">/api/v1/watchlists/items/{id}</span>
+        </h2>
+        <p>Update item status or reviewed flag.</p>
+
+        <div class="form-inline">
+            <div class="form-group">
+                <label for="watchlistsUpdate_itemId">Item ID</label>
+                <input type="number" id="watchlistsUpdate_itemId" min="1" placeholder="123">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsUpdate_status">Status</label>
+                <input type="text" id="watchlistsUpdate_status" placeholder="reviewed">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsUpdate_reviewed">Reviewed</label>
+                <select id="watchlistsUpdate_reviewed">
+                    <option value="">No Change</option>
+                    <option value="true">True</option>
+                    <option value="false">False</option>
+                </select>
+            </div>
+        </div>
+
+        <button class="api-button subtle" onclick="watchlistsUpdateItem()">Update Item</button>
+
+        <h3>Response</h3>
+        <pre id="watchlistsUpdate_response">---</pre>
+    </div>
+</div>
+
+<!-- Watchlists Outputs Tab -->
+<div id="tabWatchlistsOutputs" class="tab-content" role="tabpanel" aria-labelledby="tabWatchlistsOutputs">
+    <div class="endpoint-section" id="watchlists-outputs-settings">
+        <h2>Watchlist Output Defaults</h2>
+        <p>Defaults sourced from environment variables or job overrides.</p>
+        <p class="small muted">Default TTL: <span id="watchlistsOutputs_defaultTTL">&mdash;</span> seconds &nbsp; | &nbsp; Temporary TTL: <span id="watchlistsOutputs_tempTTL">&mdash;</span> seconds</p>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-outputs-list">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/watchlists/outputs</span>
+        </h2>
+        <p>List generated outputs for a run or job.</p>
+        <div class="form-inline">
+            <div class="form-group">
+                <label for="watchlistsOutputs_runId">Run ID</label>
+                <input type="number" id="watchlistsOutputs_runId" min="1" placeholder="123">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsOutputs_jobId">Job ID</label>
+                <input type="number" id="watchlistsOutputs_jobId" min="1" placeholder="42">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsOutputs_page">Page</label>
+                <input type="number" id="watchlistsOutputs_page" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsOutputs_size">Size</label>
+                <input type="number" id="watchlistsOutputs_size" value="50" min="1" max="200">
+            </div>
+        </div>
+        <button class="api-button" onclick="watchlistsListOutputs()">List Outputs</button>
+        <h3>Response</h3>
+        <pre id="watchlistsOutputs_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-outputs-create">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/watchlists/outputs</span>
+        </h2>
+        <p>Generate a new output. Optional delivery settings allow email and Chatbook notifications.</p>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="watchlistsCreate_runId">Run ID <span class="required">*</span></label>
+                <input type="number" id="watchlistsCreate_runId" min="1" required>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsCreate_itemIds">Item IDs (comma-separated)</label>
+                <textarea id="watchlistsCreate_itemIds" rows="2" placeholder="101,102,103"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsCreate_title">Title</label>
+                <input type="text" id="watchlistsCreate_title" placeholder="Weekly Digest">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsOutput_templateName">Template Name</label>
+                <input type="text" id="watchlistsOutput_templateName" placeholder="newsletter">
+                <select id="watchlistsTemplatePicker" onchange="watchlistsApplyTemplateSelection()">
+                    <option value="">&ndash; Select saved template &ndash;</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsCreate_format">Format</label>
+                <select id="watchlistsCreate_format">
+                    <option value="">(auto)</option>
+                    <option value="md">Markdown</option>
+                    <option value="html">HTML</option>
+                </select>
+            </div>
+            <div class="form-group checkbox-group">
+                <label>
+                    <input type="checkbox" id="watchlistsCreate_temporary"> Temporary Output
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsCreate_retention">Retention Seconds</label>
+                <input type="number" id="watchlistsCreate_retention" min="0" placeholder="0 = never expires">
+            </div>
+            <div class="form-group span-2">
+                <label for="watchlistsCreate_metadata">Metadata JSON</label>
+                <textarea id="watchlistsCreate_metadata" rows="2" placeholder='{"tag":"digest"}'></textarea>
+            </div>
+        </div>
+
+        <fieldset class="fieldset">
+            <legend>Email Delivery</legend>
+            <div class="form-grid">
+                <div class="form-group checkbox-group">
+                    <label>
+                        <input type="checkbox" id="watchlistsEmail_enabled"> Send email
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsEmail_recipients">Recipients</label>
+                    <input type="text" id="watchlistsEmail_recipients" placeholder="user@example.com,other@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsEmail_subject">Subject</label>
+                    <input type="text" id="watchlistsEmail_subject" placeholder="Daily Digest">
+                </div>
+                <div class="form-group checkbox-group">
+                    <label>
+                        <input type="checkbox" id="watchlistsEmail_attach" checked> Attach rendered file
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsEmail_bodyFormat">Body Format</label>
+                    <select id="watchlistsEmail_bodyFormat">
+                        <option value="auto">Auto</option>
+                        <option value="text">Plain Text</option>
+                        <option value="html">HTML</option>
+                    </select>
+                </div>
+            </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+            <legend>Chatbook Delivery</legend>
+            <div class="form-grid">
+                <div class="form-group checkbox-group">
+                    <label>
+                        <input type="checkbox" id="watchlistsChat_enabled"> Store generated document
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsChat_title">Document Title</label>
+                    <input type="text" id="watchlistsChat_title" placeholder="Digest Document">
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsChat_description">Description</label>
+                    <input type="text" id="watchlistsChat_description" placeholder="Auto-generated summary">
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsChat_conversation">Conversation ID</label>
+                    <input type="number" id="watchlistsChat_conversation" min="1" placeholder="optional">
+                </div>
+                <div class="form-group span-2">
+                    <label for="watchlistsChat_metadata">Metadata JSON</label>
+                    <textarea id="watchlistsChat_metadata" rows="2" placeholder='{"origin":"digest"}'></textarea>
+                </div>
+            </div>
+        </fieldset>
+
+        <button class="api-button" onclick="watchlistsCreateOutput()">Generate Output</button>
+
+        <h3>Response</h3>
+        <pre id="watchlistsCreate_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-output-prefs">
+        <h2>Job Output Preferences</h2>
+        <p>Persist job-level defaults for retention, template, and delivery targets.</p>
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="watchlistsPrefs_jobId">Job ID <span class="required">*</span></label>
+                <input type="number" id="watchlistsPrefs_jobId" min="1" required>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsPrefs_defaultTTL">Default Retention (seconds)</label>
+                <input type="number" id="watchlistsPrefs_defaultTTL" min="0" placeholder="inherit">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsPrefs_tempTTL">Temporary Retention (seconds)</label>
+                <input type="number" id="watchlistsPrefs_tempTTL" min="0" placeholder="inherit">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsPrefs_template">Default Template</label>
+                <input type="text" id="watchlistsPrefs_template" placeholder="newsletter">
+            </div>
+            <div class="form-group span-2">
+                <label for="watchlistsPrefs_emailRecipients">Default Email Recipients</label>
+                <input type="text" id="watchlistsPrefs_emailRecipients" placeholder="team@example.com">
+            </div>
+            <div class="form-group span-2">
+                <label for="watchlistsPrefs_emailSubject">Default Email Subject</label>
+                <input type="text" id="watchlistsPrefs_emailSubject" placeholder="Daily Digest">
+            </div>
+            <div class="form-group checkbox-group">
+                <label>
+                    <input type="checkbox" id="watchlistsPrefs_chatEnabled"> Store Chatbook document by default
+                </label>
+            </div>
+        </div>
+        <div class="form-actions">
+            <button class="api-button subtle" onclick="watchlistsLoadJobPrefs()">Load Existing Prefs</button>
+            <button class="api-button" onclick="watchlistsSaveOutputPrefs()">Save Output Prefs</button>
+        </div>
+        <h3>Response</h3>
+        <pre id="watchlistsPrefs_response">---</pre>
+    </div>
+</div>
+
+<!-- Watchlists Templates Tab -->
+<div id="tabWatchlistsTemplates" class="tab-content" role="tabpanel" aria-labelledby="tabWatchlistsTemplates">
+    <div class="endpoint-section" id="watchlists-templates-list">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/watchlists/templates</span>
+        </h2>
+        <p>List stored output templates.</p>
+        <button class="api-button" onclick="watchlistsListTemplates(false)">List Templates</button>
+        <h3>Response</h3>
+        <pre id="watchlistsTemplates_listResponse">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-templates-get">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/watchlists/templates/{name}</span>
+        </h2>
+        <div class="form-inline">
+            <div class="form-group">
+                <label for="watchlistsTemplate_name">Template Name</label>
+                <input type="text" id="watchlistsTemplate_name" placeholder="newsletter">
+            </div>
+        </div>
+        <div class="form-actions">
+            <button class="api-button subtle" onclick="watchlistsGetTemplate()">Fetch Template</button>
+            <button class="api-button danger" onclick="watchlistsDeleteTemplate()">Delete Template</button>
+        </div>
+        <h3>Response</h3>
+        <pre id="watchlistsTemplate_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-templates-create">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/watchlists/templates</span>
+        </h2>
+        <p>Create or overwrite a template stored on disk.</p>
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="watchlistsTemplateCreate_name">Name</label>
+                <input type="text" id="watchlistsTemplateCreate_name" placeholder="newsletter" required>
+            </div>
+            <div class="form-group">
+                <label for="watchlistsTemplateCreate_format">Format</label>
+                <select id="watchlistsTemplateCreate_format">
+                    <option value="md">Markdown</option>
+                    <option value="html">HTML</option>
+                </select>
+            </div>
+            <div class="form-group span-2">
+                <label for="watchlistsTemplateCreate_description">Description</label>
+                <input type="text" id="watchlistsTemplateCreate_description" placeholder="Morning briefing template">
+            </div>
+            <div class="form-group span-2 checkbox-group">
+                <label>
+                    <input type="checkbox" id="watchlistsTemplateCreate_overwrite"> Overwrite if exists
+                </label>
+            </div>
+            <div class="form-group span-2">
+                <label for="watchlistsTemplateCreate_content">Content</label>
+                <textarea id="watchlistsTemplateCreate_content" rows="8" placeholder="{{ title }}\n{% for item in items %}- {{ item.title }}{% endfor %}"></textarea>
+            </div>
+        </div>
+        <button class="api-button" onclick="watchlistsCreateTemplate()">Save Template</button>
+        <h3>Response</h3>
+        <pre id="watchlistsTemplateCreate_response">---</pre>
+    </div>
+</div>

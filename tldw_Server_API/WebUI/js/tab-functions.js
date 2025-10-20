@@ -3630,6 +3630,363 @@ function resetFileTransRecMax() {
     } catch(_) {}
 }
 
+// -----------------------------------------------------------------------------
+// Watchlists Tab Helpers
+// -----------------------------------------------------------------------------
+
+let _watchlistsSettingsLoaded = false;
+
+function watchlistsSetResponse(elementId, data) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (data === null || data === undefined) {
+        el.textContent = '---';
+        return;
+    }
+    if (typeof data === 'string') {
+        el.textContent = data;
+        return;
+    }
+    el.textContent = Utils.formatJSON(data, 2);
+}
+
+function watchlistsParseJSON(inputId) {
+    const field = document.getElementById(inputId);
+    if (!field) return undefined;
+    const raw = field.value.trim();
+    if (!raw) return undefined;
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        throw new Error(`Invalid JSON in ${inputId}: ${err.message}`);
+    }
+}
+
+function watchlistsParseRecipients(value) {
+    if (!value) return undefined;
+    const parts = value.split(',').map((p) => p.trim()).filter(Boolean);
+    return parts.length ? parts : undefined;
+}
+
+async function watchlistsFetchSettings() {
+    try {
+        const res = await apiClient.get('/api/v1/watchlists/settings');
+        if (res) {
+            const defaultTTL = document.getElementById('watchlistsOutputs_defaultTTL');
+            const tempTTL = document.getElementById('watchlistsOutputs_tempTTL');
+            if (defaultTTL) defaultTTL.textContent = res.default_output_ttl_seconds ?? '0';
+            if (tempTTL) tempTTL.textContent = res.temporary_output_ttl_seconds ?? '0';
+        }
+    } catch (err) {
+        console.error('Failed to load watchlist settings', err);
+    }
+}
+
+async function watchlistsRefreshTemplatePicker() {
+    const picker = document.getElementById('watchlistsTemplatePicker');
+    if (!picker) return;
+    try {
+        const res = await apiClient.get('/api/v1/watchlists/templates');
+        while (picker.options.length > 1) {
+            picker.remove(1);
+        }
+        if (res && Array.isArray(res.items)) {
+            res.items.forEach((tpl) => {
+                const opt = document.createElement('option');
+                opt.value = tpl.name;
+                opt.textContent = `${tpl.name} (${tpl.format})`;
+                picker.appendChild(opt);
+            });
+        }
+    } catch (err) {
+        console.error('Failed to load templates', err);
+    }
+}
+
+function watchlistsApplyTemplateSelection() {
+    const picker = document.getElementById('watchlistsTemplatePicker');
+    const input = document.getElementById('watchlistsOutput_templateName');
+    if (picker && input && picker.value) {
+        input.value = picker.value;
+    }
+}
+
+async function initializeWatchlistsTab(contentId) {
+    if (!_watchlistsSettingsLoaded) {
+        await watchlistsFetchSettings();
+        await watchlistsRefreshTemplatePicker();
+        _watchlistsSettingsLoaded = true;
+    }
+    if (contentId === 'tabWatchlistsTemplates') {
+        await watchlistsListTemplates(false);
+    }
+}
+
+async function watchlistsListItems() {
+    try {
+        const params = {};
+        const runId = document.getElementById('watchlistsItems_runId')?.value;
+        const jobId = document.getElementById('watchlistsItems_jobId')?.value;
+        const sourceId = document.getElementById('watchlistsItems_sourceId')?.value;
+        const status = document.getElementById('watchlistsItems_status')?.value;
+        const reviewed = document.getElementById('watchlistsItems_reviewed')?.value;
+        const query = document.getElementById('watchlistsItems_query')?.value;
+        const since = document.getElementById('watchlistsItems_since')?.value;
+        const until = document.getElementById('watchlistsItems_until')?.value;
+        const page = document.getElementById('watchlistsItems_page')?.value || '1';
+        const size = document.getElementById('watchlistsItems_size')?.value || '50';
+
+        if (runId) params.run_id = Number(runId);
+        if (jobId) params.job_id = Number(jobId);
+        if (sourceId) params.source_id = Number(sourceId);
+        if (status) params.status = status;
+        if (reviewed === 'true') params.reviewed = true;
+        if (reviewed === 'false') params.reviewed = false;
+        if (query) params.q = query;
+        if (since) params.since = since;
+        if (until) params.until = until;
+        params.page = Number(page);
+        params.size = Number(size);
+
+        const res = await apiClient.get('/api/v1/watchlists/items', params);
+        watchlistsSetResponse('watchlistsItems_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsItems_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsUpdateItem() {
+    try {
+        const itemId = document.getElementById('watchlistsUpdate_itemId')?.value;
+        if (!itemId) {
+            throw new Error('Item ID is required');
+        }
+        const payload = {};
+        const status = document.getElementById('watchlistsUpdate_status')?.value;
+        const reviewed = document.getElementById('watchlistsUpdate_reviewed')?.value;
+        if (status) payload.status = status;
+        if (reviewed === 'true') payload.reviewed = true;
+        if (reviewed === 'false') payload.reviewed = false;
+        if (!Object.keys(payload).length) {
+            throw new Error('Provide status or reviewed flag');
+        }
+        const res = await apiClient.patch(`/api/v1/watchlists/items/${Number(itemId)}`, payload);
+        watchlistsSetResponse('watchlistsUpdate_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsUpdate_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsListOutputs() {
+    try {
+        const params = {};
+        const runId = document.getElementById('watchlistsOutputs_runId')?.value;
+        const jobId = document.getElementById('watchlistsOutputs_jobId')?.value;
+        const page = document.getElementById('watchlistsOutputs_page')?.value || '1';
+        const size = document.getElementById('watchlistsOutputs_size')?.value || '50';
+        if (runId) params.run_id = Number(runId);
+        if (jobId) params.job_id = Number(jobId);
+        params.page = Number(page);
+        params.size = Number(size);
+        const res = await apiClient.get('/api/v1/watchlists/outputs', params);
+        watchlistsSetResponse('watchlistsOutputs_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsOutputs_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsCreateOutput() {
+    try {
+        const runIdRaw = document.getElementById('watchlistsCreate_runId')?.value;
+        if (!runIdRaw) {
+            throw new Error('Run ID is required');
+        }
+        const payload = {
+            run_id: Number(runIdRaw),
+        };
+        const itemIdsRaw = document.getElementById('watchlistsCreate_itemIds')?.value || '';
+        if (itemIdsRaw.trim()) {
+            const ids = itemIdsRaw.split(',').map((val) => Number(val.trim())).filter((val) => !Number.isNaN(val));
+            if (ids.length) payload.item_ids = ids;
+        }
+        const title = document.getElementById('watchlistsCreate_title')?.value;
+        if (title) payload.title = title;
+        const templateName = document.getElementById('watchlistsOutput_templateName')?.value;
+        if (templateName) payload.template_name = templateName;
+        const fmt = document.getElementById('watchlistsCreate_format')?.value;
+        if (fmt) payload.format = fmt;
+        if (document.getElementById('watchlistsCreate_temporary')?.checked) payload.temporary = true;
+        const retention = document.getElementById('watchlistsCreate_retention')?.value;
+        if (retention) payload.retention_seconds = Number(retention);
+        const metadata = watchlistsParseJSON('watchlistsCreate_metadata');
+        if (metadata) payload.metadata = metadata;
+
+        const deliveries = {};
+        if (document.getElementById('watchlistsEmail_enabled')?.checked) {
+            deliveries.email = {
+                enabled: true,
+                attach_file: !!document.getElementById('watchlistsEmail_attach')?.checked,
+                body_format: document.getElementById('watchlistsEmail_bodyFormat')?.value || 'auto',
+            };
+            const recipients = watchlistsParseRecipients(document.getElementById('watchlistsEmail_recipients')?.value || '');
+            if (recipients) deliveries.email.recipients = recipients;
+            const subject = document.getElementById('watchlistsEmail_subject')?.value;
+            if (subject) deliveries.email.subject = subject;
+        }
+        if (document.getElementById('watchlistsChat_enabled')?.checked) {
+            deliveries.chatbook = { enabled: true };
+            const chatTitle = document.getElementById('watchlistsChat_title')?.value;
+            if (chatTitle) deliveries.chatbook.title = chatTitle;
+            const description = document.getElementById('watchlistsChat_description')?.value;
+            if (description) deliveries.chatbook.description = description;
+            const conv = document.getElementById('watchlistsChat_conversation')?.value;
+            if (conv) deliveries.chatbook.conversation_id = Number(conv);
+            const chatMeta = watchlistsParseJSON('watchlistsChat_metadata');
+            if (chatMeta) deliveries.chatbook.metadata = chatMeta;
+        }
+        if (Object.keys(deliveries).length) {
+            payload.deliveries = deliveries;
+        }
+
+        const res = await apiClient.post('/api/v1/watchlists/outputs', payload);
+        watchlistsSetResponse('watchlistsCreate_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsCreate_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsLoadJobPrefs() {
+    try {
+        const jobIdRaw = document.getElementById('watchlistsPrefs_jobId')?.value;
+        if (!jobIdRaw) {
+            throw new Error('Job ID is required');
+        }
+        const res = await apiClient.get(`/api/v1/watchlists/jobs/${Number(jobIdRaw)}`);
+        if (res && res.output_prefs) {
+            const prefs = res.output_prefs;
+            document.getElementById('watchlistsPrefs_defaultTTL').value = prefs.retention?.default_seconds ?? '';
+            document.getElementById('watchlistsPrefs_tempTTL').value = prefs.retention?.temporary_seconds ?? '';
+            document.getElementById('watchlistsPrefs_template').value = prefs.template?.default_name ?? '';
+            document.getElementById('watchlistsPrefs_emailRecipients').value = (prefs.deliveries?.email?.recipients || []).join(', ');
+            document.getElementById('watchlistsPrefs_emailSubject').value = prefs.deliveries?.email?.subject ?? '';
+            document.getElementById('watchlistsPrefs_chatEnabled').checked = !!(prefs.deliveries?.chatbook?.enabled);
+        }
+        watchlistsSetResponse('watchlistsPrefs_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsPrefs_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsSaveOutputPrefs() {
+    try {
+        const jobIdRaw = document.getElementById('watchlistsPrefs_jobId')?.value;
+        if (!jobIdRaw) {
+            throw new Error('Job ID is required');
+        }
+        const payload = { output_prefs: {} };
+        const retention = {};
+        const defaultTTL = document.getElementById('watchlistsPrefs_defaultTTL')?.value;
+        const tempTTL = document.getElementById('watchlistsPrefs_tempTTL')?.value;
+        if (defaultTTL) retention.default_seconds = Number(defaultTTL);
+        if (tempTTL) retention.temporary_seconds = Number(tempTTL);
+        if (Object.keys(retention).length) payload.output_prefs.retention = retention;
+
+        const template = document.getElementById('watchlistsPrefs_template')?.value;
+        if (template) {
+            payload.output_prefs.template = { default_name: template };
+        }
+
+        const deliveries = {};
+        const recipientsDef = watchlistsParseRecipients(document.getElementById('watchlistsPrefs_emailRecipients')?.value || '');
+        const subjectDef = document.getElementById('watchlistsPrefs_emailSubject')?.value;
+        if ((recipientsDef && recipientsDef.length) || subjectDef) {
+            deliveries.email = {};
+            if (recipientsDef && recipientsDef.length) deliveries.email.recipients = recipientsDef;
+            if (subjectDef) deliveries.email.subject = subjectDef;
+        }
+        if (document.getElementById('watchlistsPrefs_chatEnabled')?.checked) {
+            deliveries.chatbook = { enabled: true };
+        }
+        if (Object.keys(deliveries).length) {
+            payload.output_prefs.deliveries = deliveries;
+        }
+
+        const res = await apiClient.patch(`/api/v1/watchlists/jobs/${Number(jobIdRaw)}`, payload);
+        watchlistsSetResponse('watchlistsPrefs_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsPrefs_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsListTemplates(silent = true) {
+    try {
+        const res = await apiClient.get('/api/v1/watchlists/templates');
+        if (!silent) {
+            watchlistsSetResponse('watchlistsTemplates_listResponse', res);
+        }
+        return res;
+    } catch (err) {
+        if (!silent) watchlistsSetResponse('watchlistsTemplates_listResponse', `Error: ${err.message}`);
+        throw err;
+    }
+}
+
+async function watchlistsGetTemplate() {
+    try {
+        const name = document.getElementById('watchlistsTemplate_name')?.value;
+        if (!name) throw new Error('Template name required');
+        const res = await apiClient.get(`/api/v1/watchlists/templates/${encodeURIComponent(name)}`);
+        watchlistsSetResponse('watchlistsTemplate_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsTemplate_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsDeleteTemplate() {
+    try {
+        const name = document.getElementById('watchlistsTemplate_name')?.value;
+        if (!name) throw new Error('Template name required');
+        await apiClient.delete(`/api/v1/watchlists/templates/${encodeURIComponent(name)}`);
+        watchlistsSetResponse('watchlistsTemplate_response', 'Deleted');
+        await watchlistsRefreshTemplatePicker();
+        await watchlistsListTemplates();
+    } catch (err) {
+        watchlistsSetResponse('watchlistsTemplate_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsCreateTemplate() {
+    try {
+        const name = document.getElementById('watchlistsTemplateCreate_name')?.value;
+        if (!name) throw new Error('Name required');
+        const fmt = document.getElementById('watchlistsTemplateCreate_format')?.value || 'md';
+        const description = document.getElementById('watchlistsTemplateCreate_description')?.value;
+        const overwrite = document.getElementById('watchlistsTemplateCreate_overwrite')?.checked;
+        const content = document.getElementById('watchlistsTemplateCreate_content')?.value;
+        if (!content) throw new Error('Template content required');
+        const payload = {
+            name,
+            format: fmt,
+            content,
+            overwrite: !!overwrite,
+        };
+        if (description) payload.description = description;
+        const res = await apiClient.post('/api/v1/watchlists/templates', payload);
+        watchlistsSetResponse('watchlistsTemplateCreate_response', res);
+        await watchlistsRefreshTemplatePicker();
+        await watchlistsListTemplates();
+    } catch (err) {
+        watchlistsSetResponse('watchlistsTemplateCreate_response', `Error: ${err.message}`);
+    }
+}
+
+// Best-effort: revoke any recording object URLs on tab unload to prevent leaks
+try {
+    window.addEventListener('beforeunload', () => {
+        try { if (typeof _audioTTSRec !== 'undefined' && _audioTTSRec && _audioTTSRec.url) URL.revokeObjectURL(_audioTTSRec.url); } catch(_) {}
+        try { if (typeof _fileTransRec !== 'undefined' && _fileTransRec && _fileTransRec.url) URL.revokeObjectURL(_fileTransRec.url); } catch(_) {}
+    });
+} catch (_) {}
 // Best-effort: revoke any recording object URLs on tab unload to prevent leaks
 try {
     window.addEventListener('beforeunload', () => {

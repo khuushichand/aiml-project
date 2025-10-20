@@ -17,6 +17,7 @@ Key Adaptations from Single-User:
 - No global state or singletons
 """
 
+import base64
 import json
 import shutil
 import zipfile
@@ -54,24 +55,60 @@ from .chatbook_models import (
     ImportStatusData
 )
 from ..DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ..DB_Management.db_path_utils import DatabasePaths
+
+try:  # Prompts database is optional in some deployments
+    from ..DB_Management.Prompts_DB import PromptsDatabase  # type: ignore
+except Exception:  # pragma: no cover - defensive guard for stripped builds
+    PromptsDatabase = None  # type: ignore
+
+try:
+    from ..DB_Management.Media_DB_v2 import (  # type: ignore
+        MediaDatabase,
+        get_media_transcripts,
+        get_media_prompts,
+    )
+except Exception:  # pragma: no cover
+    MediaDatabase = None  # type: ignore
+    get_media_transcripts = None  # type: ignore
+    get_media_prompts = None  # type: ignore
+
+try:
+    from ..DB_Management.Evaluations_DB import EvaluationsDatabase  # type: ignore
+except Exception:  # pragma: no cover
+    EvaluationsDatabase = None  # type: ignore
 
 
 class ChatbookService:
     """Service for creating and importing chatbooks with user isolation."""
     
-    def __init__(self, user_id: str, db: CharactersRAGDB):
+    def __init__(self, user_id: Union[str, int], db: CharactersRAGDB, user_id_int: Optional[int] = None):
         """
         Initialize the chatbook service for a specific user.
         
         Args:
-            user_id: User identifier
+            user_id: User identifier (string or integer)
             db: User's ChaChaNotes database instance
+            user_id_int: Optional integer form of the user id for cross-database access
         """
-        self.user_id = user_id
+        self.user_id_raw = user_id
+        self.user_id = str(user_id)
+        self.user_id_int: Optional[int] = user_id_int
+        if self.user_id_int is None:
+            try:
+                self.user_id_int = int(self.user_id)
+            except (TypeError, ValueError):
+                self.user_id_int = None
         self.db = db
+        
+        # Track TODOs once per session so we comply with PRD while exposing gaps
+        self._todo_messages: Set[str] = set()
         
         # In-process async task registry (best-effort cancellation)
         self._tasks: _Dict[str, asyncio.Task] = {}
+        self._prompts_db: Optional["PromptsDatabase"] = None
+        self._media_db: Optional["MediaDatabase"] = None
+        self._evaluations_db: Optional["EvaluationsDatabase"] = None
         
         # Secure user-specific directory using application data path
         # Get base path from environment or use appropriate default
@@ -81,7 +118,7 @@ class ChatbookService:
         
         # Sanitize user_id to prevent path traversal
         # Only allow alphanumeric characters, hyphens, and underscores
-        safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(user_id))
+        safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(self.user_id))
         # Remove any path separators or dangerous patterns
         safe_user_id = safe_user_id.replace('..', '_').replace('/', '_').replace('\\', '_')
         # Limit length to prevent excessively long paths
@@ -117,6 +154,166 @@ class ChatbookService:
         
         # Initialize job tracking tables
         self._init_job_tables()
+
+
+    # -------------------------------------------------------------------------
+    # Helper utilities (TODO markers ensure disparities with PRD are surfaced)
+    # -------------------------------------------------------------------------
+    def _note_todo(self, message: str) -> None:
+        """Log a TODO item once to highlight parity gaps with the PRD."""
+        if message not in self._todo_messages:
+            logger.warning(f"TODO(chatbooks): {message}")
+            self._todo_messages.add(message)
+
+    def _get_prompts_db(self) -> Optional["PromptsDatabase"]:
+        """Lazily initialize and cache the prompts database."""
+        if PromptsDatabase is None:
+            self._note_todo("Prompts export/import requires PromptsDatabase module; skipping for current build.")
+            return None
+        if self._prompts_db is not None:
+            return self._prompts_db
+        if self.user_id_int is None:
+            self._note_todo("Prompts export/import requires numeric user id to resolve database path.")
+            return None
+        try:
+            db_path = DatabasePaths.get_prompts_db_path(self.user_id_int)
+            self._prompts_db = PromptsDatabase(db_path, client_id=self.user_id)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(f"Failed to initialize PromptsDatabase for chatbooks export: {exc}")
+            self._note_todo("Prompts export/import initialization failed; inspect logs for details.")
+            self._prompts_db = None
+        return self._prompts_db
+
+    def _get_media_db(self) -> Optional["MediaDatabase"]:
+        """Lazily initialize and cache the media database."""
+        if MediaDatabase is None:
+            self._note_todo("Media export/import requires MediaDatabase module; skipping media coverage.")
+            return None
+        if self._media_db is not None:
+            return self._media_db
+        if self.user_id_int is None:
+            self._note_todo("Media export/import requires numeric user id to resolve database path.")
+            return None
+        try:
+            db_path = DatabasePaths.get_media_db_path(self.user_id_int)
+            self._media_db = MediaDatabase(db_path, client_id=self.user_id)
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Failed to initialize MediaDatabase for chatbooks export: {exc}")
+            self._note_todo("Media export/import initialization failed; inspect logs for details.")
+            self._media_db = None
+        return self._media_db
+
+    def _get_evaluations_db(self) -> Optional["EvaluationsDatabase"]:
+        """Lazily initialize and cache the evaluations database."""
+        if EvaluationsDatabase is None:
+            self._note_todo("Evaluations export/import requires EvaluationsDatabase module; skipping evaluations coverage.")
+            return None
+        if self._evaluations_db is not None:
+            return self._evaluations_db
+        if self.user_id_int is None:
+            self._note_todo("Evaluations export/import requires numeric user id to resolve database path.")
+            return None
+        try:
+            db_path = DatabasePaths.get_evaluations_db_path(self.user_id_int)
+            # EvaluationsDatabase handles backend resolution internally
+            self._evaluations_db = EvaluationsDatabase(str(db_path))
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Failed to initialize EvaluationsDatabase for chatbooks export: {exc}")
+            self._note_todo("Evaluations export/import initialization failed; inspect logs for details.")
+            self._evaluations_db = None
+        return self._evaluations_db
+
+    @staticmethod
+    def _normalize_datetime(value: Any) -> Any:
+        """Convert datetime-like values to ISO strings."""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    def _normalize_prompt_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize prompt record for JSON export."""
+        payload: Dict[str, Any] = {}
+        for key, value in record.items():
+            payload[key] = self._normalize_datetime(value)
+        return payload
+
+    def _fetch_media_record(self, media_db: "MediaDatabase", identifier: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a media row by integer id or uuid."""
+        record: Optional[Dict[str, Any]] = None
+        try:
+            record = media_db.get_media_by_id(int(identifier))
+        except Exception:
+            record = None
+        if not record:
+            try:
+                record = media_db.get_media_by_uuid(str(identifier))
+            except Exception:
+                record = None
+        if record and isinstance(record, dict):
+            return dict(record)
+        return record
+
+    def _normalize_media_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize media row for JSON export."""
+        payload: Dict[str, Any] = {}
+        for key, value in record.items():
+            if key == "vector_embedding":
+                # handled separately when include_embeddings is true
+                continue
+            if isinstance(value, (datetime,)):
+                payload[key] = value.isoformat()
+            elif isinstance(value, (bytes, bytearray, memoryview)):
+                payload[key] = base64.b64encode(bytes(value)).decode("ascii")
+            else:
+                payload[key] = value
+        return payload
+
+    def _normalize_transcript_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize transcript row from Media DB helpers."""
+        payload: Dict[str, Any] = {}
+        for key, value in row.items():
+            payload[key] = self._normalize_datetime(value)
+        return payload
+
+    def _normalize_evaluation_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize evaluation definition for export."""
+        payload: Dict[str, Any] = {}
+        for key, value in record.items():
+            if key in {"eval_spec", "metadata"} and isinstance(value, str):
+                try:
+                    payload[key] = json.loads(value)
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            payload[key] = self._normalize_datetime(value)
+        return payload
+
+    def _normalize_evaluation_run(self, run: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize evaluation run for export."""
+        payload: Dict[str, Any] = {}
+        for key, value in run.items():
+            if key in {"config"} and isinstance(value, str):
+                try:
+                    payload[key] = json.loads(value)
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            payload[key] = self._normalize_datetime(value)
+        return payload
+
+    @staticmethod
+    def _extension_from_mime(mime_type: Optional[str]) -> str:
+        """Infer a safe file extension for an attachment mime type."""
+        if not mime_type:
+            return ".bin"
+        mapping = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif"
+        }
+        return mapping.get(mime_type.lower(), ".bin")
 
         # Jobs backend selection (domain override > module default), legacy flag supported
         backend = (os.getenv("CHATBOOKS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
@@ -678,6 +875,31 @@ class ChatbookService:
                     work_dir, manifest, content
                 )
             
+            if ContentType.MEDIA in content_selections:
+                self._collect_media_items(
+                    content_selections[ContentType.MEDIA],
+                    work_dir, manifest, content,
+                    include_media=include_media,
+                    include_embeddings=include_embeddings
+                )
+            
+            if ContentType.PROMPT in content_selections:
+                self._collect_prompts(
+                    content_selections[ContentType.PROMPT],
+                    work_dir, manifest, content
+                )
+            
+            if ContentType.EVALUATION in content_selections:
+                self._collect_evaluations(
+                    content_selections[ContentType.EVALUATION],
+                    work_dir, manifest, content
+                )
+            
+            if ContentType.EMBEDDING in content_selections:
+                self._note_todo(
+                    "Explicit embedding exports are pending; embeddings are currently derived from media when include_embeddings=true."
+                )
+            
             if include_generated_content and ContentType.GENERATED_DOCUMENT in content_selections:
                 self._collect_generated_documents(
                     content_selections[ContentType.GENERATED_DOCUMENT],
@@ -688,6 +910,10 @@ class ChatbookService:
             manifest.total_conversations = len(content.conversations)
             manifest.total_notes = len(content.notes)
             manifest.total_characters = len(content.characters)
+            manifest.total_media_items = len(content.media)
+            manifest.total_prompts = len(content.prompts)
+            manifest.total_evaluations = len(content.evaluations)
+            manifest.total_embeddings = len(content.embeddings)
             manifest.total_world_books = len(content.world_books)
             manifest.total_dictionaries = len(content.dictionaries)
             manifest.total_documents = len(content.generated_documents)
@@ -947,6 +1173,8 @@ class ChatbookService:
             if not ok:
                 # Surface specific validator detail while keeping consistent prefix
                 detail = err or "Invalid or potentially malicious archive file"
+                if isinstance(detail, str) and detail.lower().startswith("file does not exist"):
+                    detail = "Invalid or potentially malicious archive file"
                 return False, f"Error: {detail}", None
             
             # Extract chatbook to secure temp location
@@ -1645,6 +1873,210 @@ class ChatbookService:
             logger.error(f"Error cleaning up expired exports: {e}")
             return 0
     
+    def _collect_prompts(
+        self,
+        prompt_ids: List[str],
+        work_dir: Path,
+        manifest: ChatbookManifest,
+        content: ChatbookContent
+    ) -> None:
+        """Collect Prompt Studio prompts for export."""
+        if not prompt_ids:
+            return
+        prompts_db = self._get_prompts_db()
+        if prompts_db is None:
+            logger.debug("Skipping prompt export because prompts DB is unavailable.")
+            return
+        prompts_dir = work_dir / "content" / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+
+        for prompt_identifier in prompt_ids:
+            prompt_record: Optional[Dict[str, Any]] = None
+            # Attempt ID lookup (int) first, then UUID
+            try:
+                prompt_record = prompts_db.get_prompt_by_id(int(prompt_identifier))
+            except Exception:
+                prompt_record = None
+            if not prompt_record:
+                try:
+                    prompt_record = prompts_db.get_prompt_by_uuid(str(prompt_identifier))
+                except Exception:
+                    prompt_record = None
+            if not prompt_record:
+                logger.debug(f"Prompt {prompt_identifier} not found; skipping.")
+                continue
+
+            prompt_payload = self._normalize_prompt_record(dict(prompt_record))
+            prompt_id = str(prompt_payload.get("id", prompt_identifier))
+            file_name = f"prompt_{prompt_id}.json"
+            file_path = prompts_dir / file_name
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(prompt_payload, f, indent=2, ensure_ascii=False)
+
+            content.prompts[prompt_id] = prompt_payload
+            manifest.content_items.append(ContentItem(
+                id=prompt_id,
+                type=ContentType.PROMPT,
+                title=prompt_payload.get("name", f"Prompt {prompt_id}"),
+                description=prompt_payload.get("details"),
+                file_path=f"content/prompts/{file_name}"
+            ))
+
+    def _collect_media_items(
+        self,
+        media_ids: List[str],
+        work_dir: Path,
+        manifest: ChatbookManifest,
+        content: ChatbookContent,
+        include_media: bool,
+        include_embeddings: bool
+    ) -> None:
+        """Collect media items (metadata + transcripts) for export."""
+        if not media_ids:
+            return
+        media_db = self._get_media_db()
+        if media_db is None:
+            logger.debug("Skipping media export because media DB is unavailable.")
+            return
+        media_dir = work_dir / "content" / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        embeddings_dir: Optional[Path] = None
+
+        if include_media:
+            self._note_todo("Binary media asset export is not yet implemented; exporting metadata only.")
+
+        for media_identifier in media_ids:
+            media_record = self._fetch_media_record(media_db, str(media_identifier))
+            if not media_record:
+                logger.debug(f"Media {media_identifier} not found; skipping.")
+                continue
+
+            normalized = self._normalize_media_record(media_record)
+            media_id = str(normalized.get("id", media_identifier))
+
+            # Attach transcripts when helper is available
+            transcripts: List[Dict[str, Any]] = []
+            if get_media_transcripts is not None:
+                try:
+                    transcripts_raw = get_media_transcripts(media_db, int(media_record["id"]))
+                    transcripts = [self._normalize_transcript_row(row) for row in transcripts_raw]
+                except Exception as exc:
+                    logger.debug(f"Failed to fetch transcripts for media {media_id}: {exc}")
+                    self._note_todo("Media transcripts export failed for some items; inspect logs.")
+            normalized["transcripts"] = transcripts
+
+            # Attach prompts linked to media when helper available
+            media_prompts: List[Dict[str, Any]] = []
+            if get_media_prompts is not None:
+                try:
+                    media_prompts = get_media_prompts(media_db, int(media_record["id"]))
+                except Exception as exc:
+                    logger.debug(f"Failed to fetch media prompts for media {media_id}: {exc}")
+                    self._note_todo("Media prompts export encountered failures; inspect logs.")
+            normalized["related_prompts"] = media_prompts
+
+            # Handle embeddings when requested and available
+            vector_payload = None
+            vector_blob = media_record.get("vector_embedding")
+            if include_embeddings and vector_blob:
+                if isinstance(vector_blob, memoryview):
+                    vector_blob = vector_blob.tobytes()
+                elif isinstance(vector_blob, bytearray):
+                    vector_blob = bytes(vector_blob)
+                if isinstance(vector_blob, (bytes, bytearray)):
+                    embeddings_dir = embeddings_dir or (work_dir / "content" / "embeddings")
+                    embeddings_dir.mkdir(parents=True, exist_ok=True)
+                    embedding_id = f"media:{media_id}"
+                    vector_payload = {
+                        "id": embedding_id,
+                        "source": {
+                            "media_id": media_id,
+                            "media_uuid": normalized.get("uuid")
+                        },
+                        "encoding": "base64",
+                        "vector": base64.b64encode(vector_blob).decode("ascii")
+                    }
+                    embed_file = embeddings_dir / f"embedding_media_{media_id}.json"
+                    with open(embed_file, "w", encoding="utf-8") as ef:
+                        json.dump(vector_payload, ef, indent=2, ensure_ascii=False)
+                    content.embeddings[embedding_id] = vector_payload
+                    manifest.content_items.append(ContentItem(
+                        id=embedding_id,
+                        type=ContentType.EMBEDDING,
+                        title=f"Embedding for media {normalized.get('title', media_id)}",
+                        file_path=f"content/embeddings/{embed_file.name}"
+                    ))
+                else:
+                    self._note_todo("Encountered non-binary media vector embedding; skipping serialization.")
+
+            media_file = media_dir / f"media_{media_id}.json"
+            with open(media_file, "w", encoding="utf-8") as mf:
+                json.dump(normalized, mf, indent=2, ensure_ascii=False)
+            content.media[media_id] = normalized
+
+            manifest.content_items.append(ContentItem(
+                id=media_id,
+                type=ContentType.MEDIA,
+                title=normalized.get("title", f"Media {media_id}"),
+                description=normalized.get("description"),
+                file_path=f"content/media/{media_file.name}"
+            ))
+
+        if include_embeddings and not content.embeddings:
+            self._note_todo("Embeddings export requested but no vector data found in media records.")
+
+    def _collect_evaluations(
+        self,
+        evaluation_ids: List[str],
+        work_dir: Path,
+        manifest: ChatbookManifest,
+        content: ChatbookContent
+    ) -> None:
+        """Collect evaluation definitions and runs for export."""
+        if not evaluation_ids:
+            return
+        evals_db = self._get_evaluations_db()
+        if evals_db is None:
+            logger.debug("Skipping evaluation export because evaluations DB is unavailable.")
+            return
+        eval_dir = work_dir / "content" / "evaluations"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+
+        for eval_id in evaluation_ids:
+            record = None
+            try:
+                record = evals_db.get_evaluation(str(eval_id))
+            except Exception as exc:
+                logger.debug(f"Failed to fetch evaluation {eval_id}: {exc}")
+                record = None
+            if not record:
+                continue
+
+            normalized = self._normalize_evaluation_record(record)
+            runs_payload: List[Dict[str, Any]] = []
+            try:
+                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=200)
+                runs_payload = [self._normalize_evaluation_run(run) for run in runs]
+                if has_more:
+                    self._note_todo("Evaluation export limited to first 200 runs; add pagination support.")
+            except Exception as exc:
+                logger.debug(f"Failed to list evaluation runs for {eval_id}: {exc}")
+                self._note_todo("Evaluation runs export failed for some items; inspect logs.")
+            normalized["runs"] = runs_payload
+
+            eval_file = eval_dir / f"evaluation_{eval_id}.json"
+            with open(eval_file, "w", encoding="utf-8") as ef:
+                json.dump(normalized, ef, indent=2, ensure_ascii=False)
+            content.evaluations[str(eval_id)] = normalized
+
+            manifest.content_items.append(ContentItem(
+                id=str(eval_id),
+                type=ContentType.EVALUATION,
+                title=normalized.get("name", f"Evaluation {eval_id}"),
+                description=normalized.get("description"),
+                file_path=f"content/evaluations/{eval_file.name}"
+            ))
+
     # Helper methods for collecting content
     
     def _collect_conversations(
@@ -1668,21 +2100,58 @@ class ChatbookService:
                 # Get messages
                 messages = self.db.get_messages_for_conversation(conv_id)
                 
-                # Create conversation data
+                attachments_dir: Optional[Path] = None
+                conversation_messages: List[Dict[str, Any]] = []
+                for msg in (messages or []):
+                    message_payload: Dict[str, Any] = {
+                        "id": msg['id'],
+                        "role": msg['sender'],
+                        "content": msg.get('message', msg.get('content', '')),
+                        "timestamp": msg['timestamp'].isoformat() if hasattr(msg['timestamp'], 'isoformat') else msg['timestamp'],
+                        "attachments": [],
+                        "citations": []
+                    }
+
+                    # Persist inline images as attachments
+                    for idx, image in enumerate(msg.get("images") or []):
+                        image_bytes = image.get("image_data")
+                        if isinstance(image_bytes, memoryview):
+                            image_bytes = image_bytes.tobytes()
+                        if not image_bytes:
+                            continue
+                        if attachments_dir is None:
+                            attachments_dir = conv_dir / f"conversation_{conv_id}_assets"
+                            attachments_dir.mkdir(parents=True, exist_ok=True)
+                        ext = self._extension_from_mime(image.get("image_mime_type"))
+                        attachment_name = f"{msg['id']}_image_{idx}{ext}"
+                        attachment_path = attachments_dir / attachment_name
+                        try:
+                            with open(attachment_path, "wb") as af:
+                                af.write(bytes(image_bytes))
+                        except Exception as exc:
+                            logger.debug(f"Failed to persist image attachment for message {msg['id']}: {exc}")
+                            self._note_todo("Failed to export some conversation image attachments; inspect logs.")
+                            continue
+                        rel_path = f"content/conversations/{attachments_dir.name}/{attachment_name}"
+                        message_payload["attachments"].append({
+                            "type": "image",
+                            "mime_type": image.get("image_mime_type"),
+                            "file_path": rel_path
+                        })
+
+                    # Placeholder for future citation export support
+                    if not message_payload["citations"]:
+                        self._note_todo("Conversation export lacks citation metadata; awaiting upstream storage.")
+
+                    conversation_messages.append(message_payload)
+
                 conv_data = {
                     "id": conv['id'],
                     "name": conv.get('title', 'Untitled'),
                     "created_at": conv['created_at'].isoformat() if hasattr(conv['created_at'], 'isoformat') else conv['created_at'],
                     "character_id": conv.get('character_id'),
-                    "messages": [
-                        {
-                            "id": msg['id'],
-                            "role": msg['sender'],
-                            "content": msg.get('message', msg.get('content', '')),
-                            "timestamp": msg['timestamp'].isoformat() if hasattr(msg['timestamp'], 'isoformat') else msg['timestamp']
-                        }
-                        for msg in (messages or [])
-                    ]
+                    "attachments_path": f"content/conversations/{attachments_dir.name}" if attachments_dir else None,
+                    "messages": conversation_messages
                 }
                 
                 # Write to file

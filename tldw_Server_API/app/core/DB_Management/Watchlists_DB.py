@@ -14,7 +14,12 @@ Tables (per-user, colocated with Media DB):
               last_run_at, next_run_at)
 - scrape_runs(id, job_id, status, started_at, finished_at, stats_json,
               error_msg, log_path)
-- scrape_run_items(run_id, media_id)
+- scrape_run_items(run_id, media_id, source_id)
+- scraped_items(id, run_id, job_id, source_id, media_id, media_uuid, url, title,
+                summary, published_at, tags_json, status, reviewed, created_at)
+- watchlist_outputs(id, run_id, job_id, type, format, title, content,
+                    storage_path, metadata_json, media_item_id, chatbook_path,
+                    created_at)
 
 Notes:
 - Backed by DatabaseBackendFactory; default to per-user SQLite Media DB path.
@@ -24,6 +29,7 @@ Notes:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -105,6 +111,64 @@ class RunRow:
     stats_json: Optional[str]
     error_msg: Optional[str]
     log_path: Optional[str]
+
+
+@dataclass
+class ScrapedItemRow:
+    id: int
+    run_id: int
+    job_id: int
+    source_id: int
+    media_id: Optional[int]
+    media_uuid: Optional[str]
+    url: Optional[str]
+    title: Optional[str]
+    summary: Optional[str]
+    published_at: Optional[str]
+    tags_json: Optional[str]
+    status: str
+    reviewed: int
+    created_at: str
+
+    def tags(self) -> List[str]:
+        if not self.tags_json:
+            return []
+        try:
+            data = json.loads(self.tags_json)
+            if isinstance(data, list):
+                return [str(t) for t in data if isinstance(t, str)]
+        except Exception:
+            return []
+        return []
+
+
+@dataclass
+class OutputRow:
+    id: int
+    run_id: int
+    job_id: int
+    type: str
+    format: str
+    title: Optional[str]
+    content: Optional[str]
+    storage_path: Optional[str]
+    metadata_json: Optional[str]
+    media_item_id: Optional[int]
+    chatbook_path: Optional[str]
+    version: int
+    expires_at: Optional[str]
+    created_at: str
+
+    def metadata(self) -> Dict[str, Any]:
+        if not self.metadata_json:
+            return {}
+        try:
+            data = json.loads(self.metadata_json)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return {}
+        return {}
 
 
 class WatchlistsDatabase:
@@ -206,9 +270,10 @@ class WatchlistsDatabase:
         CREATE TABLE IF NOT EXISTS scrape_run_items (
             run_id INTEGER NOT NULL,
             media_id INTEGER NOT NULL,
+            source_id INTEGER,
             UNIQUE (run_id, media_id)
         );
-        
+
         -- Track per-source seen RSS/Atom items for deduplication
         CREATE TABLE IF NOT EXISTS source_seen_items (
             source_id INTEGER NOT NULL,
@@ -219,6 +284,48 @@ class WatchlistsDatabase:
             last_seen_at TEXT NOT NULL,
             UNIQUE (source_id, item_key)
         );
+
+        CREATE TABLE IF NOT EXISTS scraped_items (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            source_id INTEGER NOT NULL,
+            media_id INTEGER,
+            media_uuid TEXT,
+            url TEXT,
+            title TEXT,
+            summary TEXT,
+            published_at TEXT,
+            tags_json TEXT,
+            status TEXT NOT NULL,
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
+        CREATE INDEX IF NOT EXISTS idx_scraped_items_job ON scraped_items(job_id);
+        CREATE INDEX IF NOT EXISTS idx_scraped_items_source ON scraped_items(source_id);
+        CREATE INDEX IF NOT EXISTS idx_scraped_items_status ON scraped_items(status);
+        CREATE INDEX IF NOT EXISTS idx_scraped_items_reviewed ON scraped_items(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_scraped_items_created ON scraped_items(created_at);
+
+        CREATE TABLE IF NOT EXISTS watchlist_outputs (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            format TEXT NOT NULL,
+            title TEXT,
+            content TEXT,
+            storage_path TEXT,
+            metadata_json TEXT,
+            media_item_id INTEGER,
+            chatbook_path TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            expires_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_run ON watchlist_outputs(run_id);
+        CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_job ON watchlist_outputs(job_id);
         """
         self.backend.create_tables(ddl)
         # Backfill columns in case table existed
@@ -232,6 +339,18 @@ class WatchlistsDatabase:
             pass
         try:
             self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE watchlist_outputs ADD COLUMN version INTEGER NOT NULL DEFAULT 1", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE watchlist_outputs ADD COLUMN expires_at TEXT", tuple())
         except Exception:
             pass
 
@@ -708,9 +827,12 @@ class WatchlistsDatabase:
         ).rows
         return [RunRow(**r) for r in rows], total
 
-    def append_run_item(self, run_id: int, media_id: int) -> None:
+    def append_run_item(self, run_id: int, media_id: int, source_id: Optional[int] = None) -> None:
         try:
-            self.backend.execute("INSERT OR IGNORE INTO scrape_run_items (run_id, media_id) VALUES (?, ?)", (run_id, media_id))
+            self.backend.execute(
+                "INSERT OR IGNORE INTO scrape_run_items (run_id, media_id, source_id) VALUES (?, ?, ?)",
+                (run_id, media_id, source_id),
+            )
         except Exception:
             pass
 
@@ -727,6 +849,309 @@ class WatchlistsDatabase:
             except Exception:
                 continue
         return mids
+
+    def purge_expired_outputs(self, now_iso: Optional[str] = None) -> int:
+        now_iso = now_iso or _utcnow_iso()
+        result = self.backend.execute(
+            "DELETE FROM watchlist_outputs WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (now_iso,),
+        )
+        return int(result.rowcount or 0)
+
+    def next_output_version(self, run_id: int) -> int:
+        row = self.backend.execute(
+            "SELECT MAX(version) AS max_version FROM watchlist_outputs WHERE run_id = ?",
+            (run_id,),
+        ).first
+        max_version = row.get("max_version") if row else None
+        try:
+            return int(max_version or 0) + 1
+        except Exception:
+            return 1
+
+    # ------------------------
+    # Scraped items
+    # ------------------------
+    def record_scraped_item(
+        self,
+        *,
+        run_id: int,
+        job_id: int,
+        source_id: int,
+        media_id: Optional[int],
+        media_uuid: Optional[str],
+        url: Optional[str],
+        title: Optional[str],
+        summary: Optional[str],
+        published_at: Optional[str],
+        tags: Optional[List[str]],
+        status: str,
+    ) -> ScrapedItemRow:
+        created_at = _utcnow_iso()
+        tags_json = json.dumps(tags or [])
+        res = self.backend.execute(
+            """
+            INSERT INTO scraped_items (
+                run_id, job_id, source_id, media_id, media_uuid, url, title,
+                summary, published_at, tags_json, status, reviewed, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                run_id,
+                job_id,
+                source_id,
+                media_id,
+                media_uuid,
+                url,
+                title,
+                summary,
+                published_at,
+                tags_json,
+                status,
+                created_at,
+            ),
+        )
+        return self.get_item(int(res.lastrowid or 0))
+
+    def get_item(self, item_id: int) -> ScrapedItemRow:
+        row = self.backend.execute(
+            """
+            SELECT id, run_id, job_id, source_id, media_id, media_uuid, url, title,
+                   summary, published_at, tags_json, status, reviewed, created_at
+            FROM scraped_items
+            WHERE id = ?
+            """,
+            (item_id,),
+        ).first
+        if not row:
+            raise KeyError("item_not_found")
+        return ScrapedItemRow(**row)
+
+    def list_items(
+        self,
+        *,
+        run_id: Optional[int] = None,
+        job_id: Optional[int] = None,
+        source_id: Optional[int] = None,
+        status: Optional[str] = None,
+        reviewed: Optional[bool] = None,
+        search: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[List[ScrapedItemRow], int]:
+        where = ["1=1"]
+        params: List[Any] = []
+        if run_id is not None:
+            where.append("run_id = ?")
+            params.append(run_id)
+        if job_id is not None:
+            where.append("job_id = ?")
+            params.append(job_id)
+        if source_id is not None:
+            where.append("source_id = ?")
+            params.append(source_id)
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        if reviewed is not None:
+            where.append("reviewed = ?")
+            params.append(1 if reviewed else 0)
+        if since:
+            where.append("created_at >= ?")
+            params.append(since)
+        if until:
+            where.append("created_at <= ?")
+            params.append(until)
+        if search:
+            like = f"%{search}%"
+            where.append("(title LIKE ? OR summary LIKE ?)")
+            params.extend([like, like])
+        where_sql = " AND ".join(where)
+        total = int(
+            self.backend.execute(
+                f"SELECT COUNT(*) AS cnt FROM scraped_items WHERE {where_sql}",
+                tuple(params),
+            ).scalar
+            or 0
+        )
+        rows = self.backend.execute(
+            f"""
+            SELECT id, run_id, job_id, source_id, media_id, media_uuid, url, title,
+                   summary, published_at, tags_json, status, reviewed, created_at
+            FROM scraped_items
+            WHERE {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params + [limit, offset]),
+        ).rows
+        return [ScrapedItemRow(**r) for r in rows], total
+
+    def get_items_by_ids(self, item_ids: List[int]) -> List[ScrapedItemRow]:
+        if not item_ids:
+            return []
+        placeholders = ",".join("?" for _ in item_ids)
+        rows = self.backend.execute(
+            f"""
+            SELECT id, run_id, job_id, source_id, media_id, media_uuid, url, title,
+                   summary, published_at, tags_json, status, reviewed, created_at
+            FROM scraped_items
+            WHERE id IN ({placeholders})
+            """,
+            tuple(item_ids),
+        ).rows
+        return [ScrapedItemRow(**r) for r in rows]
+
+    def update_item_flags(
+        self,
+        item_id: int,
+        *,
+        reviewed: Optional[bool] = None,
+        status: Optional[str] = None,
+    ) -> ScrapedItemRow:
+        fields: List[str] = []
+        params: List[Any] = []
+        if reviewed is not None:
+            fields.append("reviewed = ?")
+            params.append(1 if reviewed else 0)
+        if status is not None:
+            fields.append("status = ?")
+            params.append(status)
+        if not fields:
+            return self.get_item(item_id)
+        params.append(item_id)
+        self.backend.execute(
+            f"UPDATE scraped_items SET {', '.join(fields)} WHERE id = ?",
+            tuple(params),
+        )
+        return self.get_item(item_id)
+
+    # ------------------------
+    # Outputs
+    # ------------------------
+    def create_output(
+        self,
+        *,
+        run_id: int,
+        job_id: int,
+        type: str,
+        format: str,
+        title: Optional[str],
+        content: Optional[str],
+        storage_path: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        media_item_id: Optional[int] = None,
+        chatbook_path: Optional[str] = None,
+        version: int = 1,
+        expires_at: Optional[str] = None,
+    ) -> OutputRow:
+        created_at = _utcnow_iso()
+        res = self.backend.execute(
+            """
+            INSERT INTO watchlist_outputs (
+                run_id, job_id, type, format, title, content, storage_path,
+                metadata_json, media_item_id, chatbook_path, version, expires_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                job_id,
+                type,
+                format,
+                title,
+                content,
+                storage_path,
+                json.dumps(metadata or {}),
+                media_item_id,
+                chatbook_path,
+                version,
+                expires_at,
+                created_at,
+            ),
+        )
+        return self.get_output(int(res.lastrowid or 0))
+
+    def get_output(self, output_id: int) -> OutputRow:
+        row = self.backend.execute(
+            """
+            SELECT id, run_id, job_id, type, format, title, content, storage_path,
+                   metadata_json, media_item_id, chatbook_path, version, expires_at, created_at
+            FROM watchlist_outputs
+            WHERE id = ?
+            """,
+            (output_id,),
+        ).first
+        if not row:
+            raise KeyError("output_not_found")
+        return OutputRow(**row)
+
+    def list_outputs(
+        self,
+        *,
+        run_id: Optional[int] = None,
+        job_id: Optional[int] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[List[OutputRow], int]:
+        self.purge_expired_outputs()
+        where = ["1=1"]
+        params: List[Any] = []
+        if run_id is not None:
+            where.append("run_id = ?")
+            params.append(run_id)
+        if job_id is not None:
+            where.append("job_id = ?")
+            params.append(job_id)
+        where_sql = " AND ".join(where)
+        total = int(
+            self.backend.execute(
+                f"SELECT COUNT(*) AS cnt FROM watchlist_outputs WHERE {where_sql}",
+                tuple(params),
+            ).scalar
+            or 0
+        )
+        rows = self.backend.execute(
+            f"""
+            SELECT id, run_id, job_id, type, format, title, content, storage_path,
+                   metadata_json, media_item_id, chatbook_path, version, expires_at, created_at
+            FROM watchlist_outputs
+            WHERE {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params + [limit, offset]),
+        ).rows
+        return [OutputRow(**r) for r in rows], total
+
+    def update_output_record(
+        self,
+        output_id: int,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+        chatbook_path: Optional[str] = None,
+        storage_path: Optional[str] = None,
+    ) -> OutputRow:
+        assignments: List[str] = []
+        params: List[Any] = []
+        if metadata is not None:
+            assignments.append("metadata_json = ?")
+            params.append(json.dumps(metadata))
+        if chatbook_path is not None:
+            assignments.append("chatbook_path = ?")
+            params.append(chatbook_path)
+        if storage_path is not None:
+            assignments.append("storage_path = ?")
+            params.append(storage_path)
+        if not assignments:
+            return self.get_output(output_id)
+        params.append(output_id)
+        self.backend.execute(
+            f"UPDATE watchlist_outputs SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
+        )
+        return self.get_output(output_id)
 
     def update_run(
         self,

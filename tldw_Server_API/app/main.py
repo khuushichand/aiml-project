@@ -2438,6 +2438,11 @@ else:
         app.include_router(_items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
     except Exception as _e:
         logger.warning(f"Items endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.reading import router as _reading_router
+        app.include_router(_reading_router, prefix=f"{API_V1_PREFIX}", tags=["reading"])
+    except Exception as _e:
+        logger.warning(f"Reading endpoint not available: {_e}")
     # Watchlists endpoints (sources/groups/tags/jobs/runs)
     try:
         from tldw_Server_API.app.api.v1.endpoints.watchlists import router as _watchlists_router
