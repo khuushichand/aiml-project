@@ -534,6 +534,10 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
     if effective_auth_mode and effective_auth_mode.lower() != settings.AUTH_MODE:
         need_reset = True
 
+    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+    if test_mode:
+        need_reset = True
+
     if need_reset:
         try:
             from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
@@ -544,7 +548,6 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         reset_settings()
         settings = get_settings()
 
-    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
     if settings.AUTH_MODE != "single_user":
         if not test_mode:
             return

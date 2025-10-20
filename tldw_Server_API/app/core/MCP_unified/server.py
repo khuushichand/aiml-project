@@ -311,7 +311,9 @@ class MCPServer:
                         logger.warning(f"Invalid MCP_MODULES item format: '{item}'")
 
             # 3) Optional default: enable media module if flag is set and nothing else specified
-            if not modules_to_load and os.getenv("MCP_ENABLE_MEDIA_MODULE", "false").lower() in {"1", "true", "yes"}:
+            enable_media_flag = os.getenv("MCP_ENABLE_MEDIA_MODULE", "false").lower() in {"1", "true", "yes"}
+            test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            if enable_media_flag and not modules_to_load:
                 modules_to_load.append({
                     "id": "media",
                     "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule",
@@ -325,6 +327,23 @@ class MCPServer:
                     },
                 })
                 logger.info("MCP_ENABLE_MEDIA_MODULE=true; queuing MediaModule for registration")
+
+            # 4) Test convenience: default-enable media module when TEST_MODE unless explicitly disabled
+            if test_mode and not any(m.get("id") == "media" for m in modules_to_load):
+                if os.getenv("MCP_ENABLE_MEDIA_MODULE", "").lower() not in {"0", "false", "off"}:
+                    modules_to_load.append({
+                        "id": "media",
+                        "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule",
+                        "enabled": True,
+                        "name": "Media",
+                        "version": "1.0.0",
+                        "department": "media",
+                        "settings": {
+                            "db_path": "./Databases/Media_DB_v2.db",
+                            "cache_ttl": 300,
+                        },
+                    })
+                    logger.info("TEST_MODE auto-enabled MediaModule for deterministic tool catalogs")
 
             # (no additional built-in modules)
 
