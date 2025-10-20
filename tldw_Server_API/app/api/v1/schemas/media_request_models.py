@@ -263,6 +263,20 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     overwrite_existing: bool = Field(False, description="Overwrite any existing media with the same identifier (URL/filename)")
     keep_original_file: bool = Field(False, description="Whether to retain original uploaded files after processing")
     perform_analysis: bool = Field(True, description="Perform analysis (e.g., summarization) if applicable (default=True)")
+    perform_claims_extraction: Optional[bool] = Field(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration when unset)."
+    )
+    claims_extractor_mode: Optional[str] = Field(
+        None,
+        description="Optional override for claims extractor mode (e.g., 'heuristic', 'ner', provider id)."
+    )
+    claims_max_per_chunk: Optional[int] = Field(
+        None,
+        ge=1,
+        le=12,
+        description="Maximum number of claims to extract per chunk (uses configuration defaults when unset)."
+    )
 
     # --- Video/Audio Specific Timing --- ADD THESE ---
     start_time: Optional[str] = Field(None, description="Optional start time for processing (e.g., HH:MM:SS or seconds)")
@@ -390,6 +404,8 @@ class MediaItemProcessResponse(BaseModel):
     chunks: Optional[List[Dict[str, Any]]] # If chunking happened within the processor
     analysis: Optional[str] # The generated analysis, if analysis was performed
     analysis_details: Optional[Dict[str, Any]] # e.g., whisper model used, summarization prompt
+    claims: Optional[List[Dict[str, Any]]] = Field(None, description="Extracted factual claims, if enabled")
+    claims_details: Optional[Dict[str, Any]] = Field(None, description="Metadata about the claims extraction process")
     error: Optional[str] # Detailed error message if status != 'Success'
     warnings: Optional[List[str]] # For non-critical issues
     model_config = ConfigDict(

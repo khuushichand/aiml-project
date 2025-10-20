@@ -81,6 +81,10 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     check_media_exists,
     fetch_keywords_for_media,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims import (
+    extract_claims_for_chunks,
+    store_claims,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
@@ -613,6 +617,18 @@ def get_add_media_form(
     overwrite_existing: bool = Form(False, description="Overwrite existing media"),
     keep_original_file: bool = Form(False, description="Retain original uploaded files"),
     perform_analysis: bool = Form(True, description="Perform analysis (default=True)"),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     api_name: Optional[str] = Form(None, description="Optional API name"),
     # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
@@ -720,6 +736,9 @@ def get_add_media_form(
             overwrite_existing=overwrite_existing,
             keep_original_file=keep_original_file,
             perform_analysis=perform_analysis,
+            perform_claims_extraction=perform_claims_extraction,
+            claims_extractor_mode=claims_extractor_mode,
+            claims_max_per_chunk=claims_max_per_chunk,
             start_time=start_time,
             end_time=end_time,
             api_name=api_name,
@@ -2498,6 +2517,232 @@ def _prepare_common_options(form_data: AddMediaForm, chunk_options: Optional[Dic
         "author": form_data.author # Pass common author
     }
 
+
+def _claims_extraction_enabled(form_data: AddMediaForm) -> bool:
+    """Determine whether claim extraction should run for this request."""
+    value = getattr(form_data, "perform_claims_extraction", None)
+    if value is not None:
+        return bool(value)
+    try:
+        return bool(settings.get("ENABLE_INGESTION_CLAIMS", False))
+    except Exception:
+        return False
+
+
+def _resolve_claims_parameters(form_data: AddMediaForm) -> Tuple[str, int]:
+    """Resolve extractor mode and max claims per chunk from request or settings."""
+    mode = getattr(form_data, "claims_extractor_mode", None)
+    if isinstance(mode, str) and mode.strip():
+        extractor_mode = mode.strip()
+    else:
+        try:
+            extractor_mode = str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic"))
+        except Exception:
+            extractor_mode = "heuristic"
+
+    max_per = getattr(form_data, "claims_max_per_chunk", None)
+    if max_per is None:
+        try:
+            max_per = int(settings.get("CLAIMS_MAX_PER_CHUNK", 3))
+        except Exception:
+            max_per = 3
+    else:
+        try:
+            max_per = int(max_per)
+        except Exception:
+            max_per = 3
+    if max_per <= 0:
+        max_per = 1
+    return extractor_mode, max_per
+
+
+def _prepare_claims_chunks(process_result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[int, str]]:
+    """
+    Build a chunk list and index->text map suitable for claim extraction.
+    Prefers existing chunks, falls back to segments, and finally full content.
+    """
+    prepared_chunks: List[Dict[str, Any]] = []
+    chunk_text_map: Dict[int, str] = {}
+
+    raw_chunks = process_result.get("chunks")
+    if isinstance(raw_chunks, list):
+        for idx, chunk in enumerate(raw_chunks):
+            chunk_dict = chunk or {}
+            text = (chunk_dict.get("text") or chunk_dict.get("content") or "").strip()
+            if not text:
+                continue
+            meta = dict((chunk_dict.get("metadata") or {}).copy())
+            chunk_idx = meta.get("chunk_index", meta.get("index"))
+            try:
+                chunk_idx_int = int(chunk_idx) if chunk_idx is not None else idx
+            except Exception:
+                chunk_idx_int = idx
+            meta["chunk_index"] = chunk_idx_int
+            prepared_chunks.append({"text": text, "metadata": meta})
+            chunk_text_map[chunk_idx_int] = text
+
+    if not prepared_chunks:
+        segments = process_result.get("segments")
+        if isinstance(segments, list):
+            for idx, segment in enumerate(segments):
+                seg_dict = segment or {}
+                text = str(seg_dict.get("text") or "").strip()
+                if not text:
+                    continue
+                meta = {
+                    "chunk_index": idx,
+                    "segment_start": seg_dict.get("start"),
+                    "segment_end": seg_dict.get("end"),
+                    "source": "segment",
+                }
+                prepared_chunks.append({"text": text, "metadata": meta})
+                chunk_text_map[idx] = text
+
+    if not prepared_chunks:
+        content = process_result.get("content")
+        if isinstance(content, str) and content.strip():
+            meta = {"chunk_index": 0, "source": "content"}
+            prepared_chunks.append({"text": content, "metadata": meta})
+            chunk_text_map[0] = content
+
+    return prepared_chunks, chunk_text_map
+
+
+async def _extract_claims_if_requested(
+    process_result: Dict[str, Any],
+    form_data: AddMediaForm,
+    loop: asyncio.AbstractEventLoop,
+) -> Optional[Dict[str, Any]]:
+    """
+    Optionally extract claims for a processing result.
+    Returns context with claims and chunk map when extraction ran.
+    """
+    process_result.setdefault("claims", None)
+    process_result.setdefault("claims_details", None)
+
+    if not _claims_extraction_enabled(form_data):
+        return None
+
+    prepared_chunks, chunk_text_map = _prepare_claims_chunks(process_result)
+    extractor_mode, max_per_chunk = _resolve_claims_parameters(form_data)
+
+    if not prepared_chunks:
+        process_result["claims"] = None
+        process_result["claims_details"] = {
+            "enabled": True,
+            "extractor": extractor_mode,
+            "claim_count": 0,
+            "chunks_evaluated": 0,
+            "reason": "no_chunks_available",
+        }
+        return {"claims": [], "chunk_text_map": chunk_text_map, "extractor": extractor_mode, "max_per_chunk": max_per_chunk}
+
+    extraction_callable: Callable[[], List[Dict[str, Any]]] = functools.partial(
+        extract_claims_for_chunks,
+        prepared_chunks,
+        extractor_mode=extractor_mode,
+        max_per_chunk=max_per_chunk,
+    )
+
+    try:
+        claims = await loop.run_in_executor(None, extraction_callable)
+    except Exception as exc:
+        process_result["claims"] = None
+        process_result["claims_details"] = {
+            "enabled": True,
+            "extractor": extractor_mode,
+            "error": str(exc),
+            "chunks_evaluated": len(prepared_chunks),
+        }
+        return None
+
+    claim_count = len(claims or [])
+    if claim_count == 0:
+        process_result["claims"] = None
+        process_result["claims_details"] = {
+            "enabled": True,
+            "extractor": extractor_mode,
+            "claim_count": 0,
+            "max_per_chunk": max_per_chunk,
+            "chunks_evaluated": len(prepared_chunks),
+        }
+    else:
+        process_result["claims"] = claims
+        process_result["claims_details"] = {
+            "enabled": True,
+            "extractor": extractor_mode,
+            "claim_count": claim_count,
+            "max_per_chunk": max_per_chunk,
+            "chunks_evaluated": len(prepared_chunks),
+        }
+
+    return {
+        "claims": claims or [],
+        "chunk_text_map": chunk_text_map,
+        "extractor": extractor_mode,
+        "max_per_chunk": max_per_chunk,
+    }
+
+
+async def _persist_claims_if_applicable(
+    claims_context: Optional[Dict[str, Any]],
+    media_id: Optional[int],
+    db_path: str,
+    client_id: str,
+    loop: asyncio.AbstractEventLoop,
+    process_result: Dict[str, Any],
+) -> None:
+    """Persist extracted claims to the database when a media id is available."""
+    details = process_result.get("claims_details")
+    if not isinstance(details, dict):
+        details = None
+
+    if (
+        not claims_context
+        or not claims_context.get("claims")
+        or not media_id
+        or not db_path
+    ):
+        if details is not None:
+            details.setdefault("stored_in_db", 0)
+            process_result["claims_details"] = details
+        return
+
+    def _worker() -> int:
+        db = MediaDatabase(db_path=db_path, client_id=client_id)
+        try:
+            try:
+                db.soft_delete_claims_for_media(int(media_id))
+            except Exception:
+                pass
+            inserted = store_claims(
+                db,
+                media_id=int(media_id),
+                chunk_texts_by_index=claims_context.get("chunk_text_map", {}),
+                claims=claims_context.get("claims", []),
+                extractor=claims_context.get("extractor") or "heuristic",
+                extractor_version="v1",
+            )
+            return inserted
+        finally:
+            try:
+                db.close_connection()
+            except Exception:
+                pass
+
+    try:
+        inserted_count = await loop.run_in_executor(None, _worker)
+        if details is None:
+            details = {}
+        details["stored_in_db"] = int(inserted_count or 0)
+        process_result["claims_details"] = details
+    except Exception as exc:
+        if details is None:
+            details = {}
+        details["stored_in_db"] = 0
+        details["storage_error"] = str(exc)
+        process_result["claims_details"] = details
+
 async def _process_batch_media(
     media_type: MediaType,
     urls: List[str],
@@ -2750,6 +2995,12 @@ async def _process_batch_media(
         if pre_check_warning_msg:
              process_result.setdefault("warnings", []).append(pre_check_warning_msg)
 
+        claims_context: Optional[Dict[str, Any]] = None
+        if process_result.get("status") in ("Success", "Warning"):
+            try:
+                claims_context = await _extract_claims_if_requested(process_result, form_data, loop)
+            except Exception as claims_err:
+                logger.debug(f"Claim extraction skipped for {original_input_ref}: {claims_err}")
 
         # --- DB Interaction Logic ---
         db_id = None
@@ -2928,6 +3179,15 @@ async def _process_batch_media(
 
                     logger.info(f"DB persistence result for {original_input_ref}: ID={db_id}, UUID={media_uuid}, Msg='{db_message}'") # Log original ref
 
+                    await _persist_claims_if_applicable(
+                        claims_context,
+                        process_result.get("db_id"),
+                        db_path,
+                        client_id,
+                        loop,
+                        process_result,
+                    )
+
                 except (DatabaseError, InputError, ConflictError) as db_err:  # Catch specific DB errors
                     logging.error(f"Database operation failed for {original_input_ref}: {db_err}", exc_info=True) # Log original ref
                     process_result['status'] = 'Warning'  # Downgrade to Warning if DB fails after successful processing
@@ -2936,6 +3196,14 @@ async def _process_batch_media(
                     process_result["db_message"] = f"DB Error: {db_err}"
                     process_result["db_id"] = None  # Ensure db_id is None on error
                     process_result["media_uuid"] = None
+                    await _persist_claims_if_applicable(
+                        claims_context,
+                        None,
+                        db_path,
+                        client_id,
+                        loop,
+                        process_result,
+                    )
 
                 except Exception as e:
                     logging.error(f"Unexpected error during DB persistence for {original_input_ref}: {e}", exc_info=True) # Log original ref
@@ -2946,12 +3214,28 @@ async def _process_batch_media(
                     process_result["db_message"] = f"Persistence Error: {type(e).__name__}"
                     process_result["db_id"] = None  # Ensure db_id is None on error
                     process_result["media_uuid"] = None
+                    await _persist_claims_if_applicable(
+                        claims_context,
+                        None,
+                        db_path,
+                        client_id,
+                        loop,
+                        process_result,
+                    )
 
             else:
                 logging.warning(f"Skipping DB persistence for {original_input_ref} due to missing content.") # Log original ref
                 process_result["db_message"] = "DB persistence skipped (no content)."
                 process_result["db_id"] = None  # Ensure db_id is None
                 process_result["media_uuid"] = None
+                await _persist_claims_if_applicable(
+                    claims_context,
+                    None,
+                    db_path,
+                    client_id,
+                    loop,
+                    process_result,
+                )
 
         # Add the (potentially updated) result to the final list
         final_batch_results.append(process_result)
@@ -2983,6 +3267,8 @@ async def _process_batch_media(
             "analysis": res.get("analysis", res.get("summary")),
             "summary": res.get("summary"),
             "analysis_details": res.get("analysis_details"),
+            "claims": res.get("claims"),
+            "claims_details": res.get("claims_details"),
             "error": res.get("error"),
             "warnings": res.get("warnings"),
             "db_id": res.get("db_id"),
@@ -3023,6 +3309,7 @@ async def _process_document_like_item(
         "warnings": [], # <<< Initialize warnings as list
         "db_id": None, "db_message": None, "message": None
     }
+    claims_context: Optional[Dict[str, Any]] = None
 
     # --- 1. Pre-check ---
     # identifier_for_check = item_input_ref
@@ -3349,6 +3636,7 @@ async def _process_document_like_item(
     # --- 4. Post-Processing DB Logic ---
     # Only attempt if processing status is Success or Warning
     if final_result.get("status") in ["Success", "Warning"]:
+        claims_context = await _extract_claims_if_requested(final_result, form_data, loop)
         content_for_db = final_result.get('content', '')
         analysis_for_db = final_result.get('summary') or final_result.get('analysis')
         metadata_for_db = final_result.get('metadata', {})
@@ -3743,6 +4031,15 @@ async def _process_document_like_item(
                  final_result["media_uuid"] = None
              else:
                  final_result["db_message"] = "Persisted archive children."
+
+        await _persist_claims_if_applicable(
+            claims_context,
+            final_result.get("db_id"),
+            db_path,
+            client_id,
+            loop,
+            final_result,
+        )
     else:
         # If processing failed, set DB message accordingly
         final_result["db_message"] = "DB operation skipped (processing failed)."
@@ -3758,6 +4055,10 @@ async def _process_document_like_item(
     final_result["content"] = final_result.get("content")
     final_result["transcript"] = final_result.get("content") # For consistency with A/V
     final_result["analysis"] = final_result.get("analysis") # For consistency
+    if "claims" not in final_result:
+        final_result["claims"] = None
+    if "claims_details" not in final_result:
+        final_result["claims_details"] = None
 
     return final_result
 
@@ -4203,6 +4504,18 @@ def get_process_videos_form(
     system_prompt: Optional[str] = Form(None, description="Optional system prompt"),
     overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used in this endpoint, but needed for model)"),
     perform_analysis: bool = Form(True, description="Perform analysis"),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     start_time: Optional[str] = Form(None, description="Optional start time (HH:MM:SS or seconds)"),
     end_time: Optional[str] = Form(None, description="Optional end time (HH:MM:SS or seconds)"),
     api_name: Optional[str] = Form(None, description="Optional API name"),
@@ -4260,6 +4573,9 @@ def get_process_videos_form(
             overwrite_existing=overwrite_existing,
             keep_original_file=False, # Fixed by ProcessVideosForm
             perform_analysis=perform_analysis,
+            perform_claims_extraction=perform_claims_extraction,
+            claims_extractor_mode=claims_extractor_mode,
+            claims_max_per_chunk=claims_max_per_chunk,
             start_time=start_time,
             end_time=end_time,
             api_name=api_name,
@@ -4695,6 +5011,9 @@ def get_process_audios_form(
             overwrite_existing=overwrite_existing,
             keep_original_file=False,
             perform_analysis=perform_analysis,
+            perform_claims_extraction=perform_claims_extraction,
+            claims_extractor_mode=claims_extractor_mode,
+            claims_max_per_chunk=claims_max_per_chunk,
             api_name=api_name,
             # api_key removed - retrieved from server config
             use_cookies=use_cookies,
@@ -5144,6 +5463,18 @@ def get_process_ebooks_form(
     system_prompt: Optional[str] = Form(None, description="Optional system prompt for analysis"),
     overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used, for model validation)"),
     perform_analysis: bool = Form(True, description="Perform analysis (summarization)"),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     api_name: Optional[str] = Form(None, description="Optional API name for analysis"),
     # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests (Not implemented for ebooks)"),
@@ -5199,6 +5530,9 @@ def get_process_ebooks_form(
             "system_prompt": system_prompt,
             "overwrite_existing": overwrite_existing, # Keep for model validation if needed
             "perform_analysis": perform_analysis,
+            "perform_claims_extraction": perform_claims_extraction,
+            "claims_extractor_mode": claims_extractor_mode,
+            "claims_max_per_chunk": claims_max_per_chunk,
             "api_name": api_name,
             # api_key removed - retrieved from server config
             "use_cookies": use_cookies, # Keep for model validation if needed
@@ -5600,6 +5934,18 @@ def get_process_emails_form(
     system_prompt: Optional[str] = Form(None, description="Optional system prompt for analysis"),
     overwrite_existing: bool = Form(False),
     perform_analysis: bool = Form(False),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     api_name: Optional[str] = Form(None),
     use_cookies: bool = Form(False),
     cookies: Optional[str] = Form(None),
@@ -5638,6 +5984,9 @@ def get_process_emails_form(
             "system_prompt": system_prompt,
             "overwrite_existing": overwrite_existing,
             "perform_analysis": perform_analysis,
+            "perform_claims_extraction": perform_claims_extraction,
+            "claims_extractor_mode": claims_extractor_mode,
+            "claims_max_per_chunk": claims_max_per_chunk,
             "api_name": api_name,
             "use_cookies": use_cookies,
             "cookies": cookies,
@@ -5662,7 +6011,6 @@ def get_process_emails_form(
             "max_depth": max_depth,
             "accept_archives": accept_archives,
             "accept_mbox": accept_mbox,
-            "accept_pst": accept_pst,
             "accept_pst": accept_pst,
         }
         filtered = {k: v for k, v in form_data.items() if v is not None}
@@ -5924,6 +6272,18 @@ def get_process_documents_form(
     system_prompt: Optional[str] = Form(None, description="Optional system prompt for analysis"),
     overwrite_existing: bool = Form(False), # Keep for model validation
     perform_analysis: bool = Form(True),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     api_name: Optional[str] = Form(None),
     # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False),
@@ -5974,6 +6334,9 @@ def get_process_documents_form(
             "system_prompt": system_prompt,
             "overwrite_existing": overwrite_existing,
             "perform_analysis": perform_analysis,
+            "perform_claims_extraction": perform_claims_extraction,
+            "claims_extractor_mode": claims_extractor_mode,
+            "claims_max_per_chunk": claims_max_per_chunk,
             "api_name": api_name,
             # api_key removed - retrieved from server config
             "use_cookies": use_cookies,
@@ -6374,6 +6737,18 @@ def get_process_pdfs_form(
     overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used, for model)"),
     keep_original_file: bool = Form(False, description="Retain original files (fixed in model)"), # Fixed by ProcessPDFsForm
     perform_analysis: bool = Form(True, description="Perform analysis"),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     api_name: Optional[str] = Form(None, description="Optional API name"), # Keep this
     # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
@@ -6437,6 +6812,9 @@ def get_process_pdfs_form(
             overwrite_existing=overwrite_existing,
             keep_original_file=keep_original_file, # Use arg
             perform_analysis=perform_analysis,
+            perform_claims_extraction=perform_claims_extraction,
+            claims_extractor_mode=claims_extractor_mode,
+            claims_max_per_chunk=claims_max_per_chunk,
             api_name=api_name,   # Pass received arg
             # api_key removed - retrieved from server config
             use_cookies=use_cookies,
