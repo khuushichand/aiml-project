@@ -32,9 +32,17 @@ from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_
 from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
     WebSearchRequest, WebSearchRawResponse, WebSearchAggregateResponse
 )
-from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import (
-    generate_and_search, analyze_and_aggregate
-)
+from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs
+
+
+def generate_and_search(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+    """Wrapper that defers to the web search module, keeping monkeypatches effective."""
+    return WebSearch_APIs.generate_and_search(*args, **kwargs)
+
+
+async def analyze_and_aggregate(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+    """Async wrapper around the aggregation stage for the same monkeypatch semantics."""
+    return await WebSearch_APIs.analyze_and_aggregate(*args, **kwargs)
 
 #
 #########################################################################################################################

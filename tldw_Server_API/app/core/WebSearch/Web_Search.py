@@ -28,6 +28,35 @@ from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_a
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
+def summarize(
+        input_data: str,
+        custom_prompt_arg: Optional[str] = None,
+        api_name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        temp: float = 0.7,
+        system_message: Optional[str] = None,
+        streaming: bool = False,
+        **extra_kwargs: Any,
+) -> str:
+    """
+    Backwards-compatible summarization helper to keep legacy monkeypatch-based tests working.
+
+    The newer implementation relies on :func:`analyze`, but exposing this wrapper allows unit
+    tests (and any downstream code) to replace the summarizer without reaching into internal
+    modules. All parameters map directly onto :func:`analyze`.
+    """
+    return analyze(
+        input_data=input_data,
+        custom_prompt_arg=custom_prompt_arg,
+        api_name=api_name,
+        api_key=api_key,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        **extra_kwargs,
+    )
+
+
 #
 #######################################################################################################################
 #
@@ -440,7 +469,7 @@ async def search_result_relevance(
 
                         # Generate summary using the summarize function
                         logging.info(f"Summarizing relevant result: ID={result_id}")
-                        summary = analyze(
+                        summary = summarize(
                             input_data=scraped_content['content'],
                             custom_prompt_arg=summary_prompt,
                             api_name=api_endpoint,
@@ -652,7 +681,7 @@ def aggregate_results(
             </chunk>
             """
         try:
-            chunk_summary = analyze(
+            chunk_summary = summarize(
                 input_data=info["text"],
                 custom_prompt_arg=chunk_prompt,
                 api_name=api_endpoint,
