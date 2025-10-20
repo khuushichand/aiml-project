@@ -29,7 +29,10 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
+    VectorStoreFactory,
+    create_from_settings_for_user,
+)
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding
 # Safe import of embeddings backend to avoid heavy deps at app import time
 try:
@@ -707,7 +710,7 @@ class EvaluationRunner:
         try:
             if rp.get("cleanup_collections") and built_collections:
                 from tldw_Server_API.app.core.config import settings as app_settings
-                adapter = VectorStoreFactory.create_from_settings(app_settings, user_id=str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+                adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
                 await adapter.initialize()
                 for cname in built_collections:
                     try:
@@ -780,7 +783,7 @@ class EvaluationRunner:
 
         # Create adapter
         from tldw_Server_API.app.core.config import settings as app_settings
-        adapter = VectorStoreFactory.create_from_settings(app_settings, user_id=str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+        adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
         await adapter.initialize()
         await adapter.create_collection(collection_name)
 

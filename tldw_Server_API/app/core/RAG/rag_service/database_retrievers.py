@@ -26,7 +26,12 @@ from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQu
 
 from .types import Document, DataSource
 from .utils import normalize_scores as _normalize_scores
-from .vector_stores import VectorStoreFactory, VectorStoreConfig, VectorStoreType
+from .vector_stores import (
+    VectorStoreFactory,
+    VectorStoreConfig,
+    VectorStoreType,
+    create_from_settings_for_user,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -222,9 +227,9 @@ class MediaDBRetriever(BaseRetriever):
             # Try to get vector store from settings
             from tldw_Server_API.app.core.config import settings
             if settings.get("RAG", {}).get("vector_store_type"):
-                self.vector_store = VectorStoreFactory.create_from_settings(
-                    settings, 
-                    user_id=self.user_id
+                self.vector_store = create_from_settings_for_user(
+                    settings,
+                    self.user_id
                 )
                 logger.info(f"Vector store adapter initialized for MediaDBRetriever with user_id={self.user_id}")
         except Exception as e:

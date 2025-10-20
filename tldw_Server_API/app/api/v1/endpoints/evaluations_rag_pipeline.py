@@ -19,7 +19,10 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     PipelinePresetCreate, PipelinePresetResponse, PipelinePresetListResponse, PipelineCleanupResponse,
 )
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
+    VectorStoreFactory,
+    create_from_settings_for_user,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 
@@ -218,7 +221,7 @@ async def cleanup_ephemeral_collections(
         if not expired:
             return PipelineCleanupResponse(expired_count=0, deleted_count=0)
         from tldw_Server_API.app.core.config import settings as app_settings
-        adapter = VectorStoreFactory.create_from_settings(app_settings, user_id=str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+        adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
         await adapter.initialize()
         deleted = 0
         errors: List[str] = []

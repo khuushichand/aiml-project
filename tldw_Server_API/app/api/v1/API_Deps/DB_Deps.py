@@ -174,6 +174,30 @@ async def get_media_db_for_user(
     return db_instance
 
 
+def reset_media_db_cache() -> None:
+    """Clear cached MediaDatabase instances (useful for tests)."""
+    with _user_db_lock:
+        try:
+            # Attempt to close outstanding connections for cache entries
+            values_iter = (
+                _user_db_instances.values()
+                if hasattr(_user_db_instances, "values")
+                else []  # type: ignore[assignment]
+            )
+            for db in list(values_iter):  # type: ignore[arg-type]
+                try:
+                    if hasattr(db, "close_connection"):
+                        db.close_connection()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            _user_db_instances.clear()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 async def try_get_media_db_for_user(
     current_user: User = Depends(get_request_user)
 ) -> Optional[MediaDatabase]:

@@ -817,7 +817,7 @@ async def lifespan(app: FastAPI):
             create_evaluations_database as _create_evals_db,
         )
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DBP
-        from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory as _VSF
+        from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory as _VSF, create_from_settings_for_user as _create_vs_from_settings
         from tldw_Server_API.app.core.config import settings as _app_settings
 
         # Use per-user evaluations DB for cleanup; default to single-user ID
@@ -831,7 +831,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"Starting ephemeral collections cleanup worker (every {_interval_sec}s)")
             # Use backend-aware factory so Postgres content backend is honored
             db = _create_evals_db(db_path=_db_path)
-            adapter = _VSF.create_from_settings(_app_settings, user_id=str(_app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+            adapter = _create_vs_from_settings(_app_settings, str(_app_settings.get("SINGLE_USER_FIXED_ID", "1")))
             await adapter.initialize()
             while True:
                 try:

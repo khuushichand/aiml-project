@@ -12,7 +12,7 @@ from .base import (
     VectorStoreType
 )
 from .chromadb_adapter import ChromaDBAdapter
-from .factory import VectorStoreFactory
+from .factory import VectorStoreFactory, create_from_settings_for_user
 
 __all__ = [
     "VectorStoreAdapter",
@@ -20,5 +20,6 @@ __all__ = [
     "VectorSearchResult",
     "VectorStoreType",
     "ChromaDBAdapter",
-    "VectorStoreFactory"
+    "VectorStoreFactory",
+    "create_from_settings_for_user"
 ]

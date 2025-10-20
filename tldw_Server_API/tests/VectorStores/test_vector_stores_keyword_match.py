@@ -73,6 +73,12 @@ def testing_env(monkeypatch, tmp_path):
     from tldw_Server_API.app.core import config as cfg
     # Ensure base dir is a Path so DB deps resolve under tmp_path/1/Media_DB_v2.db
     monkeypatch.setitem(cfg.settings, "USER_DB_BASE_DIR", pathlib.Path(tmp_path))
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import reset_media_db_cache
+
+        reset_media_db_cache()
+    except Exception:
+        pass
     yield
     os.environ.pop("TESTING", None)
     os.environ.pop("USER_DB_BASE_DIR", None)

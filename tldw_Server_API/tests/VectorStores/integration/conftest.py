@@ -27,6 +27,12 @@ def vectorstores_isolated_env():
         # Patch settings at import time to avoid reusing any existing path
         from tldw_Server_API.app.core.config import settings
         settings["USER_DB_BASE_DIR"] = Path(tmp_base)
+        try:
+            from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import reset_media_db_cache
+
+            reset_media_db_cache()
+        except Exception:
+            pass
         # Ensure vector batches DB is initialized for the default user
         try:
             from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import init_db as _init_batches

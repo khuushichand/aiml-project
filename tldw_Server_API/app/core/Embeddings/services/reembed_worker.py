@@ -59,7 +59,10 @@ from tldw_Server_API.app.core.Embeddings.messages import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
+    VectorStoreFactory,
+    create_from_settings_for_user,
+)
 
 
 EMBEDDING_QUEUE = os.getenv("EMBEDDING_LIVE_QUEUE", "embeddings:embedding")
@@ -422,7 +425,7 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
                         skip_unchanged = False
                     if skip_unchanged:
                         from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-                        adapter = VectorStoreFactory.create_from_settings(_settings, user_id=str(owner))
+                        adapter = create_from_settings_for_user(_settings, str(owner))
                         if adapter is not None:
                             await adapter.initialize()
                             collection_name = f"user_{owner}_media_embeddings"

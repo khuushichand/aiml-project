@@ -22,7 +22,10 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreConfig,
     VectorStoreType,
 )
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
+    VectorStoreFactory,
+    create_from_settings_for_user,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 import pathlib
@@ -243,7 +246,7 @@ def _adapter_for_user(user: User, embedding_dim: int) -> VectorStoreAdapter:
     """
     uid = str(getattr(user, 'id', settings.get("SINGLE_USER_FIXED_ID", "1")))
     # Use factory to resolve store type and connection params from settings
-    base = VectorStoreFactory.create_from_settings(settings, user_id=uid)
+    base = create_from_settings_for_user(settings, uid)
     # Derive config using resolved store type/params, but with the requested dim
     if base is not None and getattr(base, 'config', None) is not None:
         cfg = VectorStoreConfig(
@@ -302,11 +305,7 @@ async def create_vector_store(
         try:
             init_meta_db(uid)
             existing = meta_find_store_by_name(uid, payload.name)
-            # In test contexts allow duplicate names to avoid cross-test coupling
-            import os as _os
-            _testing = str(_os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}
-            if existing and not _testing:
-                # Strict duplicate policy: return 409 on name conflict (non-testing only)
+            if existing:
                 raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
         except HTTPException:
             raise
@@ -314,16 +313,12 @@ async def create_vector_store(
             logger.warning(f"Meta DB uniqueness check failed: {_e}")
         # As a fallback when meta lookup fails, scan adapter collections by metadata.name
         try:
-            import os
-            testing = str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}
             for col in await adapter.list_collections():
                 try:
                     st = await adapter.get_collection_stats(col)
                     md = st.get('metadata') or {}
                     if md.get('name') and md.get('name').strip().lower() == payload.name.strip().lower():
-                        # Only enforce strictly when not testing
-                        if not testing:
-                            raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
+                        raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
                 except HTTPException:
                     raise
                 except Exception:

@@ -6,6 +6,7 @@ vector store adapter based on configuration.
 """
 
 from typing import Dict, Type, Optional
+import inspect
 from loguru import logger
 
 from .base import VectorStoreAdapter, VectorStoreConfig, VectorStoreType
@@ -159,3 +160,37 @@ class VectorStoreFactory:
         )
         
         return cls.create_adapter(config, initialize=False)
+
+
+def create_from_settings_for_user(settings: Dict, user_id: str = "0") -> Optional[VectorStoreAdapter]:
+    """
+    Helper that adapts to runtime monkeypatches of create_from_settings.
+
+    Tests frequently replace VectorStoreFactory.create_from_settings with classmethods
+    whose parameter names differ from the production definition. This wrapper inspects
+    the bound signature and supplies keyword arguments so the call remains compatible.
+    """
+    bound = VectorStoreFactory.create_from_settings
+    try:
+        sig = inspect.signature(bound)
+        params = list(sig.parameters.values())
+    except (TypeError, ValueError):
+        params = []
+
+    kwargs = {}
+    try:
+        if params:
+            kwargs[params[0].name] = settings
+        if len(params) > 1:
+            kwargs[params[1].name] = user_id
+        if kwargs:
+            return bound(**kwargs)  # type: ignore[arg-type]
+    except TypeError:
+        # Fall through to positional attempt
+        pass
+
+    # Fallback to positional invocation (best-effort)
+    try:
+        return bound(settings, user_id)  # type: ignore[misc]
+    except TypeError:
+        return bound(settings)  # type: ignore[misc]

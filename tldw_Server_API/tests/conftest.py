@@ -19,6 +19,11 @@ import pytest
 from loguru import logger
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+# Register optional pgvector fixtures globally so any test can request them.
+from tldw_Server_API.tests.helpers.pgvector import (  # noqa: F401
+    pgvector_dsn,
+    pgvector_temp_table,
+)
 
 
 class _TestSafeStream:

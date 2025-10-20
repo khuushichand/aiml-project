@@ -19,7 +19,10 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreConfig,
     VectorStoreType,
 )
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
+    VectorStoreFactory,
+    create_from_settings_for_user,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from ..messages import normalize_message
@@ -53,7 +56,7 @@ class StorageWorker(BaseWorker):
             # Determine target adapter (pgvector/chromadb) up-front
             base_adapter = None
             try:
-                base_adapter = VectorStoreFactory.create_from_settings(settings, user_id=str(message.user_id))
+                base_adapter = create_from_settings_for_user(settings, str(message.user_id))
             except Exception:
                 base_adapter = None
             use_adapter_pg = False
@@ -496,7 +499,7 @@ class StorageWorker(BaseWorker):
         if cache_key in self._adapter_cache:
             return self._adapter_cache[cache_key]
 
-        base = VectorStoreFactory.create_from_settings(settings, user_id=str(user_id))
+        base = create_from_settings_for_user(settings, str(user_id))
         if base is not None and getattr(base, 'config', None) is not None:
             cfg = VectorStoreConfig(
                 store_type=base.config.store_type,  # type: ignore[attr-defined]
