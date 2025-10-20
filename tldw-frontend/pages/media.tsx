@@ -38,6 +38,10 @@ export default function MediaPage() {
   const [analysisPrompt, setAnalysisPrompt] = useState<string>('Summarize the following content in 5 bullet points.');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [advancedJson, setAdvancedJson] = useState<string>(JSON.stringify({ perform_analysis: true, perform_chunking: true }, null, 2));
+  type ClaimsToggle = 'inherit' | 'enabled' | 'disabled';
+  const [claimsExtraction, setClaimsExtraction] = useState<ClaimsToggle>('inherit');
+  const [claimsExtractorMode, setClaimsExtractorMode] = useState<string>('');
+  const [claimsMaxPerChunk, setClaimsMaxPerChunk] = useState<string>('');
 
   const endpoint = (t: MediaType) => {
     switch (t) {
@@ -64,10 +68,25 @@ export default function MediaPage() {
       // Advanced options JSON appended as fields
       try {
         const opts = JSON.parse(advancedJson || '{}');
+        delete opts.perform_claims_extraction;
+        delete opts.claims_extractor_mode;
+        delete opts.claims_max_per_chunk;
         Object.entries(opts).forEach(([k, v]) => {
           if (v !== undefined && v !== null) fd.append(k, typeof v === 'string' ? v : JSON.stringify(v));
         });
       } catch {}
+      if (claimsExtraction !== 'inherit') {
+        fd.append('perform_claims_extraction', claimsExtraction === 'enabled' ? 'true' : 'false');
+      }
+      if (claimsExtractorMode.trim().length > 0) {
+        fd.append('claims_extractor_mode', claimsExtractorMode.trim());
+      }
+      if (claimsMaxPerChunk.trim().length > 0) {
+        const parsed = parseInt(claimsMaxPerChunk, 10);
+        if (!Number.isNaN(parsed) && parsed >= 1 && parsed <= 12) {
+          fd.append('claims_max_per_chunk', String(parsed));
+        }
+      }
 
       const res = await apiClient.post(endpoint(mediaType), fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -270,6 +289,48 @@ export default function MediaPage() {
               <JsonEditor value={advancedJson} onChange={setAdvancedJson} height={200} />
             </div>
           </details>
+
+          <div className="rounded border p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Claims Extraction</h2>
+              <span className="text-xs text-gray-500">Controls ingestion-time factual claim extraction.</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="sm:col-span-1">
+                <label className="mb-1 block text-sm font-medium text-gray-700">Extraction behaviour</label>
+                <select
+                  className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  value={claimsExtraction}
+                  onChange={(e) => setClaimsExtraction(e.target.value as ClaimsToggle)}
+                >
+                  <option value="inherit">Use server default</option>
+                  <option value="enabled">Always extract claims</option>
+                  <option value="disabled">Skip claims extraction</option>
+                </select>
+              </div>
+              <div className="sm:col-span-1">
+                <Input
+                  label="Extractor mode (optional)"
+                  placeholder="heuristic, ner, provider id…"
+                  value={claimsExtractorMode}
+                  onChange={(e) => setClaimsExtractorMode(e.target.value)}
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <label className="mb-1 block text-sm font-medium text-gray-700">Max claims per chunk</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={12}
+                  placeholder="e.g. 3"
+                  value={claimsMaxPerChunk}
+                  onChange={(e) => setClaimsMaxPerChunk(e.target.value)}
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">Leave blank to use the server default.</p>
+              </div>
+            </div>
+          </div>
 
           {/* Selected item details */}
           {selectedItem && (

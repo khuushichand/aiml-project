@@ -197,6 +197,7 @@ Runtime overrides (non‑persistent) are available via API:
 - `EMB_BACKPRESSURE_MAX_AGE_SECONDS`: Maximum age (seconds) of the oldest message across core embeddings queues before HTTP 429. Default: `300`.
 - `EMBEDDINGS_TENANT_RPS`: Per‑tenant requests per second limit for embeddings endpoints (multi‑tenant mode only). `0` disables. Default: `0`.
 - `INGEST_TENANT_RPS`: Per‑tenant requests per second limit for ingestion endpoints (multi‑tenant mode). Falls back to `EMBEDDINGS_TENANT_RPS` if unset. `0` disables. Default: `0`.
+- `EMBEDDINGS_REDIS_URL`: Redis connection string for embeddings job manager queues (`embeddings:*`). Falls back to `REDIS_URL` and defaults to `redis://localhost:6379`.
 
 ### Priority Queues
 - `EMBEDDINGS_PRIORITY_ENABLED`: Enable per‑stage priority sub‑queues with weighted fair consumption (`true|false`). Default: `false`.
@@ -332,8 +333,15 @@ Dashboards/Alerts/Annotations
   - `MONITORING_NOTIFY_SMTP_PORT`: SMTP port (default `587`).
   - `MONITORING_NOTIFY_SMTP_STARTTLS`: Enable STARTTLS (`true|false`, default `true`).
   - `MONITORING_NOTIFY_SMTP_USER`: SMTP auth username (optional if server allows anon relay; not recommended).
-  - `MONITORING_NOTIFY_SMTP_PASSWORD`: SMTP auth password.
+- `MONITORING_NOTIFY_SMTP_PASSWORD`: SMTP auth password.
 
 Notes:
 - Monitoring alerts do not block or modify content; they create reviewable signals for admins.
 - Webhook/email delivery is best-effort and runs in background threads with small timeouts and retries.
+
+## Watchlists Module
+- `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS`: Default retention (seconds) applied to persisted outputs. `0` keeps outputs indefinitely. Defaults to `0`.
+- `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`: Retention (seconds) for temporary outputs (`temporary=true`). Defaults to `86400` (24h).
+- `WATCHLIST_TEMPLATE_DIR`: Override directory for watchlist templates (defaults to `Config_Files/templates/watchlists`).
+- `EMAIL_PROVIDER`: Delivery backend for NotificationsService (`mock`, `smtp`, ...). Defaults to `mock` for local setups.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`: SMTP settings consumed by NotificationsService when `EMAIL_PROVIDER=smtp`.

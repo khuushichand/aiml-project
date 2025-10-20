@@ -386,6 +386,10 @@ Ordering is stable with a tie‑breaker (`run_id` for runs; `event_id` for event
 - Basic tab at `tldw_Server_API/WebUI/tabs/workflows_content.html` for definition CRUD, run start (sync/async), run status, event stream, and artifact downloads (server and client‑side zip).
 - The Runs list displays status chips including a dedicated `waiting_approval` chip for human‑in‑the‑loop runs awaiting approval.
 - The Events viewer supports cursor pagination when enabled, and client/server‑side filtering by event types.
+- Builder UX (MVP)
+  - Step inspector panels must expose `On success go to…` / `On failure go to…` selectors (populated from known step ids) so routing is discoverable without editing raw JSON.
+  - Palette should include a “Branch (if/else)” tile that preloads the canonical config (`condition`, `true_next`, `false_next`) and pairs with an inline helper explaining when to use branch vs. success/failure wiring.
+  - Adapter advanced settings should surface a read-only hint about runtime `__next__` overrides so power users know custom steps can redirect execution.
 
 ## Testing
 
@@ -407,7 +411,7 @@ Ordering is stable with a tie‑breaker (`run_id` for runs; `event_id` for event
 - Step Library Expansion: STT/TTS adapters, data transformation sandbox, export steps.
 - Schedules/Triggers: Time‑based triggers and inbound webhook triggers.
 - Budgets/Quotas: Per‑tenant/user budgets with enforcement and reporting.
-- GUI Builder: Drag‑and‑drop graph editor in the WebUI backed by the APIs above.
+- GUI Builder: Drag‑and‑drop graph editor in the WebUI backed by the APIs above, with success/failure routing selectors and a preconfigured branch template in the step palette.
 
 ## Quick Start
 

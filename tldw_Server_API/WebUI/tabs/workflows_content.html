@@ -321,7 +321,7 @@
       </label>
       <button class="api-button" onclick="wfTplResetFilters()" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
     </div>
-    <textarea id="wfDef_payload" rows="12" style="width:100%">{
+    <textarea id="wfDef_payload" rows="12" style="width:100%" oninput="wfRoutingDebounceRefresh()">{
   "name": "hello",
   "version": 1,
   "steps": [
@@ -329,6 +329,32 @@
   ]
 }</textarea>
   </div>
+  <div class="card" style="margin:12px 0; padding:10px; border:1px solid var(--color-base-40); border-radius:8px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+      <div>
+        <h3 style="margin:0 0 6px 0">Routing Helpers</h3>
+        <div style="color:var(--color-base-0); font-size:0.9em">Wire success/failure paths without editing JSON manually.</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="api-button btn-sm" onclick="wfRoutingRefreshOptions(true)" title="Rebuild the step lists from the JSON definition">Refresh Step IDs</button>
+        <button class="api-button btn-sm" onclick="wfRoutingClear()" title="Clear the current routing inputs">Clear</button>
+      </div>
+    </div>
+    <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+      <label for="wfRouting_step" style="margin:0;">Step</label>
+      <input list="wfRouting_step_ids" id="wfRouting_step" placeholder="step id (e.g., prompt_1)" style="min-width:180px" />
+      <label for="wfRouting_success" style="margin:0;">On success</label>
+      <input list="wfRouting_target_ids" id="wfRouting_success" placeholder="next step id" style="min-width:180px" />
+      <label for="wfRouting_failure" style="margin:0;">On failure</label>
+      <input list="wfRouting_target_ids" id="wfRouting_failure" placeholder="fallback id (optional)" style="min-width:180px" />
+      <button class="api-button" onclick="wfApplyRouting()" title="Apply routing to the selected step">Apply Routing</button>
+    </div>
+    <div style="font-size:0.85em; color:var(--color-base-0); margin-top:6px;">
+      Tip: Use the Branch step template to produce ready-made true/false paths.
+    </div>
+  </div>
+  <datalist id="wfRouting_step_ids"></datalist>
+  <datalist id="wfRouting_target_ids"></datalist>
   <div class="card" style="margin:12px 0; padding:10px; border:1px solid var(--color-base-40); border-radius:8px;">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
       <div>
@@ -367,6 +393,7 @@
     <button class="api-button" onclick="wfListDefinitions()">List Definitions</button>
     <button class="api-button" onclick="wfInsertDelay()">Insert Delay Step</button>
     <button class="api-button" onclick="wfInsertLog()">Insert Log Step</button>
+    <button class="api-button" onclick="wfInsertBranch()">Insert Branch Step</button>
     <button class="api-button" onclick="wfInsertPrompt()">Insert Prompt Step</button>
     <button class="api-button" onclick="wfInsertRagSearch()">Insert RAG Search Step</button>
     <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
@@ -882,6 +909,65 @@
       await wfSchedList();
     }catch(e){ Toast.error('Toggle require-online failed: '+(e?.message||e)); }
   }
+  let wfRoutingRefreshTimer = null;
+  function wfRoutingDebounceRefresh(){
+    try{
+      if(wfRoutingRefreshTimer){
+        clearTimeout(wfRoutingRefreshTimer);
+      }
+      wfRoutingRefreshTimer = setTimeout(()=>wfRoutingRefreshOptions(false), 300);
+    }catch(_e){}
+  }
+  function wfRoutingRefreshOptions(showToast){
+    try{
+      const stepList = document.getElementById('wfRouting_step_ids');
+      const targetList = document.getElementById('wfRouting_target_ids');
+      const ta = document.getElementById('wfDef_payload');
+      if(!stepList || !targetList || !ta){ return; }
+      const obj = JSON.parse(ta.value || '{}');
+      const steps = Array.isArray(obj.steps)? obj.steps : [];
+      const ids = steps.map(step => step && step.id ? String(step.id) : '').filter(Boolean);
+      const options = ids.map(id => `<option value="${id}"></option>`).join('');
+      stepList.innerHTML = options;
+      targetList.innerHTML = options;
+      if(showToast){ Toast.success('Step list refreshed'); }
+    }catch(e){
+      if(showToast){ Toast.error('Refresh failed: '+(e?.message||e)); }
+    }
+  }
+  function wfRoutingClear(){
+    ['wfRouting_step','wfRouting_success','wfRouting_failure'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el){ el.value = ''; }
+    });
+  }
+  function wfApplyRouting(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      if(!ta){ return; }
+      const stepId = (document.getElementById('wfRouting_step')?.value || '').trim();
+      if(!stepId){
+        Toast.error('Select a step id to update.');
+        return;
+      }
+      const success = (document.getElementById('wfRouting_success')?.value || '').trim();
+      const failure = (document.getElementById('wfRouting_failure')?.value || '').trim();
+      const obj = JSON.parse(ta.value || '{}');
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const step = obj.steps.find(s => String(s?.id || '') === stepId);
+      if(!step){
+        Toast.error('Step '+stepId+' not found.');
+        return;
+      }
+      if(success){ step.on_success = success; } else { delete step.on_success; }
+      if(failure){ step.on_failure = failure; } else { delete step.on_failure; }
+      ta.value = JSON.stringify(obj, null, 2);
+      wfRoutingRefreshOptions(false);
+      Toast.success('Updated routing for '+stepId);
+    }catch(e){
+      Toast.error('Routing update failed: '+(e?.message||e));
+    }
+  }
   function wfInsertDelay(){
     try{
       const ta = document.getElementById('wfDef_payload');
@@ -890,6 +976,7 @@
       const id = 'delay_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'delay', config: { milliseconds: 1000 }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted delay step');
     }catch(e){ Toast.error('Could not insert delay: '+(e?.message||e)); }
   }
@@ -901,8 +988,30 @@
       const id = 'log_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'log', config: { message: 'Run {{ inputs.name || \"\" }}', level: 'info' }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted log step');
     }catch(e){ Toast.error('Could not insert log: '+(e?.message||e)); }
+  }
+  function wfInsertBranch(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'branch_'+(obj.steps.length+1);
+      obj.steps.push({
+        id,
+        name: 'Decision '+id,
+        type: 'branch',
+        config: {
+          condition: '{{ inputs.flag || last.text || "" }}',
+          true_next: '',
+          false_next: ''
+        }
+      });
+      ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
+      Toast.success('Inserted branch step');
+    }catch(e){ Toast.error('Could not insert branch: '+(e?.message||e)); }
   }
   function wfInsertRSSFetch(){
     try{
@@ -912,6 +1021,7 @@
       const id = 'rss_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'rss_fetch', config: { urls: ['https://example.com/feed.xml'], limit: 5 }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted rss_fetch step');
     }catch(e){ Toast.error('Could not insert rss_fetch: '+(e?.message||e)); }
   }
@@ -923,6 +1033,7 @@
       const id = 'embed_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'embed', config: { texts: '{{ last.text }}', collection: 'user_{{ user_id }}_workflows' }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted embed step');
     }catch(e){ Toast.error('Could not insert embed: '+(e?.message||e)); }
   }
@@ -934,6 +1045,7 @@
       const id = 'translate_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'translate', config: { input: '{{ last.text }}', target_lang: 'en' }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted translate step');
     }catch(e){ Toast.error('Could not insert translate: '+(e?.message||e)); }
   }
@@ -945,6 +1057,7 @@
       const id = 'stt_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'stt_transcribe', config: { file_uri: 'file:///ABSOLUTE/PATH/TO/audio.wav', model: 'large-v3', word_timestamps: false }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted stt_transcribe step');
     }catch(e){ Toast.error('Could not insert stt_transcribe: '+(e?.message||e)); }
   }
@@ -956,6 +1069,7 @@
       const id = 'notify_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'notify', config: { url: 'https://hooks.slack.com/services/xxx', message: '{{ last.text }}' }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted notify step');
     }catch(e){ Toast.error('Could not insert notify: '+(e?.message||e)); }
   }
@@ -967,6 +1081,7 @@
       const id = 'diff_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'diff_change_detector', config: { current: '{{ last.text }}', method: 'ratio', threshold: 0.95 }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted diff_change_detector step');
     }catch(e){ Toast.error('Could not insert diff change: '+(e?.message||e)); }
   }
@@ -978,6 +1093,7 @@
       const id = 'prompt_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'prompt', config: { template: 'Hello {{ inputs.name }}' }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted prompt step');
     }catch(e){ Toast.error('Could not insert prompt: '+(e?.message||e)); }
   }
@@ -989,6 +1105,7 @@
       const id = 'proc_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'process_media', config: { kind: 'web_scraping', scrape_method: 'Individual URLs', url_input: 'https://example.com/article', summarize: true, temperature: 0.7 }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted process_media step');
     }catch(e){ Toast.error('Could not insert process_media: '+(e?.message||e)); }
   }
@@ -1000,6 +1117,7 @@
       const id = 'tts_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'tts', config: { input: 'Narrate: {{ last.text || inputs.summary || "" }}', model: 'kokoro', voice: 'af_heart', response_format: 'mp3', speed: 1.0 }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted TTS step');
     }catch(e){ Toast.error('Could not insert tts: '+(e?.message||e)); }
   }
@@ -1011,6 +1129,7 @@
       const id = 'rag_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'rag_search', config: { query: '{{ inputs.query || "example" }}', sources: ['media_db'], search_mode: 'hybrid', top_k: 5 }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted RAG search step');
     }catch(e){ Toast.error('Could not insert rag_search: '+(e?.message||e)); }
   }
@@ -1022,6 +1141,7 @@
       const id = 'ingest_'+(obj.steps.length+1);
       obj.steps.push({ id, type: 'media_ingest', config: { sources: [{ uri: 'file:///path/to/file.txt' }], extraction: { extract_text: true }, chunking: { method: 'simple', max_size: 800, overlap: 100 } }});
       ta.value = JSON.stringify(obj,null,2);
+      wfRoutingRefreshOptions(false);
       Toast.success('Inserted media_ingest step');
     }catch(e){ Toast.error('Could not insert media_ingest: '+(e?.message||e)); }
   }
@@ -2684,6 +2804,7 @@
       navigator.clipboard.writeText(text).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed'));
     }catch(e){ Toast.error('Copy failed: '+(e?.message||e)); }
   }
+  window.setTimeout(()=>wfRoutingRefreshOptions(false), 0);
   function escapeHtml(s){ return (s||'').replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#39;'}[m])); }
 </script>
 <script>

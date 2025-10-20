@@ -5,7 +5,7 @@ Owner: Core Maintainers
 Target Release: 0.2.x
 
 ## 1) Summary
-A Watchlists feature that lets a user maintain categorized collections of media sources (websites, blogs, news sites, RSS feeds) and schedule scraping/ingestion jobs. The v0.2 implementation ships an end‑to‑end pipeline: jobs resolve scope (tags/groups/sources), fetch RSS feeds or site front pages, deduplicate items, ingest new content into the Media DB, and persist structured `scraped_items`. Users can review items, mark them as reviewed, generate Markdown or HTML briefings with per-job defaults, and optionally deliver outputs via email or Chatbook generated documents. Audio/TTS, Media DB aggregation exports, and forum ingestion remain future work.
+A Watchlists feature that lets a user maintain categorized collections of media sources (websites, blogs, news sites, RSS feeds) and schedule scraping/ingestion jobs. The v0.2 implementation ships an end‑to‑end pipeline: jobs resolve scope (tags/groups/sources), fetch RSS feeds or site front pages, deduplicate items, ingest new content into the Media DB, and persist structured `scraped_items`. Users can review items, mark them as reviewed, generate Markdown or HTML briefings with per-job defaults, and optionally deliver outputs via email or Chatbook generated documents. The WebUI now surfaces watchlist jobs, items, outputs, and template/delivery defaults on the admin tab. Audio/TTS, Media DB aggregation exports, and forum ingestion remain future work.
 
 ## 2) Problem Statement
 Users want recurring, customizable content collection without manual effort. Today, users can ingest URLs one-off, but cannot:
@@ -16,17 +16,17 @@ Users want recurring, customizable content collection without manual effort. Tod
 
 ## 3) Goals and Non‑Goals
 ### Goals (implemented MVP → v1 roadmap)
-- ✅ Create and manage sources (URL + type + settings) and logical groupings/tags
-- ✅ Schedule scraping jobs for selected sources, groups, or tag combinations
-- ✅ Detect and ingest only new/changed items since last scrape (ETag/Last‑Modified, dedupe table)
-- ✅ Parse text/content with existing ingestion pipeline and capture run stats
-- ✅ Generate Markdown/HTML briefings from scraped items; download via API
-- ✅ Provide API to manage sources, jobs, runs, items, and outputs
-- ✅ File-backed template management API plus per-job defaults (v0.2.1)
-- ✅ Output retention/versioning with configurable TTLs, email + Chatbook delivery hooks
-- 🟡 Watchlists tab in WebUI for items/outputs/templates management (admin console view)
-- 🚧 WebUI authoring for rich template creation; MECE/newsletter presets and deeper per-job defaults
-- 🚧 Optional TTS/audio briefings and Chatbook/Media DB aggregation exports
+- [x] Create and manage sources (URL + type + settings) and logical groupings/tags
+- [x] Schedule scraping jobs for selected sources, groups, or tag combinations
+- [x] Detect and ingest only new/changed items since last scrape (ETag/Last-Modified, dedupe table)
+- [x] Parse text/content with existing ingestion pipeline and capture run stats
+- [x] Generate Markdown/HTML briefings from scraped items; download via API
+- [x] Provide API to manage sources, jobs, runs, items, and outputs
+- [x] File-backed template management API plus per-job defaults (v0.2.1)
+- [x] Output retention/versioning with configurable TTLs, email + Chatbook delivery hooks
+- [x] Watchlists tab in WebUI for items/outputs/templates management, including per-job template/retention/delivery configuration
+- [ ] WebUI authoring for rich template creation; MECE/newsletter presets and deeper per-job defaults
+- [ ] Optional TTS/audio briefings and Chatbook/Media DB aggregation exports
 
 ### Non‑Goals (initial)
 - Full headless browser automation (Playwright/Puppeteer) for heavy JS sites
@@ -54,7 +54,7 @@ Users want recurring, customizable content collection without manual effort. Tod
 - Parsing: HTML article extraction; RSS item parsing; reuse existing ingestion
 - Dedup/change detection: URL canonicalization + content hash
 - Output generation: Markdown/HTML briefings with template store; MECE/HTML variants and TTS are future increments
-- Delivery: Download rendered output; configurable email + Chatbook deliveries (generated-document backing) with per-job defaults; Media DB aggregation planned
+- Delivery: Download rendered output; configurable email + Chatbook deliveries via NotificationsService with per-job defaults; Media DB aggregation planned. Templates stored under `Config_Files/templates/watchlists/` (override with `WATCHLIST_TEMPLATE_DIR`).
 - Admin WebUI slice: watchlists tab for listing items, creating outputs (with delivery options), and managing templates
 
 ### Out-of-Scope (initial)
@@ -72,8 +72,8 @@ MVP (implemented)
 - As a user, I can generate a Markdown briefing from the collected items and download it.
 - As a user, I can review scraped items, filter them (status/reviewed), and mark them as reviewed or ignored.
 
-v1 Enhancements (not yet implemented)
-- As a user, I can pick templates (newsletter, MECE, narrative) and store defaults per job.
+v1 Enhancements (in progress)
+- As a user, I can tailor MECE/newsletter presets via a UI template editor and share defaults across jobs.
 - As a user, I can create an audio briefing using TTS and download or ingest it.
 - As a user, I can export the run as a Chatbook or ingest into Media DB as a single artifact.
 - As a user, I can set domain-level rate limits and max concurrency per job.
@@ -239,9 +239,11 @@ Concurrency & Scheduling
 ## 18) Testing Strategy
 - Unit
   - URL normalization; content hashing; RSS parsing; selector extraction; schedule parsing; template rendering
+  - Embedding queue enqueue on watchlist ingestion (best-effort Redis stub)
 - Integration
   - End-to-end: create sources → create job → dry run → run → generate output
   - API contract tests with httpx; DB fixtures for in-memory SQLite
+  - NotificationsService email/chatbook delivery flows exercised with mock provider/Chatbook store
 - Property-Based
   - Dedup invariants (same content variants map to same fingerprint)
 - Mocks
@@ -259,8 +261,8 @@ Concurrency & Scheduling
 
 ## 20) Rollout Plan
 - Phase 1 (complete): RSS + site (front page/top‑N) support; Markdown/HTML briefing; manual + interval schedule; API review tools.
-- Phase 2 (planned): Templated variants (MECE/newsletter), per-job output defaults, optional HTML/Markdown custom templates, UI integration.
-- Phase 3 (planned): TTS audio, Chatbook export, forum patterns, WS live logs, multi-tenant sharing, optional Postgres backend.
+- Phase 2 (active): MECE/newsletter automation + TTS, richer template editing, Media DB ingest toggle. **Delivered:** per-job output defaults, NotificationsService delivery, admin WebUI wiring.
+- Phase 3 (planned): TTS audio (if not completed in Phase 2), Chatbook export enhancements, forum patterns, WS live logs, multi-tenant sharing, optional Postgres backend.
 
 ## 21) Risks & Mitigations
 - Dynamic JS sites: mark unsupported initially; later headless rendering option
@@ -278,7 +280,7 @@ Concurrency & Scheduling
 - Per-job rate limiting UI; per-user Postgres backend support.  
   **Answer:** Expose rate-limit controls via API first; surface UI later. Postgres backend is deferred until the broader DB abstraction is ready.
 - WebUI parity for new items/outputs endpoints.  
-  **Answer:** WebUI should achieve full parity with the API for listing items, updating status, generating/downloading outputs, and viewing run stats.
+  **Answer:** Achieved: the Next.js admin watchlists tab lists items, previews outputs, edits per-job defaults (template/retention/delivery), and surfaces run stats. Future UI work focuses on template editing and richer item review.
 - Content Collections alignment.  
   **Answer:** When the Collections `content_items` tables land, update Watchlists ingestion to dual-write (Media DB + Collections DB) and ensure `/watchlists/items` and `/items` endpoints stay consistent. Postgres enablement remains deferred to Stage 2 so both modules migrate together.
 

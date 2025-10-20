@@ -82,3 +82,33 @@ async def test_reading_update_status_and_filters(reading_env):
     rows, total = service.list_items(status=["read"], page=1, size=10)
     assert total >= 1
     assert any(row.id == save_result.item.id for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_reading_save_triggers_embedding(reading_env, monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "0")
+
+    captured = {}
+
+    async def fake_enqueue_embeddings_job_for_item(**kwargs):
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Collections.reading_service.enqueue_embeddings_job_for_item",
+        fake_enqueue_embeddings_job_for_item,
+    )
+
+    service = ReadingService(TEST_USER_ID + 2)
+    await service.save_url(
+        url="https://example.org/embed",
+        tags=["embed"],
+        status="saved",
+        favorite=False,
+        title_override="Embed Item",
+        content_override="Embedding content body",
+    )
+
+    assert "kwargs" in captured
+    assert captured["kwargs"]["user_id"] == TEST_USER_ID + 2
+    assert "Embedding content body" in captured["kwargs"]["content"]
+    assert captured["kwargs"]["metadata"]["origin"] == "reading"

@@ -31,6 +31,16 @@ Provide a safe, observable workflow runtime to orchestrate content processing, g
 - Artifacts: list, download, manifest with optional checksum verification.
 - Step discovery: list step types with JSONSchema and examples.
 
+### Control Flow Routing (v0.1)
+
+Authors can combine three routing constructs to express if/else and success/failure paths:
+
+1. **Branch step** – the `branch` adapter renders a templated condition and selects `true_next` or `false_next`, providing classic if/else semantics inside the step graph.
+2. **Per-step `on_success` / `on_failure` targets** – any step may declare explicit follow-on step IDs for successful execution versus handled failures, keeping linear definitions easy to read while still diverging logic.
+3. **Adapter-returned `__next__` overrides** – advanced adapters can return a payload containing `{"__next__": "step_id", "__status__": "ok|failed"}` to redirect execution programmatically (e.g., shortcuts, fallback paths, or external policy checks).
+
+Builders and docs should surface these options so designers understand when to drop a branch node versus wiring success/failure continuations or deferring to adapter logic.
+
 ## Security & Policies
 
 - Egress policy with profiles (strict/permissive/custom), allowed ports, host allowlist, private IP blocking. Webhook allow/deny (global and per tenant).

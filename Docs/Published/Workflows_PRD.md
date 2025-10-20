@@ -10,6 +10,12 @@ This document summarizes the Product Requirements for the Workflows module as of
 - Webhook lifecycle with signing and DLQ
 - SQLite (default) and PostgreSQL (recommended) backends
 
+### Control Flow Routing
+
+- `branch` step: templated condition with `true_next` / `false_next` targets (if/else).
+- Per-step `on_success` / `on_failure` jump targets for linear success/failure splits.
+- Adapter-returned `{"__next__": "step_id", "__status__": ...}` to programmatically choose the next step.
+
 ## Validation Modes (Artifacts)
 
 - Strict (default): path scope + checksum enforced
@@ -44,4 +50,3 @@ This document summarizes the Product Requirements for the Workflows module as of
 - `WORKFLOWS_DEBUG=1` – enable broad Workflows debug logs
 - `WORKFLOWS_ARTIFACTS_DEBUG=1` – artifact endpoints
 - `WORKFLOWS_DLQ_DEBUG=1` – DLQ endpoints/worker
-

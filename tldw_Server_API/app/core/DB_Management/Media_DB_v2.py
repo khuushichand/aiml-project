@@ -2173,7 +2173,21 @@ class MediaDatabase:
         try:
             with self.transaction() as conn:
                 if self.backend_type == BackendType.SQLITE:
-                    self._execute_with_connection(conn, "DELETE FROM claims_fts")
+                    try:
+                        self._execute_with_connection(conn, "DELETE FROM claims_fts")
+                    except sqlite3.Error as sqlite_err:
+                        logging.warning("claims_fts table missing during rebuild; recreating. Error: %s", sqlite_err)
+                        self._execute_with_connection(
+                            conn,
+                            """
+                            CREATE VIRTUAL TABLE IF NOT EXISTS claims_fts USING fts5(
+                                claim_text,
+                                content='Claims',
+                                content_rowid='id'
+                            )
+                            """,
+                        )
+                        self._execute_with_connection(conn, "DELETE FROM claims_fts")
                     self._execute_with_connection(
                         conn,
                         "INSERT INTO claims_fts(rowid, claim_text) SELECT id, claim_text FROM Claims WHERE deleted = 0",

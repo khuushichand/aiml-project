@@ -16,6 +16,11 @@ Path: `tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_clai
 Flow (behind `ENABLE_INGESTION_CLAIMS`):
 - Hooked inside the embeddings pipeline (`ChromaDB_Library`). After chunking a document, the system optionally extracts claims (`heuristic` by default) and stores them in the `Claims` SQL table.
 - Optional embedding: when `CLAIMS_EMBED=True`, claim texts are embedded into a separate Chroma collection per user.
+- API clients can now control ingestion-time claims extraction per request:
+  - `perform_claims_extraction` — tri-state toggle. `true/false` overrides the server config; `null`/omitted falls back to `ENABLE_INGESTION_CLAIMS`.
+  - `claims_extractor_mode` — optional per-request override (e.g., `heuristic`, `ner`, provider id). When absent, `CLAIM_EXTRACTOR_MODE` is used.
+  - `claims_max_per_chunk` — optional per-request override (1–12). Defaults to `CLAIMS_MAX_PER_CHUNK` when omitted.
+  These fields are exposed on `/media/add` as well as the `/process-*` helper endpoints so WebUI and API consumers can surface them directly in their UX.
 
 Extractor modes:
 - `heuristic` (default): fast sentence-based heuristic extraction.

@@ -12,19 +12,19 @@ Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py
 ## 1. Summary
 
 Content Collections unify two complementary workflows:
-- **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented in `app/core/Watchlists` and related APIs.*
-- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, highlights/notes, import/export. *Status: highlights persistence/API scaffold exists; capture + reader experience pending.*
+- **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented; WebUI admin flows now consume the new APIs.*
+- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, highlights/notes, import/export. *Status: capture/status/favorite flows and basic WebUI shipped; highlights/import remain in backlog.*
 
 Both flows will share a normalized collections layer that references (but does not replace) the existing Media DB. Media DB remains the canonical artifact store; the collections layer will provide dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
 
 ## 2. Goals and Non‑Goals
 
 ### Goals (MVP → v1)
-- Unified content item model and shared ingestion/dedupe/search/embeddings.
-- Reading capture: save URL → readable text; statuses/tags/favorites; search; basic WebUI.
-- Watchlists: manage sources, groups/tags; jobs with schedule; runs with logs/stats; RSS + simple sites (front page + top‑N).
-- Outputs: Markdown briefing/newsletter; optional MECE; optional TTS audio; export/ingest.
-- APIs and WebUI slices for items, reading, watchlists, and outputs.
+- [x] Unified content item model and shared ingestion/dedupe/search/embeddings.
+- [x] Reading capture: save URL → readable text; statuses/tags/favorites; search; basic WebUI. *(Highlights/import/export still planned.)*
+- [x] Watchlists: manage sources, groups/tags; jobs with schedule; runs with logs/stats; RSS + simple sites (front page + top‑N).
+- [ ] Outputs: Markdown briefing/newsletter; optional MECE; optional TTS audio; export/ingest. *(Markdown/HTML + retention/delivery shipped; MECE/TTS automation pending.)*
+- [x] APIs and WebUI slices for items, reading, watchlists, and outputs.
 
 ### Non‑Goals (initial)
 - Headless JS rendering for SPA‑only sites, session/login scraping.
@@ -91,6 +91,7 @@ v1
 - Optional fields for reading features: status (saved/reading/read/archived), favorite, read_at.
 - Relations: source_id?, job_id?, run_id?, media_item_id?; tags many‑to‑many; highlights (v1).
 - Dedupe: canonical URL and/or content_hash on stripped main content; merge tags on duplicate saves.
+- Status: **Complete** — `CollectionsDatabase` provides `content_items`, tag joins, FTS hooks, and watchlists dual-write; `/api/v1/items` now queries this layer before falling back to legacy Media DB search.
 
 ### 8.2 Ingestion & Parsing
 - URL validation; safe fetch (timeouts, size caps, content‑type checks); follow redirects.
@@ -115,12 +116,15 @@ v1
 - FTS5 virtual table over title/domain/text; filters by tags/status/origin/domain/date/job/run.
 - Embeddings in ChromaDB with namespace per user; expose items via existing RAG endpoints (opt‑in by user preference).
 - Re‑embedding policy: when an item’s normalized text changes (content_hash diff), upsert vectors for that item and remove the old vector; record `embedding_model`, `embedding_model_version`, and `embedding_ts` in metadata. Background job supports full re‑index when the configured embedding model/version changes.
+- Status: **Complete** — FTS5 writes are active for collections, and both reading saves and watchlist ingestion enqueue embeddings via `EMBEDDINGS_REDIS_URL`/`REDIS_URL` backed worker queues (best-effort when Redis unavailable). Regression tests cover queueing and offline behavior.
 
 ### 8.6 Outputs & Delivery
 - Output types: newsletter_markdown, briefing_markdown, mece_markdown, newsletter_html (v1), tts_audio (v1).
 - Inputs: item IDs, saved filter query, or run_id; templating with variables (job, date, items, tags).
-- Templates: managed via API (CRUD) with DB‑backed storage and seed defaults; preview supported.
-- Delivery: download file; ingest artifact into Media DB; export as Chatbook.
+- Templates: managed via API (CRUD) with DB-backed storage and seed defaults; preview supported. Watchlist-specific templates are stored under `Config_Files/templates/watchlists` (override via `WATCHLIST_TEMPLATE_DIR`).
+- Delivery: download file; optional Media DB ingest, email (SMTP provider via `NotificationsService`), Chatbook document generation.
+- Retention: global defaults via `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, per-job overrides under `output_prefs.retention`, per-output overrides during generation.
+- Status: **Partially complete** — API + retention/versioning + email/Chatbook delivery and WebUI controls shipped; MECE/TTS automation and Media DB ingest toggles remain planned.
 
 ### 8.7 Reading Features
 - Status transitions (saved → reading → read/archived); favorites; per‑item notes (basic); highlights (v1).
@@ -299,37 +303,35 @@ Scheduling
 
 ## 18. Implementation Roadmap (Media DB remains separate)
 
-1. **Unified Collections Layer**
-   - Add `content_items` + linkage tables within Collections DB for normalized metadata (URL, canonical URL, provenance, status) while referencing Media DB IDs.
-   - Modify watchlist ingestion to populate the collections layer alongside existing Media DB writes.
-   - Expand `/api/v1/items` to query the collections layer so watchlist and upcoming reading items share filters without altering Media DB schema.
+1. **Unified Collections Layer** – *shipped*
+   - `content_items` + tag joins live in Collections DB alongside Media DB.
+   - Watchlist ingestion dual-writes; `/api/v1/items` resolves from collections before falling back to legacy search.
 
-2. **Reading Workflow**
-   - Implement URL capture/import APIs, Readability extraction, status/favorite/tag management, and reader endpoints.
-   - Integrate highlights lifecycle (including stale marking when content hash changes) and wire the WebUI reader experience.
-   - Add import/export (Pocket/Instapaper) flows to meet v1 parity.
+2. **Reading Workflow** – *MVP shipped; highlights/import pending*
+   - URL capture (save), status/favorite/tags, reader endpoints, and WebUI page delivered.
+   - Highlights lifecycle and third-party import/export remain TODO.
 
-3. **Search & Retrieval Enhancements**
-   - Introduce FTS5 indices (SQLite) and Chroma queueing for `content_items`, ensuring new/updated items enqueue embeddings.
-   - Extend `/items` filters (status, origin, tags, domain, date) and expose provenance metadata for downstream RAG/LLM services.
+3. **Search & Retrieval Enhancements** – *shipped*
+   - FTS5 online updates for collections; embeddings queueing via Redis job manager; provenance filters exposed on `/items`.
+   - End-to-end embeddings worker validation pending full worker stack smoke tests.
 
-4. **Outputs & Delivery Expansion**
-   - Add MECE/narrative template variants and one-click TTS rendering leveraging existing audio APIs.
-   - Support multiple output artifacts per run with deterministic naming, optional Media DB ingestion, and retention enforcement (including temporary storage defaults).
+4. **Outputs & Delivery Expansion** – *in progress*
+   - Markdown/HTML generation, retention TTLs, NotificationsService delivery, and output templates wired into WebUI.
+   - MECE/TTS automation and Media DB ingest switch to follow.
 
-5. **WebUI & Admin UX**
-   - Wire WebUI items/reading/watchlists screens to the new endpoints, including per-job defaults (templates, TTLs, delivery) and admin settings.
-   - Provide configuration UX for default retention values and template directories.
+5. **WebUI & Admin UX** – *shipped*
+   - Next.js pages for Items, Reading, and Watchlists consume the new APIs; job output preferences editable (template, retention, email/chatbook deliveries).
+   - Future: reader highlights UI, template editor, bulk item actions.
 
-6. **Stage 2 – Postgres Enablement**
-   - Refactor schema creation/migration scripts for Postgres compatibility (separate statements, explicit `ON CONFLICT` handling).
+6. **Stage 2 – Postgres Enablement** – *planned*
+   - Refactor schema creation/migration scripts for Postgres compatibility.
    - Validate Watchlists/Collections DB backends against Postgres and update tooling/documentation accordingly.
 
 ## 19. Rollout Plan
 
-- **Phase 1:** Unified collections schema, ingestion bridge, reading capture/search UI.
-- **Phase 2:** Advanced outputs (MECE/TTS automation), forums (feature-flag), delivery UX, embeddings/search parity.
-- **Phase 3:** Reader enhancements (highlights/notes UX), third-party imports, WebSocket run streaming, Postgres enablement (Stage 2).
+- **Phase 1 (complete):** Unified collections schema, ingestion bridge, reading capture/search UI, WebUI wiring for items/reading/watchlists.
+- **Phase 2 (active):** Advanced outputs (MECE/TTS automation), delivery UX refinements, embeddings worker hardening, optional forums ingestion experiments.
+- **Phase 3 (planned):** Reader enhancements (highlights/notes UX), third-party imports, WebSocket run streaming, Postgres enablement (Stage 2).
 
 ## 20. Risks & Mitigations
 
@@ -340,9 +342,9 @@ Scheduling
 
 ## 21. Open Questions
 
-- Email delivery: integrate SMTP now or defer to exports/webhooks?
-- Template editor: file‑based to start vs in‑UI editor.
-- Provenance in RAG: how to present origin (reading vs watchlist) in citations by default?
+- Email delivery: integrate SMTP now or defer to exports/webhooks? **Answer:** Implemented now via NotificationsService; document SMTP env vars (`EMAIL_PROVIDER`, host/port credentials) and add integration tests for real providers when available.
+- Template editor: file‑based to start vs in‑UI editor. **Answer:** File-based (`WATCHLIST_TEMPLATE_DIR`) for now; plan UI-driven editor post-MECE/TTS.
+- Provenance in RAG: how to present origin (reading vs watchlist) in citations by default? **Answer:** `/items` exposes `type` and tags; downstream RAG callers should include origin metadata in citation payloads. Future work: helper that maps origin to default citation format.
 
 ---
 Implementation must follow project conventions: PEP 8, type hints, Loguru, Pydantic models, dependency injection, no raw SQL outside DB abstractions, and rate limiters on endpoints that trigger network/compute.

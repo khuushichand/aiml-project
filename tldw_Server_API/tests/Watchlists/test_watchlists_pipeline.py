@@ -188,3 +188,85 @@ async def test_rss_dedup_and_meta_and_stats():
     # Source meta updated
     srow = db.get_source(src.id)
     assert srow.last_scraped_at is not None
+
+
+@pytest.mark.asyncio
+async def test_watchlist_run_enqueues_embeddings(monkeypatch):
+    user_id = 780
+    db = WatchlistsDatabase.for_user(user_id)
+
+    src = db.create_source(
+        name="Feed",
+        url="https://example.com/feed.xml",
+        source_type="rss",
+        active=True,
+        settings_json=json.dumps({"limit": 1}),
+        tags=["embed"],
+        group_ids=[],
+    )
+    job = db.create_job(
+        name="EmbeddingRun",
+        description=None,
+        scope_json=json.dumps({"tags": ["embed"]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+
+    # Allow full pipeline path (not TEST_MODE); stub network fetchers.
+    monkeypatch.setenv("TEST_MODE", "0")
+
+    async def fake_fetch_rss_feed(url, etag=None, last_modified=None, timeout=8.0, tenant_id="default"):
+        return {
+            "status": 200,
+            "items": [
+                {
+                    "title": "Stub Item",
+                    "url": "https://example.com/article",
+                    "summary": "Stub summary",
+                    "published": None,
+                }
+            ],
+            "etag": None,
+            "last_modified": None,
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Watchlists.pipeline.fetch_rss_feed",
+        fake_fetch_rss_feed,
+    )
+
+    def fake_fetch_site_article(link: str):
+        return {"title": "Stub Item", "url": link, "content": "Body", "author": None}
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Watchlists.pipeline.fetch_site_article",
+        fake_fetch_site_article,
+    )
+
+    def fake_add_media_with_keywords(self, **kwargs):
+        return 123, "uuid-123", "created"
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Watchlists.pipeline.MediaDatabase.add_media_with_keywords",
+        fake_add_media_with_keywords,
+    )
+
+    captured = []
+
+    async def fake_enqueue_embeddings_job_for_item(**kwargs):
+        captured.append(kwargs)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Watchlists.pipeline.enqueue_embeddings_job_for_item",
+        fake_enqueue_embeddings_job_for_item,
+    )
+
+    res = await run_watchlist_job(user_id, job.id)
+    assert res.get("items_ingested", 0) >= 1
+    assert captured, "expected embeddings enqueue call"
+    assert captured[0]["metadata"]["origin"] == "watchlist"

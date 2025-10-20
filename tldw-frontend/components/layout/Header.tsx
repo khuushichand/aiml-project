@@ -14,6 +14,9 @@ export function Header() {
   const navLinks = [
     { href: '/', label: 'Home' },
     { href: '/media', label: 'Media' },
+    { href: '/items', label: 'Items' },
+    { href: '/reading', label: 'Reading' },
+    { href: '/watchlists', label: 'Watchlists' },
     { href: '/chat', label: 'Chat' },
     { href: '/search', label: 'Search' },
     { href: '/audio', label: 'Audio' },

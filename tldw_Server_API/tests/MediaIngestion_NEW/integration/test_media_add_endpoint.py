@@ -287,6 +287,155 @@ class TestDatabasePersistence:
             app.dependency_overrides.clear()
 
 # ========================================================================
+# Claims Extraction Toggle Tests
+# ========================================================================
+
+class TestClaimsExtractionToggles:
+    """Verify ingest-time claims extraction controls."""
+
+    @pytest.mark.unit
+    def test_claims_extraction_enabled_override(self, test_client, auth_headers, media_database, test_text_file):
+        """When disabled globally, an explicit true toggle should persist claims."""
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+        from tldw_Server_API.app.core.config import settings as app_settings
+
+        original_flag = app_settings.get("ENABLE_INGESTION_CLAIMS")
+        app_settings["ENABLE_INGESTION_CLAIMS"] = False
+        app.dependency_overrides[get_media_db_for_user] = lambda: media_database
+
+        try:
+            with open(test_text_file, 'rb') as f:
+                files = [("files", ("claims_enabled.txt", f, "text/plain"))]
+                form = {
+                    "media_type": "document",
+                    "title": "Claims Enabled",
+                    "perform_claims_extraction": "true",
+                }
+                response = test_client.post(
+                    "/api/v1/media/add",
+                    data=form,
+                    files=files,
+                    headers=auth_headers
+                )
+
+            assert response.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
+            result_entry = next((r for r in response.json().get("results", []) if r.get("db_id")), {})
+            media_id = result_entry.get("db_id")
+            assert media_id is not None
+
+            claims = media_database.get_claims_by_media(int(media_id), limit=20, offset=0)
+            assert claims, "Expected claims to be stored when toggle enabled."
+            details = result_entry.get("claims_details")
+            assert isinstance(details, dict) and details.get("enabled") is True
+        finally:
+            if original_flag is not None:
+                app_settings["ENABLE_INGESTION_CLAIMS"] = original_flag
+            else:
+                app_settings.pop("ENABLE_INGESTION_CLAIMS", None)
+            app.dependency_overrides.clear()
+
+    @pytest.mark.unit
+    def test_claims_extraction_disabled_override(self, test_client, auth_headers, media_database, test_text_file):
+        """When enabled globally, forcing false should skip persistence."""
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+        from tldw_Server_API.app.core.config import settings as app_settings
+
+        original_flag = app_settings.get("ENABLE_INGESTION_CLAIMS")
+        app_settings["ENABLE_INGESTION_CLAIMS"] = True
+        app.dependency_overrides[get_media_db_for_user] = lambda: media_database
+
+        try:
+            with open(test_text_file, 'rb') as f:
+                files = [("files", ("claims_disabled.txt", f, "text/plain"))]
+                form = {
+                    "media_type": "document",
+                    "title": "Claims Disabled",
+                    "perform_claims_extraction": "false",
+                }
+                response = test_client.post(
+                    "/api/v1/media/add",
+                    data=form,
+                    files=files,
+                    headers=auth_headers
+                )
+
+            assert response.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
+            result_entry = next((r for r in response.json().get("results", []) if r.get("db_id")), {})
+            media_id = result_entry.get("db_id")
+            assert media_id is not None
+
+            claims = media_database.get_claims_by_media(int(media_id), limit=20, offset=0)
+            assert not claims, "Claims should be skipped when toggle disabled."
+            assert result_entry.get("claims") in (None, [])
+            assert result_entry.get("claims_details") in (None, {})
+        finally:
+            if original_flag is not None:
+                app_settings["ENABLE_INGESTION_CLAIMS"] = original_flag
+            else:
+                app_settings.pop("ENABLE_INGESTION_CLAIMS", None)
+            app.dependency_overrides.clear()
+
+    @pytest.mark.unit
+    def test_claims_extraction_inherits_global_setting(self, test_client, auth_headers, media_database, test_text_file):
+        """When unset, behaviour should follow the config flag."""
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+        from tldw_Server_API.app.core.config import settings as app_settings
+
+        original_flag = app_settings.get("ENABLE_INGESTION_CLAIMS")
+        app.dependency_overrides[get_media_db_for_user] = lambda: media_database
+
+        try:
+            app_settings["ENABLE_INGESTION_CLAIMS"] = True
+            with open(test_text_file, 'rb') as f:
+                files = [("files", ("claims_inherit_on.txt", f, "text/plain"))]
+                form = {
+                    "media_type": "document",
+                    "title": "Claims Inherit On",
+                }
+                response = test_client.post(
+                    "/api/v1/media/add",
+                    data=form,
+                    files=files,
+                    headers=auth_headers
+                )
+            assert response.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
+            entry_on = next((r for r in response.json().get("results", []) if r.get("db_id")), {})
+            media_id_on = entry_on.get("db_id")
+            claims_on = media_database.get_claims_by_media(int(media_id_on), limit=20, offset=0)
+            assert claims_on, "Claims should be present when config enables extraction."
+
+            # Reset DB for second run
+            media_database.soft_delete_claims_for_media(int(media_id_on))
+
+            app_settings["ENABLE_INGESTION_CLAIMS"] = False
+            with open(test_text_file, 'rb') as f:
+                files = [("files", ("claims_inherit_off.txt", f, "text/plain"))]
+                form = {
+                    "media_type": "document",
+                    "title": "Claims Inherit Off",
+                }
+                response2 = test_client.post(
+                    "/api/v1/media/add",
+                    data=form,
+                    files=files,
+                    headers=auth_headers
+                )
+            assert response2.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
+            entry_off = next((r for r in response2.json().get("results", []) if r.get("db_id")), {})
+            media_id_off = entry_off.get("db_id")
+            claims_off = media_database.get_claims_by_media(int(media_id_off), limit=20, offset=0)
+            assert not claims_off, "Claims should be absent when config disables extraction."
+        finally:
+            if original_flag is not None:
+                app_settings["ENABLE_INGESTION_CLAIMS"] = original_flag
+            else:
+                app_settings.pop("ENABLE_INGESTION_CLAIMS", None)
+            app.dependency_overrides.clear()
+
+# ========================================================================
 # Error Handling Tests
 # ========================================================================
 
