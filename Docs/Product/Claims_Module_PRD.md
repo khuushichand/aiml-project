@@ -40,6 +40,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 
 ### 6.3 Storage & Retrieval
 - Maintain `Claims` schema (chunk index, extractor metadata, timestamps, versioning, soft-delete) plus SQLite/PostgreSQL FTS tables and triggers (`tldw_Server_API/app/core/DB_Management/Media_DB_v2.py`).
+- For SQLite, rebuild operations reset the virtual table with `INSERT INTO claims_fts(claims_fts) VALUES ('delete-all')` before repopulating to avoid the corruption seen with raw `DELETE` statements; rely on the provided API instead of manual SQL.
 - Provide REST endpoint `GET /api/v1/claims/{media_id}` with optional envelope pagination, admin override (`user_id`), and absolute links.
 - Deliver `POST` endpoints to rebuild single media, bulk media (`missing`, `all`, `stale` policies), and FTS indexes; expose `GET /status` for worker stats (`tldw_Server_API/app/api/v1/endpoints/claims.py`).
 
@@ -89,4 +90,3 @@ Analysts and downstream automations need grounded, inspectable factual statement
 2. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
 3. Implement cross-media claim clustering/deduplication and integrate with watchlists/analytics.
 4. Add richer monitoring (provider latency/cost dashboards) and adaptive throttling for rebuild jobs.
-

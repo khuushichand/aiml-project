@@ -241,6 +241,16 @@ web_research = [
   "trafilatura>=1.6.0"
 ]
 
+# Scraper analyzers (optional)
+scrape-analyzers = [
+  "playwright>=1.40.0",
+  "curl-cffi>=0.5.0",
+]
+
+scrape-analyzers-waf = [
+  "wafw00f>=2.2.0",
+]
+
 # Windows audio recording
 audio_recording_windows = [
   "PyAudioWPatch>=0.2.12"

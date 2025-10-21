@@ -19,6 +19,9 @@ import pytest
 from loguru import logger
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Utils.executor_registry import (
+    shutdown_all_registered_executors,
+)
 # Register optional pgvector fixtures globally so any test can request them.
 from tldw_Server_API.tests.helpers.pgvector import (  # noqa: F401
     pgvector_dsn,
@@ -265,6 +268,20 @@ async def _shutdown_all() -> None:
                     pass
     except Exception as e:
         logger.debug(f"Chat request queue cleanup skipped: {e}")
+
+    # Registered executors (CPU/db pools, async helpers)
+    try:
+        await shutdown_all_registered_executors(wait=True, cancel_futures=True)
+    except Exception as e:
+        logger.debug(f"Executor registry shutdown skipped: {e}")
+
+    # CPU-bound helper pools hold additional globals that need explicit reset
+    try:
+        from tldw_Server_API.app.core.Utils import cpu_bound_handler
+
+        await asyncio.to_thread(cpu_bound_handler.cleanup_pools)
+    except Exception as e:
+        logger.debug(f"CPU pool cleanup skipped: {e}")
 
     # Cancel any lingering async tasks on this loop
     await _cancel_pending_tasks()

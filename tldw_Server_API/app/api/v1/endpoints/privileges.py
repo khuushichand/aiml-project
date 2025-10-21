@@ -19,6 +19,7 @@ from tldw_Server_API.app.api.v1.schemas.privileges import (
     PrivilegeSnapshotDetailResponse,
     PrivilegeSnapshotListResponse,
     PrivilegeSnapshotRecord,
+    PrivilegeSnapshotSummary,
 )
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.PrivilegeMaps import (
@@ -27,6 +28,7 @@ from tldw_Server_API.app.core.PrivilegeMaps import (
     get_privilege_map_service,
     get_privilege_snapshot_store,
 )
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 router = APIRouter(prefix="/privileges", tags=["privileges"])
@@ -236,9 +238,40 @@ async def create_privilege_snapshot(
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ):
     generated_by = str(current_user.get("id") or "system")
+    user_ids = list(payload.user_ids or [])
+    if payload.target_scope == "user" and not user_ids:
+        user_ids = [generated_by]
     if payload.async_job:
+        snapshot_id = f"snap-{uuid4()}"
+        job_payload = {
+            "action": "generate_snapshot",
+            "snapshot_id": snapshot_id,
+            "target_scope": payload.target_scope,
+            "org_id": payload.org_id,
+            "team_id": payload.team_id,
+            "user_ids": user_ids,
+            "catalog_version": payload.catalog_version or service.catalog.version,
+            "requested_by": generated_by,
+            "notes": payload.notes,
+        }
+        try:
+            job_manager = JobManager()
+            job_row = job_manager.create_job(
+                domain="privilege_maps",
+                queue="default",
+                job_type="snapshot",
+                payload=job_payload,
+                owner_user_id=generated_by,
+                request_id=snapshot_id,
+            )
+        except Exception as exc:
+            logger.error("Failed to enqueue privilege snapshot job: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to queue privilege snapshot job.",
+            ) from exc
         accepted = PrivilegeSnapshotAcceptedResponse(
-            request_id=f"snap-job-{uuid4()}",
+            request_id=snapshot_id,
             status="queued",
             estimated_ready_at=datetime.now(timezone.utc),
         )
@@ -246,11 +279,8 @@ async def create_privilege_snapshot(
             status_code=status.HTTP_202_ACCEPTED,
             content=jsonable_encoder(accepted),
         )
-    user_ids = payload.user_ids
-    if payload.target_scope == "user" and not user_ids:
-        user_ids = [generated_by]
     try:
-        summary = await service.build_snapshot_summary(
+        summary_data, snapshot_users = await service.build_snapshot_summary(
             target_scope=payload.target_scope,
             org_id=payload.org_id,
             team_id=payload.team_id,
@@ -261,6 +291,11 @@ async def create_privilege_snapshot(
 
     generated_at = datetime.now(timezone.utc)
     snapshot_id = f"snap-{generated_at.strftime('%Y%m%d-%H%M%S')}"
+    summary_model = PrivilegeSnapshotSummary(**summary_data)
+    detail_items = service.build_snapshot_detail(
+        snapshot_users,
+        restrict_to_team=payload.team_id if payload.target_scope == "team" else None,
+    )
     record = PrivilegeSnapshotRecord(
         snapshot_id=snapshot_id,
         generated_at=generated_at,
@@ -269,7 +304,7 @@ async def create_privilege_snapshot(
         org_id=payload.org_id,
         team_id=payload.team_id,
         catalog_version=payload.catalog_version or service.catalog.version,
-        summary=summary,
+        summary=summary_model,
     )
     await store.add_snapshot(
         {
@@ -280,7 +315,8 @@ async def create_privilege_snapshot(
             "org_id": record.org_id,
             "team_id": record.team_id,
             "catalog_version": record.catalog_version,
-            "summary": record.summary.dict() if record.summary else None,
-        }
+            "summary": summary_model.dict(),
+        },
+        detail_items=detail_items,
     )
     return record

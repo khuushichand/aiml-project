@@ -7,6 +7,7 @@ always hold true regardless of input.
 
 import asyncio
 import json
+import math
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -495,8 +496,11 @@ class TestEmbeddingSimilarityInvariants:
             dot_product = sum(x * y for x, y in zip(a, b))
             norm_a = sum(x ** 2 for x in a) ** 0.5
             norm_b = sum(x ** 2 for x in b) ** 0.5
-            similarity = dot_product / (norm_a * norm_b) if norm_a * norm_b > 0 else 0
-            return 1 - similarity  # Convert to distance
+            if norm_a * norm_b == 0:
+                return 0.0
+            similarity = dot_product / (norm_a * norm_b)
+            similarity = max(min(similarity, 1.0), -1.0)
+            return math.acos(similarity)
         
         # Calculate distances
         d_01 = cosine_distance(embeddings[0], embeddings[1])

@@ -635,6 +635,15 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Startup: Failed to initialize auth services: {e}")
         # Continue startup even if auth services fail (for backward compatibility)
 
+    # Startup: Validate privilege catalog and route metadata (fail fast on mismatch)
+    try:
+        from tldw_Server_API.app.core.PrivilegeMaps.startup import validate_privilege_metadata_on_startup
+
+        validate_privilege_metadata_on_startup(app)
+    except Exception as exc:
+        logger.error(f"App Startup: Privilege metadata validation failed: {exc}")
+        raise
+
     # Initialize MCP Unified Server (secure, production-ready)
     logger.info("App Startup: Initializing MCP Unified server...")
     try:

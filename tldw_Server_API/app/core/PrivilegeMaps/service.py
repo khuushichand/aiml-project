@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.privilege_catalog import PrivilegeCatalog, ScopeEntry, load_catalog
+from tldw_Server_API.app.core.PrivilegeMaps.introspection import (
+    RouteMetadata,
+    collect_privilege_route_registry,
+)
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.PrivilegeMaps.trends import PrivilegeTrendStore, get_privilege_trend_store
+from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import MemoryCache
 
 
 RESOURCE_FALLBACK = "uncategorized"
@@ -20,16 +29,112 @@ MAX_DETAIL_ROWS = 50_000
 class PrivilegeMapService:
     """Aggregates privilege information for organization, team, and user views."""
 
-    def __init__(self) -> None:
-        self._catalog: PrivilegeCatalog = load_catalog()
+    def __init__(
+        self,
+        *,
+        route_registry: Optional[Dict[str, List[RouteMetadata]]] = None,
+        catalog: Optional[PrivilegeCatalog] = None,
+        trend_store: Optional[PrivilegeTrendStore] = None,
+    ) -> None:
+        self._catalog: PrivilegeCatalog = catalog or load_catalog()
+        self._route_registry: Dict[str, List[RouteMetadata]] = route_registry or self._collect_route_registry()
+        self._placeholder_routes: Dict[str, List[RouteMetadata]] = {}
         self._role_scope_map: Dict[str, List[ScopeEntry]] = self._build_role_scope_map()
         self._admin_roles: Set[str] = {"admin", "owner", "platform_admin"}
         self._feature_flag_map = {flag.id: flag for flag in self.catalog.feature_flags}
         self._scope_lookup = {scope.id: scope for scope in self.catalog.scopes}
+        self._summary_cache = MemoryCache()
+        self._cache_generation = 0
+        self._cache_ttl_seconds = self._resolve_cache_ttl()
+        self._trend_store = trend_store or get_privilege_trend_store()
+        self._route_signature = self._compute_route_signature()
 
     @property
     def catalog(self) -> PrivilegeCatalog:
         return self._catalog
+
+    def invalidate_cache(self) -> None:
+        """Manually clear cached summaries."""
+        try:
+            self._summary_cache.clear()
+        except Exception:
+            pass
+        self._cache_generation += 1
+
+    def _resolve_cache_ttl(self) -> int:
+        try:
+            ttl = int(os.getenv("PRIVILEGE_MAP_CACHE_TTL_SECONDS", "120") or "120")
+        except Exception:
+            ttl = 120
+        # Enforce a sensible floor to avoid thrashing.
+        return max(ttl, 10)
+
+    def _compute_route_signature(self) -> str:
+        try:
+            serialized: List[Tuple[Any, ...]] = []
+            for scope_id, routes in sorted(self._route_registry.items()):
+                for route in sorted(routes, key=lambda r: (r.path, r.methods_or_any)):
+                    dependencies_signature = tuple(
+                        (dep.id, dep.type, dep.module or "")
+                        for dep in (route.dependencies or ())
+                    )
+                    serialized.append(
+                        (
+                            scope_id,
+                            route.path,
+                            tuple(route.methods_or_any),
+                            route.endpoint or "",
+                            tuple(route.tags or ()),
+                            dependencies_signature,
+                            tuple(route.rate_limit_resources or ()),
+                        )
+                    )
+            payload = json.dumps(serialized, sort_keys=True, default=list)
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        except Exception:
+            return "static"
+
+    def _compute_user_signature(self, users: Sequence[Dict[str, Any]]) -> str:
+        serializable: List[Dict[str, Any]] = []
+        for user in sorted(users, key=lambda u: str(u.get("id"))):
+            serializable.append(
+                {
+                    "id": str(user.get("id")),
+                    "roles": sorted(user.get("roles", [])),
+                    "permissions": sorted(user.get("permissions", [])),
+                    "scopes": sorted(user.get("allowed_scopes", [])),
+                    "feature_flags": sorted(user.get("feature_flags", [])),
+                }
+            )
+        payload = json.dumps(serializable, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _summary_cache_key(
+        self,
+        *,
+        scope: str,
+        group_by: str,
+        team_id: Optional[str],
+        users_signature: str,
+    ) -> str:
+        team_component = str(team_id or "__none__")
+        return "::".join(
+            [
+                scope,
+                group_by,
+                team_component,
+                users_signature,
+                self._route_signature,
+                self.catalog.version,
+                str(self._cache_generation),
+            ]
+        )
+
+    @staticmethod
+    def _normalize_timestamp(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     async def get_org_summary(
         self,
@@ -39,19 +144,52 @@ class PrivilegeMapService:
         since: Optional[datetime],
     ) -> Dict[str, Any]:
         users = await self._fetch_users()
-        generated_at = datetime.now(timezone.utc)
-        buckets: List[Dict[str, Any]] = []
+        users_signature = self._compute_user_signature(users)
+        cache_key = self._summary_cache_key(
+            scope="org",
+            group_by=group_by,
+            team_id=None,
+            users_signature=users_signature,
+        )
+        cached = self._summary_cache.get(cache_key)
+        if cached:
+            base_payload = cached
+        else:
+            generated_at = self._normalize_timestamp(datetime.now(timezone.utc))
+            if group_by == "resource":
+                buckets = self._group_by_resource(users)
+            elif group_by == "team":
+                buckets = await self._group_by_team(users)
+            else:
+                buckets = self._group_by_role(users)
+            base_payload = {
+                "generated_at": generated_at,
+                "buckets": buckets,
+            }
+            self._summary_cache.set(cache_key, base_payload, ttl_sec=self._cache_ttl_seconds)
+            try:
+                await self._record_trend_snapshot(
+                    scope="org",
+                    group_by=group_by,
+                    buckets=buckets,
+                    generated_at=generated_at,
+                    team_id=None,
+                )
+            except Exception as exc:
+                logger.debug("Unable to record privilege trend snapshot: %s", exc)
 
+        generated_at = base_payload["generated_at"]
+        buckets = base_payload["buckets"]
         trends: List[Dict[str, Any]] = []
         if include_trends:
-            trends = self._build_trends_placeholder(group_by=group_by, since=since)
-
-        if group_by == "resource":
-            buckets = self._group_by_resource(users)
-        elif group_by == "team":
-            buckets = await self._group_by_team(users)
-        else:  # default to role
-            buckets = self._group_by_role(users)
+            trends = await self._build_trends(
+                scope="org",
+                group_by=group_by,
+                buckets=buckets,
+                generated_at=generated_at,
+                since=since,
+                team_id=None,
+            )
 
         return {
             "catalog_version": self.catalog.version,
@@ -86,15 +224,50 @@ class PrivilegeMapService:
     ) -> Dict[str, Any]:
         users = await self._fetch_users()
         team_users = await self._filter_users_for_team(users, team_id=team_id)
-        generated_at = datetime.now(timezone.utc)
-        if group_by == "resource":
-            buckets = self._group_by_resource(team_users)
+        users_signature = self._compute_user_signature(team_users)
+        cache_key = self._summary_cache_key(
+            scope="team",
+            group_by=group_by,
+            team_id=team_id,
+            users_signature=users_signature,
+        )
+        cached = self._summary_cache.get(cache_key)
+        if cached:
+            base_payload = cached
         else:
-            buckets = self._group_by_member(team_users)
+            generated_at = self._normalize_timestamp(datetime.now(timezone.utc))
+            if group_by == "resource":
+                buckets = self._group_by_resource(team_users)
+            else:
+                buckets = self._group_by_member(team_users)
+            base_payload = {
+                "generated_at": generated_at,
+                "buckets": buckets,
+            }
+            self._summary_cache.set(cache_key, base_payload, ttl_sec=self._cache_ttl_seconds)
+            try:
+                await self._record_trend_snapshot(
+                    scope="team",
+                    group_by=group_by,
+                    buckets=buckets,
+                    generated_at=generated_at,
+                    team_id=team_id,
+                )
+            except Exception as exc:
+                logger.debug("Unable to record team privilege trend snapshot: %s", exc)
 
+        generated_at = base_payload["generated_at"]
+        buckets = base_payload["buckets"]
         trends: List[Dict[str, Any]] = []
         if include_trends:
-            trends = self._build_trends_placeholder(group_by=group_by, since=since, team_id=team_id)
+            trends = await self._build_trends(
+                scope="team",
+                group_by=group_by,
+                buckets=buckets,
+                generated_at=generated_at,
+                since=since,
+                team_id=team_id,
+            )
 
         return {
             "catalog_version": self.catalog.version,
@@ -165,6 +338,13 @@ class PrivilegeMapService:
                 "ownership_predicates": item["ownership_predicates"],
                 "status": item["status"],
                 "blocked_reason": item["blocked_reason"],
+                "dependencies": item.get("dependencies", []),
+                "dependency_sources": item.get("dependency_sources", []),
+                "rate_limit_class": item.get("rate_limit_class"),
+                "rate_limit_resources": item.get("rate_limit_resources", []),
+                "source_module": item.get("source_module"),
+                "summary": item.get("summary"),
+                "tags": item.get("tags", []),
             }
             for item in items
         ]
@@ -183,7 +363,7 @@ class PrivilegeMapService:
         org_id: Optional[str],
         team_id: Optional[str],
         user_ids: Optional[Sequence[str]],
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         users = await self._fetch_users()
         if target_scope == "team":
             if not team_id:
@@ -201,6 +381,7 @@ class PrivilegeMapService:
 
         scope_ids: Set[str] = set()
         sensitivity_breakdown: Dict[str, int] = defaultdict(int)
+        endpoint_keys: Set[Tuple[str, str]] = set()
         for user in users:
             for scope_id in user.get("allowed_scopes", set()):
                 scope_ids.add(scope_id)
@@ -209,15 +390,34 @@ class PrivilegeMapService:
             scope = self._scope_lookup.get(scope_id)
             if scope:
                 sensitivity_breakdown[scope.sensitivity_tier] += 1
+                for route_meta in self._routes_for_scope(scope):
+                    for method in route_meta.methods_or_any:
+                        endpoint_keys.add((route_meta.path, method))
 
         summary = {
             "users": len(users),
             "scopes": len(scope_ids),
-            "endpoints": len(scope_ids),
+            "endpoints": len(endpoint_keys) if endpoint_keys else len(scope_ids),
             "scope_ids": sorted(scope_ids),
             "sensitivity_breakdown": dict(sensitivity_breakdown),
+            "endpoint_paths": sorted({path for (path, _method) in endpoint_keys}),
         }
-        return summary
+        return summary, users
+
+    def build_snapshot_detail(
+        self,
+        users: Sequence[Dict[str, Any]],
+        *,
+        resource: Optional[str] = None,
+        role_filter: Optional[str] = None,
+        restrict_to_team: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return self._build_detail_items(
+            users,
+            resource_filter=resource,
+            role_filter=role_filter,
+            restrict_to_team=restrict_to_team,
+        )
 
     # --------------------------------------------------------------------- #
     # Internal helpers
@@ -233,6 +433,40 @@ class PrivilegeMapService:
         for admin_role in ("admin", "owner", "platform_admin"):
             mapping[admin_role] = {scope.id: scope for scope in self.catalog.scopes}
         return {role: list(scopes.values()) for role, scopes in mapping.items()}
+
+    def _collect_route_registry(self) -> Dict[str, List[RouteMetadata]]:
+        try:
+            from tldw_Server_API.app.main import app as fastapi_app
+
+            return collect_privilege_route_registry(fastapi_app, self.catalog)
+        except Exception as exc:
+            logger.warning("Privilege route introspection failed: %s", exc)
+            return {}
+
+    def _routes_for_scope(self, scope: ScopeEntry) -> List[RouteMetadata]:
+        routes = self._route_registry.get(scope.id)
+        if routes:
+            return routes
+        cached = self._placeholder_routes.get(scope.id)
+        if cached:
+            return cached
+        placeholder = self._create_placeholder_route(scope)
+        self._placeholder_routes[scope.id] = [placeholder]
+        return [placeholder]
+
+    def _create_placeholder_route(self, scope: ScopeEntry) -> RouteMetadata:
+        return RouteMetadata(
+            path=self._scope_to_endpoint(scope),
+            methods=("ANY",),
+            name=scope.id,
+            tags=tuple(scope.resource_tags or [RESOURCE_FALLBACK]),
+            endpoint="",
+            dependencies=tuple(),
+            dependency_sources=tuple(),
+            rate_limit_resources=tuple(),
+            summary=scope.description,
+            description=scope.description,
+        )
 
     async def _fetch_users(self) -> List[Dict[str, Any]]:
         try:
@@ -508,22 +742,30 @@ class PrivilegeMapService:
         buckets: Dict[str, Dict[str, Any]] = {}
         for user in users:
             role = user.get("primary_role") or "user"
-            scopes = user.get("allowed_scopes", set())
+            scopes = set(user.get("allowed_scopes", set()))
             bucket = buckets.setdefault(
                 role,
-                {"key": role, "users": 0, "scopes": set()},
+                {"key": role, "users": 0, "scopes": set(), "endpoints": set()},
             )
             bucket["users"] += 1
             bucket["scopes"].update(scopes)
+            for scope_id in scopes:
+                scope_entry = self._scope_lookup.get(scope_id)
+                if not scope_entry:
+                    continue
+                for route_meta in self._routes_for_scope(scope_entry):
+                    for method in route_meta.methods_or_any:
+                        bucket["endpoints"].add((route_meta.path, method))
 
         results: List[Dict[str, Any]] = []
         for role, payload in buckets.items():
             scope_count = len(payload["scopes"])
+            endpoint_count = len(payload["endpoints"]) if payload["endpoints"] else scope_count
             results.append(
                 {
                     "key": role,
                     "users": payload["users"],
-                    "endpoints": scope_count,
+                    "endpoints": endpoint_count,
                     "scopes": scope_count,
                 }
             )
@@ -542,20 +784,30 @@ class PrivilegeMapService:
                     "org_id": entry.get("org_id"),
                     "users": set(),
                     "scopes": set(),
+                    "endpoints": set(),
                 },
             )
             team["users"].add(str(entry.get("user_id")))
             user = next((u for u in users if str(u["id"]) == str(entry.get("user_id"))), None)
             if user:
-                team["scopes"].update(user.get("allowed_scopes", set()))
+                team_scopes = set(user.get("allowed_scopes", set()))
+                team["scopes"].update(team_scopes)
+                for scope_id in team_scopes:
+                    scope_entry = self._scope_lookup.get(scope_id)
+                    if not scope_entry:
+                        continue
+                    for route_meta in self._routes_for_scope(scope_entry):
+                        for method in route_meta.methods_or_any:
+                            team["endpoints"].add((route_meta.path, method))
 
         buckets: List[Dict[str, Any]] = []
         for team in by_team.values():
+            endpoint_count = len(team["endpoints"]) if team["endpoints"] else len(team["scopes"])
             buckets.append(
                 {
                     "key": team["key"],
                     "users": len(team["users"]),
-                    "endpoints": len(team["scopes"]),
+                    "endpoints": endpoint_count,
                     "scopes": len(team["scopes"]),
                     "metadata": {
                         "team_name": team.get("team_name"),
@@ -568,12 +820,20 @@ class PrivilegeMapService:
     def _group_by_member(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         buckets: List[Dict[str, Any]] = []
         for user in users:
-            scopes = user.get("allowed_scopes", set())
+            scopes = set(user.get("allowed_scopes", set()))
+            endpoints: Set[Tuple[str, str]] = set()
+            for scope_id in scopes:
+                scope_entry = self._scope_lookup.get(scope_id)
+                if not scope_entry:
+                    continue
+                for route_meta in self._routes_for_scope(scope_entry):
+                    for method in route_meta.methods_or_any:
+                        endpoints.add((route_meta.path, method))
             buckets.append(
                 {
                     "key": str(user.get("id")),
                     "users": 1,
-                    "endpoints": len(scopes),
+                    "endpoints": len(endpoints) if endpoints else len(scopes),
                     "scopes": len(scopes),
                     "metadata": {
                         "username": user.get("username"),
@@ -592,18 +852,22 @@ class PrivilegeMapService:
                 for tag in tags:
                     bucket = resource_access.setdefault(
                         tag,
-                        {"key": tag, "users": set(), "scopes": set()},
+                        {"key": tag, "users": set(), "scopes": set(), "endpoints": set()},
                     )
                     bucket["users"].add(str(user["id"]))
                     bucket["scopes"].add(scope.id)
+                    for route_meta in self._routes_for_scope(scope):
+                        for method in route_meta.methods_or_any:
+                            bucket["endpoints"].add((route_meta.path, method))
 
         results: List[Dict[str, Any]] = []
         for tag, payload in resource_access.items():
+            endpoint_count = len(payload["endpoints"]) if payload["endpoints"] else len(payload["scopes"])
             results.append(
                 {
                     "key": tag,
                     "users": len(payload["users"]),
-                    "endpoints": len(payload["scopes"]),
+                    "endpoints": endpoint_count,
                     "scopes": len(payload["scopes"]),
                 }
             )
@@ -634,32 +898,65 @@ class PrivilegeMapService:
             allowed_scopes = user.get("allowed_scopes", set())
             feature_flags = user.get("feature_flags", set())
             for scope in self.catalog.scopes:
-                tags = [tag.lower() for tag in (scope.resource_tags or [RESOURCE_FALLBACK])]
-                if resource_filter_lower and resource_filter_lower not in tags:
-                    continue
-                status = "allowed"
-                blocked_reason = None
-                if scope.feature_flag_id and scope.feature_flag_id not in feature_flags:
-                    status = "blocked"
-                    blocked_reason = "feature_flag_disabled"
-                elif scope.id not in allowed_scopes:
-                    status = "blocked"
-                    blocked_reason = "missing_scope"
-                items.append(
-                    {
-                        "user_id": str(user.get("id")),
-                        "user_name": user.get("username") or "",
-                        "role": role,
-                        "endpoint": self._scope_to_endpoint(scope),
-                        "method": "ANY",
-                        "privilege_scope_id": scope.id,
-                        "feature_flag_id": scope.feature_flag_id,
-                        "sensitivity_tier": scope.sensitivity_tier,
-                        "ownership_predicates": scope.ownership_predicates or [],
-                        "status": status,
-                        "blocked_reason": blocked_reason,
-                    }
-                )
+                route_entries = self._routes_for_scope(scope)
+                for route_meta in route_entries:
+                    tag_values: List[str] = list(scope.resource_tags or [])
+                    tag_values.extend(list(route_meta.tags or ()))
+                    if not tag_values:
+                        tag_values = [RESOURCE_FALLBACK]
+                    if resource_filter_lower and resource_filter_lower not in {t.lower() for t in tag_values}:
+                        continue
+                    normalized_tag_values = list(dict.fromkeys(tag_values))
+                    for method in route_meta.methods_or_any:
+                        status = "allowed"
+                        blocked_reason = None
+                    if scope.feature_flag_id and scope.feature_flag_id not in feature_flags:
+                        status = "blocked"
+                        blocked_reason = "feature_flag_disabled"
+                    elif scope.id not in allowed_scopes:
+                        status = "blocked"
+                        blocked_reason = "missing_scope"
+                    dependency_payload = [
+                        {
+                            "id": dep.id,
+                            "type": dep.type,
+                            "module": dep.module,
+                        }
+                        for dep in route_meta.dependencies
+                    ]
+                    for resource in route_meta.rate_limit_resources:
+                        dependency_payload.append(
+                            {
+                                "id": f"ratelimit.{resource}",
+                                "type": "rate_limit",
+                                "module": None,
+                            }
+                        )
+                    source_module = None
+                    if route_meta.endpoint:
+                        source_module = route_meta.endpoint.rsplit(".", 1)[0]
+                    items.append(
+                        {
+                            "user_id": str(user.get("id")),
+                            "user_name": user.get("username") or "",
+                            "role": role,
+                                "endpoint": route_meta.path,
+                                "method": method,
+                                "privilege_scope_id": scope.id,
+                                "feature_flag_id": scope.feature_flag_id,
+                                "sensitivity_tier": scope.sensitivity_tier,
+                                "ownership_predicates": scope.ownership_predicates or [],
+                                "status": status,
+                                "blocked_reason": blocked_reason,
+                                "dependencies": dependency_payload,
+                                "dependency_sources": list(route_meta.dependency_sources),
+                                "rate_limit_class": scope.rate_limit_class,
+                                "rate_limit_resources": list(route_meta.rate_limit_resources),
+                                "source_module": source_module,
+                                "summary": route_meta.summary or route_meta.description or scope.description,
+                                "tags": normalized_tag_values,
+                            }
+                        )
         return items
 
     def _paginate_detail(
@@ -690,14 +987,67 @@ class PrivilegeMapService:
             "items": paginated,
         }
 
-    def _build_trends_placeholder(
+    async def _record_trend_snapshot(
         self,
         *,
+        scope: str,
         group_by: str,
+        buckets: Sequence[Dict[str, Any]],
+        generated_at: datetime,
+        team_id: Optional[str],
+    ) -> None:
+        if not buckets:
+            return
+        normalized_ts = self._normalize_timestamp(generated_at)
+        await self._trend_store.record_snapshot(
+            scope=scope,
+            group_by=group_by,
+            catalog_version=self.catalog.version,
+            generated_at=normalized_ts,
+            buckets=buckets,
+            team_id=team_id,
+        )
+
+    async def _build_trends(
+        self,
+        *,
+        scope: str,
+        group_by: str,
+        buckets: Sequence[Dict[str, Any]],
+        generated_at: datetime,
         since: Optional[datetime],
-        team_id: Optional[str] = None,
+        team_id: Optional[str],
     ) -> List[Dict[str, Any]]:
-        return []
+        if not buckets:
+            return []
+        window_end = self._normalize_timestamp(generated_at)
+        window_start = self._normalize_timestamp(since) if since else window_end - timedelta(days=30)
+        if window_start > window_end:
+            window_start = window_end - timedelta(days=30)
+        bucket_counts = {}
+        for bucket in buckets:
+            key = bucket.get("key")
+            if key is None:
+                continue
+            bucket_counts[str(key)] = {
+                "users": int(bucket.get("users") or 0),
+                "endpoints": int(bucket.get("endpoints") or 0),
+                "scopes": int(bucket.get("scopes") or 0),
+            }
+        if not bucket_counts:
+            return []
+        try:
+            return await self._trend_store.compute_trends(
+                scope=scope,
+                group_by=group_by,
+                bucket_counts=bucket_counts,
+                window_start=window_start,
+                window_end=window_end,
+                team_id=team_id,
+            )
+        except Exception as exc:
+            logger.debug("Privilege trend computation failed: %s", exc)
+            return []
 
     def _build_recommended_actions(
         self, items: Sequence[Dict[str, Any]]
@@ -718,7 +1068,7 @@ class PrivilegeMapService:
                 continue
             key = f"{scope_id}:{reason}"
             actions[key] = {
-                "scope_id": scope_id,
+                "privilege_scope_id": scope_id,
                 "action": action_text,
                 "reason": reason_text,
             }

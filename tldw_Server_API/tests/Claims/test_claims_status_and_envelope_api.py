@@ -68,7 +68,13 @@ def _setup_db_for_policies() -> tuple[str, dict[str, int]]:
     stale_mid = _add_media_with_claim("stale claims")
     cur = db.execute_query("SELECT version FROM Media WHERE id = ?", (stale_mid,))
     row = cur.fetchone()
-    current_version = int(row[0] if row and not isinstance(row, dict) else row.get("version", 1)) if row else 1
+    if row is None:
+        current_version = 1
+    else:
+        try:
+            current_version = int(row["version"])  # type: ignore[index]
+        except (TypeError, KeyError):
+            current_version = int(row[0])  # type: ignore[index]
     db.execute_query(
         "UPDATE Media SET last_modified = ?, version = ? WHERE id = ?",
         ("9999-01-01T00:00:00Z", current_version + 1, stale_mid),
@@ -272,49 +278,56 @@ def test_claims_rebuild_policies_enqueue_expected_media():
             self.username = "admin"
             self.is_admin = True
 
-    db_path, media_ids = _setup_db_for_policies()
-    total_media = len(media_ids)
-    stale_expected = len({media_ids["missing"], media_ids["stale"]})
-
     async def _override_user():
         return _Admin()
 
-    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
-        override_db = MediaDatabase(db_path=db_path, client_id="test_client")
-        try:
-            yield override_db
-        finally:
-            try:
-                override_db.close_connection()
-            except Exception:
-                pass
-
     fastapi_app.dependency_overrides[get_request_user] = _override_user
-    fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
 
-    expected_counts = {
-        "missing": 1,
-        "stale": stale_expected,  # includes missing (no claims) and explicitly stale media
-        "all": total_media,
-    }
+    policies = ["missing", "stale", "all"]
 
-    with TestClient(fastapi_app) as client:
-        for policy, expected in expected_counts.items():
+    try:
+        for policy in policies:
+            db_path, media_ids = _setup_db_for_policies()
+            total_media = len(media_ids)
+            expected_map = {
+                "missing": 1,
+                "stale": len({media_ids["missing"], media_ids["stale"]}),
+                "all": total_media,
+            }
+            expected = expected_map[policy]
+
+            async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+                override_db = MediaDatabase(db_path=db_path, client_id="test_client")
+                try:
+                    yield override_db
+                finally:
+                    try:
+                        override_db.close_connection()
+                    except Exception:
+                        pass
+
+            fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
+
             svc = _reset_claims_rebuild_service()
-            response = client.post("/api/v1/claims/rebuild/all", params={"policy": policy})
-            assert response.status_code == 200, response.text
-            body = response.json()
-            assert body.get("status") == "accepted"
-            assert body.get("enqueued") == expected
-            assert body.get("policy") == policy
 
-            _wait_for_service_completion(expected_processed=expected)
+            with TestClient(fastapi_app) as client:
+                response = client.post("/api/v1/claims/rebuild/all", params={"policy": policy})
+                assert response.status_code == 200, response.text
+                body = response.json()
+                assert body.get("status") == "accepted"
+                assert body.get("enqueued") == expected
+                assert body.get("policy") == policy
 
-            status = client.get("/api/v1/claims/status")
-            assert status.status_code == 200, status.text
-            stats = status.json().get("stats", {})
-            assert stats.get("enqueued") == expected
-            assert stats.get("processed") == expected
+                _wait_for_service_completion(expected_processed=expected)
+
+                status = client.get("/api/v1/claims/status")
+                assert status.status_code == 200, status.text
+                stats = status.json().get("stats", {})
+                assert stats.get("enqueued") == expected
+                assert stats.get("processed") == expected
 
             svc.stop()
             svc.start()
+    finally:
+        fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
+        fastapi_app.dependency_overrides.pop(get_request_user, None)

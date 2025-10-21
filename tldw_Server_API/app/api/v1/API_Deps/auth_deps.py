@@ -909,6 +909,10 @@ def rbac_rate_limit(resource: str):
     """Factory returning a dependency that logs selected RBAC limits for the given resource."""
     async def _dep(request: Request, db_pool: DatabasePool = Depends(get_db_pool)):
         await enforce_rbac_rate_limit(request, resource, db_pool)
+    try:
+        setattr(_dep, "_tldw_rate_limit_resource", resource)
+    except Exception:
+        pass
     return _dep
 
 
@@ -1145,8 +1149,13 @@ def require_token_scope(
             except Exception:
                 # Best-effort: do not block if metadata not available
                 return None
-        
         return None
+
+    try:
+        setattr(_checker, "_tldw_endpoint_id", endpoint_id)
+        setattr(_checker, "_tldw_scope_name", scope)
+    except Exception:
+        pass
 
     return _checker
 #

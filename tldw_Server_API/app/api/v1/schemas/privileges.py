@@ -23,6 +23,12 @@ class PrivilegeSummaryResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PrivilegeDependency(BaseModel):
+    id: str
+    type: str = "dependency"
+    module: Optional[str] = None
+
+
 class PrivilegeDetailItem(BaseModel):
     user_id: str
     user_name: str
@@ -35,6 +41,13 @@ class PrivilegeDetailItem(BaseModel):
     ownership_predicates: List[str] = Field(default_factory=list)
     status: Literal["allowed", "blocked"]
     blocked_reason: Optional[str] = None
+    dependencies: List[PrivilegeDependency] = Field(default_factory=list)
+    dependency_sources: List[str] = Field(default_factory=list)
+    rate_limit_class: Optional[str] = None
+    rate_limit_resources: List[str] = Field(default_factory=list)
+    source_module: Optional[str] = None
+    summary: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
 
 
 class PrivilegeDetailResponse(BaseModel):
@@ -56,6 +69,7 @@ class PrivilegeSnapshotSummary(BaseModel):
     endpoints: Optional[int] = None
     sensitivity_breakdown: Dict[str, int] = Field(default_factory=dict)
     scope_ids: List[str] = Field(default_factory=list)
+    endpoint_paths: List[str] = Field(default_factory=list)
 
 
 class PrivilegeSnapshotListItem(BaseModel):
@@ -91,7 +105,7 @@ class PrivilegeTrend(BaseModel):
 
 
 class PrivilegeRecommendedAction(BaseModel):
-    scope_id: Optional[str] = None
+    privilege_scope_id: Optional[str] = None
     action: str
     reason: Optional[str] = None
 
@@ -105,6 +119,13 @@ class PrivilegeSelfItem(BaseModel):
     ownership_predicates: List[str] = Field(default_factory=list)
     status: Literal["allowed", "blocked"]
     blocked_reason: Optional[str] = None
+    dependencies: List[PrivilegeDependency] = Field(default_factory=list)
+    dependency_sources: List[str] = Field(default_factory=list)
+    rate_limit_class: Optional[str] = None
+    rate_limit_resources: List[str] = Field(default_factory=list)
+    source_module: Optional[str] = None
+    summary: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
 
 
 class PrivilegeSelfResponse(BaseModel):
@@ -155,6 +176,13 @@ class PrivilegeSnapshotDetailItem(BaseModel):
     ownership_predicates: List[str] = Field(default_factory=list)
     status: Literal["allowed", "blocked"]
     blocked_reason: Optional[str] = None
+    dependencies: List[PrivilegeDependency] = Field(default_factory=list)
+    dependency_sources: List[str] = Field(default_factory=list)
+    rate_limit_class: Optional[str] = None
+    rate_limit_resources: List[str] = Field(default_factory=list)
+    source_module: Optional[str] = None
+    summary: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
 
 
 class PrivilegeSnapshotDetailMatrix(BaseModel):

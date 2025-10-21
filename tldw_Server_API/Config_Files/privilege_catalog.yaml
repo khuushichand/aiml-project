@@ -55,6 +55,339 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/media-catalog-view
+  - id: any
+    description: Generic low-risk scope used for permissive endpoints and legacy clients.
+    resource_tags:
+      - public
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/any
+  - id: chat.completions
+    description: Invoke chat completion style LLM endpoints.
+    resource_tags:
+      - chat
+      - llm
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-completions
+  - id: audio.speech
+    description: Generate speech audio from text using TTS providers.
+    resource_tags:
+      - audio
+      - tts
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-speech
+  - id: audio.transcriptions
+    description: Submit audio for transcription or translation.
+    resource_tags:
+      - audio
+      - stt
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-transcriptions
+  - id: audio.translations
+    description: Request audio translation jobs.
+    resource_tags:
+      - audio
+      - stt
+      - translation
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-translations
+  - id: workflows
+    description: Create and manage automated workflow schedules and runs.
+    resource_tags:
+      - workflows
+      - automation
+    sensitivity_tier: high
+    rate_limit_class: admin
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/workflows
+  - id: workflows.run_saved
+    description: Trigger saved workflow definitions manually.
+    resource_tags:
+      - workflows
+      - automation
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/workflows-run-saved
+  - id: evals.create_run
+    description: Launch evaluation runs from existing evaluation definitions.
+    resource_tags:
+      - evaluations
+      - workflows
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+      - evaluation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-create-run
+  - id: evals.embeddings_abtest.create
+    description: Create embeddings A/B tests within the evaluations module.
+    resource_tags:
+      - evaluations
+      - embeddings
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - evaluation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-embeddings-abtest-create
+  - id: evals.embeddings_abtest.run
+    description: Execute embeddings A/B test runs.
+    resource_tags:
+      - evaluations
+      - embeddings
+      - workflows
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - evaluation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-embeddings-abtest-run
+  - id: evals.rag_pipeline.preset.create
+    description: Create reusable RAG evaluation pipeline presets.
+    resource_tags:
+      - evaluations
+      - rag
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - evaluation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-rag-pipeline-preset-create
+  - id: evals.rag_pipeline.preset.list
+    description: List available RAG pipeline presets.
+    resource_tags:
+      - evaluations
+      - rag
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - evaluation_manager
+      - analyst
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-rag-pipeline-preset-list
+  - id: evals.rag_pipeline.preset.get
+    description: Retrieve a specific RAG pipeline preset definition.
+    resource_tags:
+      - evaluations
+      - rag
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - evaluation_manager
+      - analyst
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-rag-pipeline-preset-get
+  - id: evals.rag_pipeline.preset.delete
+    description: Delete a RAG pipeline preset.
+    resource_tags:
+      - evaluations
+      - rag
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - evaluation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-rag-pipeline-preset-delete
+  - id: evals.rag_pipeline.cleanup
+    description: Clean up temporary assets generated by RAG evaluation pipeline runs.
+    resource_tags:
+      - evaluations
+      - rag
+      - workflows
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - evaluation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/evals-rag-pipeline-cleanup
+  - id: scheduler.workflows.create
+    description: Create scheduled workflow definitions.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-create
+  - id: scheduler.workflows.list
+    description: List scheduled workflows for the organization.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - automation_manager
+      - analyst
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-list
+  - id: scheduler.workflows.get
+    description: Retrieve details for a specific scheduled workflow.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - automation_manager
+      - analyst
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-get
+  - id: scheduler.workflows.update
+    description: Update scheduled workflow configuration.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-update
+  - id: scheduler.workflows.delete
+    description: Delete a scheduled workflow.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-delete
+  - id: scheduler.workflows.run_now
+    description: Trigger an immediate run for a scheduled workflow.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-run-now
+  - id: scheduler.workflows.dry_run
+    description: Execute a dry-run of a scheduled workflow without persistence.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - automation_manager
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-dry-run
+  - id: scheduler.workflows.admin_rescan
+    description: Rescan workflow definitions to reconcile scheduler state.
+    resource_tags:
+      - workflows
+      - scheduler
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/scheduler-workflows-admin-rescan
 feature_flags:
   - id: media_ingest_beta
     description: Enables new media ingestion pipeline with enhanced metadata extraction.

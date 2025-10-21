@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import TransactionError
+
+MAX_SNAPSHOT_DETAIL_ROWS = 50_000
+DETAIL_INSERT_BATCH_SIZE = 500
 
 
 class PrivilegeSnapshotStore:
@@ -135,7 +139,11 @@ class PrivilegeSnapshotStore:
             },
         }
 
-    async def add_snapshot(self, snapshot: Dict[str, Any]) -> None:
+    async def add_snapshot(
+        self,
+        snapshot: Dict[str, Any],
+        detail_items: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> None:
         snapshot_id = snapshot.get("snapshot_id")
         if not snapshot_id:
             raise ValueError("snapshot must include snapshot_id")
@@ -154,6 +162,17 @@ class PrivilegeSnapshotStore:
         summary_json = json.dumps(summary) if summary is not None else None
         scope_index = self._build_scope_index(summary)
         now_iso = self._to_iso(datetime.now(timezone.utc))
+
+        detail_payload: List[Dict[str, Any]] = []
+        if detail_items is not None:
+            # Clamp to prevent runaway storage; log if truncated.
+            detail_payload = list(detail_items)[:MAX_SNAPSHOT_DETAIL_ROWS]
+            if len(detail_items) > MAX_SNAPSHOT_DETAIL_ROWS:
+                logger.warning(
+                    "Truncated snapshot detail rows for %s to %s entries",
+                    snapshot_id,
+                    MAX_SNAPSHOT_DETAIL_ROWS,
+                )
 
         async with pool.transaction() as conn:
             await conn.execute(
@@ -196,12 +215,56 @@ class PrivilegeSnapshotStore:
                     now_iso,
                 ),
             )
+            if detail_payload:
+                await conn.execute(
+                    "DELETE FROM privilege_snapshot_details WHERE snapshot_id = ?",
+                    (snapshot_id,),
+                )
+                await self._insert_snapshot_details(conn, snapshot_id, detail_payload, now_iso)
 
     async def clear(self) -> None:
         pool = await self._get_pool()
         await self._ensure_schema(pool)
-        async with pool.transaction() as conn:
-            await conn.execute("DELETE FROM privilege_snapshots")
+        try:
+            async with pool.transaction() as conn:
+                await conn.execute("DELETE FROM privilege_snapshots")
+                await conn.execute("DELETE FROM privilege_snapshot_details")
+        except TransactionError as exc:
+            detail = str(exc).lower()
+            if "no such table" in detail:
+                logger.debug("Snapshot clear skipped: tables not present yet")
+            else:
+                raise
+
+    async def _insert_snapshot_details(
+        self,
+        conn: Any,
+        snapshot_id: str,
+        detail_rows: Sequence[Dict[str, Any]],
+        created_at_iso: str,
+    ) -> None:
+        row_index = 0
+        for chunk_start in range(0, len(detail_rows), DETAIL_INSERT_BATCH_SIZE):
+            chunk = detail_rows[chunk_start : chunk_start + DETAIL_INSERT_BATCH_SIZE]
+            for item in chunk:
+                row_json = self._encode_detail_item(item)
+                await conn.execute(
+                    """
+                    INSERT INTO privilege_snapshot_details (
+                        snapshot_id,
+                        row_index,
+                        row_json,
+                        created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id,
+                        row_index,
+                        row_json,
+                        created_at_iso,
+                    ),
+                )
+                row_index += 1
 
     async def get_snapshot(
         self,
@@ -238,12 +301,38 @@ class PrivilegeSnapshotStore:
             except Exception as exc:
                 logger.warning("Failed to parse snapshot summary JSON: %s", exc)
                 summary_obj = None
-
+        page = max(page, 1)
+        page_size = max(min(page_size, 500), 1)
+        offset = (page - 1) * page_size
+        total_items_raw = await pool.fetchval(
+            "SELECT COUNT(*) FROM privilege_snapshot_details WHERE snapshot_id = ?",
+            (snapshot_id,),
+        )
+        try:
+            total_items = int(total_items_raw or 0)
+        except Exception:
+            total_items = 0
+        detail_items: List[Dict[str, Any]] = []
+        if total_items and offset < total_items:
+            rows = await pool.fetchall(
+                """
+                SELECT row_index, row_json
+                FROM privilege_snapshot_details
+                WHERE snapshot_id = ?
+                ORDER BY row_index
+                LIMIT ? OFFSET ?
+                """,
+                (snapshot_id, page_size, offset),
+            )
+            for row in rows:
+                payload = self._decode_detail_json(self._row_to_dict(row).get("row_json"))
+                if payload is not None:
+                    detail_items.append(payload)
         detail = {
             "page": page,
             "page_size": page_size,
-            "total_items": 0,
-            "items": [],
+            "total_items": total_items,
+            "items": detail_items,
         }
 
         return {
@@ -256,7 +345,7 @@ class PrivilegeSnapshotStore:
             "team_id": record.get("team_id"),
             "summary": summary_obj,
             "detail": detail,
-            "etag": f'W/"{record.get("snapshot_id")}-v1"',
+            "etag": f'W/"{record.get("snapshot_id")}-v{total_items or 0}"',
         }
 
     # ------------------------------------------------------------------ #
@@ -286,6 +375,17 @@ class PrivilegeSnapshotStore:
                     scope_index TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS privilege_snapshot_details (
+                    snapshot_id TEXT NOT NULL,
+                    row_index INTEGER NOT NULL,
+                    row_json TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (snapshot_id, row_index)
                 )
                 """
             )
@@ -322,6 +422,32 @@ class PrivilegeSnapshotStore:
             logger.debug("Privilege snapshot index creation skipped: %s", exc)
 
         self._initialized = True
+
+    @staticmethod
+    def _encode_detail_item(item: Dict[str, Any]) -> str:
+        def _default(obj: Any) -> Any:
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, set):
+                return sorted(obj)
+            return str(obj)
+
+        try:
+            return json.dumps(item, default=_default)
+        except Exception:
+            sanitized = {str(k): str(v) for k, v in item.items()}
+            return json.dumps(sanitized)
+
+    @staticmethod
+    def _decode_detail_json(value: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not value:
+            return None
+        try:
+            payload = json.loads(value)
+            return payload if isinstance(payload, dict) else None
+        except Exception as exc:
+            logger.warning("Failed to decode snapshot detail payload: %s", exc)
+            return None
 
     @staticmethod
     def _row_to_dict(row: Any) -> Optional[Dict[str, Any]]:

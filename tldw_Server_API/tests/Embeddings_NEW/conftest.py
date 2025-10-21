@@ -199,6 +199,43 @@ def _chromadb_inmemory_clients(monkeypatch):
     monkeypatch.setattr(_chromadb, "Client", _stub_client, raising=False)
     yield
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _chromadb_stub_clients_session():
+    """Global safeguard so unittest-style tests also get the in-memory chroma stub."""
+    try:
+        import chromadb as _chromadb
+    except Exception:
+        yield
+        return
+
+    try:
+        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import _InMemoryChromaClient
+    except Exception:
+        yield
+        return
+
+    original_persistent = getattr(_chromadb, "PersistentClient", None)
+    original_client = getattr(_chromadb, "Client", None)
+
+    def _stub_persistent_client(*args, **kwargs):
+        return _InMemoryChromaClient()
+
+    def _stub_client(*args, **kwargs):
+        return _InMemoryChromaClient()
+
+    if original_persistent is not None:
+        _chromadb.PersistentClient = _stub_persistent_client  # type: ignore[attr-defined]
+    if original_client is not None:
+        _chromadb.Client = _stub_client  # type: ignore[attr-defined]
+    try:
+        yield
+    finally:
+        if original_persistent is not None:
+            _chromadb.PersistentClient = original_persistent  # type: ignore[attr-defined]
+        if original_client is not None:
+            _chromadb.Client = original_client  # type: ignore[attr-defined]
+
 # =====================================================================
 # Vector/Embedding Fixtures
 # =====================================================================
