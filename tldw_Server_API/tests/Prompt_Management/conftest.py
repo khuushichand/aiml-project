@@ -91,7 +91,11 @@ def client(test_user, test_api_token):
 @pytest.fixture
 def prompt_studio_db(tmp_path: Path) -> PromptStudioDatabase:
     """Create an isolated PromptStudioDatabase for job system tests."""
-    db_path = tmp_path / "prompt_studio.db"
+    db_dir = tmp_path / "prompt_studio"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    db_path = db_dir / "prompt_studio.db"
+    if not db_path.exists():
+        db_path.touch()
     db = PromptStudioDatabase(str(db_path), client_id="test-client")
     try:
         yield db

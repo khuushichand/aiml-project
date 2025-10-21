@@ -285,3 +285,12 @@ def get_topic_monitoring_service() -> TopicMonitoringService:
     if _service_singleton is None:
         _service_singleton = TopicMonitoringService()
     return _service_singleton
+
+
+def _reset_topic_monitoring_service() -> None:
+    """
+    Testing helper: reset the cached singleton so the next access picks up
+    fresh environment configuration (e.g., temp DB paths).
+    """
+    global _service_singleton
+    _service_singleton = None

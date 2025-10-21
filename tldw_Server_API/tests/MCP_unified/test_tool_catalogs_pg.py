@@ -1,5 +1,8 @@
 import os
+import asyncio
 import pytest
+
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 
 
 @pytest.mark.pg_integration
@@ -16,16 +19,24 @@ def test_tool_catalogs_postgres_list_filter(monkeypatch):
     os.environ["DATABASE_URL"] = dsn
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["TEST_MODE"] = "true"
-    os.environ.setdefault("SINGLE_USER_API_KEY", "CHANGE_ME_TO_SECURE_API_KEY")
+    fallback_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+    if not os.getenv("SINGLE_USER_API_KEY"):
+        os.environ["SINGLE_USER_API_KEY"] = fallback_key
     os.environ["MCP_ENABLE_MEDIA_MODULE"] = "true"
+    reset_settings()
 
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server
+
+    # Ensure module registry/server picks up fresh env toggles (media module)
+    asyncio.run(reset_mcp_server())
 
     client = TestClient(app)
 
     # Use configured test API key
-    api_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+    settings = get_settings()
+    api_key = settings.SINGLE_USER_API_KEY or fallback_key
     headers = {"X-API-KEY": api_key}
 
     # Create a unique catalog name and add an entry
@@ -62,4 +73,3 @@ def test_tool_catalogs_postgres_list_filter(monkeypatch):
     assert "media.search" in names
     # Ensure a write tool not in catalog isn't shown
     assert "ingest_media" not in names
-

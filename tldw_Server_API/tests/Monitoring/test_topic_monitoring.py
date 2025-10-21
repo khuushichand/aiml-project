@@ -2,7 +2,10 @@ import os
 import json
 import pytest
 
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import (
+    get_topic_monitoring_service,
+    _reset_topic_monitoring_service,
+)
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import Watchlist, WatchlistRule
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB
 
@@ -19,7 +22,8 @@ def test_topic_monitoring_alert_creation(tmp_path, monkeypatch):
     wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
     monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", str(wl_file))
 
-    # Initialize service (singleton may have been created; force reimport is heavy, so guard by reload())
+    # Ensure the singleton picks up the temp paths for this test run
+    _reset_topic_monitoring_service()
     svc = get_topic_monitoring_service()
     svc.reload()
 
@@ -43,4 +47,3 @@ def test_topic_monitoring_alert_creation(tmp_path, monkeypatch):
     items = db.list_alerts(user_id="u1")
     assert len(items) >= 1
     assert any("badword" in (it.get("pattern") or "") for it in items)
-
