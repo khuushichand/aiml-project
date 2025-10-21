@@ -342,7 +342,7 @@ const TTS = {
         if (this.currentProvider === 'neutts') {
             request = await this.buildNeuTTSRequest();
         } else {
-            request = this.buildRequest();
+            request = await this.buildRequest();
         }
             
             // Make API call
@@ -400,7 +400,7 @@ const TTS = {
     },
     
     // Build request based on current provider
-    buildRequest() {
+    async buildRequest() {
         const text = document.getElementById('tts-text-input').value;
         const format = document.getElementById('tts-format').value;
         const streaming = document.getElementById('tts-streaming').checked;

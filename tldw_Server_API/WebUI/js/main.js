@@ -332,7 +332,11 @@ class WebUI {
             try {
                 const badge = document.getElementById('dlq-badge');
                 if (!badge) return;
-                const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+                const client = window.apiClient;
+                if (!client || !client.token) {
+                    return;
+                }
+                const res = await client.get('/api/v1/embeddings/dlq/stats');
                 const total = (res && typeof res.total_dlq === 'number') ? res.total_dlq : 0;
                 badge.textContent = `DLQ: ${total}`;
                 badge.classList.remove('badge-warn', 'badge-crit');
