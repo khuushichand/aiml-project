@@ -13,6 +13,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+try:  # psycopg v3 preferred; fall back to psycopg2 if installed
+    from psycopg import sql as psycopg_sql  # type: ignore
+except Exception:  # pragma: no cover
+    try:
+        from psycopg2 import sql as psycopg_sql  # type: ignore
+    except Exception:  # pragma: no cover
+        psycopg_sql = None  # type: ignore
 
 from loguru import logger
 
@@ -408,7 +415,15 @@ class BackendPromptStudioDatabaseBase:
         try:
             if self.backend_type == BackendType.POSTGRESQL and self.client_id:
                 cur = raw_conn.cursor()
-                cur.execute("SET SESSION app.user_id = %s", (str(self.client_id),))
+                user_value = str(self.client_id)
+                if psycopg_sql is not None:  # type: ignore[name-defined]
+                    stmt = psycopg_sql.SQL("SET SESSION app.user_id = {}").format(
+                        psycopg_sql.Literal(user_value)
+                    )
+                    cur.execute(stmt)
+                else:
+                    safe_value = user_value.replace("'", "''")
+                    cur.execute(f"SET SESSION app.user_id = '{safe_value}'")
                 try:
                     raw_conn.commit()
                 except Exception:

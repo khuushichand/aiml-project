@@ -47,6 +47,13 @@ from pathlib import Path
 import threading
 from loguru import logger
 from typing import List, Dict, Optional, Any, Union, Set, Tuple
+try:  # Prefer psycopg v3 sql helper, fall back to psycopg2 if available
+    from psycopg import sql as psycopg_sql  # type: ignore
+except Exception:  # pragma: no cover - compatibility fallback
+    try:
+        from psycopg2 import sql as psycopg_sql  # type: ignore
+    except Exception:  # pragma: no cover - driver not installed
+        psycopg_sql = None  # type: ignore
 #
 # Third-Party Libraries
 from loguru import logger
@@ -1584,7 +1591,15 @@ UPDATE db_schema_version
                 if self.backend_type == BackendType.POSTGRESQL and self.client_id:
                     cur = conn.cursor()
                     # Use SESSION scope so it persists for pooled connection lifecycle
-                    cur.execute("SET SESSION app.user_id = %s", (str(self.client_id),))
+                    user_value = str(self.client_id)
+                    if psycopg_sql is not None:  # type: ignore[name-defined]
+                        statement = psycopg_sql.SQL("SET SESSION app.user_id = {}").format(
+                            psycopg_sql.Literal(user_value)
+                        )
+                        cur.execute(statement)
+                    else:
+                        safe_value = user_value.replace("'", "''")
+                        cur.execute(f"SET SESSION app.user_id = '{safe_value}'")
                     try:
                         conn.commit()
                     except Exception:
@@ -2470,6 +2485,44 @@ UPDATE db_schema_version
                 columns=columns,
                 connection=conn,
             )
+        self._refresh_postgres_tsvectors(connection=conn)
+
+    def _refresh_postgres_tsvectors(self, connection=None) -> None:
+        """Populate/refresh tsvector columns backing Postgres FTS searches."""
+        if self.backend_type != BackendType.POSTGRESQL:
+            return
+
+        backend = self.backend
+        for fts_table, source_table, columns in self._FTS_CONFIG:
+            actual_source = self._map_table_for_backend(source_table)
+            fts_column = f"{fts_table}_tsv"
+            concat_expr = " || ' ' || ".join(
+                f"coalesce({backend.escape_identifier(col)}, '')" for col in columns
+            )
+            if not concat_expr:
+                concat_expr = "''"
+
+            update_sql = (
+                f"UPDATE {backend.escape_identifier(actual_source)} "
+                f"SET {backend.escape_identifier(fts_column)} = "
+                f"to_tsvector('english', {concat_expr})"
+            )
+            try:
+                backend.execute(update_sql, connection=connection)
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Failed to refresh PostgreSQL FTS vector for %s.%s: %s",
+                    actual_source,
+                    fts_column,
+                    exc,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Unexpected error while refreshing PostgreSQL FTS vector for %s.%s: %s",
+                    actual_source,
+                    fts_column,
+                    exc,
+                )
 
     def rebuild_full_text_indexes(self) -> None:
         """Rebuild FTS indexes for the active backend."""
@@ -2484,6 +2537,7 @@ UPDATE db_schema_version
                         columns=columns,
                         connection=None,
                     )
+                self._refresh_postgres_tsvectors()
             except BackendDatabaseError as exc:
                 raise CharactersRAGDBError(f"Failed to rebuild PostgreSQL FTS structures: {exc}") from exc
             return

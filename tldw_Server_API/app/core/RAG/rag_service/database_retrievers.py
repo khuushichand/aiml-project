@@ -1487,6 +1487,12 @@ class CharacterCardsRetriever(BaseRetriever):
                 logger.debug(f"Retrieved {len(documents)} Character/Chat documents via ChaCha backend")
                 return documents
             except Exception as e:
+                if getattr(self.chacha_db, "backend_type", None) == BackendType.POSTGRESQL:
+                    logger.warning(
+                        "ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: %s",
+                        e,
+                    )
+                    raise
                 logger.debug(f"ChaCha backend search failed; falling back to legacy SQL: {e}")
 
         # Legacy SQLite-style path
@@ -1498,25 +1504,29 @@ class CharacterCardsRetriever(BaseRetriever):
                 cc.description,
                 cc.personality,
                 cc.first_message,
+                cc.system_prompt,
                 cc.scenario,
                 cc.creator,
                 cc.version
             FROM character_cards cc
-            WHERE cc.name LIKE ? 
+            WHERE cc.deleted = 0 AND (
+                cc.name LIKE ? 
                 OR cc.description LIKE ?
                 OR cc.personality LIKE ?
                 OR cc.scenario LIKE ?
+                OR cc.system_prompt LIKE ?
+            )
             LIMIT ?
         """
-        params = [f"%{query}%"] * 4 + [self.config.max_results // 2]
+        params = [f"%{query}%"] * 5 + [self.config.max_results // 2]
         card_results = self._execute_query(card_sql, params)
         for row in card_results:
             content = f"""# {row['name']}\n\n**Description:** {row['description']}\n\n**Personality:** {row['personality']}\n\n**Scenario:** {row['scenario']}\n\n**First Message:** {row['first_message']}"""
             matches = sum([
                 query.lower() in (row[field] or "").lower()
-                for field in ["name", "description", "personality", "scenario"]
+                for field in ["name", "description", "personality", "scenario", "system_prompt"]
             ])
-            score = matches / 4.0
+            score = matches / 5.0 if matches else 0.0
             doc = Document(
                 id=f"character_{row['id']}",
                 content=content,
@@ -1530,28 +1540,28 @@ class CharacterCardsRetriever(BaseRetriever):
                 },
                 score=score,
             )
-            documents.append(doc)
+                documents.append(doc)
 
         if include_chats:
             chat_sql = """
                 SELECT 
-                    cm.id,
-                    cm.message,
-                    cm.sender,
-                    cm.timestamp,
-                    cs.character_id,
+                    m.id,
+                    m.content,
+                    m.sender,
+                    m.timestamp,
+                    conv.character_id,
                     cc.name as character_name
-                FROM chat_messages cm
-                JOIN chat_sessions cs ON cm.session_id = cs.id
-                LEFT JOIN character_cards cc ON cs.character_id = cc.id
-                WHERE cm.message LIKE ?
-                ORDER BY cm.timestamp DESC
+                FROM messages m
+                JOIN conversations conv ON m.conversation_id = conv.id
+                LEFT JOIN character_cards cc ON conv.character_id = cc.id
+                WHERE m.deleted = 0 AND m.content LIKE ?
+                ORDER BY m.timestamp DESC
                 LIMIT ?
             """
             chat_params = [f"%{query}%", self.config.max_results // 2]
             chat_results = self._execute_query(chat_sql, chat_params)
             for row in chat_results:
-                content = f"[{row['sender']}]: {row['message']}"
+                content = f"[{row['sender']}]: {row['content']}"
                 doc = Document(
                     id=f"chat_{row['id']}",
                     content=content,
