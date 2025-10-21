@@ -348,6 +348,72 @@ class PrivilegeSnapshotStore:
             "etag": f'W/"{record.get("snapshot_id")}-v{total_items or 0}"',
         }
 
+    async def export_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        pool = await self._get_pool()
+        await self._ensure_schema(pool)
+
+        row = await pool.fetchone(
+            """
+            SELECT snapshot_id,
+                   generated_at,
+                   generated_by,
+                   target_scope,
+                   org_id,
+                   team_id,
+                   catalog_version,
+                   summary_json
+            FROM privilege_snapshots
+            WHERE snapshot_id = ?
+            """,
+            (snapshot_id,),
+        )
+        record = self._row_to_dict(row)
+        if not record:
+            return None
+
+        summary_obj = None
+        if record.get("summary_json"):
+            try:
+                summary_obj = json.loads(record["summary_json"])
+            except Exception as exc:
+                logger.warning("Failed to parse snapshot summary JSON during export: %s", exc)
+                summary_obj = None
+
+        rows = await pool.fetchall(
+            """
+            SELECT row_index, row_json
+            FROM privilege_snapshot_details
+            WHERE snapshot_id = ?
+            ORDER BY row_index
+            """,
+            (snapshot_id,),
+        )
+
+        detail_items: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = self._decode_detail_json(self._row_to_dict(row).get("row_json"))
+            if payload is not None:
+                detail_items.append(payload)
+
+        total_items = len(detail_items)
+        return {
+            "snapshot_id": record.get("snapshot_id"),
+            "catalog_version": record.get("catalog_version"),
+            "generated_at": self._parse_datetime(record.get("generated_at")),
+            "generated_by": record.get("generated_by"),
+            "target_scope": record.get("target_scope"),
+            "org_id": record.get("org_id"),
+            "team_id": record.get("team_id"),
+            "summary": summary_obj,
+            "detail_items": detail_items,
+            "total_items": total_items,
+            "etag": f'W/"{record.get("snapshot_id")}-v{total_items}"',
+        }
+
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #

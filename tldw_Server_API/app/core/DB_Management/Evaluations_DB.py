@@ -395,6 +395,7 @@ class EvaluationsDatabase:
                     text TEXT NOT NULL,
                     ground_truth_ids TEXT,
                     metadata_json TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id)
                 )
             """)
@@ -431,6 +432,21 @@ class EvaluationsDatabase:
                     cursor.execute(sql)
                 except Exception:
                     pass
+
+            # Ensure embedding_abtest_queries.created_at exists even on older databases (SQLite cannot add non-constant defaults)
+            try:
+                cursor.execute("PRAGMA table_info(embedding_abtest_queries)")
+                columns = {row["name"] for row in cursor.fetchall()}
+            except Exception:
+                columns = set()
+            if "created_at" not in columns:
+                try:
+                    cursor.execute("ALTER TABLE embedding_abtest_queries ADD COLUMN created_at TEXT")
+                    cursor.execute(
+                        "UPDATE embedding_abtest_queries SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+                    )
+                except Exception:
+                    logger.warning("Failed to backfill embedding_abtest_queries.created_at column", exc_info=True)
 
             # Indexes for A/B test tables
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtests_created ON embedding_abtests(created_at DESC)")
@@ -580,6 +596,7 @@ class EvaluationsDatabase:
             text TEXT NOT NULL,
             ground_truth_ids JSONB,
             metadata_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
             FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id)
         );
         CREATE TABLE IF NOT EXISTS embedding_abtest_results (
@@ -600,6 +617,8 @@ class EvaluationsDatabase:
             FOREIGN KEY (arm_id) REFERENCES embedding_abtest_arms(arm_id),
             FOREIGN KEY (query_id) REFERENCES embedding_abtest_queries(query_id)
         );
+        ALTER TABLE embedding_abtest_queries
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_evals_created ON evaluations(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id);
@@ -849,13 +868,23 @@ class EvaluationsDatabase:
                 ids.append(qid)
                 cursor.execute(
                     """
-                    INSERT INTO embedding_abtest_queries (query_id, test_id, text, ground_truth_ids, metadata_json)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO embedding_abtest_queries (
+                        query_id,
+                        test_id,
+                        text,
+                        ground_truth_ids,
+                        metadata_json,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        qid, test_id, q.get('text',''),
+                        qid,
+                        test_id,
+                        q.get('text', ''),
                         json.dumps(q.get('expected_ids')) if q.get('expected_ids') else None,
-                        json.dumps(q.get('metadata')) if q.get('metadata') else None
+                        json.dumps(q.get('metadata')) if q.get('metadata') else None,
+                        datetime.utcnow().isoformat(sep=" "),
                     )
                 )
             conn.commit()

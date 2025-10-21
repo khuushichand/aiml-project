@@ -134,6 +134,46 @@ class MetricsRegistry:
                 description="Number of rows stored in the privilege_snapshots table",
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_cache_hits_total",
+                type=MetricType.COUNTER,
+                description="Total number of privilege cache hits",
+                labels=["backend", "layer"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_cache_misses_total",
+                type=MetricType.COUNTER,
+                description="Total number of privilege cache misses",
+                labels=["backend", "layer"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_cache_invalidations_total",
+                type=MetricType.COUNTER,
+                description="Number of privilege cache invalidations broadcast",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_cache_generation",
+                type=MetricType.GAUGE,
+                description="Current privilege cache generation counter",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="privilege_cache_entries",
+                type=MetricType.GAUGE,
+                description="Current number of entries tracked in the local privilege cache",
+                labels=["backend"],
+            )
+        )
         
         # LLM metrics
         self.register_metric(

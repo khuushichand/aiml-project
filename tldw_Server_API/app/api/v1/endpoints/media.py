@@ -4953,6 +4953,18 @@ def get_process_audios_form(
     system_prompt: Optional[str] = Form(None, description="Optional system prompt"),
     overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used in this endpoint, but needed for model)"),
     perform_analysis: bool = Form(True, description="Perform analysis"),
+    perform_claims_extraction: Optional[bool] = Form(
+        None,
+        description="Extract factual claims during analysis (defaults to server configuration)."
+    ),
+    claims_extractor_mode: Optional[str] = Form(
+        None,
+        description="Override claims extractor mode (heuristic|ner|provider id)."
+    ),
+    claims_max_per_chunk: Optional[int] = Form(
+        None,
+        description="Maximum number of claims to extract per chunk (uses config default when unset)."
+    ),
     api_name: Optional[str] = Form(None, description="Optional API name"),
     # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),

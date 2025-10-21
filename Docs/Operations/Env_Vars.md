@@ -184,6 +184,12 @@ Runtime overrides (non‑persistent) are available via API:
 - `LLM_USAGE_LOG_RETENTION_DAYS`: Retain `llm_usage_log` rows for this many days; daily job prunes older rows (default `180`).
 - `PRIVILEGE_SNAPSHOT_RETENTION_DAYS`: Keep privilege snapshots at full granularity for this many days before weekly downsampling (default `90`).
 - `PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS`: Retain the downsampled weekly snapshots for this many days before purging entirely (default `365`).
+- `PRIVILEGE_MAP_CACHE_TTL_SECONDS`: TTL for cached privilege summaries in seconds (default `120`, floor `10`). Controls the in-process and distributed cache expiry.
+- `PRIVILEGE_CACHE_BACKEND`: `memory` (default) keeps cache local to each worker; set to `redis` to enable distributed caching with pub/sub invalidation.
+- `PRIVILEGE_CACHE_REDIS_URL`: Redis connection string used when `PRIVILEGE_CACHE_BACKEND=redis`. Falls back to `REDIS_URL` if unset.
+- `PRIVILEGE_CACHE_NAMESPACE`: Optional namespace prefix for distributed cache keys/channels (default `privmap`).
+- `PRIVILEGE_CACHE_SLIDING_TTL`: `1|true` (default) refreshes Redis TTL on reads; set to `0|false` to keep a fixed expiry.
+- `PRIVILEGE_CACHE_GENERATION_SYNC_SECONDS`: Polling interval (seconds) for generation checks when Redis pub/sub is unavailable (default `2`).
 - `DISABLE_LLM_USAGE_AGGREGATOR`: When `true`, skip starting the LLM usage background aggregator at startup (env-only override).
 
 ## LLM Pricing

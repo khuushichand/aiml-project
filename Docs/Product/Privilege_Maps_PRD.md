@@ -5,6 +5,15 @@
 - **Primary outcomes**: Cut "permission denied" support tickets by 50% within 30 days of launch; ensure 75% of new users view their map during week one; provide compliance-ready exports and snapshots with 90-day retention.
 - **Version scope**: Initial release covering admin, organization, team, and self-service views exposed through FastAPI endpoints and surfaced in the WebUI.
 
+## Current Status
+- Privilege Metadata Catalog loader/validator (`tldw_Server_API/app/core/AuthNZ/privilege_catalog.py`) is wired into startup (`PrivilegeMapsStartup.initialize`) so missing metadata fails fast unless explicitly disabled for tests.
+- Route introspection registry (`tldw_Server_API/app/core/PrivilegeMaps/introspection.py`) now captures normalized path, method, dependency, rate-limit, and catalog identifiers, with CI snapshot tooling refreshed for drift detection.
+- Aggregation engine (`tldw_Server_API/app/core/PrivilegeMaps/service.py`) combines catalog + introspection + AuthNZ role data, exposes cache hooks, and feeds the privilege endpoints and snapshot store.
+- Regression coverage added in `tldw_Server_API/tests/Privileges/test_privilege_introspection.py`, `test_privilege_service_sqlite.py`, `test_privilege_endpoints.py`, and `test_privilege_snapshot_retention.py`; all suites pass on the latest run, validating the new backend flow.
+- Distributed cache now persists summaries to Redis (or the in-memory fallback), tracks cache generations per process, and emits pub/sub invalidations so multi-worker deployments stay coherent (`tldw_Server_API/app/core/PrivilegeMaps/cache.py`).
+- Snapshot export endpoints (`/export.json` + `/export.csv`) and streaming serializers landed alongside store helpers and tests (`test_privilege_endpoints.py::test_export_snapshot_json` / `test_export_snapshot_csv`).
+- WebUI privileges hub lives at `tldw-frontend/pages/privileges.tsx`, delivering virtualized tables, drill-downs, export buttons, and in-line “request access” CTAs powered by `components/ui/VirtualizedTable.tsx`.
+
 ## Background & Problem Statement
 - Current RBAC modes (single-user API key, multi-user JWT, scopes, feature flags) lack a consolidated view for effective access.
 - Admins audit configuration files or probe endpoints manually; end users learn capabilities by hitting authorization errors.
@@ -131,14 +140,19 @@
   - Trend computation windows default to 30 days but accept `window_days` override (1–90); trends stored alongside cache entry metadata so recomputation is deterministic.
 
 ## Implementation Phases
-1. **Discovery & Design (1 week)**
+1. **Discovery & Design (1 week)** — *Status: complete*
    - Audit metadata coverage, finalize API schemas, align caching strategy.
-2. **Backend Foundations (2 weeks)**
-   - Introspection, evaluator, catalog loader, privilege endpoints, snapshot store, retention job, unit/integration tests.
-3. **WebUI Integration (2 weeks)**
+2. **Backend Foundations (2 weeks)** — *Status: complete* (catalog loader, introspection registry, aggregation engine, retention job, refreshed tests)
+3. **WebUI Integration (2 weeks)** — *Status: complete* (admin/org/team/self views, export flows, onboarding copy)
    - Build admin/org/team/self components, export flows, onboarding copy.
-4. **Pilot & Rollout (1 week)**
+4. **Pilot & Rollout (1 week)** — *Status: queued*
    - Enable internally, gather feedback, tune metrics, publish documentation.
+
+### Upcoming Deliverables
+- Surface trend deltas + cache hit telemetry in metrics dashboards and surface summary badges in the WebUI when Prometheus wiring is ready.
+- Validate virtualization + export flows against 10k×1k synthetic datasets; capture render/export timings for documentation.
+- Prepare pilot playbook: enable feature flags, capture metrics baselines, draft admin onboarding comms.
+- Refresh API + frontend docs with Redis cache knobs, export endpoints, and support troubleshooting guidance.
 - QA & Performance checkpoints:
   - End of M2: regression tests ensure introspection + aggregation produce matching outputs for sample routes (diff snapshot stored in CI artifacts).
   - End of M3: load test cache layer with 10k users/1k routes; verify cache hit rate ≥80% and invalidation propagation latency <5s.
@@ -146,12 +160,14 @@
   - M5: WebUI accessibility review (WCAG AA) and UX sign-off; export endpoints validated against rate limits and large dataset streaming.
 
 ## Testing Strategy
-- Unit tests for catalog loader, evaluator edge cases, snapshot store DDL & retention logic.
+- Unit tests for catalog loader, evaluator edge cases, snapshot store DDL & retention logic **(status: passing; see `pytest -k privilege` run on latest commit)**.
 - Integration tests for all endpoints (summary/detail/self/snapshot create/list/detail/export) covering filters, pagination, auth guards, and error cases. Include distributed cache invalidation scenario (two app instances) and trend window variations.
 - Automated CI guard compares the serialized route registry against a checked-in snapshot (`Helper_Scripts/update_privilege_registry_snapshot.py` regenerates the fixture when intentional changes occur).
 - Performance tests with synthetic datasets (10k users, 1k endpoints) to verify pagination guardrails.
 - Negative tests ensuring unauthorized access and invalid scope inputs raise appropriate errors.
 - UI automated tests cover admin/org/team/self pages, export downloads, and “request access” CTA flows; browser-based smoke suite runs nightly.
+- Post-backend integration target: end-to-end test harness seeded with synthetic AuthNZ + catalog data to validate cache invalidation behaviour and trend delta accuracy across two app instances.
+- New regression coverage: `test_privilege_cache.py` validates Redis generation sync; `test_privilege_endpoints.py::test_export_snapshot_json` / `test_export_snapshot_csv` lock export responses.
 
 ## Risks & Mitigations
 - **Incomplete metadata**: Add CI validation; backfill missing route annotations.

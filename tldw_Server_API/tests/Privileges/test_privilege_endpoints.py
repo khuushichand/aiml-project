@@ -394,6 +394,32 @@ def test_get_snapshot_detail(privilege_test_client: TestClient):
     assert payload["target_scope"] == "org"
 
 
+def test_export_snapshot_json(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/snapshots/snap-2025-01-15-001/export.json"
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert "attachment; filename=" in response.headers.get("content-disposition", "")
+    payload = response.json()
+    assert payload["snapshot_id"] == "snap-2025-01-15-001"
+    assert isinstance(payload.get("detail_items"), list)
+    assert payload["total_items"] == len(payload.get("detail_items"))
+
+
+def test_export_snapshot_csv(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/snapshots/snap-2025-01-15-001/export.csv"
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=" in response.headers.get("content-disposition", "")
+    body_lines = response.text.strip().splitlines()
+    assert len(body_lines) >= 2
+    header = body_lines[0].split(",")
+    assert "privilege_scope_id" in header
+
+
 def test_create_snapshot_org(privilege_test_client: TestClient):
     response = privilege_test_client.post(
         "/api/v1/privileges/snapshots",

@@ -43,14 +43,11 @@ def valid_embedding_vector(draw, dimension=None):
     """Generate valid embedding vectors."""
     if dimension is None:
         dimension = draw(valid_embedding_dimension())
-    
-    # Generate normalized vectors
+
     vector = np.random.randn(dimension)
-    # Normalize to unit length
     norm = np.linalg.norm(vector)
     if norm > 0:
         vector = vector / norm
-    
     return vector.tolist()
 
 @st.composite

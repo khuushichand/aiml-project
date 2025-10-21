@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
@@ -227,6 +229,153 @@ async def get_privilege_snapshot(
     if not snapshot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
     return snapshot
+
+
+@router.get("/snapshots/{snapshot_id}/export.json")
+async def export_privilege_snapshot_json(
+    *,
+    snapshot_id: str,
+    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
+) -> JSONResponse:
+    del current_user
+    export_data = await store.export_snapshot(snapshot_id=snapshot_id)
+    if not export_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
+
+    generated_at = export_data.get("generated_at")
+    if isinstance(generated_at, datetime):
+        generated_at_iso = generated_at.astimezone(timezone.utc).isoformat()
+    else:
+        generated_at_iso = str(generated_at) if generated_at else None
+
+    payload = {
+        "snapshot_id": export_data.get("snapshot_id"),
+        "catalog_version": export_data.get("catalog_version"),
+        "generated_at": generated_at_iso,
+        "generated_by": export_data.get("generated_by"),
+        "target_scope": export_data.get("target_scope"),
+        "org_id": export_data.get("org_id"),
+        "team_id": export_data.get("team_id"),
+        "summary": export_data.get("summary"),
+        "total_items": export_data.get("total_items"),
+        "detail_items": export_data.get("detail_items", []),
+        "metadata": {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+    response = JSONResponse(content=jsonable_encoder(payload))
+    filename = f"privilege-snapshot-{snapshot_id}.json"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    etag = export_data.get("etag")
+    if etag:
+        response.headers["ETag"] = etag
+    return response
+
+
+@router.get("/snapshots/{snapshot_id}/export.csv")
+async def export_privilege_snapshot_csv(
+    *,
+    snapshot_id: str,
+    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
+) -> StreamingResponse:
+    del current_user
+    export_data = await store.export_snapshot(snapshot_id=snapshot_id)
+    if not export_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
+
+    generated_at = export_data.get("generated_at")
+    if isinstance(generated_at, datetime):
+        generated_at_iso = generated_at.astimezone(timezone.utc).isoformat()
+    else:
+        generated_at_iso = str(generated_at) if generated_at else None
+
+    detail_items = export_data.get("detail_items", [])
+    fieldnames = [
+        "snapshot_id",
+        "catalog_version",
+        "generated_at",
+        "generated_by",
+        "target_scope",
+        "org_id",
+        "team_id",
+        "user_id",
+        "endpoint",
+        "method",
+        "privilege_scope_id",
+        "status",
+        "blocked_reason",
+        "feature_flag_id",
+        "sensitivity_tier",
+        "ownership_predicates",
+        "dependencies",
+        "dependency_modules",
+        "rate_limit_class",
+        "rate_limit_resources",
+        "source_module",
+        "summary",
+        "tags",
+    ]
+
+    def _flatten_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+        dependencies = detail.get("dependencies") or []
+        dependency_ids = ";".join(dep.get("id", "") for dep in dependencies if dep)
+        dependency_modules = ";".join(
+            dep.get("module", "") for dep in dependencies if dep and dep.get("module")
+        )
+        ownership_predicates = ";".join(detail.get("ownership_predicates") or [])
+        rate_limit_resources = ";".join(detail.get("rate_limit_resources") or [])
+        tags = ";".join(detail.get("tags") or [])
+
+        return {
+            "snapshot_id": export_data.get("snapshot_id"),
+            "catalog_version": export_data.get("catalog_version"),
+            "generated_at": generated_at_iso,
+            "generated_by": export_data.get("generated_by"),
+            "target_scope": export_data.get("target_scope"),
+            "org_id": export_data.get("org_id"),
+            "team_id": export_data.get("team_id"),
+            "user_id": detail.get("user_id"),
+            "endpoint": detail.get("endpoint"),
+            "method": detail.get("method"),
+            "privilege_scope_id": detail.get("privilege_scope_id"),
+            "status": detail.get("status"),
+            "blocked_reason": detail.get("blocked_reason"),
+            "feature_flag_id": detail.get("feature_flag_id"),
+            "sensitivity_tier": detail.get("sensitivity_tier"),
+            "ownership_predicates": ownership_predicates,
+            "dependencies": dependency_ids,
+            "dependency_modules": dependency_modules,
+            "rate_limit_class": detail.get("rate_limit_class"),
+            "rate_limit_resources": rate_limit_resources,
+            "source_module": detail.get("source_module"),
+            "summary": detail.get("summary"),
+            "tags": tags,
+        }
+
+    def iter_csv():
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+
+        for detail in detail_items:
+            writer.writerow(_flatten_detail(detail))
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    filename = f"privilege-snapshot-{snapshot_id}.csv"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    etag = export_data.get("etag")
+    if etag:
+        response.headers["ETag"] = etag
+    return response
 
 
 @router.post(

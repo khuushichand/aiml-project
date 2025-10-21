@@ -13,13 +13,13 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.privilege_catalog import PrivilegeCatalog, ScopeEntry, load_catalog
+from tldw_Server_API.app.core.PrivilegeMaps.cache import get_privilege_cache
 from tldw_Server_API.app.core.PrivilegeMaps.introspection import (
     RouteMetadata,
     collect_privilege_route_registry,
 )
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.PrivilegeMaps.trends import PrivilegeTrendStore, get_privilege_trend_store
-from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import MemoryCache
 
 
 RESOURCE_FALLBACK = "uncategorized"
@@ -43,8 +43,7 @@ class PrivilegeMapService:
         self._admin_roles: Set[str] = {"admin", "owner", "platform_admin"}
         self._feature_flag_map = {flag.id: flag for flag in self.catalog.feature_flags}
         self._scope_lookup = {scope.id: scope for scope in self.catalog.scopes}
-        self._summary_cache = MemoryCache()
-        self._cache_generation = 0
+        self._summary_cache = get_privilege_cache()
         self._cache_ttl_seconds = self._resolve_cache_ttl()
         self._trend_store = trend_store or get_privilege_trend_store()
         self._route_signature = self._compute_route_signature()
@@ -55,11 +54,7 @@ class PrivilegeMapService:
 
     def invalidate_cache(self) -> None:
         """Manually clear cached summaries."""
-        try:
-            self._summary_cache.clear()
-        except Exception:
-            pass
-        self._cache_generation += 1
+        self._summary_cache.invalidate()
 
     def _resolve_cache_ttl(self) -> int:
         try:
@@ -126,7 +121,7 @@ class PrivilegeMapService:
                 users_signature,
                 self._route_signature,
                 self.catalog.version,
-                str(self._cache_generation),
+                str(self._summary_cache.generation),
             ]
         )
 
@@ -135,6 +130,18 @@ class PrivilegeMapService:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    def _coerce_summary_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not payload:
+            return payload
+        base_payload = dict(payload)
+        generated_at = base_payload.get("generated_at")
+        if isinstance(generated_at, str):
+            try:
+                base_payload["generated_at"] = datetime.fromisoformat(generated_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                base_payload["generated_at"] = self._normalize_timestamp(datetime.now(timezone.utc))
+        return base_payload
 
     async def get_org_summary(
         self,
@@ -153,7 +160,7 @@ class PrivilegeMapService:
         )
         cached = self._summary_cache.get(cache_key)
         if cached:
-            base_payload = cached
+            base_payload = self._coerce_summary_payload(cached)
         else:
             generated_at = self._normalize_timestamp(datetime.now(timezone.utc))
             if group_by == "resource":
@@ -239,7 +246,7 @@ class PrivilegeMapService:
         )
         cached = self._summary_cache.get(cache_key)
         if cached:
-            base_payload = cached
+            base_payload = self._coerce_summary_payload(cached)
         else:
             generated_at = self._normalize_timestamp(datetime.now(timezone.utc))
             if group_by == "resource":

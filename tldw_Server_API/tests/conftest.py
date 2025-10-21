@@ -275,6 +275,33 @@ async def _shutdown_all() -> None:
     except Exception as e:
         logger.debug(f"Executor registry shutdown skipped: {e}")
 
+    # Async embeddings service (owns ThreadPoolExecutors for providers)
+    try:
+        from tldw_Server_API.app.core.Embeddings import async_embeddings as _async_embed_mod
+
+        service = getattr(_async_embed_mod, "_async_service", None)
+        if service is not None:
+            await service.shutdown()
+            _async_embed_mod._async_service = None
+    except Exception as e:
+        logger.debug(f"Async embedding service cleanup skipped: {e}")
+
+    # Loaded embedding model cache (ensures timers/threads release promptly)
+    try:
+        from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Create as _embed_create
+
+        with _embed_create.embedding_models_lock:
+            for _model_id, _embedder in list(_embed_create.embedding_models.items()):
+                try:
+                    unload = getattr(_embedder, "unload_model", None)
+                    if callable(unload):
+                        unload()
+                except Exception:
+                    pass
+            _embed_create.embedding_models.clear()
+    except Exception as e:
+        logger.debug(f"Embedding model cache cleanup skipped: {e}")
+
     # CPU-bound helper pools hold additional globals that need explicit reset
     try:
         from tldw_Server_API.app.core.Utils import cpu_bound_handler

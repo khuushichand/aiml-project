@@ -723,9 +723,17 @@ class HuggingFaceEmbedder:
         # --- End of critical section ---
 
     def __del__(self):
-        logging.debug(f"HuggingFaceEmbedder {self.model_identifier} is being deleted.")
+        logger_debug = getattr(logging, "debug", None)
+        if callable(logger_debug):
+            try:
+                logger_debug(f"HuggingFaceEmbedder {self.model_identifier} is being deleted.")
+            except Exception:
+                pass
         if self.unload_timer:
-            self.unload_timer.cancel()
+            try:
+                self.unload_timer.cancel()
+            except Exception:
+                pass
             self.unload_timer = None
 
 
