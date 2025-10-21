@@ -1,14 +1,17 @@
 import hashlib
 import os
 import tempfile
-from typing import Any
+import time
+from queue import Queue
+from typing import Any, AsyncGenerator
 
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service
 
 
-def _setup_db_with_claims() -> tuple[MediaDatabase, int]:
+def _setup_db_with_claims() -> tuple[str, int]:
     tmpdir = tempfile.mkdtemp(prefix="claims_env_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
@@ -30,7 +33,74 @@ def _setup_db_with_claims() -> tuple[MediaDatabase, int]:
             "chunk_hash": chunk_hash,
         })
     db.upsert_claims(rows)
-    return db, media_id
+    db.close_connection()
+    return db_path, media_id
+
+
+def _setup_db_for_policies() -> tuple[str, dict[str, int]]:
+    tmpdir = tempfile.mkdtemp(prefix="claims_policy_")
+    db_path = os.path.join(tmpdir, "media.db")
+    db = MediaDatabase(db_path=db_path, client_id="test_client")
+    db.initialize_db()
+
+    def _add_media_with_claim(text: str) -> int:
+        mid, _, _ = db.add_media_with_keywords(title=text, media_type="text", content=text, keywords=None)
+        chunk_hash = hashlib.sha256(text.encode()).hexdigest()
+        db.upsert_claims([{
+            "media_id": mid,
+            "chunk_index": 0,
+            "span_start": None,
+            "span_end": None,
+            "claim_text": text,
+            "confidence": 0.9,
+            "extractor": "heuristic",
+            "extractor_version": "v1",
+            "chunk_hash": chunk_hash,
+        }])
+        return mid
+
+    with_claims = _add_media_with_claim("already claimed")
+
+    missing_mid, _, _ = db.add_media_with_keywords(
+        title="missing", media_type="text", content="No claims yet.", keywords=None
+    )
+
+    stale_mid = _add_media_with_claim("stale claims")
+    cur = db.execute_query("SELECT version FROM Media WHERE id = ?", (stale_mid,))
+    row = cur.fetchone()
+    current_version = int(row[0] if row and not isinstance(row, dict) else row.get("version", 1)) if row else 1
+    db.execute_query(
+        "UPDATE Media SET last_modified = ?, version = ? WHERE id = ?",
+        ("9999-01-01T00:00:00Z", current_version + 1, stale_mid),
+        commit=True,
+    )
+
+    db.close_connection()
+    return db_path, {"with_claims": with_claims, "missing": missing_mid, "stale": stale_mid}
+
+
+def _reset_claims_rebuild_service():
+    svc = get_claims_rebuild_service()
+    svc.stop()
+    svc._queue = Queue()  # type: ignore[attr-defined]
+    with svc._stats_lock:  # type: ignore[attr-defined]
+        svc._stats = {"enqueued": 0, "processed": 0, "failed": 0}  # type: ignore[attr-defined]
+    svc.start()
+    return svc
+
+
+def _wait_for_service_completion(expected_processed: int, timeout: float = 5.0, poll: float = 0.05) -> None:
+    svc = get_claims_rebuild_service()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        stats = svc.get_stats()
+        processed = stats.get("processed", 0) + stats.get("failed", 0)
+        if processed >= expected_processed:
+            unfinished = getattr(svc._queue, "unfinished_tasks", 0)  # type: ignore[attr-defined]
+            if svc.get_queue_length() == 0 and unfinished == 0:
+                return
+        time.sleep(poll)
+    raise AssertionError("Claims rebuild worker did not finish within timeout")
 
 
 def test_claims_status_admin_ok():
@@ -48,9 +118,17 @@ def test_claims_status_admin_ok():
         return _Admin()
 
     # DB not required for status, but keep consistent override
-    async def _override_db():
-        db, _ = _setup_db_with_claims()
-        return db
+    db_path, _ = _setup_db_with_claims()
+
+    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+        override_db = MediaDatabase(db_path=db_path, client_id="test_client")
+        try:
+            yield override_db
+        finally:
+            try:
+                override_db.close_connection()
+            except Exception:
+                pass
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
@@ -77,13 +155,20 @@ def test_claims_envelope_pagination_absolute_link():
             self.username = "admin"
             self.is_admin = True
 
-    db, media_id = _setup_db_with_claims()
+    db_path, media_id = _setup_db_with_claims()
 
     async def _override_user():
         return _Admin()
 
-    async def _override_db():
-        return db
+    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+        override_db = MediaDatabase(db_path=db_path, client_id="test_client")
+        try:
+            yield override_db
+        finally:
+            try:
+                override_db.close_connection()
+            except Exception:
+                pass
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
@@ -121,3 +206,115 @@ def test_claims_status_forbidden_non_admin():
     with TestClient(fastapi_app) as client:
         r = client.get("/api/v1/claims/status")
         assert r.status_code == 403
+
+
+def test_claims_status_reports_queue_activity():
+    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+
+    class _Admin:
+        def __init__(self) -> None:
+            self.id = 1
+            self.username = "admin"
+            self.is_admin = True
+
+    svc = _reset_claims_rebuild_service()
+    db_path, media_id = _setup_db_with_claims()
+
+    async def _override_user():
+        return _Admin()
+
+    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+        override_db = MediaDatabase(db_path=db_path, client_id="test_client")
+        try:
+            yield override_db
+        finally:
+            try:
+                override_db.close_connection()
+            except Exception:
+                pass
+
+    fastapi_app.dependency_overrides[get_request_user] = _override_user
+    fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
+
+    with TestClient(fastapi_app) as client:
+        initial = client.get("/api/v1/claims/status")
+        assert initial.status_code == 200
+        init_body = initial.json()
+        assert init_body.get("stats", {}).get("enqueued", 0) == 0
+
+        r = client.post(f"/api/v1/claims/{media_id}/rebuild")
+        assert r.status_code == 200, r.text
+
+        _wait_for_service_completion(expected_processed=1)
+
+        status = client.get("/api/v1/claims/status")
+        assert status.status_code == 200, status.text
+        data = status.json()
+        stats = data.get("stats", {})
+        assert stats.get("enqueued") == 1
+        assert stats.get("processed") == 1
+        assert data.get("queue_length") == 0
+
+    svc.stop()
+    svc.start()
+
+
+def test_claims_rebuild_policies_enqueue_expected_media():
+    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+
+    class _Admin:
+        def __init__(self) -> None:
+            self.id = 1
+            self.username = "admin"
+            self.is_admin = True
+
+    db_path, media_ids = _setup_db_for_policies()
+    total_media = len(media_ids)
+    stale_expected = len({media_ids["missing"], media_ids["stale"]})
+
+    async def _override_user():
+        return _Admin()
+
+    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+        override_db = MediaDatabase(db_path=db_path, client_id="test_client")
+        try:
+            yield override_db
+        finally:
+            try:
+                override_db.close_connection()
+            except Exception:
+                pass
+
+    fastapi_app.dependency_overrides[get_request_user] = _override_user
+    fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
+
+    expected_counts = {
+        "missing": 1,
+        "stale": stale_expected,  # includes missing (no claims) and explicitly stale media
+        "all": total_media,
+    }
+
+    with TestClient(fastapi_app) as client:
+        for policy, expected in expected_counts.items():
+            svc = _reset_claims_rebuild_service()
+            response = client.post("/api/v1/claims/rebuild/all", params={"policy": policy})
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert body.get("status") == "accepted"
+            assert body.get("enqueued") == expected
+            assert body.get("policy") == policy
+
+            _wait_for_service_completion(expected_processed=expected)
+
+            status = client.get("/api/v1/claims/status")
+            assert status.status_code == 200, status.text
+            stats = status.json().get("stats", {})
+            assert stats.get("enqueued") == expected
+            assert stats.get("processed") == expected
+
+            svc.stop()
+            svc.start()

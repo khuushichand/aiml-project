@@ -26,6 +26,7 @@ Voice cloning, also known as voice synthesis or voice mimicry, allows the TTS sy
 | **Higgs** | 3s | 10s | 50+ | Excellent | Medium | 6GB+ |
 | **Chatterbox** | 5s | 20s | English | Very Good | Fast | 4GB+ |
 | **VibeVoice** | 3s | 30s | 12 | Good | Medium | 3-16GB |
+| **IndexTTS2** | 3s | 15s | EN/zh | Excellent | Medium | 12GB+ |
 | **ElevenLabs** | 1 min | 5 min | 29 | Excellent | Fast | N/A (Cloud) |
 
 ### Higgs Audio V2
@@ -82,6 +83,24 @@ Voice cloning, also known as voice synthesis or voice mimicry, allows the TTS sy
 - Long-form content
 - Multi-speaker dialogues
 
+### IndexTTS2
+
+**Strengths:**
+- True zero-shot cloning from a single short audio prompt
+- Emotion conditioning via secondary audio, emotion vectors, or text prompts
+- Real-time streaming support with adaptive chunk pacing
+- High fidelity output with integrated neural codec + vocoder stack
+
+**Limitations:**
+- Requires GPU with ≥12GB VRAM for best performance (CPU-only works but is slow)
+- Needs at least 3 seconds of clean reference audio; 8–15 seconds recommended
+- Model assets must be downloaded separately (config, semantic codec, emotion model)
+
+**Best Use Cases:**
+- Expressive narration where emotion guidance matters
+- Rapid prototyping of character voices
+- Interactive assistants that demand streaming playback
+
 ## How Voice Cloning Works
 
 ### Technical Process
@@ -117,7 +136,7 @@ Text Input → Text Encoder → Synthesis Model ← Speaker Embeddings
 
 ```python
 class TTSRequest(BaseModel):
-    model: str  # "higgs", "chatterbox", or "vibevoice"
+    model: str  # "higgs", "chatterbox", "vibevoice", or "index_tts"
     input: str  # Text to synthesize
     voice: str = "clone"  # Use "clone" for voice cloning
     voice_reference: Optional[str] = None  # Base64-encoded audio
@@ -198,7 +217,18 @@ class HiggsAdapter(TTSAdapter):
             f.write(processed_audio)
             
         return temp_path
-```
+
+#### IndexTTS2 Emotion Parameters
+
+The IndexTTS2 adapter accepts the following keys in `TTSRequest.extra_params`:
+
+- `emo_audio_reference` (base64-encoded bytes) or `emo_audio_path` (filesystem path) for secondary emotion guidance.
+- `emo_alpha` (float) to scale the strength of the emotion embedding.
+- `emo_vector` (list/ndarray) to provide a pre-computed embedding.
+- `use_emo_text` + `emo_text` for QwenEmotion-driven conditioning.
+- `use_random` to sample random latent vectors, `interval_silence` and `max_text_tokens_per_segment` for pacing control.
+
+Requests must still include `voice_reference`; the adapter will reject calls without it.
 
 ### Temporary File Management
 

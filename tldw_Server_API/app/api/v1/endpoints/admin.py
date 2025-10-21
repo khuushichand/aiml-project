@@ -678,6 +678,11 @@ async def admin_list_org_members(
 async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -> Dict[str, Any]:
     try:
         res = await remove_org_member(org_id=org_id, user_id=user_id)
+        if res.get("error") == "owner_required":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Organization must retain at least one owner",
+            )
         if not res.get("removed"):
             return {"message": "No membership found", "org_id": org_id, "user_id": user_id}
         # Best-effort audit
@@ -711,6 +716,8 @@ async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -
         except Exception as _e:
             logger.debug(f"Audit (org member remove) skipped/failed: {_e}")
         return {"message": "Org member removed", **res}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to remove org member user_id={user_id} from org_id={org_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to remove org member")
@@ -722,6 +729,11 @@ async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMe
         row = await update_org_member_role(org_id=org_id, user_id=user_id, role=payload.role)
         if not row:
             raise HTTPException(status_code=404, detail="Org membership not found")
+        if row.get("error") == "owner_required":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Organization must retain at least one owner",
+            )
         # Best-effort audit
         try:
             actor_id = getattr(request.state, 'user_id', None)

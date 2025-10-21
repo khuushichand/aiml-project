@@ -7,7 +7,11 @@ from typing import Optional, Tuple
 from fastapi import Depends, HTTPException
 from fastapi import Request, Response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    is_single_user_mode,
+    get_settings,
+    reset_settings,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
@@ -53,8 +57,29 @@ def _cfg_float(name: str, default_val: float) -> float:
     return float(default_val)
 
 
-BP_MAX_DEPTH = _cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000)
-BP_MAX_AGE_S = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
+def _bp_limits() -> Tuple[int, float]:
+    """Return the current backpressure limits using latest config/env overrides."""
+    max_depth = _cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000)
+    max_age = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
+    return max_depth, max_age
+
+
+def _is_single_user_mode_runtime() -> bool:
+    """Determine auth mode, allowing env overrides to take effect without restart."""
+    env_mode = os.getenv("AUTH_MODE")
+    if env_mode:
+        normalized = env_mode.strip().lower()
+        try:
+            settings_obj = get_settings()
+            if settings_obj.AUTH_MODE.lower() != normalized:
+                reset_settings()
+        except Exception:
+            try:
+                reset_settings()
+            except Exception:
+                pass
+        return normalized != "multi_user"
+    return is_single_user_mode()
 
 
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, float]:
@@ -94,10 +119,11 @@ async def guard_backpressure_and_quota(
         except Exception:
             client = None
         if client is not None:
+            max_depth, max_age = _bp_limits()
             depth, age = await _orchestrator_depth_and_age(client)
-            if depth >= BP_MAX_DEPTH or age >= BP_MAX_AGE_S:
+            if depth >= max_depth or age >= max_age:
                 retry_after = 5
-                if age >= BP_MAX_AGE_S:
+                if age >= max_age:
                     retry_after = min(60, int(max(5, age / 2)))
                 raise HTTPException(status_code=429, detail="Backpressure: queue overload", headers={"Retry-After": str(retry_after)})
     finally:
@@ -109,7 +135,7 @@ async def guard_backpressure_and_quota(
 
     # Tenant quota (allow override key for ingestion; fallback to embeddings quota)
     rps = _cfg_int("INGEST_TENANT_RPS", 0) or _cfg_int("EMBEDDINGS_TENANT_RPS", 0)
-    if not is_single_user_mode() and rps > 0:
+    if not _is_single_user_mode_runtime() and rps > 0:
         client2: Optional[aioredis.Redis] = None
         try:
             client2 = await _get_redis_client()

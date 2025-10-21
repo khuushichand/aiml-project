@@ -23,6 +23,8 @@ except Exception as exc:  # pragma: no cover
 else:
     _import_error = None
 
+_ASYNC_STUB_CACHE: Dict[str, "InMemoryAsyncRedis"] = {}
+
 try:  # pragma: no cover - optional metrics dependency
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
         get_metrics_registry as _get_metrics_registry,
@@ -136,12 +138,24 @@ async def create_async_redis_client(
     start_time = time.perf_counter()
 
     client = None
+    decode_option = options.get("decode_responses", decode_responses)
     try:
         candidate = aioredis.from_url(url, **options)
         if inspect.isawaitable(candidate):  # redis<5 compatibility
             candidate = await candidate
         client = candidate
-        await client.ping()
+        ping = getattr(client, "ping", None)
+        if ping is None:
+            _record_connection_metrics(
+                mode="async",
+                context=context_label,
+                outcome="stub",
+                start_time=start_time,
+            )
+            return client
+        result = ping()
+        if inspect.isawaitable(result):
+            await result
     except Exception as exc:
         if client is not None:
             try:
@@ -163,7 +177,12 @@ async def create_async_redis_client(
             context=context_label,
             err=exc,
         )
-        fake_client = InMemoryAsyncRedis()
+        cache_key = f"{url}::{context_label}::{decode_option}"
+        fake_client = _ASYNC_STUB_CACHE.get(cache_key)
+        if fake_client is None:
+            fake_client = InMemoryAsyncRedis(decode_responses=decode_option)
+            _ASYNC_STUB_CACHE[cache_key] = fake_client
+        setattr(fake_client, "_tldw_is_stub", True)
         await fake_client.ping()
         _record_connection_metrics(
             mode="async",
@@ -310,8 +329,51 @@ class _InMemoryRedisCore:
         stream.append((entry_id, {str(k): str(v) for k, v in fields.items()}))
         return entry_id
 
-    def xrange(self, name: str, minimum: str = "-", maximum: str = "+", count: Optional[int] = None) -> List[Tuple[str, Dict[str, str]]]:
+    def xrange(
+        self,
+        name: str,
+        min: str = "-",  # noqa: A002 - match redis signature
+        max: str = "+",
+        count: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[str, Dict[str, str]]]:
+        minimum = kwargs.get("minimum", min)
+        maximum = kwargs.get("maximum", max)
         stream = list(self._streams.get(name, []))
+        if minimum not in ("-", None) or maximum not in ("+", None):
+            def _within(entry_id: str) -> bool:
+                ts = entry_id.split("-", 1)[0]
+                if minimum not in ("-", None) and ts < str(minimum):
+                    return False
+                if maximum not in ("+", None) and ts > str(maximum):
+                    return False
+                return True
+            stream = [item for item in stream if _within(item[0])]
+        if count is not None and count >= 0:
+            stream = stream[:count]
+        return [(entry_id, dict(data)) for entry_id, data in stream]
+
+    def xrevrange(
+        self,
+        name: str,
+        max: str = "+",
+        min: str = "-",
+        count: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[str, Dict[str, str]]]:
+        maximum = kwargs.get("maximum", max)
+        minimum = kwargs.get("minimum", min)
+        stream = list(self._streams.get(name, []))
+        stream.reverse()
+        if minimum not in ("-", None) or maximum not in ("+", None):
+            def _within(entry_id: str) -> bool:
+                ts = entry_id.split("-", 1)[0]
+                if maximum not in ("+", None) and ts > str(maximum):
+                    return False
+                if minimum not in ("-", None) and ts < str(minimum):
+                    return False
+                return True
+            stream = [item for item in stream if _within(item[0])]
         if count is not None and count >= 0:
             stream = stream[:count]
         return [(entry_id, dict(data)) for entry_id, data in stream]
@@ -499,9 +561,13 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.xadd(name, fields)
 
-    async def xrange(self, name: str, minimum: str = "-", maximum: str = "+", count: Optional[int] = None):
+    async def xrange(self, name: str, *args, **kwargs):
         async with self._lock:
-            return self._core.xrange(name, minimum, maximum, count)
+            return self._core.xrange(name, *args, **kwargs)
+
+    async def xrevrange(self, name: str, *args, **kwargs):
+        async with self._lock:
+            return self._core.xrevrange(name, *args, **kwargs)
 
     async def xdel(self, name: str, entry_id: str) -> int:
         async with self._lock:

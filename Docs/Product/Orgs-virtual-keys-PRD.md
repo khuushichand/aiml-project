@@ -145,11 +145,11 @@ Notes:
   - virtual_keys.is_key_over_budget: simulate llm_usage_log rows and verify threshold checks.
 
 - Integration:
-  - Admin endpoints for org/team CRUD; org membership (POST/GET/PATCH/DELETE + user‑centric listing); team membership (POST/GET/DELETE); virtual key creation/list.
-  - Middleware blocks disallowed providers/models when allowlists are set (403). Edge cases covered:
-    - Missing X‑LLM‑Provider header with a provider allowlist (allowed unless header present and disallowed).
-    - Non‑JSON bodies or invalid JSON (skip model enforcement; should not trigger 403/402).
-  - Middleware returns 402 after budgets are exceeded for virtual keys (SQLite + Postgres).
+  - Admin endpoints for org/team CRUD; org membership (POST/GET/PATCH/DELETE + user-centric listing); team membership (POST/GET/DELETE); virtual key creation/list. Pagination and filter behaviour now covered for both SQLite and Postgres paths.
+  - Middleware blocks disallowed providers/models when allowlists are set (403). Endpoint allowlists explicitly reject `/api/v1/embeddings` for chat-only keys. Edge cases covered:
+    - Missing X-LLM-Provider header with a provider allowlist (allowed unless header present and disallowed).
+    - Non-JSON bodies or invalid JSON (skip model enforcement; should not trigger 403/402).
+  - Middleware returns 402 after budgets are exceeded for virtual keys (SQLite + Postgres). Both token- and USD-based ceilings validated.
   - Real audit tests via reusable real_audit_service fixture and @pytest.mark.real_audit for team/org membership add/remove/role update across SQLite and Postgres.
   - Postgres test suite uses a dedicated fixture (test_db_pool) so app endpoints and services share the same DSN and clean schema per test.
 
@@ -161,7 +161,5 @@ Notes:
 
 ## Status
 
-- v1 implementation complete. Follow‑ups:
-  - Expand middleware tests to additional negative/edge paths as noted.
-  - Add large‑set pagination/filter coverage for org member listings.
-  - Explore org/team RBAC propagation strategies in v2`.
+- v1 implementation complete. Follow-ups:
+  - Explore org/team RBAC propagation strategies in v2.

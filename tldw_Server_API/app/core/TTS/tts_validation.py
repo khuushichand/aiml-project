@@ -2,6 +2,7 @@
 # Description: Input validation and sanitization for TTS requests
 #
 # Imports
+import base64
 import re
 import html
 import unicodedata
@@ -82,6 +83,13 @@ class ProviderLimits:
             "min_speed": 0.5,
             "max_speed": 2.0,
             "max_speakers": 4
+        },
+        "index_tts": {
+            "max_text_length": 4000,
+            "languages": ["en", "zh"],
+            "valid_formats": {"mp3", "wav"},
+            "min_speed": 0.5,
+            "max_speed": 2.0
         }
     }
     
@@ -172,6 +180,7 @@ class TTSInputValidator:
         "dia": 1500,
         "chatterbox": 2000,
         "vibevoice": 3000,
+        "index_tts": 4000,
         "default": 1000
     }
     
@@ -183,7 +192,8 @@ class TTSInputValidator:
         "higgs": {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh"},
         "dia": {"en"},
         "chatterbox": {"en"},
-        "vibevoice": {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh", "ar", "hi"}
+        "vibevoice": {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh", "ar", "hi"},
+        "index_tts": {"en", "zh"}
     }
     
     # Supported audio formats by provider
@@ -194,7 +204,8 @@ class TTSInputValidator:
         "higgs": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC},
         "dia": {AudioFormat.MP3, AudioFormat.WAV},
         "chatterbox": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS},
-        "vibevoice": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS}
+        "vibevoice": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS},
+        "index_tts": {AudioFormat.MP3, AudioFormat.WAV}
     }
     
     # Voice reference file validation
@@ -205,6 +216,7 @@ class TTSInputValidator:
         "audio/mpeg", "audio/wav", "audio/x-wav", "audio/flac",
         "audio/opus", "audio/ogg", "audio/mp4", "audio/x-m4a"
     }
+    EMO_REF_MAX_SIZE = 20 * 1024 * 1024  # 20MB limit for emotion references
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -429,22 +441,25 @@ class TTSInputValidator:
     
     def _validate_parameters(self, request: TTSRequest):
         """Validate TTS parameters"""
+        raw_speed = getattr(request, "_original_speed", request.speed)
         # Speed validation
-        if request.speed < 0.1 or request.speed > 3.0:
+        if raw_speed < 0.1 or raw_speed > 3.0:
             raise TTSInvalidInputError(
-                f"Speed must be between 0.1 and 3.0, got {request.speed}"
+                f"Speed must be between 0.1 and 3.0, got {raw_speed}"
             )
         
         # Pitch validation
-        if request.pitch < -20.0 or request.pitch > 20.0:
+        raw_pitch = getattr(request, "_original_pitch", request.pitch)
+        if raw_pitch < -20.0 or raw_pitch > 20.0:
             raise TTSInvalidInputError(
-                f"Pitch must be between -20.0 and 20.0, got {request.pitch}"
+                f"Pitch must be between -20.0 and 20.0, got {raw_pitch}"
             )
         
         # Volume validation
-        if request.volume < 0.0 or request.volume > 2.0:
+        raw_volume = getattr(request, "_original_volume", request.volume)
+        if raw_volume < 0.0 or raw_volume > 2.0:
             raise TTSInvalidInputError(
-                f"Volume must be between 0.0 and 2.0, got {request.volume}"
+                f"Volume must be between 0.0 and 2.0, got {raw_volume}"
             )
         
         # Emotion intensity validation
@@ -452,6 +467,62 @@ class TTSInputValidator:
             raise TTSInvalidInputError(
                 f"Emotion intensity must be between 0.0 and 2.0, got {request.emotion_intensity}"
             )
+
+        extras = request.extra_params or {}
+        if extras:
+            emo_alpha = extras.get("emo_alpha")
+            if emo_alpha is not None:
+                try:
+                    emo_alpha = float(emo_alpha)
+                except Exception as exc:
+                    raise TTSInvalidInputError(f"emo_alpha must be numeric, got {emo_alpha!r}") from exc
+                if emo_alpha < 0.0 or emo_alpha > 1.0:
+                    raise TTSInvalidInputError("emo_alpha must be between 0.0 and 1.0")
+
+            emo_vector = extras.get("emo_vector")
+            if emo_vector is not None:
+                if not isinstance(emo_vector, (list, tuple)):
+                    raise TTSInvalidInputError("emo_vector must be a list or tuple of floats")
+                if len(emo_vector) not in (0, 8):
+                    raise TTSInvalidInputError("emo_vector must contain 8 values (happy, angry, sad, afraid, disgusted, melancholic, surprised, calm)")
+                for value in emo_vector:
+                    if not isinstance(value, (int, float)):
+                        raise TTSInvalidInputError("emo_vector entries must be numeric")
+
+            emo_audio_reference = extras.get("emo_audio_reference")
+            if emo_audio_reference is not None:
+                if isinstance(emo_audio_reference, str):
+                    try:
+                        emo_audio_bytes = base64.b64decode(emo_audio_reference, validate=True)
+                    except Exception as exc:
+                        raise TTSInvalidInputError("emo_audio_reference must be valid base64 audio") from exc
+                elif isinstance(emo_audio_reference, (bytes, bytearray)):
+                    emo_audio_bytes = bytes(emo_audio_reference)
+                else:
+                    raise TTSInvalidInputError("emo_audio_reference must be a base64 string or bytes")
+
+                if len(emo_audio_bytes) > self.EMO_REF_MAX_SIZE:
+                    raise TTSInvalidInputError(
+                        f"Emotion reference audio too large: {len(emo_audio_bytes)} bytes (max {self.EMO_REF_MAX_SIZE})"
+                    )
+
+            interval_silence = extras.get("interval_silence")
+            if interval_silence is not None:
+                try:
+                    interval_value = int(interval_silence)
+                except Exception as exc:
+                    raise TTSInvalidInputError("interval_silence must be an integer millisecond value") from exc
+                if interval_value < 0 or interval_value > 5000:
+                    raise TTSInvalidInputError("interval_silence must be between 0 and 5000 milliseconds")
+
+            max_tokens = extras.get("max_text_tokens_per_segment")
+            if max_tokens is not None:
+                try:
+                    max_tokens_value = int(max_tokens)
+                except Exception as exc:
+                    raise TTSInvalidInputError("max_text_tokens_per_segment must be an integer") from exc
+                if max_tokens_value <= 0:
+                    raise TTSInvalidInputError("max_text_tokens_per_segment must be greater than zero")
     
     def _validate_voice_reference(self, voice_ref_data: bytes):
         """Validate voice reference audio for cloning"""

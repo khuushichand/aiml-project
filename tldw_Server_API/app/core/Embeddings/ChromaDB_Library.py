@@ -382,7 +382,17 @@ class ChromaDBManager:
             elif isinstance(value, np.bool_):
                 cleaned[key] = bool(value)
             elif isinstance(value, (list, tuple)):  # Chroma allows lists of primitives
-                cleaned[key] = [self._clean_metadata_value(v) for v in value]
+                cleaned_list = [self._clean_metadata_value(v) for v in value]
+                # Some chromadb builds crash on zero-length lists; drop them eagerly
+                cleaned_list = [
+                    item for item in cleaned_list
+                    if item is not None and not (isinstance(item, str) and item == "")
+                ]
+                if cleaned_list:
+                    cleaned[key] = cleaned_list
+                else:
+                    logger.debug(
+                        f"User '{self.user_id}': Dropping metadata key '{key}' due to empty list value.")
             else:  # Fallback to string, log a warning for unexpected types
                 logger.debug(
                     f"User '{self.user_id}': Converting metadata value of type {type(value)} for key '{key}' to string.")
@@ -1283,7 +1293,24 @@ class ChromaDBManager:
         """Deletes items from a collection by their IDs."""
         if not ids:
             logger.warning(f"User '{self.user_id}': No IDs provided for deletion. Skipping.")
-        return
+            return
+
+        target_collection = self.get_or_create_collection(collection_name)
+        with self._lock:
+            try:
+                logger.info(
+                    f"User '{self.user_id}': Deleting {len(ids)} item(s) from collection '{target_collection.name}'.")
+                target_collection.delete(ids=ids)
+            except chromadb.errors.ChromaError as ce:
+                logger.error(
+                    f"User '{self.user_id}': ChromaDB error deleting IDs {ids} from collection "
+                    f"'{target_collection.name}': {ce}", exc_info=True)
+                raise RuntimeError(f"ChromaDB operation failed: {ce}") from ce
+            except Exception as e:
+                logger.error(
+                    f"User '{self.user_id}': Unexpected error deleting IDs {ids} from collection "
+                    f"'{target_collection.name}': {e}", exc_info=True)
+                raise RuntimeError(f"Unexpected error during deletion: {e}") from e
 
     # --- Ingest-time utilities ---
     def _dedupe_text_chunks(self, chunks: List[Dict[str, Any]], threshold: float = 0.9) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:

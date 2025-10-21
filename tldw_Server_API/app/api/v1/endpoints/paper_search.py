@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
+import requests
 
 from tldw_Server_API.app.api.v1.schemas.research_schemas import (
     ArxivSearchRequestForm,

@@ -2174,7 +2174,10 @@ class MediaDatabase:
             with self.transaction() as conn:
                 if self.backend_type == BackendType.SQLITE:
                     try:
-                        self._execute_with_connection(conn, "DELETE FROM claims_fts")
+                        self._execute_with_connection(
+                            conn,
+                            "INSERT INTO claims_fts(claims_fts) VALUES ('delete-all')",
+                        )
                     except sqlite3.Error as sqlite_err:
                         logging.warning("claims_fts table missing during rebuild; recreating. Error: %s", sqlite_err)
                         self._execute_with_connection(
@@ -2187,7 +2190,10 @@ class MediaDatabase:
                             )
                             """,
                         )
-                        self._execute_with_connection(conn, "DELETE FROM claims_fts")
+                        self._execute_with_connection(
+                            conn,
+                            "INSERT INTO claims_fts(claims_fts) VALUES ('delete-all')",
+                        )
                     self._execute_with_connection(
                         conn,
                         "INSERT INTO claims_fts(rowid, claim_text) SELECT id, claim_text FROM Claims WHERE deleted = 0",

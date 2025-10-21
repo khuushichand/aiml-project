@@ -12,6 +12,7 @@ This guide provides comprehensive instructions for deploying and configuring the
   - 8GB for Kokoro (ONNX)
   - 16GB for Higgs/Chatterbox/Dia
   - 32GB for VibeVoice-7B
+  - 12GB+ for IndexTTS2 (emotion + codec pipelines)
 - **Storage**: 
   - 1GB for code + dependencies
   - 1GB per local model (Kokoro)
@@ -25,6 +26,7 @@ This guide provides comprehensive instructions for deploying and configuring the
   - 6GB for Higgs/Chatterbox
   - 8GB for Dia
   - 16GB for VibeVoice-7B
+  - 12GB for IndexTTS2 zero-shot cloning (higher for multi-speaker batches)
 - **Apple Silicon**: MLX support for Parakeet (see https://github.com/senstella/parakeet-mlx)
 
 ## Prerequisites
@@ -72,7 +74,8 @@ pip install \
     librosa \
     onnxruntime \
     kokoro-onnx \
-    phonemizer
+    phonemizer \
+    "index-tts @ git+https://github.com/index-tts/index-tts.git"
 
 # For GPU acceleration
 pip install onnxruntime-gpu  # For ONNX models
@@ -144,6 +147,7 @@ provider_priority:
   - higgs           # Multi-lingual specialist
   - chatterbox      # Emotion specialist
   - dia             # Dialogue specialist
+  - index_tts       # Zero-shot voice cloning (local)
   - vibevoice       # Long-form specialist
 
 # Provider configurations
@@ -204,7 +208,19 @@ providers:
     use_bf16: true
     auto_detect_speakers: true
     max_speakers: 5
-    
+
+  index_tts:
+    enabled: false              # Enable after downloading checkpoints
+    model_dir: checkpoints/index_tts2
+    cfg_path: checkpoints/index_tts2/config.yaml
+    device: cuda                # CPU works for debugging only
+    use_fp16: true
+    use_cuda_kernel: true
+    interval_silence: 200       # Milliseconds between text segments
+    max_text_tokens_per_segment: 120
+    quick_streaming_tokens: 0
+    # Requires voice_reference audio; see voice_mappings.clone_required
+     
   vibevoice:
     enabled: true
     variant: 1.5B  # or 7B
@@ -217,6 +233,8 @@ providers:
     enable_voice_cloning: true
     min_reference_duration: 3.0
     max_reference_duration: 30.0
+
+> Keep the `voice_mappings.generic.*.index_tts` entries set to `clone_required` so upstream services remember to include voice reference audio with every request.
 
 # Fallback configuration
 fallback:
@@ -244,6 +262,76 @@ performance:
   stream_chunk_size: 4096
   cache_enabled: false
   cache_ttl: 3600
+
+## Manual GPU Smoke Test (IndexTTS2)
+
+1. **Environment check** – Verify CUDA is visible:
+   ```bash
+   python - <<'PY'
+   import torch
+   assert torch.cuda.is_available(), "CUDA device not detected"
+   print(torch.cuda.get_device_name(0))
+   PY
+   ```
+2. **Adapter dry run** – Use a short voice reference (5–10 s WAV) and confirm end-to-end generation (update the `voice_refs/coach.wav` path to your sample):
+   ```bash
+   python - <<'PY'
+   import base64, asyncio
+   from pathlib import Path
+   from tldw_Server_API.app.core.TTS.adapters.index_tts_adapter import IndexTTS2Adapter
+   from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
+
+   async def main():
+       adapter = IndexTTS2Adapter({
+           "index_tts_model_dir": "checkpoints/index_tts2",
+           "index_tts_cfg_path": "checkpoints/index_tts2/config.yaml",
+           "index_tts_device": "cuda",
+           "index_tts_use_fp16": True,
+       })
+       await adapter.initialize()
+       voice_bytes = Path("voice_refs/coach.wav").read_bytes()
+       request = TTSRequest(
+           text="IndexTTS2 smoke test on GPU.",
+           voice="clone_required",
+           voice_reference=voice_bytes,
+           format=AudioFormat.MP3,
+           stream=False,
+           provider="index_tts",
+       )
+       response = await adapter.generate(request)
+       Path("smoke-test-index-tts.mp3").write_bytes(response.audio_data)
+       print("Generated:", response.sample_rate, "Hz")
+
+   asyncio.run(main())
+   PY
+   ```
+3. **Streaming verification** – Launch the API and request a streaming response to ensure chunk pacing:
+   ```bash
+   uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+   ```
+   ```bash
+   python - <<'PY'
+   import base64, json
+   from pathlib import Path
+   payload = {
+       "model": "index_tts",
+       "input": "Streaming verification for the IndexTTS2 adapter.",
+       "voice": "clone_required",
+       "voice_reference": base64.b64encode(Path("voice_refs/coach.wav").read_bytes()).decode(),
+       "response_format": "mp3",
+       "stream": True
+   }
+   Path("index-tts-stream.json").write_text(json.dumps(payload))
+   PY
+   curl -X POST http://localhost:8000/api/v1/audio/speech \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <token>" \
+     -d @index-tts-stream.json \
+     --output stream-index-tts.mp3
+   ```
+   Monitor server logs for `IndexTTS2 adapter initialized` and confirm `stream-index-tts.mp3` plays without artifacts.
+
+Document findings and GPU specs in `Docs/QA/ttsmodule-smoke-tests.md` (or create the file) to keep regressions visible.
 
 # Logging
 logging:
@@ -1006,3 +1094,4 @@ cp /var/lib/redis/dump.rdb backups/redis_$(date +%Y%m%d).rdb
 
 *Last Updated: 2025-08-31*
 *Version: 2.0.0*
+> **IndexTTS2 models**: Clone the [index-tts](https://github.com/index-tts/index-tts) repo if you need bleeding-edge changes and run `pip install -e .`. Download checkpoints into `checkpoints/index_tts2/` (see README for file layout).

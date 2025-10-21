@@ -32,8 +32,13 @@ async def test_admin_org_members_endpoints_sqlite(tmp_path):
             "INSERT INTO users (username, email, password_hash, is_active) VALUES (?, ?, ?, 1)",
             ("bob", "bob@example.com", "x"),
         )
+        await conn.execute(
+            "INSERT INTO users (username, email, password_hash, is_active) VALUES (?, ?, ?, 1)",
+            ("charlie", "charlie@example.com", "x"),
+        )
     admin_id = await pool.fetchval("SELECT id FROM users WHERE username = ?", "admin")
     bob_id = await pool.fetchval("SELECT id FROM users WHERE username = ?", "bob")
+    charlie_id = await pool.fetchval("SELECT id FROM users WHERE username = ?", "charlie")
 
     # Prepare app client and override admin requirement
     from tldw_Server_API.app.main import app
@@ -57,6 +62,18 @@ async def test_admin_org_members_endpoints_sqlite(tmp_path):
         assert r.status_code == 200, r.text
         r2 = client.post(f"/api/v1/admin/orgs/{org['id']}/members", json={"user_id": bob_id, "role": "member"})
         assert r2.status_code == 200
+
+        # Default-Base team auto-created and enrollment applied
+        team_id = await pool.fetchval(
+            "SELECT id FROM teams WHERE org_id = ? AND name = ?",
+            (org['id'], "Default-Base"),
+        )
+        assert team_id is not None
+        member_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM team_members WHERE team_id = ? AND user_id = ?",
+            (team_id, bob_id),
+        )
+        assert member_count == 1
 
         # List members (with pagination + filters)
         r = client.get(f"/api/v1/admin/orgs/{org['id']}/members", params={"limit": 100, "offset": 0})
@@ -84,6 +101,30 @@ async def test_admin_org_members_endpoints_sqlite(tmp_path):
         assert r.status_code == 200
         assert "No membership found" in r.text
 
+        # Default team membership removed
+        remaining = await pool.fetchval(
+            "SELECT COUNT(*) FROM team_members WHERE team_id = ? AND user_id = ?",
+            (team_id, bob_id),
+        )
+        assert remaining == 0
+
+        # Add sole owner and ensure enforcement prevents demotion/removal
+        r = client.post(
+            f"/api/v1/admin/orgs/{org['id']}/members",
+            json={"user_id": charlie_id, "role": "owner"},
+        )
+        assert r.status_code == 200, r.text
+
+        r = client.patch(
+            f"/api/v1/admin/orgs/{org['id']}/members/{charlie_id}",
+            json={"role": "admin"},
+        )
+        assert r.status_code == 400
+        assert "retain at least one owner" in r.text.lower()
+
+        r = client.delete(f"/api/v1/admin/orgs/{org['id']}/members/{charlie_id}")
+        assert r.status_code == 400
+        assert "retain at least one owner" in r.text.lower()
+
     # Cleanup overrides
     app.dependency_overrides.pop(require_admin, None)
-

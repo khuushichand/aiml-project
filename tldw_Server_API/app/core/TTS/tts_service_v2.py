@@ -3,8 +3,9 @@
 #
 # Imports
 import asyncio
+import os
 import time
-from typing import AsyncGenerator, Optional, Dict, Any, List
+from typing import AsyncGenerator, Optional, Dict, Any, List, Set
 #
 # Third-party Imports
 from loguru import logger
@@ -95,15 +96,28 @@ class TTSServiceV2:
         # Limit concurrent generations; honor config if available
         max_concurrent = 4
         stream_errors_as_audio = True
+        env_stream_override = os.getenv("TTS_STREAM_ERRORS_AS_AUDIO")
+        if env_stream_override is not None:
+            normalized = env_stream_override.strip().lower()
+            stream_errors_as_audio = normalized not in {"0", "false", "no", "off"}
         try:
             if self.factory and hasattr(self.factory, "registry") and hasattr(self.factory.registry, "config"):
                 perf_cfg = self.factory.registry.config.get("performance", {})  # type: ignore[attr-defined]
+                # Support Pydantic models or dictionaries
+                if not isinstance(perf_cfg, dict):
+                    if hasattr(perf_cfg, "model_dump"):  # Pydantic v2
+                        perf_cfg = perf_cfg.model_dump()  # type: ignore[assignment]
+                    elif hasattr(perf_cfg, "dict"):
+                        perf_cfg = perf_cfg.dict()  # type: ignore[assignment]
                 if isinstance(perf_cfg, dict):
-                    mcg = perf_cfg.get("max_concurrent_generations", 4)
-                    # Coerce to int and clamp to at least 1
-                    max_concurrent = int(mcg) if int(mcg) > 0 else 1
-                    # Compatibility flag: stream embedded error bytes vs raising errors
-                    if "stream_errors_as_audio" in perf_cfg:
+                    mcg = perf_cfg.get("max_concurrent_generations", max_concurrent)
+                    try:
+                        max_concurrent = int(mcg)
+                        if max_concurrent <= 0:
+                            max_concurrent = 1
+                    except Exception:
+                        max_concurrent = 4
+                    if env_stream_override is None and "stream_errors_as_audio" in perf_cfg:
                         stream_errors_as_audio = bool(perf_cfg.get("stream_errors_as_audio"))
         except Exception:
             # Fallback to default on any parsing/config errors
@@ -393,7 +407,8 @@ class TTSServiceV2:
                                 "tts_fallback_attempts",
                                 labels={"from_provider": adapter.provider_name, "to_provider": "any", "success": "pending"}
                             )
-                            async for chunk in self._try_fallback_providers(tts_request, [adapter.provider_name]):
+                            exclude_tokens = self._build_exclude_tokens(adapter)
+                            async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                                 yield chunk
                             return
                         else:
@@ -421,7 +436,8 @@ class TTSServiceV2:
                     logger.error(error_msg)
                     if fallback:
                         await self._handle_provider_fallback(tts_request, adapter.provider_name, error_msg)
-                        async for chunk in self._try_fallback_providers(tts_request, [adapter.provider_name]):
+                        exclude_tokens = self._build_exclude_tokens(adapter)
+                        async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                             yield chunk
                     else:
                         if self._stream_errors_as_audio:
@@ -466,7 +482,8 @@ class TTSServiceV2:
                     "tts_fallback_attempts",
                     labels={"from_provider": adapter.provider_name, "to_provider": "any", "success": "pending"}
                 )
-                async for chunk in self._try_fallback_providers(tts_request, [adapter.provider_name]):
+                exclude_tokens = self._build_exclude_tokens(adapter)
+                async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                     yield chunk
             else:
                 # For non-recoverable errors or when fallback is disabled
@@ -501,7 +518,8 @@ class TTSServiceV2:
             
             if fallback:
                 logger.info("Attempting fallback due to unexpected error")
-                async for chunk in self._try_fallback_providers(tts_request, [adapter.provider_name]):
+                exclude_tokens = self._build_exclude_tokens(adapter)
+                async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                     yield chunk
             else:
                 if self._stream_errors_as_audio:
@@ -604,14 +622,49 @@ class TTSServiceV2:
         # Get adapter by model name
         return await self.factory.get_adapter_by_model(model)
     
+    def _provider_aliases(self, adapter: TTSAdapter) -> Set[str]:
+        """Return a normalized alias set for a provider/adapter."""
+        aliases = {
+            adapter.provider_name.lower(),
+            adapter.__class__.__name__.lower(),
+        }
+        provider_key = getattr(adapter, "PROVIDER_KEY", None)
+        if provider_key:
+            aliases.add(str(provider_key).lower())
+        for provider in TTSProvider:
+            if provider.value.lower() in aliases or provider.name.lower() in aliases:
+                aliases.add(provider.value.lower())
+                aliases.add(provider.name.lower())
+        normalized = set()
+        for alias in aliases:
+            normalized.add(alias)
+            normalized.add(alias.replace("adapter", ""))
+            normalized.add(alias.replace("adapter", "").replace("_", "").replace("-", ""))
+        return {alias for alias in normalized if alias}
+
+    def _build_exclude_tokens(self, adapter: TTSAdapter) -> List[str]:
+        """Build normalized exclude tokens for a provider."""
+        return list(self._provider_aliases(adapter))
+
     async def _get_fallback_adapter(
         self,
         request: TTSRequest,
         exclude: Optional[List[str]] = None
     ) -> Optional[TTSAdapter]:
         """Get a fallback adapter that can handle the request"""
-        exclude = exclude or []
-        
+        exclude_tokens = {token.lower() for token in (exclude or [])}
+        # Normalize tokens to cover enum values (e.g., "OpenAIAdapter" -> "openai")
+        normalized_tokens = set(exclude_tokens)
+        for token in list(exclude_tokens):
+            cleaned = token.replace("adapter", "").replace("_", "").replace("-", "")
+            if cleaned and cleaned != token:
+                normalized_tokens.add(cleaned)
+        for provider in TTSProvider:
+            if provider.value.lower() in exclude_tokens or provider.name.lower() in exclude_tokens:
+                normalized_tokens.add(provider.value.lower())
+                normalized_tokens.add(provider.name.lower())
+        exclude_tokens = normalized_tokens
+    
         # Find adapter that supports the requirements
         adapter = await self.factory.get_best_adapter(
             language=request.language,
@@ -620,20 +673,30 @@ class TTSServiceV2:
         )
         
         # Check if adapter is not in exclude list
-        if adapter and adapter.provider_name not in exclude:
-            return adapter
+        if adapter:
+            provider_aliases = self._provider_aliases(adapter)
+            if not provider_aliases & exclude_tokens:
+                return adapter
+            exclude_tokens.update(provider_aliases)
         
         # Try any available adapter
         for provider in TTSProvider:
-            if provider.value in exclude:
+            if provider.value.lower() in exclude_tokens or provider.name.lower() in exclude_tokens:
                 continue
             
             adapter = await self.factory.registry.get_adapter(provider)
             if adapter:
                 # Validate if it can handle the request
-                is_valid, _ = await adapter.validate_request(request)
+                validation_result = await adapter.validate_request(request)
+                if isinstance(validation_result, tuple):
+                    is_valid, _ = validation_result
+                elif validation_result is None:
+                    is_valid = True
+                else:
+                    is_valid = bool(validation_result)
                 if is_valid:
                     return adapter
+                exclude_tokens.update(self._provider_aliases(adapter))
         
         return None
     
@@ -776,7 +839,10 @@ class TTSServiceV2:
                 
                 # Try one more fallback if available and error is retryable
                 if is_retryable_error(e):
-                    exclude_providers.append(fallback_adapter.provider_name)
+                    exclude_providers.extend(
+                        token for token in self._build_exclude_tokens(fallback_adapter)
+                        if token not in exclude_providers
+                    )
                     final_fallback = await self._get_fallback_adapter(request, exclude_providers)
                     
                     if final_fallback:

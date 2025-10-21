@@ -9,6 +9,7 @@ provider_priority:
   - chatterbox  # Emotion control
   - dia         # Dialogue specialist
   - higgs       # Advanced multi-lingual
+  - index_tts   # IndexTTS2 (local, expressive zero-shot)
 
 # Provider-specific configurations
 providers:
@@ -97,7 +98,23 @@ providers:
     # Note: Provide `voice_reference` (base64-encoded audio) and `extra_params.reference_text`
     # in the request for voice cloning. Optionally pre-compute `extra_params.ref_codes`.
 
+  # IndexTTS2 Configuration
+  index_tts:
+    enabled: false  # Disabled by default (requires >10GB VRAM for best results)
+    model_dir: "checkpoints/index_tts2"
+    cfg_path: "checkpoints/index_tts2/config.yaml"
+    device: "cuda"
+    use_fp16: true
+    use_cuda_kernel: true
+    use_deepspeed: false
+    sample_rate: 24000
+    interval_silence: 200  # Silence in ms between segments
+    max_text_tokens_per_segment: 120
+
 # Voice mappings for cross-provider compatibility
+# NOTE: Providers like index_tts rely on uploaded reference audio; the
+#       "clone_required" placeholder indicates the caller must supply
+#       `voice_reference` bytes rather than a built-in preset.
 voice_mappings:
   # Generic voice names mapped to provider-specific voices
   generic:
@@ -107,18 +124,21 @@ voice_mappings:
       higgs: "narrator"
       dia: "speaker1"
       chatterbox: "default"
+      index_tts: "clone_required"
     female:
       openai: "nova"
       kokoro: "af_bella"
       higgs: "narrator"
       dia: "speaker2"
       chatterbox: "default"
+      index_tts: "clone_required"
     neutral:
       openai: "alloy"
       kokoro: "af_sky"
       higgs: "conversational"
       dia: "narrator"
       chatterbox: "calm"
+      index_tts: "clone_required"
       
   # Emotion-based voice selection
   emotions:
@@ -126,18 +146,22 @@ voice_mappings:
       openai: "nova"
       kokoro: "af_sky"
       chatterbox: "energetic"
+      index_tts: "clone_required"
     sad:
       openai: "shimmer"
       kokoro: "af_heart"
       chatterbox: "calm"
+      index_tts: "clone_required"
     angry:
       openai: "onyx"
       kokoro: "am_michael"
       chatterbox: "default"
+      index_tts: "clone_required"
     excited:
       openai: "fable"
       kokoro: "af_bella"
       chatterbox: "energetic"
+      index_tts: "clone_required"
 
 # Audio format preferences by provider
 format_preferences:
@@ -147,6 +171,7 @@ format_preferences:
   dia: ["wav", "mp3", "opus", "flac", "pcm"]
   chatterbox: ["wav", "mp3", "opus", "flac", "pcm"]
   neutts: ["wav", "mp3", "opus", "flac", "pcm"]
+  index_tts: ["mp3", "wav"]
 
 # Performance settings
 performance:

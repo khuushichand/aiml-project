@@ -6,6 +6,98 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 
 
+DEFAULT_BASE_TEAM_NAME = "Default-Base"
+DEFAULT_BASE_TEAM_SLUG = "default-base"
+DEFAULT_BASE_TEAM_DESCRIPTION = "Automatically managed base team for organization-wide membership."
+
+
+async def _get_or_create_default_team_id(conn, org_id: int, *, create: bool = True) -> Optional[int]:
+    """Fetch (and optionally create) the Default-Base team for an organization."""
+    is_postgres = hasattr(conn, "fetchrow")
+    if is_postgres:
+        row = await conn.fetchrow(
+            "SELECT id FROM teams WHERE org_id = $1 AND name = $2",
+            org_id,
+            DEFAULT_BASE_TEAM_NAME,
+        )
+        if row:
+            return int(row["id"])
+        if not create:
+            return None
+        new_row = await conn.fetchrow(
+            """
+            INSERT INTO teams (org_id, name, slug, description, metadata)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            """,
+            org_id,
+            DEFAULT_BASE_TEAM_NAME,
+            DEFAULT_BASE_TEAM_SLUG,
+            DEFAULT_BASE_TEAM_DESCRIPTION,
+            None,
+        )
+        return int(new_row["id"])
+    # SQLite / aiosqlite connection
+    cur = await conn.execute(
+        "SELECT id FROM teams WHERE org_id = ? AND name = ?",
+        (org_id, DEFAULT_BASE_TEAM_NAME),
+    )
+    row = await cur.fetchone()
+    if row:
+        return int(row[0])
+    if not create:
+        return None
+    await conn.execute(
+        "INSERT INTO teams (org_id, name, slug, description, metadata) VALUES (?, ?, ?, ?, ?)",
+        (org_id, DEFAULT_BASE_TEAM_NAME, DEFAULT_BASE_TEAM_SLUG, DEFAULT_BASE_TEAM_DESCRIPTION, None),
+    )
+    cur = await conn.execute(
+        "SELECT id FROM teams WHERE org_id = ? AND name = ?",
+        (org_id, DEFAULT_BASE_TEAM_NAME),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else None
+
+
+async def _ensure_user_in_default_team(conn, org_id: int, user_id: int) -> None:
+    """Ensure the user is enrolled in the organization's Default-Base team."""
+    team_id = await _get_or_create_default_team_id(conn, org_id, create=True)
+    if team_id is None:
+        return
+    if hasattr(conn, "execute") and hasattr(conn, "fetchrow"):
+        # Postgres
+        await conn.execute(
+            "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) "
+            "ON CONFLICT (team_id, user_id) DO NOTHING",
+            team_id,
+            user_id,
+            "member",
+        )
+    else:
+        await conn.execute(
+            "INSERT OR IGNORE INTO team_members (team_id, user_id, role) VALUES (?, ?, ?)",
+            (team_id, user_id, "member"),
+        )
+
+
+async def _remove_user_from_default_team(conn, org_id: int, user_id: int) -> None:
+    """Remove the user from the organization's Default-Base team if present."""
+    team_id = await _get_or_create_default_team_id(conn, org_id, create=False)
+    if team_id is None:
+        return
+    if hasattr(conn, "execute") and hasattr(conn, "fetchrow"):
+        await conn.execute(
+            "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
+            team_id,
+            user_id,
+        )
+    else:
+        await conn.execute(
+            "DELETE FROM team_members WHERE team_id = ? AND user_id = ?",
+            (team_id, user_id),
+        )
+
+
 async def create_organization(
     *,
     name: str,
@@ -232,9 +324,17 @@ async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> 
             )
             row = await conn.fetchrow(
                 "SELECT org_id, user_id, role FROM org_members WHERE org_id = $1 AND user_id = $2",
-                org_id, user_id,
+                org_id,
+                user_id,
             )
-            return dict(row) if row else {"org_id": org_id, "user_id": user_id, "role": role}
+            result = dict(row) if row else {"org_id": org_id, "user_id": user_id, "role": role}
+            try:
+                await _ensure_user_in_default_team(conn, org_id, user_id)
+            except Exception as exc:
+                logger.warning(
+                    f"Default team auto-enroll failed for org_id={org_id}, user_id={user_id}: {exc}"
+                )
+            return result
         else:
             # SQLite
             await conn.execute(
@@ -252,10 +352,18 @@ async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> 
             row = await cur.fetchone()
             if row:
                 try:
-                    return {"org_id": row[0], "user_id": row[1], "role": row[2]}
+                    result = {"org_id": row[0], "user_id": row[1], "role": row[2]}
                 except Exception:
-                    return dict(row)
-            return {"org_id": org_id, "user_id": user_id, "role": role}
+                    result = dict(row)
+            else:
+                result = {"org_id": org_id, "user_id": user_id, "role": role}
+            try:
+                await _ensure_user_in_default_team(conn, org_id, user_id)
+            except Exception as exc:
+                logger.warning(
+                    f"Default team auto-enroll failed for org_id={org_id}, user_id={user_id}: {exc}"
+                )
+            return result
 
 
 async def list_org_members(
@@ -321,13 +429,55 @@ async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
         removed = False
         if hasattr(conn, 'fetchrow'):
             # PostgreSQL: use RETURNING to detect if a row was deleted
+            current_role = await conn.fetchval(
+                "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
+                org_id,
+                user_id,
+            )
+            if (current_role or "").lower() == "owner":
+                owner_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role = 'owner'",
+                    org_id,
+                )
+                if owner_count is not None and int(owner_count) <= 1:
+                    return {
+                        "org_id": int(org_id),
+                        "user_id": int(user_id),
+                        "removed": False,
+                        "error": "owner_required",
+                    }
             row = await conn.fetchrow(
                 "DELETE FROM org_members WHERE org_id = $1 AND user_id = $2 RETURNING org_id, user_id",
                 org_id, user_id,
             )
             removed = row is not None
+            if removed:
+                try:
+                    await _remove_user_from_default_team(conn, org_id, user_id)
+                except Exception as exc:
+                    logger.warning(
+                        f"Default team removal failed for org_id={org_id}, user_id={user_id}: {exc}"
+                    )
         else:
             # SQLite: check rowcount
+            cur_role = await conn.execute(
+                "SELECT role FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
+            role_row = await cur_role.fetchone()
+            if role_row and (role_row[0] or "").lower() == "owner":
+                owner_count_row = await conn.execute(
+                    "SELECT COUNT(*) FROM org_members WHERE org_id = ? AND role = 'owner'",
+                    (org_id,),
+                )
+                owner_count = await owner_count_row.fetchone()
+                if owner_count and int(owner_count[0]) <= 1:
+                    return {
+                        "org_id": int(org_id),
+                        "user_id": int(user_id),
+                        "removed": False,
+                        "error": "owner_required",
+                    }
             cur = await conn.execute(
                 "DELETE FROM org_members WHERE org_id = ? AND user_id = ?",
                 (org_id, user_id),
@@ -340,20 +490,68 @@ async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
                 removed = (cur.rowcount or 0) > 0
             except Exception:
                 removed = True  # best-effort fallback
+            if removed:
+                try:
+                    await _remove_user_from_default_team(conn, org_id, user_id)
+                except Exception as exc:
+                    logger.warning(
+                        f"Default team removal failed for org_id={org_id}, user_id={user_id}: {exc}"
+                    )
         return {"org_id": int(org_id), "user_id": int(user_id), "removed": bool(removed)}
 
 
 async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
     """Update an org member's role; returns updated row or None if missing."""
     pool = await get_db_pool()
+    target_role = (role or "").lower()
     async with pool.transaction() as conn:
         if hasattr(conn, 'fetchrow'):
+            current_role = await conn.fetchval(
+                "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
+                org_id,
+                user_id,
+            )
+            if current_role is None:
+                return None
+            if (current_role or "").lower() == "owner" and target_role != "owner":
+                owner_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role = 'owner'",
+                    org_id,
+                )
+                if owner_count is not None and int(owner_count) <= 1:
+                    return {
+                        "org_id": int(org_id),
+                        "user_id": int(user_id),
+                        "role": current_role,
+                        "error": "owner_required",
+                    }
             row = await conn.fetchrow(
                 "UPDATE org_members SET role = $3 WHERE org_id = $1 AND user_id = $2 RETURNING org_id, user_id, role",
                 org_id, user_id, role,
             )
             return dict(row) if row else None
         else:
+            cur = await conn.execute(
+                "SELECT role FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
+            row = await cur.fetchone()
+            if not row:
+                return None
+            current_role = row[0] if not hasattr(row, "keys") else row["role"]
+            if (current_role or "").lower() == "owner" and target_role != "owner":
+                owner_count_cur = await conn.execute(
+                    "SELECT COUNT(*) FROM org_members WHERE org_id = ? AND role = 'owner'",
+                    (org_id,),
+                )
+                owner_count_row = await owner_count_cur.fetchone()
+                if owner_count_row and int(owner_count_row[0]) <= 1:
+                    return {
+                        "org_id": int(org_id),
+                        "user_id": int(user_id),
+                        "role": current_role,
+                        "error": "owner_required",
+                    }
             await conn.execute(
                 "UPDATE org_members SET role = ? WHERE org_id = ? AND user_id = ?",
                 (role, org_id, user_id),

@@ -6,6 +6,7 @@ vector generation, worker orchestration, and ChromaDB integration.
 """
 
 import os
+import sys
 import tempfile
 import shutil
 from pathlib import Path
@@ -15,6 +16,7 @@ import json
 import numpy as np
 from datetime import datetime
 import uuid
+import types
 
 import pytest
 from fastapi.testclient import TestClient
@@ -89,6 +91,113 @@ def test_env_vars():
         shutil.rmtree(tmp_user_base, ignore_errors=True)
     except Exception:
         pass
+
+# =====================================================================
+# Autouse safety fixtures (mirrored from legacy embeddings tests)
+# =====================================================================
+
+@pytest.fixture(autouse=True)
+def _sanitize_jsonschema_module(monkeypatch):
+    """Ensure sys.modules['jsonschema'] is hashable (Hypothesis introspects it)."""
+    mod = sys.modules.get("jsonschema")
+    if mod is not None and not isinstance(mod, types.ModuleType):
+        wrapper = types.ModuleType("jsonschema")
+        for attr in ("validate",):
+            try:
+                setattr(wrapper, attr, getattr(mod, attr))
+            except Exception:
+                pass
+        monkeypatch.setitem(sys.modules, "jsonschema", wrapper)
+
+
+@pytest.fixture(autouse=True)
+def _patch_hypothesis_local_constants(monkeypatch):
+    """Guard Hypothesis against unhashable stubs left in sys.modules."""
+    try:
+        from hypothesis.internal.conjecture import providers as _providers  # type: ignore
+    except Exception:
+        return
+
+    original = getattr(_providers, "_get_local_constants", None)
+    if not callable(original):
+        return
+
+    def _safe_get_local_constants():  # type: ignore[return-type]
+        try:
+            return original()
+        except TypeError:
+            for name, module in list(sys.modules.items()):
+                try:
+                    hash(module)
+                    continue
+                except Exception:
+                    pass
+                if isinstance(module, types.SimpleNamespace):
+                    wrapper = types.ModuleType(name)
+                    for attr in dir(module):
+                        if attr.startswith("__") and attr.endswith("__"):
+                            continue
+                        try:
+                            setattr(wrapper, attr, getattr(module, attr))
+                        except Exception:
+                            pass
+                    sys.modules[name] = wrapper
+            try:
+                return original()
+            except Exception:
+                return getattr(_providers, "_local_constants", None)
+
+    monkeypatch.setattr(_providers, "_get_local_constants", _safe_get_local_constants, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_chromadb_shared_state():
+    """Reset shared Chromadb client caches between tests to avoid cross-test leakage."""
+    try:
+        from chromadb.api import client as _client  # local import to avoid circulars
+        _client.SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
+    yield
+    try:
+        from chromadb.api import client as _client  # type: ignore
+        _client.SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _chromadb_inmemory_clients(monkeypatch):
+    """Route chromadb Client/PersistentClient calls to the in-memory stub for deterministic tests."""
+    try:
+        import chromadb as _chromadb
+    except Exception:
+        yield
+        return
+
+    try:
+        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import _InMemoryChromaClient
+    except Exception:
+        # If the embeddings library isn't available yet, skip patching (tests will use default clients).
+        yield
+        return
+
+    stub_cache: Dict[str, _InMemoryChromaClient] = {}
+
+    def _stub_persistent_client(*args, **kwargs):
+        key = str(kwargs.get("path") or "default")
+        cli = stub_cache.get(key)
+        if cli is None:
+            cli = _InMemoryChromaClient()
+            stub_cache[key] = cli
+        return cli
+
+    def _stub_client(*args, **kwargs):
+        return _InMemoryChromaClient()
+
+    monkeypatch.setattr(_chromadb, "PersistentClient", _stub_persistent_client, raising=False)
+    monkeypatch.setattr(_chromadb, "Client", _stub_client, raising=False)
+    yield
 
 # =====================================================================
 # Vector/Embedding Fixtures

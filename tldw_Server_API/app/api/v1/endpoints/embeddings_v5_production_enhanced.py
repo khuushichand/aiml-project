@@ -3496,23 +3496,33 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
     """
     require_admin(current_user)
     client: Optional[aioredis.Redis] = None
+    def _zero_snapshot() -> Dict[str, Any]:
+        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
+
     try:
         client = await _get_redis_client()
+        if getattr(client, "_tldw_is_stub", False):
+            try:
+                orchestrator_summary_failures_total.inc()
+            except Exception:
+                pass
+            snapshot = _zero_snapshot()
+            await ensure_async_client_closed(client)
+            client = None
+            return snapshot
     except Exception:
-        # Fallback: return zeroed structure with stable shape for polling clients
         try:
             orchestrator_summary_failures_total.inc()
         except Exception:
             pass
-        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
+        return _zero_snapshot()
     try:
         return await _build_orchestrator_snapshot(client)
     except Exception:
-        # Return best-effort empty snapshot on failure while preserving shape
         try:
             orchestrator_summary_failures_total.inc()
         except Exception:
             pass
-        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
+        return _zero_snapshot()
     finally:
         await ensure_async_client_closed(client)

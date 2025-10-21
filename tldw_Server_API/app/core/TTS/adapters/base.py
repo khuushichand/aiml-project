@@ -141,6 +141,7 @@ class TTSRequest:
     def __post_init__(self):
         # Clamp speed into a broadly accepted range
         try:
+            self._original_speed = self.speed
             if self.speed is not None:
                 if self.speed < 0.25:
                     self.speed = 0.25
@@ -148,6 +149,14 @@ class TTSRequest:
                     self.speed = 4.0
         except Exception:
             pass
+        try:
+            self._original_pitch = self.pitch
+        except Exception:
+            self._original_pitch = None
+        try:
+            self._original_volume = self.volume
+        except Exception:
+            self._original_volume = None
         # Coerce provider/model to lowercase strings if present
         try:
             if isinstance(self.provider, str):

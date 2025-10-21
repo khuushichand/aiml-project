@@ -653,9 +653,11 @@ class TestAdapterIntegration:
                         reason="Requires OPENAI_API_KEY and ELEVENLABS_API_KEY")
     async def test_adapter_fallback_chain(self):
         """Test fallback from one adapter to another - requires real API keys"""
+        if not (os.getenv("OPENAI_API_KEY") and os.getenv("ELEVENLABS_API_KEY")):
+            pytest.skip("Requires OPENAI_API_KEY and ELEVENLABS_API_KEY")
         primary = OpenAIAdapter({"openai_api_key": os.getenv("OPENAI_API_KEY")})
         fallback = ElevenLabsAdapter({"elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY")})
-        
+
         await primary.initialize()
         await fallback.initialize()
         

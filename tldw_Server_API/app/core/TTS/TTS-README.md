@@ -7,8 +7,8 @@ The TTS module provides a production-ready, extensible Text-to-Speech service wi
 ## Features
 
 ### Core Capabilities
-- **Multi-Provider Support**: OpenAI, ElevenLabs, and 4 open-source models
-- **Voice Cloning**: Support for voice reference audio with Higgs, Chatterbox, and VibeVoice
+- **Multi-Provider Support**: OpenAI, ElevenLabs, and 7 open-source/local adapters (Kokoro, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS)
+- **Voice Cloning**: Support for voice reference audio with Higgs, Chatterbox, VibeVoice, NeuTTS, and IndexTTS2
 - **Streaming Audio**: Real-time audio streaming for all providers
 - **Format Support**: MP3, WAV, OPUS, FLAC, PCM output formats
 - **OpenAI Compatibility**: Drop-in replacement for OpenAI TTS API
@@ -27,7 +27,34 @@ The TTS module provides a production-ready, extensible Text-to-Speech service wi
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
 | **Dia** | Local PyTorch | EN | ❌ | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
+| **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
 | **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, GGUF streaming |
+
+### IndexTTS2 Adapter
+
+IndexTTS2 extends the local pipeline with expressive zero-shot voice cloning and optional emotion conditioning.
+
+- **Dependencies**: `torch`, `torchaudio`, `transformers`, `sentencepiece`, `safetensors`, plus the upstream [`index-tts`](https://github.com/index-tts/index-tts) package. Install via `pip install -e .` from the project root.
+- **Model Assets**: Place checkpoints under `checkpoints/index_tts2/` (config, acoustic model, codec, Qwen emotion model). The adapter surfaces `model_dir` and `cfg_path` overrides in `tts_providers_config.yaml`.
+- **Configuration Snippet**:
+
+```yaml
+providers:
+  index_tts:
+    enabled: true
+    model_dir: "checkpoints/index_tts2"
+    cfg_path: "checkpoints/index_tts2/config.yaml"
+    device: "cuda"         # "cpu" works for debugging; GPU highly recommended
+    use_fp16: true
+    interval_silence: 200  # ms between chunks
+    max_text_tokens_per_segment: 120
+```
+
+- **Voice Mapping**: The configuration ships with a `clone_required` placeholder to remind callers to include `voice_reference` audio bytes. The adapter rejects requests that omit a speaker prompt.
+- **Streaming**: Uses `IndexTTS2.infer(..., stream_return=True)` under the hood with async chunk normalization and sample-rate conversion to 24 kHz when requested.
+- **Emotion Controls**: Provide `extra_params` such as `emo_audio_reference`, `emo_alpha`, `emo_vector`, or `emo_text` to tap into QwenEmotion-guided delivery.
+
+> **Manual GPU smoke test**: See `TTS-DEPLOYMENT.md` for a short checklist covering environment validation and end-to-end streaming playback on real hardware.
 
 ## Architecture
 

@@ -35,6 +35,7 @@ class TTSProvider(Enum):
     ELEVENLABS = "elevenlabs"
     VIBEVOICE = "vibevoice"
     NEUTTS = "neutts"
+    INDEX_TTS = "index_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -56,6 +57,7 @@ class TTSAdapterRegistry:
         TTSProvider.ELEVENLABS: "tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.ElevenLabsTTSAdapter",
         TTSProvider.VIBEVOICE: "tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter.VibeVoiceAdapter",
         TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
+        TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
     }
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -316,7 +318,20 @@ class TTSAdapterRegistry:
                     alias('backbone_repo', 'backbone_repo')
                     alias('codec_repo', 'codec_repo')
                     alias('sample_rate', 'sample_rate')
-                
+                elif p == 'index_tts':
+                    alias('model_dir', 'index_tts_model_dir')
+                    alias('cfg_path', 'index_tts_cfg_path')
+                    alias('device', 'index_tts_device')
+                    alias('use_fp16', 'index_tts_use_fp16')
+                    alias('use_cuda_kernel', 'index_tts_use_cuda_kernel')
+                    alias('use_deepspeed', 'index_tts_use_deepspeed')
+                    alias('interval_silence', 'index_tts_interval_silence')
+                    alias('quick_streaming_tokens', 'index_tts_quick_streaming_tokens')
+                    alias('max_text_tokens_per_segment', 'index_tts_max_text_tokens_per_segment')
+                    alias('more_segment_before', 'index_tts_more_segment_before')
+                    alias('verbose', 'index_tts_verbose')
+                    alias('sample_rate', 'sample_rate')
+
                 # Generic target latency for local providers
                 if p == 'chatterbox':
                     alias('target_latency_ms', 'chatterbox_target_latency_ms')
@@ -518,15 +533,32 @@ class TTSAdapterRegistry:
         }
         
         for provider in TTSProvider:
-            if provider in self._adapters:
-                adapter = self._adapters[provider]
-                status = adapter.status.value
-                if adapter.status == ProviderStatus.AVAILABLE:
+            adapter = self._adapters.get(provider)
+            if adapter:
+                status_value = adapter.status.value
+                is_available = adapter.status == ProviderStatus.AVAILABLE
+                if is_available:
                     summary["available"] += 1
+                provider_info = {
+                    "status": status_value,
+                    "initialized": bool(getattr(adapter, "_initialized", False)),
+                    "failed": provider in self._failed_providers,
+                }
+                try:
+                    if adapter.capabilities:
+                        provider_info["supports_streaming"] = adapter.capabilities.supports_streaming
+                        provider_info["supported_formats"] = sorted(fmt.value for fmt in adapter.capabilities.supported_formats)
+                        provider_info["sample_rate"] = adapter.capabilities.sample_rate
+                except Exception:
+                    pass
             else:
-                status = "not_initialized"
-            
-            summary["providers"][provider.value] = status
+                status_value = "not_initialized"
+                provider_info = {
+                    "status": status_value,
+                    "initialized": False,
+                    "failed": provider in self._failed_providers,
+                }
+            summary["providers"][provider.value] = provider_info
         
         return summary
 
