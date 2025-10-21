@@ -22,6 +22,13 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSRateLimitError,
     TTSProviderError
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_openai_api_key(monkeypatch):
+    """Ensure tests start without OPENAI_API_KEY so adapter reads config only."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    return None
 #
 #######################################################################################################################
 #

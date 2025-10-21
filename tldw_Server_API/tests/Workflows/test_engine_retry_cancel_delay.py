@@ -102,9 +102,11 @@ def test_backoff_cap_env_applied(monkeypatch, client_with_wf: TestClient):
     monkeypatch.setenv("WORKFLOWS_BACKOFF_CAP_SECONDS", "1")
 
     sleep_calls = []
+    orig_sleep = asyncio.sleep
 
     async def _fake_sleep(dur: float):
         sleep_calls.append(float(dur))
+        await orig_sleep(0)
         return None
 
     monkeypatch.setattr("asyncio.sleep", _fake_sleep)

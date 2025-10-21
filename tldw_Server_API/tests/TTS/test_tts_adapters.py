@@ -37,8 +37,12 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import (
 )
 
 
+REAL_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+
 @pytest.fixture(autouse=True)
 def clear_tts_env(monkeypatch):
+    """Default to cleared API keys; individual tests restore as needed."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
@@ -434,19 +438,21 @@ class TestTTSServiceV2:
         service = TTSServiceV2(factory)
         assert service.factory == factory
     
-    @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY")
-    async def test_list_voices(self):
+    @pytest.mark.skipif(not REAL_OPENAI_API_KEY, reason="Requires OPENAI_API_KEY")
+    async def test_list_voices(self, monkeypatch):
         """Test listing voices - requires real API key"""
-        factory = TTSAdapterFactory({"openai_api_key": os.getenv("OPENAI_API_KEY")})
+        monkeypatch.setenv("OPENAI_API_KEY", REAL_OPENAI_API_KEY)
+        factory = TTSAdapterFactory({"openai_api_key": REAL_OPENAI_API_KEY})
         service = TTSServiceV2(factory)
         
         voices = await service.list_voices()
         assert len(voices) > 0  # Should have at least one provider
     
-    @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY")
-    async def test_get_capabilities(self):
+    @pytest.mark.skipif(not REAL_OPENAI_API_KEY, reason="Requires OPENAI_API_KEY")
+    async def test_get_capabilities(self, monkeypatch):
         """Test getting capabilities - requires real API key"""
-        factory = TTSAdapterFactory({"openai_api_key": os.getenv("OPENAI_API_KEY")})
+        monkeypatch.setenv("OPENAI_API_KEY", REAL_OPENAI_API_KEY)
+        factory = TTSAdapterFactory({"openai_api_key": REAL_OPENAI_API_KEY})
         service = TTSServiceV2(factory)
         
         caps = await service.get_capabilities()
@@ -505,11 +511,12 @@ class TestIntegration:
         await close_tts_service_v2()
         await close_tts_factory()
     
-    @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY")
-    async def test_backwards_compatibility(self):
+    @pytest.mark.skipif(not REAL_OPENAI_API_KEY, reason="Requires OPENAI_API_KEY")
+    async def test_backwards_compatibility(self, monkeypatch):
         """Test backwards compatibility wrapper - requires real API key"""
         from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
         from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSService
+        monkeypatch.setenv("OPENAI_API_KEY", REAL_OPENAI_API_KEY)
         
         # Create adapter (backwards compatible)
         adapter = TTSService()

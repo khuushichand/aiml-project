@@ -22,15 +22,6 @@ def _small_wav_bytes(duration_sec: float = 0.25, sr: int = 16000) -> bytes:
     return buf.getvalue()
 
 
-def _setup_env():
-    os.environ["TEST_MODE"] = "true"
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"
-    os.environ["SINGLE_USER_FIXED_ID"] = "1"
-    # Ensure errors are not embedded as audio bytes
-    os.environ["TTS_STREAM_ERRORS_AS_AUDIO"] = "0"
-
-
 def _neutts_streaming_available(client: TestClient) -> bool:
     h = client.get("/api/v1/audio/health")
     if h.status_code != 200:
@@ -65,9 +56,14 @@ def _mp3_supported() -> bool:
         return False
 
 
-@pytest.fixture(scope="module")
-def client():
-    _setup_env()
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
+    # Ensure errors are not embedded as audio bytes
+    monkeypatch.setenv("TTS_STREAM_ERRORS_AS_AUDIO", "0")
     app = FastAPI()
     app.include_router(audio_router, prefix="/api/v1/audio")
     with TestClient(app) as c:

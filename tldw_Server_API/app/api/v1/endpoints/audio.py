@@ -246,11 +246,14 @@ async def create_speech(
             detail="An unexpected error occurred during audio generation"
         )
 
-    speech_iter = tts_service.generate_speech(
-        request_data,
-        provider=None,
-        fallback=True,
-    )
+    try:
+        speech_iter = tts_service.generate_speech(
+            request_data,
+            provider=None,
+            fallback=True,
+        )
+    except Exception as exc:
+        _raise_for_tts_error(exc)
 
     async def _pull_first_chunk() -> bytes:
         try:

@@ -9,13 +9,14 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
 
 
-def _setup_env():
-    os.environ["TEST_MODE"] = "true"
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"
-    os.environ["SINGLE_USER_FIXED_ID"] = "1"
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
     # Keep errors as HTTP, not embedded in audio
-    os.environ["TTS_STREAM_ERRORS_AS_AUDIO"] = "0"
+    monkeypatch.setenv("TTS_STREAM_ERRORS_AS_AUDIO", "0")
     # Clear cached TTS config if present
     try:
         from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
@@ -23,11 +24,6 @@ def _setup_env():
         mgr._config_cache = None  # type: ignore[attr-defined]
     except Exception:
         pass
-
-
-@pytest.fixture(scope="module")
-def client():
-    _setup_env()
     app = FastAPI()
     app.include_router(audio_router, prefix="/api/v1/audio")
     with TestClient(app) as c:

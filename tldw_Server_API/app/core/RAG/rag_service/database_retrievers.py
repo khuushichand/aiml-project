@@ -1540,7 +1540,7 @@ class CharacterCardsRetriever(BaseRetriever):
                 },
                 score=score,
             )
-                documents.append(doc)
+            documents.append(doc)
 
         if include_chats:
             chat_sql = """
