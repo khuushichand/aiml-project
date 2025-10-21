@@ -9,6 +9,7 @@ Provides CRUD operations and query methods for:
 """
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 import uuid
@@ -163,11 +164,14 @@ class EvaluationsDatabase:
 
         self.backend_type: BackendType = self.backend.backend_type if self.backend else BackendType.SQLITE
 
+        self._abtest_store = None
+
         if self.backend_type == BackendType.SQLITE:
             self._initialize_database()
             self._apply_migrations()
         else:
             self._initialize_database_postgres()
+        self._init_abtest_store()
     
     @contextmanager
     def get_connection(self):
@@ -737,12 +741,33 @@ class EvaluationsDatabase:
             
             has_more = len(rows) > limit
             evaluations = [self._row_to_eval_dict(row) for row in rows[:limit]]
-            
+
             return evaluations, has_more
+
+    def _init_abtest_store(self) -> None:
+        desired = str(os.getenv("EVALS_ABTEST_PERSISTENCE", "sqlalchemy")).strip().lower()
+        if desired not in {"sqlalchemy", "repo"}:
+            self._abtest_store = None
+            return
+        if self.backend_type != BackendType.SQLITE:
+            self._abtest_store = None
+            return
+        try:
+            from tldw_Server_API.app.core.Evaluations.embeddings_abtest_repository import (
+                get_embeddings_abtest_store,
+            )
+
+            self._abtest_store = get_embeddings_abtest_store(self.db_path)
+            logger.debug("Embeddings A/B tests using SQLAlchemy repository backend")
+        except Exception as exc:
+            self._abtest_store = None
+            logger.warning("Falling back to legacy embeddings A/B persistence: %s", exc)
 
     # ============= Embeddings A/B Test Operations =============
 
     def create_abtest(self, name: str, config: Dict[str, Any], created_by: Optional[str] = None) -> str:
+        if self._abtest_store:
+            return self._abtest_store.create_abtest(name=name, config=config, created_by=created_by)
         test_id = f"abtest_{uuid.uuid4().hex[:12]}"
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -770,6 +795,20 @@ class EvaluationsDatabase:
         stats_json: Optional[Dict[str, Any]] = None,
         metadata_json: Optional[Dict[str, Any]] = None,
     ) -> str:
+        if self._abtest_store:
+            return self._abtest_store.upsert_abtest_arm(
+                test_id=test_id,
+                arm_index=arm_index,
+                provider=provider,
+                model_id=model_id,
+                dimensions=dimensions,
+                collection_hash=collection_hash,
+                pipeline_hash=pipeline_hash,
+                collection_name=collection_name,
+                status=status,
+                stats_json=stats_json,
+                metadata_json=metadata_json,
+            )
         arm_id = f"arm_{test_id}_{arm_index}"
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -800,6 +839,8 @@ class EvaluationsDatabase:
         return arm_id
 
     def insert_abtest_queries(self, test_id: str, queries: List[Dict[str, Any]]) -> List[str]:
+        if self._abtest_store:
+            return self._abtest_store.insert_abtest_queries(test_id, queries)
         ids: List[str] = []
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -821,6 +862,9 @@ class EvaluationsDatabase:
         return ids
 
     def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None):
+        if self._abtest_store:
+            self._abtest_store.set_abtest_status(test_id, status, stats_json)
+            return
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -843,6 +887,20 @@ class EvaluationsDatabase:
         ranked_documents: Optional[List[str]] = None,
         rerank_scores: Optional[List[float]] = None,
     ) -> str:
+        if self._abtest_store:
+            return self._abtest_store.insert_abtest_result(
+                test_id=test_id,
+                arm_id=arm_id,
+                query_id=query_id,
+                ranked_ids=ranked_ids,
+                scores=scores,
+                metrics=metrics,
+                latency_ms=latency_ms,
+                ranked_distances=ranked_distances,
+                ranked_metadatas=ranked_metadatas,
+                ranked_documents=ranked_documents,
+                rerank_scores=rerank_scores,
+            )
         rid = f"res_{uuid.uuid4().hex[:12]}"
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -869,6 +927,8 @@ class EvaluationsDatabase:
         return rid
 
     def get_abtest(self, test_id: str) -> Optional[Dict[str, Any]]:
+        if self._abtest_store:
+            return self._abtest_store.get_abtest(test_id)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM embedding_abtests WHERE test_id = ?", (test_id,))
@@ -878,18 +938,24 @@ class EvaluationsDatabase:
         return None
 
     def get_abtest_arms(self, test_id: str) -> List[Dict[str, Any]]:
+        if self._abtest_store:
+            return self._abtest_store.get_abtest_arms(test_id)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM embedding_abtest_arms WHERE test_id = ? ORDER BY arm_index ASC", (test_id,))
             return [dict(r) for r in cursor.fetchall()]
 
     def get_abtest_queries(self, test_id: str) -> List[Dict[str, Any]]:
+        if self._abtest_store:
+            return self._abtest_store.get_abtest_queries(test_id)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
             return [dict(r) for r in cursor.fetchall()]
 
     def list_abtest_results(self, test_id: str, limit: int = 100, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+        if self._abtest_store:
+            return self._abtest_store.list_abtest_results(test_id, limit, offset)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

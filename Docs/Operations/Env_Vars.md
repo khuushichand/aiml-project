@@ -48,9 +48,12 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
 
 ### RAG Quality Evaluations (Nightly)
-- `RAG_QUALITY_EVAL_ENABLED`: Enable nightly eval scheduler in‑process (`true|false`, default `false`).
+- `RAG_QUALITY_EVAL_ENABLED`: Enable nightly eval scheduler in-process (`true|false`, default `false`).
 - `RAG_QUALITY_EVAL_INTERVAL_SEC`: Interval between eval runs in seconds (default `86400`).
 - `RAG_QUALITY_EVAL_DATASET`: Path to JSONL eval dataset (default `Docs/Deployment/Monitoring/Evals/nightly_rag_eval.jsonl`).
+
+### Embeddings A/B Persistence
+- `EVALS_ABTEST_PERSISTENCE`: Backend for embeddings A/B test storage. Defaults to `sqlalchemy` (or `repo`) which enables the SQLAlchemy repository with typed models. Set to any other value (for example `legacy`) to fall back to the previous SQLite helper implementation. Only the SQLite deployment path honors this toggle; Postgres deployments always use the legacy adapter.
 
 Notes:
 - In production (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the unified pipeline will default to enabling numeric fidelity and strict citations unless explicitly configured otherwise by the request.
@@ -347,3 +350,8 @@ Notes:
 - `WATCHLIST_TEMPLATE_DIR`: Override directory for watchlist templates (defaults to `Config_Files/templates/watchlists`).
 - `EMAIL_PROVIDER`: Delivery backend for NotificationsService (`mock`, `smtp`, ...). Defaults to `mock` for local setups.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`: SMTP settings consumed by NotificationsService when `EMAIL_PROVIDER=smtp`.
+
+
+## Privilege Maps Snapshot Workflow
+- `PRIVILEGE_METADATA_VALIDATE_ON_STARTUP`: Defaults to `1`. Set to `0` when running tests that inject a fake privilege service to bypass catalog validation.
+- Snapshot guard: CI compares the live privilege route registry (collected at runtime) against `tldw_Server_API/tests/fixtures/privilege_route_registry_snapshot.json`. If the snapshot drifts, CI fails with guidance to rerun `python Helper_Scripts/update_privilege_registry_snapshot.py` and commit the refreshed file. Use this script whenever you intentionally add or modify FastAPI routes or privilege dependencies.

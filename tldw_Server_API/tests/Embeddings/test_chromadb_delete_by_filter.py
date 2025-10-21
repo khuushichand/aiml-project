@@ -25,8 +25,8 @@ def test_chromadb_delete_by_filter_stub(monkeypatch):
             pass
     chroma_mod.Client = _Client
     chroma_mod.PersistentClient = _Client
-    sys.modules["chromadb"] = chroma_mod
-    sys.modules["chromadb.config"] = chroma_cfg
+    monkeypatch.setitem(sys.modules, "chromadb", chroma_mod)
+    monkeypatch.setitem(sys.modules, "chromadb.config", chroma_cfg)
 
     # Import adapter after injecting dummy chromadb
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import ChromaDBAdapter

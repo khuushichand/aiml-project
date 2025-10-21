@@ -176,17 +176,24 @@ def privilege_test_client():
                     "endpoint": "/api/v1/media/process",
                     "method": "POST",
                     "privilege_scope_id": "media.ingest",
-                    "feature_flag_id": None,
+                    "feature_flag_id": "media_ingest_beta",
                     "sensitivity_tier": "high",
                     "ownership_predicates": ["same_org"],
                     "status": "allowed",
                     "blocked_reason": None,
-                    "dependencies": ["require_token_scope"],
+                    "dependencies": [
+                        {
+                            "id": "auth.require_token_scope",
+                            "type": "dependency",
+                            "module": "tldw.fake.auth",
+                        }
+                    ],
                     "dependency_sources": ["tldw.fake.require_token_scope"],
-                    "rate_limit_class": "standard",
+                    "rate_limit_class": "elevated",
                     "rate_limit_resources": ["media.ingest"],
+                    "source_module": "tests.fake.media",
                     "summary": "Ingest new media assets",
-                    "tags": ["media"],
+                    "tags": ["media", "ingestion"],
                 }
             ],
         )
@@ -291,6 +298,30 @@ def test_get_org_detail_pagination(privilege_test_client: TestClient):
     assert payload["items"], "Expected detail items to be present"
     statuses = {item["status"] for item in payload["items"]}
     assert statuses.issubset({"allowed", "blocked"})
+    first = payload["items"][0]
+    assert isinstance(first["dependencies"], list)
+    assert first["dependencies"], "Expected at least one dependency entry"
+    assert {"id", "type"}.issubset(first["dependencies"][0].keys())
+    assert isinstance(first["rate_limit_resources"], list)
+    assert first["source_module"]
+
+
+def test_org_detail_dependency_filter(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/org",
+        params={
+            "view": "detail",
+            "page": 1,
+            "page_size": 20,
+            "dependency": "ratelimit.media.catalog.view",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"], "Expected filtered results"
+    for item in payload["items"]:
+        dependency_ids = {dep["id"] for dep in item["dependencies"]}
+        assert "ratelimit.media.catalog.view" in dependency_ids
 
 
 def test_team_detail_filters(privilege_test_client: TestClient):
@@ -303,6 +334,24 @@ def test_team_detail_filters(privilege_test_client: TestClient):
     assert payload["total_items"] >= 1
     for item in payload["items"]:
         assert "media" in item["endpoint"]
+
+
+def test_team_detail_dependency_filter(privilege_test_client: TestClient):
+    response = privilege_test_client.get(
+        "/api/v1/privileges/teams/team-1",
+        params={
+            "view": "detail",
+            "page": 1,
+            "page_size": 20,
+            "dependency": "ratelimit.media.ingest",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    for item in payload["items"]:
+        dependency_ids = {dep["id"] for dep in item["dependencies"]}
+        assert "ratelimit.media.ingest" in dependency_ids
 
 
 def test_snapshot_list_filters(privilege_test_client: TestClient):

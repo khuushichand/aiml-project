@@ -184,6 +184,7 @@ async def test_privilege_service_honors_authnz_role_mappings(tmp_path, monkeypat
         page=1,
         page_size=50,
         resource=None,
+        dependency=None,
         role_filter=None,
     )
     ingest_rows = [

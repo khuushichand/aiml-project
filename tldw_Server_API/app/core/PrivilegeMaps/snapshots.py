@@ -215,11 +215,11 @@ class PrivilegeSnapshotStore:
                     now_iso,
                 ),
             )
+            await conn.execute(
+                "DELETE FROM privilege_snapshot_details WHERE snapshot_id = ?",
+                (snapshot_id,),
+            )
             if detail_payload:
-                await conn.execute(
-                    "DELETE FROM privilege_snapshot_details WHERE snapshot_id = ?",
-                    (snapshot_id,),
-                )
                 await self._insert_snapshot_details(conn, snapshot_id, detail_payload, now_iso)
 
     async def clear(self) -> None:

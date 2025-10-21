@@ -24,8 +24,8 @@ def test_chroma_index_info_has_no_ef_search(monkeypatch):
     chroma_mod.config = chroma_cfg
     chroma_mod.Client = _Client
     chroma_mod.PersistentClient = _Client
-    sys.modules["chromadb"] = chroma_mod
-    sys.modules["chromadb.config"] = chroma_cfg
+    monkeypatch.setitem(sys.modules, "chromadb", chroma_mod)
+    monkeypatch.setitem(sys.modules, "chromadb.config", chroma_cfg)
 
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
         VectorStoreConfig,
@@ -56,4 +56,3 @@ def test_chroma_index_info_has_no_ef_search(monkeypatch):
         assert "ef_search" not in info
 
     asyncio.run(_run())
-

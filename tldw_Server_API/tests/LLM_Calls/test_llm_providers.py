@@ -549,8 +549,7 @@ class TestIntegration:
                 )
                 for i in range(5)
             ]
-            
-        results = await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
         assert len(results) == 5
         assert all(r["choices"][0]["message"]["content"] == "Response" for r in results)
 

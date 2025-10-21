@@ -35,6 +35,7 @@
 - Require catalog-backed metadata on routes/dependencies: `privilege_scope_id`, `feature_flag_id` (optional), `sensitivity_tier`, `rate_limit_class`, `ownership_predicates`.
 - Cache results per user/org/team with invalidation on role/config changes and manual refresh support.
 - Include `catalog_version`, `generated_at`, and cache metadata in all responses.
+- Maintain a deterministic serialized registry of scope→route mappings; publish diffs in CI so catalog drift is surfaced immediately.
 
 ### API Endpoints
 - `GET /api/v1/privileges/self`
@@ -49,6 +50,7 @@
 ### Summary & Detail Contracts
 - Summary endpoints support `group_by` (org: `role|team|resource`; team: `member|resource`), optional `since`, `include_trends`; responses include `trends` arrays when requested. Each trend object contains `{ "key": "<bucket identifier>", "window": { "start": "<ISO8601>", "end": "<ISO8601>" }, "delta_users": <int>, "delta_endpoints": <int>, "delta_scopes": <int> }`. If `since` is omitted, `window.start` defaults to 30 days prior to `generated_at`.
 - Detail endpoints enforce pagination (`page`, `page_size <= 500`), reject >50k row pulls, and expose per-user scope status (`allowed|blocked` with `blocked_reason`). Supported filters: `resource`, `role` (org/team detail), `view=summary|detail`, and enforce `429` when clients skip pagination.
+- Detail endpoints also accept `dependency` to filter by dependency id (including derived rate-limit entries such as `ratelimit.media.ingest`), enabling operators to audit specific enforcement hooks.
 - Detail item schema (applies to user/team/org detail and snapshot detail):
   ```json
   {
@@ -146,6 +148,7 @@
 ## Testing Strategy
 - Unit tests for catalog loader, evaluator edge cases, snapshot store DDL & retention logic.
 - Integration tests for all endpoints (summary/detail/self/snapshot create/list/detail/export) covering filters, pagination, auth guards, and error cases. Include distributed cache invalidation scenario (two app instances) and trend window variations.
+- Automated CI guard compares the serialized route registry against a checked-in snapshot (`Helper_Scripts/update_privilege_registry_snapshot.py` regenerates the fixture when intentional changes occur).
 - Performance tests with synthetic datasets (10k users, 1k endpoints) to verify pagination guardrails.
 - Negative tests ensuring unauthorized access and invalid scope inputs raise appropriate errors.
 - UI automated tests cover admin/org/team/self pages, export downloads, and “request access” CTA flows; browser-based smoke suite runs nightly.

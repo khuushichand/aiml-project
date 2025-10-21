@@ -88,6 +88,7 @@ async def get_org_privilege_map(
     page_size: int = Query(100, ge=1, le=500),
     resource: Optional[str] = Query(None),
     role: Optional[str] = Query(None),
+    dependency: Optional[str] = Query(None),
     current_user: Dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeOrgResponse:
@@ -98,6 +99,7 @@ async def get_org_privilege_map(
                 page=page,
                 page_size=page_size,
                 resource=resource,
+                dependency=dependency,
                 role_filter=role,
             )
         return await service.get_org_summary(
@@ -120,6 +122,7 @@ async def get_team_privilege_map(
     page_size: int = Query(100, ge=1, le=500),
     resource: Optional[str] = Query(None),
     role: Optional[str] = Query(None),
+    dependency: Optional[str] = Query(None),
     include_trends: bool = Query(False),
     since: Optional[datetime] = Query(None),
     current_user: Dict[str, Any] = Depends(require_privilege_admin),
@@ -133,6 +136,7 @@ async def get_team_privilege_map(
                 page=page,
                 page_size=page_size,
                 resource=resource,
+                dependency=dependency,
                 role_filter=role,
             )
         return await service.get_team_summary(

@@ -32,6 +32,7 @@ scopes:
     description: Execute RAG searches across organization knowledge bases.
     resource_tags:
       - rag
+      - search
     sensitivity_tier: moderate
     rate_limit_class: elevated
     default_roles:

@@ -212,10 +212,16 @@ class PrivilegeMapService:
         page: int,
         page_size: int,
         resource: Optional[str],
+        dependency: Optional[str],
         role_filter: Optional[str],
     ) -> Dict[str, Any]:
         users = await self._fetch_users()
-        items = self._build_detail_items(users, resource_filter=resource, role_filter=role_filter)
+        items = self._build_detail_items(
+            users,
+            resource_filter=resource,
+            dependency_filter=dependency,
+            role_filter=role_filter,
+        )
         return self._paginate_detail(items, page=page, page_size=page_size)
 
     async def get_team_summary(
@@ -292,6 +298,7 @@ class PrivilegeMapService:
         page: int,
         page_size: int,
         resource: Optional[str],
+        dependency: Optional[str],
         role_filter: Optional[str],
     ) -> Dict[str, Any]:
         users = await self._fetch_users()
@@ -299,6 +306,7 @@ class PrivilegeMapService:
         items = self._build_detail_items(
             team_users,
             resource_filter=resource,
+            dependency_filter=dependency,
             role_filter=role_filter,
             restrict_to_team=team_id,
         )
@@ -886,11 +894,13 @@ class PrivilegeMapService:
         users: Sequence[Dict[str, Any]],
         *,
         resource_filter: Optional[str],
+        dependency_filter: Optional[str] = None,
         role_filter: Optional[str] = None,
         restrict_to_team: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         resource_filter_lower = resource_filter.lower() if resource_filter else None
+        dependency_filter_lower = dependency_filter.lower() if dependency_filter else None
         for user in users:
             role = user.get("primary_role") or "user"
             if role_filter and role != role_filter:
@@ -910,36 +920,45 @@ class PrivilegeMapService:
                     for method in route_meta.methods_or_any:
                         status = "allowed"
                         blocked_reason = None
-                    if scope.feature_flag_id and scope.feature_flag_id not in feature_flags:
-                        status = "blocked"
-                        blocked_reason = "feature_flag_disabled"
-                    elif scope.id not in allowed_scopes:
-                        status = "blocked"
-                        blocked_reason = "missing_scope"
-                    dependency_payload = [
-                        {
-                            "id": dep.id,
-                            "type": dep.type,
-                            "module": dep.module,
-                        }
-                        for dep in route_meta.dependencies
-                    ]
-                    for resource in route_meta.rate_limit_resources:
-                        dependency_payload.append(
+                        if scope.feature_flag_id and scope.feature_flag_id not in feature_flags:
+                            status = "blocked"
+                            blocked_reason = "feature_flag_disabled"
+                        elif scope.id not in allowed_scopes:
+                            status = "blocked"
+                            blocked_reason = "missing_scope"
+
+                        dependency_entries = [
+                            {
+                                "id": dep.id,
+                                "type": dep.type,
+                                "module": dep.module,
+                            }
+                            for dep in route_meta.dependencies
+                        ]
+                        rate_limit_entries = [
                             {
                                 "id": f"ratelimit.{resource}",
                                 "type": "rate_limit",
                                 "module": None,
                             }
-                        )
-                    source_module = None
-                    if route_meta.endpoint:
-                        source_module = route_meta.endpoint.rsplit(".", 1)[0]
-                    items.append(
-                        {
-                            "user_id": str(user.get("id")),
-                            "user_name": user.get("username") or "",
-                            "role": role,
+                            for resource in route_meta.rate_limit_resources
+                        ]
+                        if dependency_filter_lower:
+                            candidate_ids = {entry["id"].lower() for entry in dependency_entries}
+                            candidate_ids.update(entry["id"].lower() for entry in rate_limit_entries)
+                            if dependency_filter_lower not in candidate_ids:
+                                continue
+
+                        dependency_payload = dependency_entries + rate_limit_entries
+                        source_module = None
+                        if route_meta.endpoint:
+                            source_module = route_meta.endpoint.rsplit(".", 1)[0]
+
+                        items.append(
+                            {
+                                "user_id": str(user.get("id")),
+                                "user_name": user.get("username") or "",
+                                "role": role,
                                 "endpoint": route_meta.path,
                                 "method": method,
                                 "privilege_scope_id": scope.id,
