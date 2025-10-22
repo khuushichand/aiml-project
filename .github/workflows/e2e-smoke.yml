@@ -81,51 +81,14 @@ jobs:
           SINGLE_USER_API_KEY: "test-api-key-12345"
         shell: bash
         run: |
-          python - <<'PY'
-          import os, subprocess, sys, pathlib
-          label = os.environ.get("SERVER_LABEL", "server")
-          pid_path = pathlib.Path(f"server-{label}.pid")
-          log_path = pathlib.Path(f"server-{label}.log")
-          env = os.environ.copy()
-          cmd = [
-              sys.executable,
-              "-m",
-              "uvicorn",
-              "tldw_Server_API.app.main:app",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              os.environ.get("SERVER_PORT", "8000"),
-          ]
-          with log_path.open("w", encoding="utf-8") as log_file:
-              proc = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=log_file)
-          pid_path.write_text(str(proc.pid), encoding="utf-8")
-          PY
+          python tldw_Server_API/scripts/server_lifecycle.py start
 
       - name: Wait for API health (single-user)
         env:
           SERVER_LABEL: single
         shell: bash
         run: |
-          python - <<'PY'
-          import os, sys, time, urllib.request, pathlib
-          label = os.environ.get("SERVER_LABEL", "server")
-          base_url = os.environ.get("E2E_TEST_BASE_URL", "http://127.0.0.1:8000")
-          url = base_url.rstrip("/") + "/api/v1/health"
-          for attempt in range(60):
-              try:
-                  with urllib.request.urlopen(url, timeout=2) as resp:
-                      if resp.status == 200:
-                          break
-              except Exception:
-                  time.sleep(2)
-          else:
-              log_path = pathlib.Path(f"server-{label}.log")
-              if log_path.exists():
-                  print("===== server log tail (single-user) =====")
-                  print(log_path.read_text(encoding="utf-8")[-4000:], flush=True)
-              sys.exit("Server failed to become healthy in time")
-          PY
+          python tldw_Server_API/scripts/server_lifecycle.py health-check
 
       - name: Run E2E tests (single-user)
         env:
@@ -147,34 +110,7 @@ jobs:
           SERVER_LABEL: single
         shell: bash
         run: |
-          python - <<'PY'
-          import os, signal, pathlib, time, sys
-          label = os.environ.get("SERVER_LABEL", "server")
-          pid_path = pathlib.Path(f"server-{label}.pid")
-          if not pid_path.exists():
-              sys.exit(0)
-          try:
-              pid = int(pid_path.read_text(encoding="utf-8").strip())
-          except Exception:
-              sys.exit(0)
-          try:
-              os.kill(pid, signal.SIGTERM)
-          except OSError:
-              sys.exit(0)
-          for _ in range(30):
-              try:
-                  os.kill(pid, 0)
-              except OSError:
-                  pid_path.unlink(missing_ok=True)
-                  sys.exit(0)
-              time.sleep(1)
-          try:
-              kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-              os.kill(pid, kill_signal)
-          except OSError:
-              pass
-          pid_path.unlink(missing_ok=True)
-          PY
+          python tldw_Server_API/scripts/server_lifecycle.py stop
 
       - name: Print server log (single-user)
         if: failure()
@@ -197,51 +133,14 @@ jobs:
           AUTH_MODE: multi_user
         shell: bash
         run: |
-          python - <<'PY'
-          import os, subprocess, sys, pathlib
-          label = os.environ.get("SERVER_LABEL", "server")
-          pid_path = pathlib.Path(f"server-{label}.pid")
-          log_path = pathlib.Path(f"server-{label}.log")
-          env = os.environ.copy()
-          cmd = [
-              sys.executable,
-              "-m",
-              "uvicorn",
-              "tldw_Server_API.app.main:app",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              os.environ.get("SERVER_PORT", "8000"),
-          ]
-          with log_path.open("w", encoding="utf-8") as log_file:
-              proc = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=log_file)
-          pid_path.write_text(str(proc.pid), encoding="utf-8")
-          PY
+          python tldw_Server_API/scripts/server_lifecycle.py start
 
       - name: Wait for API health (multi-user)
         env:
           SERVER_LABEL: multi
         shell: bash
         run: |
-          python - <<'PY'
-          import os, sys, time, urllib.request, pathlib
-          label = os.environ.get("SERVER_LABEL", "server")
-          base_url = os.environ.get("E2E_TEST_BASE_URL", "http://127.0.0.1:8000")
-          url = base_url.rstrip("/") + "/api/v1/health"
-          for attempt in range(60):
-              try:
-                  with urllib.request.urlopen(url, timeout=2) as resp:
-                      if resp.status == 200:
-                          break
-              except Exception:
-                  time.sleep(2)
-          else:
-              log_path = pathlib.Path(f"server-{label}.log")
-              if log_path.exists():
-                  print("===== server log tail (multi-user) =====")
-                  print(log_path.read_text(encoding="utf-8")[-4000:], flush=True)
-              sys.exit("Server failed to become healthy in time")
-          PY
+          python tldw_Server_API/scripts/server_lifecycle.py health-check
 
       - name: Run E2E tests (multi-user)
         env:
@@ -257,34 +156,7 @@ jobs:
           SERVER_LABEL: multi
         shell: bash
         run: |
-          python - <<'PY'
-          import os, signal, pathlib, time, sys
-          label = os.environ.get("SERVER_LABEL", "server")
-          pid_path = pathlib.Path(f"server-{label}.pid")
-          if not pid_path.exists():
-              sys.exit(0)
-          try:
-              pid = int(pid_path.read_text(encoding="utf-8").strip())
-          except Exception:
-              sys.exit(0)
-          try:
-              os.kill(pid, signal.SIGTERM)
-          except OSError:
-              sys.exit(0)
-          for _ in range(30):
-              try:
-                  os.kill(pid, 0)
-              except OSError:
-                  pid_path.unlink(missing_ok=True)
-                  sys.exit(0)
-              time.sleep(1)
-          try:
-              kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-              os.kill(pid, kill_signal)
-          except OSError:
-              pass
-          pid_path.unlink(missing_ok=True)
-          PY
+          python tldw_Server_API/scripts/server_lifecycle.py stop
 
       - name: Print server log (multi-user)
         if: failure()

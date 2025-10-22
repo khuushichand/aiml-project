@@ -1,123 +1,98 @@
-import os
-import time
-import socket
 import contextlib
-import subprocess
-import threading
-
-
-class _ProcLogger:
-    def __init__(self, proc: subprocess.Popen):
-        self._proc = proc
-        self.buffer = []
-        self._t = threading.Thread(target=self._reader, daemon=True)
-        self._t.start()
-
-    def _reader(self):
-        try:
-            if not self._proc.stdout:
-                return
-            for line in iter(self._proc.stdout.readline, b""):
-                try:
-                    s = line.decode(errors="ignore").rstrip()
-                except Exception:
-                    s = str(line)
-                self.buffer.append(s)
-                # Prevent unbounded growth
-                if len(self.buffer) > 1000:
-                    self.buffer = self.buffer[-1000:]
-        except Exception:
-            pass
+import os
+import socket
+from pathlib import Path
+from typing import Dict, Optional
 
 import pytest
 
-try:
-    import requests
-except Exception:  # requests might not be installed; fallback to stdlib
-    requests = None
-    import urllib.request
+from tldw_Server_API.scripts import server_lifecycle
 
 
-def _find_free_port():
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
+def _find_free_port() -> int:
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.bind(("", 0))
+        return sock.getsockname()[1]
+
+
+def _set_env(overrides: Dict[str, str]) -> Dict[str, Optional[str]]:
+    original = {key: os.environ.get(key) for key in overrides}
+    for key, value in overrides.items():
+        os.environ[key] = value
+    return original
+
+
+def _restore_env(original: Dict[str, Optional[str]]) -> None:
+    for key, value in original.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _print_server_log(label: str) -> None:
+    log_path = Path(f"server-{label}.log")
+    if log_path.exists():
+        print(f"===== server log ({label}) =====")
+        try:
+            print(log_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
 
 
 @pytest.fixture(scope="session")
-def server_url():
+def server_url() -> str:
     port = _find_free_port()
-    env = os.environ.copy()
-    env["AUTH_MODE"] = "single_user"
-    # Use a key >=16 chars to satisfy settings validation
-    env["SINGLE_USER_API_KEY"] = os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID")
-    env["TEST_MODE"] = "true"
-    # Avoid any optional background workers that could slow startup
-    env["EPHEMERAL_CLEANUP_ENABLED"] = "false"
-    env["CLAIMS_REBUILD_ENABLED"] = "false"
+    base_url = f"http://127.0.0.1:{port}"
+    label = os.environ.get("SERVER_LABEL", "webui")
 
-    proc = subprocess.Popen(
-        [
-            "python",
-            "-m",
-            "uvicorn",
-            "tldw_Server_API.app.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--log-level",
-            "warning",
-        ],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    logger = _ProcLogger(proc)
+    overrides = {
+        "SERVER_LABEL": label,
+        "SERVER_PORT": str(port),
+        "E2E_TEST_BASE_URL": base_url,
+        "AUTH_MODE": "single_user",
+        "SINGLE_USER_API_KEY": os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID"),
+        "TEST_MODE": "true",
+        "EPHEMERAL_CLEANUP_ENABLED": "false",
+        "CLAIMS_REBUILD_ENABLED": "false",
+    }
 
-    base = f"http://127.0.0.1:{port}"
-    # Wait for readiness (increase timeout for slower startups)
-    for _ in range(360):  # up to ~90s
-        try:
-            if requests:
-                r = requests.get(f"{base}/health", timeout=1)
-                ok = r.status_code in (200, 206)
-            else:
-                with urllib.request.urlopen(f"{base}/health", timeout=1) as resp:
-                    ok = resp.status in (200, 206)
-            if ok:
-                break
-        except Exception:
-            pass
-        time.sleep(0.25)
-    else:
-        proc.terminate()
-        # Emit captured log lines to help diagnose
-        logs = "\n".join(logger.buffer[-200:])
-        raise RuntimeError(f"Server failed to start in time. Recent logs:\n{logs}")
+    original_env = _set_env(overrides)
 
-    yield base
-
-    proc.terminate()
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        server_lifecycle.start_server()
+        server_lifecycle.health_check()
+    except Exception:
+        _print_server_log(label)
+        _restore_env(original_env)
+        raise
+
+    try:
+        yield base_url
+    finally:
+        try:
+            server_lifecycle.stop_server()
+        finally:
+            _restore_env(original_env)
 
 
 @pytest.fixture(scope="session")
 def browser():
     from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        yield browser
-        browser.close()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            yield browser
+        finally:
+            browser.close()
 
 
 @pytest.fixture
-def page(browser, server_url):
+def page(server_url: str, browser):
     context = browser.new_context(base_url=server_url)
-    page = context.new_page()
-    yield page
-    context.close()
+    try:
+        page = context.new_page()
+        yield page
+    finally:
+        context.close()

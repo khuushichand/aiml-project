@@ -890,14 +890,13 @@ jobs:
           MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
           MCP_PROMETHEUS_PUBLIC: '1'
         run: |
-          nohup python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
-          echo $! > server.pid
+          export SERVER_LABEL=mcp
+          python tldw_Server_API/scripts/server_lifecycle.py start
 
       - name: Wait for MCP status
         run: |
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:8000/api/v1/mcp/status >/dev/null; then
-              echo "MCP status OK"; exit 0; fi; sleep 2; done; exit 1
+          export SERVER_LABEL=mcp
+          python tldw_Server_API/scripts/server_lifecycle.py health-check
 
       - name: Scrape Prometheus metrics
         run: |
@@ -909,13 +908,21 @@ jobs:
       - name: Print server logs (on failure)
         if: failure()
         run: |
-          echo '===== server.log ====='
-          cat server.log || true
+          export SERVER_LABEL=mcp
+          python - <<'PY'
+          import os, pathlib
+          label = os.environ.get("SERVER_LABEL", "server")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print('===== server log =====')
+              print(log_path.read_text(encoding='utf-8'))
+          PY
 
       - name: Stop server
         if: always()
         run: |
-          kill $(cat server.pid) || true
+          export SERVER_LABEL=mcp
+          python tldw_Server_API/scripts/server_lifecycle.py stop
 
   mcp-tests:
     name: MCP Tests (gated)
