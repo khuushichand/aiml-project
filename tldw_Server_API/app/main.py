@@ -1655,6 +1655,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping request queue: {e}")
 
+    # Shutdown Evaluations connection manager (stops maintenance thread for tests)
+    try:
+        from tldw_Server_API.app.core.Evaluations.connection_pool import connection_manager
+
+        if connection_manager is not None:
+            connection_manager.shutdown()
+            logger.info("App Shutdown: Evaluations connection manager shutdown")
+    except Exception as e:
+        logger.error(f"App Shutdown: Error shutting down evaluations connection manager: {e}")
+
     # Shutdown Unified Audit Services (via DI cache)
     try:
         from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (

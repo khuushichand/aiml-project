@@ -1,5 +1,6 @@
 """Simplified test configuration that works with the existing system."""
 
+import asyncio
 import pytest
 import tempfile
 import os
@@ -20,8 +21,19 @@ except Exception:  # pragma: no cover
     ASGITransport = None
 
 # Set environment variables BEFORE any tldw imports
-os.environ["OPENAI_API_KEY"] = "sk-mock-key-12345"
-os.environ["OPENAI_API_BASE"] = "http://localhost:8080/v1"
+_ORIG_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+_ORIG_OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE")
+
+if _ORIG_OPENAI_API_KEY is None:
+    os.environ["OPENAI_API_KEY"] = ""
+    _SET_MOCK_OPENAI_KEY = True
+else:
+    _SET_MOCK_OPENAI_KEY = False
+
+_SET_MOCK_OPENAI_BASE = False
+if not _ORIG_OPENAI_API_BASE and _SET_MOCK_OPENAI_KEY:
+    os.environ["OPENAI_API_BASE"] = "http://localhost:8080/v1"
+    _SET_MOCK_OPENAI_BASE = True
 
 # IMPORTANT: Ensure API_BEARER is not set - it causes wrong authentication path in single-user mode
 if "API_BEARER" in os.environ:
@@ -44,6 +56,58 @@ _mock_server_state = {"server": None, "thread": None, "base_url": None}
 
 # Global variable to store original dependency overrides
 _original_dependency_overrides = None
+
+
+def _run_coro_safely(coro):
+    """Run the given coroutine, even if an event loop is already running."""
+    try:
+        asyncio.run(coro)
+        return
+    except RuntimeError:
+        # Fall back to a dedicated loop when we're inside an active asyncio loop.
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(coro)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
+def _stop_request_queue():
+    """Stop the global chat request queue to avoid cross-test leakage."""
+    try:
+        from tldw_Server_API.app.core.Chat import request_queue as rq_mod
+    except Exception:
+        return
+
+    queue = rq_mod.get_request_queue()
+    if queue is None:
+        return
+
+    async def _stop():
+        try:
+            await queue.stop()
+        except Exception:
+            pass
+
+    _run_coro_safely(_stop())
+
+    # Clear the module-level singleton so future startups get a clean queue.
+    try:
+        rq_mod._request_queue = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _reset_rate_limiter():
+    """Reinitialise the chat rate limiter with the current TEST_* env values."""
+    try:
+        from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter
+
+        initialize_rate_limiter()
+    except Exception:
+        pass
 
 
 def cleanup_mock_server():
@@ -86,6 +150,18 @@ def preserve_app_state():
     # Restore the original state at the end of the test session
     app.dependency_overrides = _original_dependency_overrides.copy()
 
+    # Restore OpenAI environment variables if we set test defaults
+    if _SET_MOCK_OPENAI_KEY:
+        if _ORIG_OPENAI_API_KEY is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = _ORIG_OPENAI_API_KEY
+    if _SET_MOCK_OPENAI_BASE:
+        if _ORIG_OPENAI_API_BASE is None:
+            os.environ.pop("OPENAI_API_BASE", None)
+        else:
+            os.environ["OPENAI_API_BASE"] = _ORIG_OPENAI_API_BASE
+
 
 @pytest.fixture(autouse=True)
 def reset_app_overrides():
@@ -97,6 +173,9 @@ def reset_app_overrides():
         app.dependency_overrides = _original_dependency_overrides.copy()
     else:
         app.dependency_overrides.clear()
+
+    _stop_request_queue()
+    _reset_rate_limiter()
     
     yield
     
@@ -105,6 +184,9 @@ def reset_app_overrides():
         app.dependency_overrides = _original_dependency_overrides.copy()
     else:
         app.dependency_overrides.clear()
+
+    _stop_request_queue()
+    _reset_rate_limiter()
 
 
 @pytest.fixture(scope="session")

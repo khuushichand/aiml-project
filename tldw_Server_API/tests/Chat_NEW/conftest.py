@@ -54,6 +54,52 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 )
 
 # =====================================================================
+# Default LLM call mocking
+# =====================================================================
+
+@pytest.fixture(autouse=True)
+def _mock_perform_chat_api_call(monkeypatch):
+    """
+    Provide a deterministic fake LLM response so integration tests do not rely on
+    external OpenAI connectivity. Tests that need custom behaviour can override
+    this by patching `perform_chat_api_call` in the test body.
+    """
+    from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
+
+    def _stream_generator():
+        chunks = [
+            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":"!"}}]}\n\n',
+            'data: [DONE]\n\n',
+        ]
+        for chunk in chunks:
+            yield chunk
+
+    def _fake_chat_call(api_endpoint: str, messages_payload, *, streaming: bool | None = None, **kwargs):
+        stream_flag = streaming or kwargs.get("stream")
+
+        if stream_flag:
+            return _stream_generator()
+
+        return {
+            "id": "chatcmpl-mocked",
+            "object": "chat.completion",
+            "created": 1,
+            "model": kwargs.get("model") or "mock-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Mocked response"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
+
+    monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", _fake_chat_call)
+
+# =====================================================================
 # Test Markers
 # =====================================================================
 
