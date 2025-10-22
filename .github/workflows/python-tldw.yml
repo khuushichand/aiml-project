@@ -256,8 +256,70 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results-integration-${{ matrix.os }}-${{ matrix.python-version }}
-          path: test-results-integration-${{ matrix.os }}-${{ matrix.python-version }}.xml
+      name: test-results-integration-${{ matrix.os }}-${{ matrix.python-version }}
+      path: test-results-integration-${{ matrix.os }}-${{ matrix.python-version }}.xml
+
+  property-tests:
+    name: Property Tests - ${{ matrix.os }} - Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    needs: unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      TEST_MODE: "true"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install system dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install portaudio ffmpeg
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ffmpeg -y
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install email-validator
+          python -m pip install pytest-xdist
+          python -m pip install -e ".[dev]"
+        shell: bash
+
+      - name: Run property tests
+        run: |
+          pytest -v -m "property" -n auto --timeout=600 --junit-xml=test-results-property-${{ matrix.os }}-${{ matrix.python-version }}.xml
+        shell: bash
+        continue-on-error: true
+
+      - name: Upload property test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-property-${{ matrix.os }}-${{ matrix.python-version }}
+          path: test-results-property-${{ matrix.os }}-${{ matrix.python-version }}.xml
 
   postgres-tests:
     name: PostgreSQL Backend Tests
