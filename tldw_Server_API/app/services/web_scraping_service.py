@@ -14,7 +14,7 @@ from fastapi import HTTPException
 # Local Imports
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 # Import the enhanced service
@@ -187,7 +187,10 @@ async def process_web_scraping_task(
                 # Default to user_id 1 if not provided (single-user mode)
                 effective_user_id = 1  # Default for legacy fallback
                 db_path = get_user_media_db_path(effective_user_id)
-                db = MediaDatabase(db_path=db_path, client_id="webscraping_legacy_service")
+                db = create_media_database(
+                    client_id="webscraping_legacy_service",
+                    db_path=db_path,
+                )
                 
                 # Persist each article in the DB
                 media_ids = []

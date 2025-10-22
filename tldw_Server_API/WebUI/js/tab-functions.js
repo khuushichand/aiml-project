@@ -3561,6 +3561,8 @@ function resetFileTransRecMax() {
 // -----------------------------------------------------------------------------
 
 let _watchlistsSettingsLoaded = false;
+let _watchlistsSourcesInitialized = false;
+let _watchlistsScrapeAdvancedVisible = false;
 
 function watchlistsSetResponse(elementId, data) {
     const el = document.getElementById(elementId);
@@ -3592,6 +3594,33 @@ function watchlistsParseRecipients(value) {
     if (!value) return undefined;
     const parts = value.split(',').map((p) => p.trim()).filter(Boolean);
     return parts.length ? parts : undefined;
+}
+
+function watchlistsParseTags(value) {
+    if (!value) return undefined;
+    const parts = value.split(',').map((p) => p.trim()).filter(Boolean);
+    return parts.length ? parts : undefined;
+}
+
+function watchlistsNormalizeSelectorsInput(value) {
+    if (!value) return undefined;
+    const lines = value
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    if (!lines.length) return undefined;
+    return lines.length === 1 ? lines[0] : lines;
+}
+
+function watchlistsParseNumber(value, { allowZero = false } = {}) {
+    if (value === undefined || value === null) return undefined;
+    const trimmed = String(value).trim();
+    if (!trimmed) return undefined;
+    const num = Number(trimmed);
+    if (Number.isNaN(num)) return undefined;
+    if (!allowZero && num <= 0) return undefined;
+    if (allowZero && num < 0) return undefined;
+    return num;
 }
 
 async function watchlistsFetchSettings() {
@@ -3642,6 +3671,11 @@ async function initializeWatchlistsTab(contentId) {
         await watchlistsFetchSettings();
         await watchlistsRefreshTemplatePicker();
         _watchlistsSettingsLoaded = true;
+        if (!_watchlistsSourcesInitialized) {
+            watchlistsResetSourceForm();
+            await watchlistsListSources();
+            _watchlistsSourcesInitialized = true;
+        }
     }
     if (contentId === 'tabWatchlistsTemplates') {
         await watchlistsListTemplates(false);
@@ -3903,6 +3937,196 @@ async function watchlistsCreateTemplate() {
         await watchlistsListTemplates();
     } catch (err) {
         watchlistsSetResponse('watchlistsTemplateCreate_response', `Error: ${err.message}`);
+    }
+}
+
+function watchlistsSourceTypeChanged() {
+    const typeEl = document.getElementById('watchlistsSource_type');
+    const siteFields = document.getElementById('watchlistsSource_siteFields');
+    const rssFields = document.getElementById('watchlistsSource_rssFields');
+    if (!typeEl || !siteFields || !rssFields) return;
+    const type = typeEl.value || 'site';
+    if (type === 'rss') {
+        rssFields.style.display = 'block';
+        siteFields.style.display = 'none';
+    } else {
+        rssFields.style.display = 'none';
+        siteFields.style.display = 'block';
+    }
+}
+
+function watchlistsToggleScrapeAdvanced(forceState) {
+    const container = document.getElementById('watchlistsSource_scrapeAdvanced');
+    if (!container) return;
+    if (typeof forceState === 'boolean') {
+        _watchlistsScrapeAdvancedVisible = forceState;
+    } else {
+        _watchlistsScrapeAdvancedVisible = !_watchlistsScrapeAdvancedVisible;
+    }
+    container.style.display = _watchlistsScrapeAdvancedVisible ? 'block' : 'none';
+}
+
+function watchlistsSyncListUrl() {
+    const urlEl = document.getElementById('watchlistsSource_url');
+    const listEl = document.getElementById('watchlistsSource_listUrl');
+    if (!urlEl || !listEl) return;
+    if (!listEl.value || !listEl.value.trim()) {
+        listEl.value = urlEl.value;
+    }
+}
+
+function watchlistsResetSourceForm({ keepResponse = false } = {}) {
+    const setValue = (id, value = '') => {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    };
+    setValue('watchlistsSource_name');
+    setValue('watchlistsSource_url');
+    setValue('watchlistsSource_tags');
+    setValue('watchlistsSource_rssLimit', '');
+    setValue('watchlistsSource_topN', '');
+    setValue('watchlistsSource_discover', 'auto');
+    setValue('watchlistsSource_limit', '');
+    setValue('watchlistsSource_listUrl', '');
+    setValue('watchlistsSource_entrySelectors', '');
+    setValue('watchlistsSource_linkSelectors', '');
+    setValue('watchlistsSource_titleSelectors', '');
+    setValue('watchlistsSource_summarySelectors', '');
+    setValue('watchlistsSource_contentSelectors', '');
+    setValue('watchlistsSource_authorSelectors', '');
+    setValue('watchlistsSource_publishedSelectors', '');
+    setValue('watchlistsSource_publishedFormat', '');
+    setValue('watchlistsSource_summaryJoin', ' ');
+    setValue('watchlistsSource_contentJoin', '\n\n');
+    setValue('watchlistsSource_nextSelectors', '');
+    setValue('watchlistsSource_nextAttr', 'href');
+    setValue('watchlistsSource_maxPages', '2');
+    const typeEl = document.getElementById('watchlistsSource_type');
+    if (typeEl) typeEl.value = 'site';
+    const activeEl = document.getElementById('watchlistsSource_active');
+    if (activeEl) activeEl.checked = true;
+    const skipEl = document.getElementById('watchlistsSource_skipArticle');
+    if (skipEl) skipEl.checked = false;
+    watchlistsSourceTypeChanged();
+    watchlistsToggleScrapeAdvanced(false);
+    if (!keepResponse) {
+        watchlistsSetResponse('watchlistsSource_createResponse', '---');
+    }
+}
+
+async function watchlistsListSources() {
+    try {
+        const page = document.getElementById('watchlistsSources_page')?.value || '1';
+        const size = document.getElementById('watchlistsSources_size')?.value || '50';
+        const tag = document.getElementById('watchlistsSources_tag')?.value || '';
+        const params = {
+            page: Number(page),
+            size: Number(size),
+        };
+        const tagList = watchlistsParseTags(tag);
+        if (tagList) params.tags = tagList;
+        const res = await apiClient.get('/api/v1/watchlists/sources', params);
+        watchlistsSetResponse('watchlistsSources_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsSources_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsCreateSource() {
+    try {
+        const name = document.getElementById('watchlistsSource_name')?.value?.trim();
+        const url = document.getElementById('watchlistsSource_url')?.value?.trim();
+        if (!name || !url) {
+            throw new Error('Name and URL are required');
+        }
+        const type = document.getElementById('watchlistsSource_type')?.value || 'site';
+        const active = !!document.getElementById('watchlistsSource_active')?.checked;
+        const tags = watchlistsParseTags(document.getElementById('watchlistsSource_tags')?.value || '');
+
+        const payload = {
+            name,
+            url,
+            source_type: type,
+            active,
+        };
+        if (tags) payload.tags = tags;
+
+        const settings = {};
+
+        if (type === 'rss') {
+            const limit = watchlistsParseNumber(document.getElementById('watchlistsSource_rssLimit')?.value);
+            if (limit !== undefined) settings.limit = limit;
+        } else {
+            const topN = watchlistsParseNumber(document.getElementById('watchlistsSource_topN')?.value);
+            if (topN !== undefined) settings.top_n = topN;
+            const discover = document.getElementById('watchlistsSource_discover')?.value?.trim();
+            if (discover) settings.discover_method = discover;
+            const siteLimit = watchlistsParseNumber(document.getElementById('watchlistsSource_limit')?.value);
+            const rules = {};
+            const listUrlRaw = document.getElementById('watchlistsSource_listUrl')?.value?.trim();
+            const listUrl = listUrlRaw || url;
+            if (listUrl) rules.list_url = listUrl;
+            if (siteLimit !== undefined) rules.limit = siteLimit;
+
+            const entrySelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_entrySelectors')?.value || '');
+            if (entrySelectors) rules.entry_xpath = entrySelectors;
+            const linkSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_linkSelectors')?.value || '');
+            if (linkSelectors) rules.link_xpath = linkSelectors;
+            const titleSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_titleSelectors')?.value || '');
+            if (titleSelectors) rules.title_xpath = titleSelectors;
+            const summarySelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_summarySelectors')?.value || '');
+            if (summarySelectors) rules.summary_xpath = summarySelectors;
+            const contentSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_contentSelectors')?.value || '');
+            if (contentSelectors) rules.content_xpath = contentSelectors;
+            const authorSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_authorSelectors')?.value || '');
+            if (authorSelectors) rules.author_xpath = authorSelectors;
+            const publishedSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_publishedSelectors')?.value || '');
+            if (publishedSelectors) rules.published_xpath = publishedSelectors;
+            const publishedFormat = document.getElementById('watchlistsSource_publishedFormat')?.value?.trim();
+            if (publishedFormat) rules.published_format = publishedFormat;
+            const summaryJoin = document.getElementById('watchlistsSource_summaryJoin')?.value ?? '';
+            if (summaryJoin.trim().length > 0) rules.summary_join_with = summaryJoin;
+            const contentJoin = document.getElementById('watchlistsSource_contentJoin')?.value ?? '';
+            if (contentJoin.trim().length > 0) rules.content_join_with = contentJoin;
+            if (document.getElementById('watchlistsSource_skipArticle')?.checked) {
+                rules.skip_article_fetch = true;
+            }
+
+            const pagination = {};
+            const nextSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_nextSelectors')?.value || '');
+            if (nextSelectors) pagination.next_xpath = nextSelectors;
+            const nextAttr = document.getElementById('watchlistsSource_nextAttr')?.value?.trim();
+            if (nextAttr && nextAttr !== 'href') {
+                pagination.next_attribute = nextAttr;
+            }
+            const maxPages = watchlistsParseNumber(document.getElementById('watchlistsSource_maxPages')?.value);
+            if (maxPages !== undefined) {
+                pagination.max_pages = maxPages;
+            }
+            if (Object.keys(pagination).length > 0) {
+                rules.pagination = pagination;
+            }
+
+            if (Object.keys(rules).length > 0) {
+                settings.scrape_rules = rules;
+            }
+        }
+
+        if (Object.keys(settings).length > 0) {
+            payload.settings = settings;
+        }
+
+        const button = document.getElementById('watchlistsSource_createBtn');
+        if (button) button.disabled = true;
+        const res = await apiClient.post('/api/v1/watchlists/sources', payload);
+        watchlistsSetResponse('watchlistsSource_createResponse', res);
+        watchlistsResetSourceForm({ keepResponse: true });
+        if (button) button.disabled = false;
+        await watchlistsListSources();
+    } catch (err) {
+        const button = document.getElementById('watchlistsSource_createBtn');
+        if (button) button.disabled = false;
+        watchlistsSetResponse('watchlistsSource_createResponse', `Error: ${err.message}`);
     }
 }
 

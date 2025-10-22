@@ -412,6 +412,30 @@ Ordering is stable with a tie‑breaker (`run_id` for runs; `event_id` for event
 - Schedules/Triggers: Time‑based triggers and inbound webhook triggers.
 - Budgets/Quotas: Per‑tenant/user budgets with enforcement and reporting.
 - GUI Builder: Drag‑and‑drop graph editor in the WebUI backed by the APIs above, with success/failure routing selectors and a preconfigured branch template in the step palette.
+- Rich trigger catalog: Webhooks, cron, polling, IMAP, queues, and event stream triggers plus sub-workflows, reusable workflow modules, and error hooks for structured retry/compensation flows.
+  - Implement a trigger registry with shared schema and validation so new trigger types can be registered without engine changes.
+  - Ship inbound webhook service with signature verification, replay protection, and trigger-level rate limiting.
+  - Extend the scheduler to support long-polling connectors (IMAP, queues, event streams) using incremental checkpoint state.
+  - Add sub-workflow invocation step with typed input/output contracts and version pinning.
+  - Introduce error hooks that bind to failure events and dispatch compensating workflows or alerts.
+- Advanced flow control: Enhanced branching, looping, merges, wait states, inline Python function nodes, and first-class data transformation helpers.
+  - Extend definition schema and engine to support loop constructs (while, foreach) with deterministic exit conditions.
+  - Add merge/join semantics so parallel branches can synchronize before continuing.
+  - Provide wait-state primitives that emit human/system tasks with expiring tokens for resume.
+  - Deliver sandboxed Python function nodes with resource limits and audit logging.
+  - Bundle reusable data transformation helpers (templating, JSON logic, vector math) exposed via step configs.
+- Execution management: Configurable retry policies, manual reruns, comprehensive execution logs, definition version history, and environment-scoped credential stores.
+  - Allow per-step and per-workflow retry policies (max attempts, backoff curves, retryable errors) managed by the engine.
+  - Add run replay endpoints and UI controls for manual reruns and partial restarts from step checkpoints.
+  - Persist structured execution logs with search/filter APIs and retention policies.
+  - Track definition versions with diff, promotion, and rollback workflows.
+  - Build environment-scoped credential store with rotation APIs and usage auditing.
+- Horizontal scaling & collaboration: Queue/worker modes, worker sharding, multi-tenant RBAC improvements, and hosted/cloud deployment options with shared workspace collaboration features.
+  - Introduce a queue-backed execution mode with distributed workers and lease-based run ownership.
+  - Support worker sharding by tenant, workflow tags, or resource class to isolate workloads.
+  - Expand RBAC to cover shared spaces, workflow-level permissions, and audit trails for edits.
+  - Provide IaC templates and observability packs for hosted/cloud deployment footprints.
+  - Add collaboration features (shared drafts, reviewer workflows, comments) to the builder and API.
 
 ## Quick Start
 

@@ -553,6 +553,20 @@ async def lifespan(app: FastAPI):
         logger.error(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
         raise
 
+    # Startup: Validate Postgres content backend when enabled
+    try:
+        from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+            validate_postgres_content_backend as _validate_content_backend,
+        )
+
+        _validate_content_backend()
+        logger.info("App Startup: PostgreSQL content backend validated")
+    except RuntimeError as _content_err:
+        logger.error(f"Startup aborted: {_content_err}")
+        raise
+    except ImportError as _content_import_err:
+        logger.debug(f"Content backend validation skipped (import error): {_content_import_err}")
+
     # Startup: Initialize telemetry and metrics
     logger.info("App Startup: Initializing telemetry and metrics...")
     try:

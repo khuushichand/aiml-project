@@ -1,30 +1,351 @@
 """
-Minimal fetchers for Watchlists: RSS/Atom and Site pages.
+Watchlists fetch helpers for RSS/Atom feeds and HTML scraping.
 
-Design notes:
-- RSS fetch: reuse the existing workflows adapter logic to avoid duplicating
-  URL policy checks and XML parsing. Falls back to a small fake result when
-  TEST_MODE is set to avoid network in tests.
-- Site fetch: use the existing article extraction library (blocking variant)
-  which relies on requests + trafilatura for robustness without Playwright.
+Highlights:
+- RSS fetch: reuses workflows adapter logic for URL policy checks and XML parsing.
+  TEST_MODE returns static items so offline unit tests stay deterministic.
+- Site fetch: relies on the blocking article extractor plus optional rule-based
+  list scraping informed by FreshRSS-style XPath/CSS selectors.
 
 Returned item structure (normalized):
 - RSS items: { 'title': str, 'url': str, 'summary': Optional[str], 'published': Optional[str] }
-- Site items: { 'title': str, 'url': str, 'content': str, 'author': Optional[str] }
+- Site articles: { 'title': str, 'url': str, 'content': str, 'author': Optional[str] }
+- Scraped list items: { 'title': str, 'url': str, 'summary': Optional[str], 'content': Optional[str], ... }
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
 import os
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence
+from urllib.parse import urljoin
 
-from loguru import logger
-from typing import Iterable
-from typing import Tuple
 import httpx
 import xml.etree.ElementTree as ET
+from loguru import logger
+from lxml import html
+from lxml.etree import XPathError
+from lxml.html import HtmlElement
 
 from tldw_Server_API.app.core.Security.egress import is_url_allowed_for_tenant, is_url_allowed
+
+_TEST_MODE_VALUES = {"1", "true", "yes"}
+
+
+def _in_test_mode() -> bool:
+    return os.getenv("TEST_MODE", "").lower() in _TEST_MODE_VALUES
+
+
+def _ensure_sequence(value: Sequence[str] | str | None) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value if isinstance(v, str)]
+
+
+def _select_nodes(node: HtmlElement, selector: str) -> List[Any]:
+    expr = selector.strip()
+    if not expr:
+        return []
+    if expr.startswith("css:"):
+        css_expr = expr[4:].strip()
+        if not css_expr:
+            return []
+        try:
+            from lxml.cssselect import CSSSelector
+        except Exception as exc:
+            logger.debug(f"CSS selector support unavailable for '{css_expr}': {exc}")
+            return []
+        try:
+            sel = CSSSelector(css_expr)
+            return list(sel(node))
+        except Exception as exc:
+            logger.debug(f"CSS selector evaluation failed for '{css_expr}': {exc}")
+            return []
+    try:
+        result = node.xpath(expr)
+    except XPathError as exc:
+        logger.debug(f"XPath evaluation failed for '{expr}': {exc}")
+        return []
+    if isinstance(result, list):
+        return result
+    return [result]
+
+
+def _coerce_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, bytes):
+        try:
+            text = value.decode("utf-8", errors="ignore").strip()
+            return text or None
+        except Exception:
+            return None
+    if hasattr(value, "text_content"):
+        try:
+            text = value.text_content().strip()
+            return text or None
+        except Exception:
+            return None
+    try:
+        text = str(value).strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def _reduce_matches(matches: Sequence[Any], join_with: str) -> Optional[str]:
+    parts: List[str] = []
+    for match in matches:
+        val = _coerce_value(match)
+        if val:
+            parts.append(val)
+    if not parts:
+        return None
+    return join_with.join(parts).strip() or None
+
+
+def _extract_value(
+    node: HtmlElement,
+    selectors: Sequence[str] | str | None,
+    *,
+    join: bool = False,
+    join_with: str = " ",
+) -> Optional[str]:
+    for expr in _ensure_sequence(selectors):
+        matches = _select_nodes(node, expr)
+        if not matches:
+            continue
+        if join:
+            value = _reduce_matches(matches, join_with)
+        else:
+            value = _coerce_value(matches[0])
+        if value:
+            return value
+    return None
+
+
+def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _normalize_datetime(raw: str, fmt: Optional[str] = None) -> Optional[str]:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if fmt:
+        try:
+            dt = datetime.strptime(text, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat()
+        except Exception:
+            pass
+    # Try dateutil if available
+    try:
+        from dateutil import parser as dateutil_parser  # type: ignore
+
+        dt = dateutil_parser.parse(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        pass
+    # Fallback to email.utils
+    try:
+        from email.utils import parsedate_to_datetime
+
+        dt = parsedate_to_datetime(text)
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        pass
+    return text
+
+
+def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse HTML into structured items using XPath/CSS rules.
+
+    Returns dict: { "items": [...], "next_pages": [...] } to support pagination-aware callers.
+    """
+    result: Dict[str, Any] = {"items": [], "next_pages": []}
+    if not html_text:
+        return result
+    try:
+        document = html.fromstring(html_text)
+    except Exception as exc:
+        logger.debug(f"parse_scraped_items HTML parse failed: {exc}")
+        return result
+
+    try:
+        document.make_links_absolute(base_url)
+    except Exception:
+        pass
+
+    def _gather_items(rule_set: Dict[str, Any], *, seen: set[str], items: List[Dict[str, Any]], limit: Optional[int]) -> None:
+        entry_selectors = (
+            rule_set.get("entry_xpath")
+            or rule_set.get("item_xpath")
+            or rule_set.get("items_xpath")
+            or rule_set.get("entry_selector")
+            or rule_set.get("item_selector")
+            or rules.get("entry_xpath")
+            or rules.get("item_xpath")
+            or rules.get("items_xpath")
+            or rules.get("entry_selector")
+            or rules.get("item_selector")
+        )
+        nodes: List[HtmlElement] = []
+        for selector in _ensure_sequence(entry_selectors) or ["//article", "//item"]:
+            nodes.extend([n for n in _select_nodes(document, selector) if isinstance(n, HtmlElement)])
+        if not nodes:
+            nodes = [document]
+
+        summary_join = str(rule_set.get("summary_join_with") or rules.get("summary_join_with") or " ")
+        content_join = str(rule_set.get("content_join_with") or rules.get("content_join_with") or "\n")
+
+        for node in nodes:
+            link = _extract_value(
+                node,
+                rule_set.get("link_xpath")
+                or rule_set.get("url_xpath")
+                or rules.get("link_xpath")
+                or rules.get("url_xpath"),
+                join=False,
+            )
+            if not link:
+                continue
+            link = link.strip()
+            if not link or link in seen:
+                continue
+            seen.add(link)
+
+            item: Dict[str, Any] = {"url": link}
+            title = _extract_value(
+                node,
+                rule_set.get("title_xpath") or rule_set.get("title_selector") or rules.get("title_xpath") or rules.get("title_selector"),
+                join=False,
+            )
+            if title:
+                item["title"] = title
+            summary = _extract_value(
+                node,
+                rule_set.get("summary_xpath")
+                or rule_set.get("description_xpath")
+                or rule_set.get("summary_selector")
+                or rules.get("summary_xpath")
+                or rules.get("description_xpath")
+                or rules.get("summary_selector"),
+                join=True,
+                join_with=summary_join,
+            )
+            if summary:
+                item["summary"] = summary
+            content = _extract_value(
+                node,
+                rule_set.get("content_xpath")
+                or rule_set.get("content_selector")
+                or rules.get("content_xpath")
+                or rules.get("content_selector"),
+                join=True,
+                join_with=content_join,
+            )
+            if content:
+                item["content"] = content
+            author = _extract_value(
+                node,
+                rule_set.get("author_xpath") or rule_set.get("author_selector") or rules.get("author_xpath") or rules.get("author_selector"),
+                join=False,
+            )
+            if author:
+                item["author"] = author
+            guid = _extract_value(
+                node,
+                rule_set.get("guid_xpath") or rule_set.get("id_xpath") or rules.get("guid_xpath") or rules.get("id_xpath"),
+                join=False,
+            )
+            if guid:
+                item["guid"] = guid
+            published_raw = _extract_value(
+                node,
+                rule_set.get("published_xpath")
+                or rule_set.get("date_xpath")
+                or rule_set.get("date_selector")
+                or rules.get("published_xpath")
+                or rules.get("date_xpath")
+                or rules.get("date_selector"),
+                join=False,
+            )
+            if published_raw:
+                item["published_raw"] = published_raw
+                fmt = rule_set.get("published_format") or rules.get("published_format") or rule_set.get("date_format") or rules.get("date_format")
+                parsed = _normalize_datetime(published_raw, fmt if isinstance(fmt, str) else None)
+                if parsed:
+                    item["published"] = parsed
+
+            items.append(item)
+            if limit is not None and len(items) >= limit:
+                break
+        return
+
+    limit = _coerce_int(rules.get("limit") or rules.get("max_items"))
+    items: List[Dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    _gather_items(rules, seen=seen_urls, items=items, limit=limit)
+
+    alternates = rules.get("alternates")
+    if isinstance(alternates, list):
+        for alt in alternates:
+            if not isinstance(alt, dict):
+                continue
+            if limit is not None and len(items) >= limit:
+                break
+            merged = {**rules, **alt}
+            _gather_items(merged, seen=seen_urls, items=items, limit=limit)
+            if limit is not None and len(items) >= limit:
+                break
+
+    pagination_cfg = rules.get("pagination") if isinstance(rules.get("pagination"), dict) else None
+    next_pages: List[str] = []
+    if pagination_cfg:
+        candidate_selectors = _ensure_sequence(
+            pagination_cfg.get("next_xpath")
+            or pagination_cfg.get("next_selector")
+            or pagination_cfg.get("next_link_xpath")
+            or pagination_cfg.get("next_link_selector")
+        )
+        attr = pagination_cfg.get("next_attribute") or "href"
+        for selector in candidate_selectors:
+            matches = _select_nodes(document, selector)
+            for match in matches:
+                url = None
+                if isinstance(match, HtmlElement):
+                    url = match.get(attr)
+                    if not url:
+                        url = _coerce_value(match)
+                else:
+                    url = _coerce_value(match)
+                if not url:
+                    continue
+                absolute = urljoin(base_url, url)
+                if absolute not in next_pages:
+                    next_pages.append(absolute)
+    result["items"] = items
+    result["next_pages"] = next_pages
+    return result
 
 
 async def fetch_rss_items(urls: List[str], *, limit: int = 10, tenant_id: str = "default") -> List[Dict[str, Any]]:
@@ -212,6 +533,111 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
     except Exception as e:
         logger.debug(f"fetch_site_top_links fallback: {e}")
         return [base_url]
+
+
+async def fetch_site_items_with_rules(
+    base_url: str,
+    rules: Dict[str, Any],
+    *,
+    tenant_id: str = "default",
+    timeout: float = 10.0,
+) -> List[Dict[str, Any]]:
+    """Fetch a list page and extract items using scrape rules."""
+    list_url = str(rules.get("list_url") or base_url or "").strip()
+    if not list_url:
+        return []
+
+    limit = _coerce_int(rules.get("limit") or rules.get("max_items"), default=10)
+    if limit is not None and limit < 0:
+        limit = 0
+    if limit == 0:
+        return []
+
+    pagination_cfg = rules.get("pagination") if isinstance(rules.get("pagination"), dict) else {}
+    max_pages = _coerce_int(pagination_cfg.get("max_pages"), default=1)
+    if max_pages is None or max_pages < 1:
+        max_pages = 1
+
+    if _in_test_mode():
+        max_items = limit if limit is not None else 3
+        max_items = min(max_items, 5)
+        samples: List[Dict[str, Any]] = []
+        for idx in range(max_items):
+            url = f"{list_url.rstrip('/')}/test-scrape-{idx + 1}"
+            samples.append(
+                {
+                    "title": f"Test scraped item {idx + 1}",
+                    "url": url,
+                    "summary": "Test summary from scrape rules.",
+                    "content": "Test content from scrape rules.",
+                }
+            )
+        return samples
+
+    headers = {
+        "User-Agent": "tldw-watchlist/0.1 (+https://github.com/your-org/tldw_server2)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+    }
+
+    queue: List[str] = [list_url]
+    visited: set[str] = set()
+    seen_items: set[str] = set()
+    collected: List[Dict[str, Any]] = []
+
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            while queue and len(visited) < max_pages:
+                page_url = queue.pop(0)
+                if page_url in visited:
+                    continue
+                visited.add(page_url)
+
+                allowed = False
+                try:
+                    allowed = is_url_allowed_for_tenant(page_url, tenant_id)
+                except Exception:
+                    allowed = is_url_allowed(page_url)
+                if not allowed:
+                    logger.debug(f"Scrape rules blocked by URL policy: {page_url}")
+                    continue
+
+                try:
+                    resp = client.get(page_url, headers=headers)
+                except Exception as exc:
+                    logger.debug(f"fetch_site_items_with_rules request failed ({page_url}): {exc}")
+                    continue
+
+                if resp.status_code // 100 != 2:
+                    logger.debug(f"fetch_site_items_with_rules HTTP {resp.status_code} for {page_url}")
+                    continue
+
+                parsed = parse_scraped_items(resp.text or "", page_url, rules)
+                page_items = parsed.get("items") or []
+                for item in page_items:
+                    url = item.get("url")
+                    if not url or url in seen_items:
+                        continue
+                    seen_items.add(url)
+                    collected.append(item)
+                    if limit is not None and len(collected) >= limit:
+                        break
+                if limit is not None and len(collected) >= limit:
+                    break
+
+                next_pages = parsed.get("next_pages") or []
+                for nxt in next_pages:
+                    if not nxt or nxt in visited or nxt in queue:
+                        continue
+                    if len(visited) + len(queue) >= max_pages:
+                        break
+                    queue.append(nxt)
+    except Exception as exc:
+        logger.debug(f"fetch_site_items_with_rules pagination failed: {exc}")
+
+    if limit is not None:
+        return collected[:limit]
+    return collected
 
 
 async def fetch_rss_feed(

@@ -409,6 +409,58 @@ pg_dump -U tldw_user -d tldw_users > tldw_users_backup.sql
 psql -U tldw_user -d tldw_users < tldw_users_backup.sql
 ```
 
+## Content Database Modes (Development)
+
+The media/content store can run on either SQLite (default) or a shared PostgreSQL
+instance. Switching modes is controlled via environment variables and a light-weight
+validation CLI.
+
+### Enable PostgreSQL for Content Storage
+
+1. Configure the Postgres connection (reusing or separate from AuthNZ):
+
+   ```bash
+   export CONTENT_DB_MODE=postgres            # same as TLDW_CONTENT_DB_BACKEND=postgresql
+   export TLDW_CONTENT_PG_HOST=localhost
+   export TLDW_CONTENT_PG_PORT=5432
+   export TLDW_CONTENT_PG_DATABASE=tldw_content
+   export TLDW_CONTENT_PG_USER=tldw_user
+   export TLDW_CONTENT_PG_PASSWORD="your_password"
+   ```
+
+2. Apply migrations and ensure row-level security:
+
+   ```bash
+   python -m tldw_Server_API.app.core.DB_Management.content_migrate
+   ```
+
+   The command exits non-zero if migrations are pending or required policies are missing.
+
+3. Start the API server. Startup now fails fast when the Postgres backend is misconfigured
+   or missing required policies, preventing partial initialization.
+
+### Reverting to SQLite
+
+1. Unset the Postgres-specific environment variables:
+
+   ```bash
+   unset CONTENT_DB_MODE TLDW_CONTENT_DB_BACKEND TLDW_CONTENT_PG_HOST \
+         TLDW_CONTENT_PG_PORT TLDW_CONTENT_PG_DATABASE TLDW_CONTENT_PG_USER \
+         TLDW_CONTENT_PG_PASSWORD
+   ```
+
+2. Clear any cached per-user database handles (optional but recommended when switching modes):
+
+   ```bash
+   python - <<'PY'
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import reset_media_db_cache
+reset_media_db_cache()
+PY
+   ```
+
+3. Restart the server; it will automatically fall back to the per-user SQLite databases
+   defined by `USER_DB_BASE_DIR`.
+
 ---
 
 *Last Updated: 2024*  

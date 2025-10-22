@@ -22,6 +22,7 @@ https://arxiv.org/abs/2503.10357
 https://github.com/IAAR-Shanghai/CRUD_RAG
 https://github.com/johnbean393/SVGBench
 https://github.com/scaleapi/SWE-bench_Pro-os
+https://simple-bench.com/
 https://arxiv.org/abs/2412.12300
 https://huggingface.co/tencent/SongGeneration
 https://github.com/aizip/Rag-Eval-flow

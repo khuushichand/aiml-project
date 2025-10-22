@@ -16,6 +16,8 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 # Utils
 from loguru import logger
 # API Dependencies
@@ -276,6 +278,35 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         request.state.user_id = user.id
     except Exception:
         pass
+
+    team_ids: List[int] = []
+    org_ids: List[int] = []
+    try:
+        memberships = await list_memberships_for_user(int(user.id))
+        team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+        org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+        try:
+            request.state.team_ids = team_ids
+            request.state.org_ids = org_ids
+        except Exception:
+            pass
+    except Exception:
+        try:
+            request.state.team_ids = []
+            request.state.org_ids = []
+        except Exception:
+            pass
+
+    try:
+        set_scope(
+            user_id=user.id_int,
+            org_ids=org_ids,
+            team_ids=team_ids,
+            is_admin=bool(user.is_admin),
+        )
+    except Exception as scope_exc:
+        logger.debug(f"Failed to set scope context for user {user.id}: {scope_exc}")
+
     logger.info(f"Authenticated active user: {user.username} (ID: {user.id})")
     return user
 
@@ -398,6 +429,20 @@ async def get_request_user(
             request.state.user_id = user.id
         except Exception:
             pass
+        try:
+            request.state.team_ids = []
+            request.state.org_ids = []
+        except Exception:
+            pass
+        try:
+            set_scope(
+                user_id=user.id_int,
+                org_ids=[],
+                team_ids=[],
+                is_admin=True,
+            )
+        except Exception:
+            pass
         return user
     else:
         # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
@@ -438,7 +483,36 @@ async def get_request_user(
                 except Exception:
                     pass
 
-                return User(**user_data)
+                user_obj = User(**user_data)
+                team_ids: List[int] = []
+                org_ids: List[int] = []
+                try:
+                    memberships = await list_memberships_for_user(int(user_id))
+                    team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+                    org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+                    try:
+                        request.state.team_ids = team_ids
+                        request.state.org_ids = org_ids
+                    except Exception:
+                        pass
+                except Exception:
+                    try:
+                        request.state.team_ids = []
+                        request.state.org_ids = []
+                    except Exception:
+                        pass
+
+                try:
+                    set_scope(
+                        user_id=user_obj.id_int,
+                        org_ids=org_ids,
+                        team_ids=team_ids,
+                        is_admin=bool(user_obj.is_admin),
+                    )
+                except Exception as scope_exc:
+                    logger.debug(f"Scope context setup failed for API key user {user_id}: {scope_exc}")
+
+                return user_obj
             except HTTPException:
                 raise
             except Exception as e:

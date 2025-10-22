@@ -2,391 +2,226 @@
 
 ## Overview
 
-The TTS module provides a unified, production-ready interface for multiple text-to-speech providers, supporting both cloud-based APIs and local models. It features automatic fallback, circuit breaker patterns, comprehensive error handling, and resource management.
+The TTS module delivers a unified, production-grade interface over multiple text-to-speech engines. It wraps commercial APIs and local models behind a shared adapter contract, exposes OpenAI-compatible endpoints, and provides fallbacks, metrics, and resource management so the rest of the platform can treat TTS as a single capability.
 
-## Architecture
+## Feature Highlights
 
-### Core Components
+- **Provider federation**: built-in adapters for OpenAI, ElevenLabs, Kokoro, Higgs Audio, Dia, Chatterbox, VibeVoice, IndexTTS2, and NeuTTS; a mock adapter exists for tests and an AllTalk placeholder is reserved.
+- **Streaming-first pipeline**: adapters implement chunked streaming where supported; the service coordinates fallbacks, normalization, and HTTP 200 vs. error streaming via `performance.stream_errors_as_audio` or the `TTS_STREAM_ERRORS_AS_AUDIO` override.
+- **Voice cloning & management**: cloning-aware adapters accept reference audio while the `voice_manager` subsystem handles uploads, validation, quotas, and preview generation.
+- **Unified configuration**: `TTSConfigManager` merges `tts_providers_config.yaml`, `Config_Files/config.txt`, and environment overrides with provider-specific settings and priority ordering.
+- **Resilience & observability**: per-provider circuit breakers, resource checks, HTTP connection pooling, and Prometheus metrics (`tts_requests_total`, `tts_request_duration_seconds`, etc.) are registered automatically.
+- **Security & validation**: input sanitization, text length enforcement, voice reference validation, rate limiting, and scope-based auth protect the API surface.
 
-1. **Adapter Pattern** - Each TTS provider has its own adapter implementing a common interface
-2. **Registry & Factory** - Manages adapter lifecycle and provider selection
-3. **Service Layer** - High-level API with fallback and error recovery
-4. **Resource Management** - Memory monitoring, connection pooling, and session management
-5. **Configuration System** - Unified configuration from multiple sources
-6. **Circuit Breaker** - Automatic failure detection and recovery
+## Architecture & Layout
 
-### Directory Structure
+### Directory Layout
 
 ```
 TTS/
-├── adapters/                  # Provider adapters
-│   ├── base.py               # Base adapter interface
-│   ├── openai_adapter.py     # OpenAI TTS
-│   ├── kokoro_adapter.py     # Kokoro (local)
-│   ├── higgs_adapter.py      # Higgs Audio V2
-│   ├── dia_adapter.py        # Dia (dialogue)
-│   ├── chatterbox_adapter.py # Chatterbox (emotion)
-│   ├── elevenlabs_adapter.py # ElevenLabs
-│   └── vibevoice_adapter.py  # VibeVoice (Microsoft)
-├── tts_service_v2.py         # Main service layer
-├── adapter_registry.py       # Adapter management
-├── circuit_breaker.py        # Circuit breaker implementation
-├── tts_config.py            # Unified configuration
-├── tts_exceptions.py        # Exception hierarchy
-├── tts_validation.py        # Input validation & sanitization
-├── tts_resource_manager.py  # Resource management
-├── audio_utils.py           # Audio processing utilities
-└── streaming_audio_writer.py # Streaming audio handling
+├── adapters/                  # Provider adapters (cloud + local)
+│   ├── base.py                # Adapter interface + data models
+│   ├── chatterbox_adapter.py
+│   ├── dia_adapter.py
+│   ├── elevenlabs_adapter.py
+│   ├── higgs_adapter.py
+│   ├── index_tts_adapter.py
+│   ├── kokoro_adapter.py
+│   ├── neutts_adapter.py
+│   ├── openai_adapter.py
+│   └── vibevoice_adapter.py
+├── adapter_registry.py        # Provider registry & factory
+├── audio_converter.py         # Format conversion & resampling helpers
+├── audio_utils.py             # Text + audio validation helpers
+├── circuit_breaker.py         # Per-provider breaker management
+├── streaming_audio_writer.py  # Streaming normalization utilities
+├── tts_config.py              # Unified configuration manager (Pydantic)
+├── tts_exceptions.py          # Error hierarchy
+├── tts_resource_manager.py    # Resource pooling and cleanup
+├── tts_service_v2.py          # High-level orchestration (fallback + metrics)
+├── tts_validation.py          # Request sanitization/validation rules
+├── voice_manager.py           # Custom voice upload/registry service
+├── waveform_streamer.py       # Helpers for HTTP streaming responses
+├── vendors/                   # Vendored engines (e.g., NeuTTS Air)
+└── README.md / TTS-*.md       # Module documentation
 ```
 
-## Supported Providers
+### Core Components
 
-### Cloud Providers
+- `TTSServiceV2`: coordinates provider selection, concurrency via an async semaphore, fallback, and exposes both OpenAI-compatible streaming and legacy adapter APIs.
+- `TTSAdapterRegistry`: lazy-loads adapters, respects configuration enablement, and tracks failed providers to avoid repeated initialization.
+- `TTSResourceManager`: manages HTTP clients, streaming sessions, and resource health (memory, temp files, GPU) while providing cleanup hooks.
+- `VoiceManager`: validates and stores user-supplied voice references, enforces quotas, and powers `/api/v1/audio/voices/*` endpoints.
+- `StreamingAudioWriter` & `AudioConverter`: normalize chunk sizes, convert sample rates / formats, and support provider-specific stream wrappers.
+- `CircuitBreakerManager`: guards providers with failure thresholds and integrates with the fallback path.
+- `tts_validation`: centralizes input sanitation, voice reference checks, and provider-specific limits.
 
-| Provider | Models | Languages | Key Features |
-|----------|--------|-----------|--------------|
-| **OpenAI** | tts-1, tts-1-hd | 50+ | High quality, reliable |
-| **ElevenLabs** | Multiple | 20+ | Voice cloning, emotions |
+## Provider Support Matrix
 
-### Local Models
+| Provider      | Type         | Streaming | Voice Cloning | Formats*               | Notes |
+|---------------|--------------|-----------|---------------|------------------------|-------|
+| OpenAI        | Cloud API    | Yes       | No            | mp3, opus, aac, flac, wav, pcm | Uses OpenAI `tts-1`/`tts-1-hd`; voice mapping + HTTP client pooling |
+| ElevenLabs    | Cloud API    | Yes       | Yes (Pro)     | mp3, opus, wav, pcm    | Supports user voices, stability/similarity tuning |
+| Kokoro        | Local ONNX   | Yes       | No            | mp3, wav, opus, flac, pcm | Lightweight offline synthesis with phoneme support |
+| Higgs Audio   | Local PyTorch| Yes       | Yes           | wav, mp3, opus, flac, pcm | Multilingual, emotion control, background audio |
+| Dia           | Local PyTorch| Yes       | Yes           | wav, mp3, opus, flac, pcm | Dialogue-focused multi-speaker generation |
+| Chatterbox    | Local PyTorch| Yes       | Yes           | wav, mp3, opus, flac, pcm | Emotion exaggeration controls and style tuning |
+| VibeVoice     | Local PyTorch| Yes       | Yes           | wav, mp3, opus, flac, pcm | Long-form generation, CFG controls, background music |
+| IndexTTS2     | Local (Index)| Yes       | Yes (required)| mp3, wav               | Zero/one-shot cloning with emotion prompts; requires reference audio |
+| NeuTTS Air    | Local Hybrid | Conditional†| Yes         | mp3, wav, opus, flac, pcm | On-device synthesis; streaming when loading quantized GGUF |
+| Mock (tests)  | Test double  | Yes       | No            | wav                    | Deterministic adapter for test environments |
+| AllTalk       | Planned      | –         | –             | –                      | Placeholder entry in `TTSProvider` for future work |
 
-| Provider | Model Size | Languages | Key Features |
-|----------|------------|-----------|--------------|
-| **Kokoro** | ~50MB | English | Fast, lightweight, ONNX |
-| **Higgs** | 3B params | 50+ | Multilingual, singing |
-| **Dia** | 1.6B params | English | Multi-speaker dialogue |
-| **Chatterbox** | ~1B params | English | Emotion control |
-| **VibeVoice** | 1.5B/7B | 12+ | 90min generation, music |
+\* Actual formats depend on each adapter’s `TTSCapabilities`.
+
+† Streaming is enabled when a quantized (GGUF) model is loaded; otherwise NeuTTS returns buffered audio.
+
+Adapters expose `TTSCapabilities` describing supported languages, formats, and advanced features; discovery APIs surface this metadata to clients.
+
+## Voice Management
+
+The `voice_manager` module powers custom voice workflows:
+
+- Validates uploads per provider (extensions, duration, sample rate, and size) and sanitizes filenames.
+- Persists voice metadata with SHA hashes to deduplicate uploads under user-specific storage.
+- Enforces configurable quotas (`VOICE_RATE_LIMITS`) covering upload rate, concurrent processing, and total storage.
+- Exposes management endpoints:
+  - `POST /api/v1/audio/voices/upload`
+  - `GET /api/v1/audio/voices/catalog` (aggregated provider voices, optional `provider` filter)
+  - `GET /api/v1/audio/voices` + `GET/DELETE /api/v1/audio/voices/{voice_id}`
+  - `POST /api/v1/audio/voices/{voice_id}/preview`
+- Integrates with cloning-capable adapters (VibeVoice, Higgs, Chatterbox, Dia, IndexTTS2, NeuTTS, ElevenLabs). See `TTS-VOICE-CLONING.md` for detailed workflows.
 
 ## Configuration
 
-### Configuration Sources (Priority Order)
+`TTSConfigManager` merges sources in the order: environment variables → `Config_Files/config.txt` → `tts_providers_config.yaml` → defaults.
 
-1. **Environment Variables** - Highest priority
-2. **config.txt** - Main application config
-3. **tts_providers_config.yaml** - TTS-specific config
-4. **Defaults** - Built-in defaults
+Example `tts_providers_config.yaml` excerpt:
 
-### Example Configuration
-
-#### tts_providers_config.yaml
 ```yaml
 provider_priority:
-  - openai      # Try first
-  - kokoro      # Fallback to local
-  
+  - openai
+  - elevenlabs
+  - kokoro
+  - higgs
+  - index_tts
+  - neutts
+
 providers:
   openai:
     enabled: true
     api_key: ${OPENAI_API_KEY}
-    model: "tts-1"
-    
+    model: tts-1-hd
+
   kokoro:
     enabled: true
-    use_onnx: true
-    device: "cpu"
-    
+    model_path: ./models/kokoro-v0_19.onnx
+    device: cpu
+
+  index_tts:
+    enabled: false
+    model_dir: checkpoints/index_tts2
+    cfg_path: checkpoints/index_tts2/config.yaml
+    device: cuda
+    interval_silence: 200
+
+  neutts:
+    enabled: false
+    backbone_repo: neuphonic/neutts-air
+    codec_repo: neuphonic/neucodec
+    auto_download: true
+    sample_rate: 24000
+
 performance:
   max_concurrent_generations: 4
-  # Error streaming policy (compatibility vs. strict HTTP errors)
   stream_errors_as_audio: true
-  memory_warning_threshold: 80
-  memory_critical_threshold: 90
-  
+  connection_timeout: 30.0
+
 fallback:
   enabled: true
   max_attempts: 3
+  exclude_providers: []
 ```
 
-#### config.txt
-```ini
-[TTS-Settings]
-default_tts_provider = kokoro
-default_tts_voice = af_bella
-default_tts_speed = 1.0
-local_tts_device = cpu
-```
+Additional notes:
 
-#### Environment Variables
-```bash
-export OPENAI_API_KEY="sk-..."
-export ELEVENLABS_API_KEY="..."
-export TTS_DEFAULT_PROVIDER="openai"
-export TTS_DEVICE="cuda"
-```
+- `TTS_STREAM_ERRORS_AS_AUDIO` overrides the streaming error behavior at runtime.
+- Provider configs support `${ENV_VAR}` references for secrets.
+- `voice_mappings`, `format_preferences`, and logging settings can be customized per deployment.
 
-### Concurrency Control
+## Runtime Behaviour
 
-TTSServiceV2 honors `performance.max_concurrent_generations` from the TTS configuration. This value sets the internal semaphore that limits how many TTS generations run concurrently across providers. If unset or invalid, the service defaults to `4`.
+- **Provider selection & fallback**: `TTSServiceV2` maps OpenAI model names to adapters, applies circuit breaker checks, and iterates through `provider_priority` when a provider fails. Retryable errors use exponential backoff.
+- **Concurrency control**: an async semaphore enforces `performance.max_concurrent_generations`; adapters layer on their own limits when necessary.
+- **Resource management**: `tts_resource_manager` maintains HTTP clients, streaming sessions, and periodic cleanup of idle resources while tracking metrics per resource type.
+- **Metrics & logging**: metrics such as `tts_requests_total`, `tts_request_duration_seconds`, `tts_text_length_characters`, `tts_audio_size_bytes`, and `tts_fallback_attempts` are registered with the global metrics registry. Logging levels follow configuration.
+- **Validation & quotas**: `tts_validation` sanitizes text, enforces provider limits, and coordinates with API rate limiting and scope enforcement.
 
-### Error Streaming Policy
+## API Endpoints
 
-Use `performance.stream_errors_as_audio` to control how streaming failures are surfaced:
-- `true` (default): embed `ERROR: ...` messages in the audio stream (HTTP 200).
-- `false`: raise TTS exceptions so the API returns appropriate HTTP error codes.
+All endpoints live under `/api/v1/audio`:
 
-## Usage
+- `POST /api/v1/audio/speech` — OpenAI-compatible speech synthesis (streaming or buffered).
+- `GET /api/v1/audio/voices/catalog` — Aggregate voice catalog across providers.
+- `POST /api/v1/audio/voices/upload` — Upload custom voice references.
+- `GET /api/v1/audio/voices` — List a user’s custom voice assets.
+- `GET /api/v1/audio/voices/{voice_id}` / `DELETE /api/v1/audio/voices/{voice_id}` — Manage stored voices.
+- `POST /api/v1/audio/voices/{voice_id}/preview` — Generate preview audio via a stored voice.
 
-### Basic Usage
+See `tldw_Server_API/app/api/v1/endpoints/audio.py` for additional STT and quota-related endpoints co-located with the TTS routes.
+
+## Usage Examples
 
 ```python
 from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 
-# Get service instance
-tts_service = await get_tts_service_v2()
+async def synthesize():
+    service = await get_tts_service_v2()
+    request = OpenAISpeechRequest(
+        input="Hello from the TLDW server.",
+        model="tts-1-hd",
+        voice="alloy",
+        response_format="mp3",
+        stream=True
+    )
 
-# Create request
-request = OpenAISpeechRequest(
-    input="Hello, this is a test.",
-    model="tts-1",
-    voice="alloy",
-    response_format="mp3",
-    speed=1.0
-)
-
-# Generate speech (with automatic fallback)
-async for audio_chunk in tts_service.generate_speech(request):
-    # Process audio chunks
-    pass
+    async for chunk in service.generate_speech(request):
+        process_audio(chunk)  # Your audio handling logic
 ```
 
-### Direct Adapter Usage
+List voices aggregated from all providers:
 
 ```python
-from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory, TTSProvider
-from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
-
-# Get factory
-factory = await get_tts_factory()
-
-# Get specific adapter
-adapter = await factory.registry.get_adapter(TTSProvider.KOKORO)
-
-# Create request
-request = TTSRequest(
-    text="Hello world",
-    voice="af_bella",
-    format=AudioFormat.WAV,
-    speed=1.0
-)
-
-# Generate
-response = await adapter.generate(request)
+tts_service = await get_tts_service_v2()
+catalog = await tts_service.list_voices()
+print(catalog["openai"]["voices"])  # Provider-specific voice metadata
 ```
-
-## Error Handling
-
-### Exception Hierarchy
-
-```
-TTSError (base)
-├── TTSConfigurationError
-│   ├── TTSProviderNotConfiguredError
-│   ├── TTSProviderInitializationError
-│   └── TTSModelNotFoundError
-├── TTSValidationError
-│   ├── TTSTextTooLongError
-│   ├── TTSInvalidVoiceReferenceError
-│   └── TTSUnsupportedFormatError
-├── TTSProviderError
-│   ├── TTSAuthenticationError
-│   ├── TTSRateLimitError
-│   ├── TTSNetworkError
-│   └── TTSTimeoutError
-├── TTSGenerationError
-│   └── TTSStreamingError
-└── TTSResourceError
-    ├── TTSInsufficientMemoryError
-    └── TTSGPUError
-```
-
-### Error Recovery
-
-The service automatically handles errors with:
-- **Retryable errors** - Network, rate limits, timeouts
-- **Fallback providers** - Automatic failover
-- **Circuit breaker** - Prevents cascading failures
-- **Exponential backoff** - Smart retry timing
-
-## Security Features
-
-### Input Validation
-- Text sanitization (XSS, SQL injection prevention)
-- Parameter bounds checking
-- Voice reference file validation
-- Provider-specific limits enforcement
-
-### Resource Protection
-- Memory monitoring with thresholds
-- Connection pooling with limits
-- Session management with cleanup
-- GPU memory tracking
-
-## Performance Optimization
-
-### Caching (Future)
-- Response caching for repeated requests
-- Voice embedding caching
-- Model caching for local providers
-
-### Streaming
-- Chunk-based audio streaming
-- Configurable chunk sizes
-- Format conversion on-the-fly
-
-### Resource Management
-- Automatic cleanup of idle resources
-- Connection reuse for API providers
-- Memory-aware model loading
 
 ## Testing
 
-### Test Coverage
-- `test_tts_exceptions.py` - Exception hierarchy tests
-- `test_tts_validation.py` - Validation and security tests
-- `test_tts_resource_manager.py` - Resource management tests
-- `test_tts_adapters.py` - Adapter functionality tests
-- `test_tts_service_v2.py` - Service layer tests
-
-### Running Tests
 ```bash
-# Run all TTS tests
-python -m pytest tldw_Server_API/tests/TTS/ -v
+# Full TTS regression suite (legacy + v2)
+python -m pytest tldw_Server_API/tests/TTS -v
 
-# Run specific test file
-python -m pytest tldw_Server_API/tests/TTS/test_tts_validation.py -v
+# Property and integration tests for the new pipeline
+python -m pytest tldw_Server_API/tests/TTS_NEW -v
 
-# Run with coverage
-python -m pytest tldw_Server_API/tests/TTS/ --cov=tldw_Server_API.app.core.TTS
+# Targeted adapter tests
+python -m pytest tldw_Server_API/tests/TTS/test_tts_adapters.py -k openai
 ```
 
-## Adding New Providers
+## Adding a New Provider
 
-### 1. Create Adapter
+1. **Create an adapter** inheriting from `TTSAdapter` under `adapters/your_adapter.py`. Implement `initialize`, `get_capabilities`, `generate`, and (optionally) streaming helpers.
+2. **Register it** in `TTSProvider` and `DEFAULT_ADAPTERS` (via dotted path) inside `adapter_registry.py`.
+3. **Add configuration** defaults to `tts_providers_config.yaml` and document required assets/dependencies.
+4. **Provide tests** covering initialization, capability reporting, request validation, and audio generation.
+5. **Update documentation** (this README and any relevant deployment guides).
 
-```python
-# adapters/myprovider_adapter.py
-from .base import TTSAdapter, TTSRequest, TTSResponse
+## Additional References
 
-class MyProviderAdapter(TTSAdapter):
-    async def initialize(self) -> bool:
-        # Initialize connection/model
-        pass
-    
-    async def generate(self, request: TTSRequest) -> TTSResponse:
-        # Generate speech
-        pass
-    
-    async def get_capabilities(self) -> TTSCapabilities:
-        # Return provider capabilities
-        pass
-```
-
-### 2. Register Provider
-
-```python
-# adapter_registry.py
-class TTSProvider(Enum):
-    MYPROVIDER = "myprovider"
-
-# Add to DEFAULT_ADAPTERS
-DEFAULT_ADAPTERS = {
-    TTSProvider.MYPROVIDER: MyProviderAdapter,
-    ...
-}
-```
-
-### 3. Add Configuration
-
-```yaml
-# tts_providers_config.yaml
-providers:
-  myprovider:
-    enabled: true
-    api_key: ${MYPROVIDER_API_KEY}
-    # ... other settings
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Provider Not Available**
-   - Check provider is enabled in config
-   - Verify API keys are set
-   - Check model files for local providers
-
-2. **Memory Errors**
-   - Adjust memory thresholds in config
-   - Use smaller models or batch sizes
-   - Enable model offloading
-
-3. **Network Timeouts**
-   - Increase timeout in provider config
-   - Check network connectivity
-   - Enable fallback providers
-
-4. **Audio Quality Issues**
-   - Try different models (e.g., tts-1-hd)
-   - Adjust voice settings
-   - Check audio format compatibility
-
-### Debug Logging
-
-```python
-# Enable debug logging
-import logging
-logging.getLogger("tldw_Server_API.app.core.TTS").setLevel(logging.DEBUG)
-```
-
-## API Reference
-
-### OpenAI-Compatible Endpoint
-
-```
-POST /v1/audio/speech
-```
-
-Request:
-```json
-{
-  "input": "Text to synthesize",
-  "model": "tts-1",
-  "voice": "alloy",
-  "response_format": "mp3",
-  "speed": 1.0
-}
-```
-
-Response: Audio stream in requested format
-
-### Supported Voices
-
-Each provider has different voice options:
-- **OpenAI**: alloy, echo, fable, onyx, nova, shimmer
-- **Kokoro**: af_bella, af_nicole, am_adam, am_michael, etc.
-- **ElevenLabs**: rachel, drew, clyde, paul, domi, etc.
-
-### Audio Formats
-
-Supported formats vary by provider:
-- **MP3** - Widely supported
-- **WAV** - Uncompressed
-- **OPUS** - Efficient compression
-- **FLAC** - Lossless
-- **PCM** - Raw audio
-
-## License
-
-This module is part of the tldw_server project and follows the same licensing:
-- GNU General Public License v2.0
-
-## Contributing
-
-When contributing to the TTS module:
-1. Follow the adapter pattern for new providers
-2. Include comprehensive error handling
-3. Add validation for all inputs
-4. Write tests for new functionality
-5. Update this documentation
+- `TTS-DEPLOYMENT.md` — deployment checklist and environment validation.
+- `TTS-VOICE-CLONING.md` — detailed cloning workflows and provider requirements.
+- `Docs/STT-TTS/TTS-SETUP-GUIDE.md` — end-to-end setup for local and cloud engines.
+- `Docs/Design/TTS_Module_PRD.md` — product requirements and roadmap.

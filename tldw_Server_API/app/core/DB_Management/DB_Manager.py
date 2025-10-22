@@ -72,6 +72,7 @@ content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_u
 
 # Resolve shared backend instance for content databases (Media/ChaCha).
 _CONTENT_DB_BACKEND: Optional[DatabaseBackend] = get_content_backend(single_user_config)
+_POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
 
 single_user_db_path: str = content_db_settings.sqlite_path or './Databases/server_media_summary.db'
 single_user_backup_path: str = content_db_settings.backup_path or 'database_backups'
@@ -86,6 +87,8 @@ single_user_workflows_path: str = single_user_config.get(
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
     """Return the shared content DatabaseBackend instance (if configured)."""
+    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
+        raise RuntimeError("PostgreSQL content backend is required but was not initialized. Check TLDW_CONTENT_DB_BACKEND configuration.")
     return _CONTENT_DB_BACKEND
 
 
@@ -102,12 +105,107 @@ def create_media_database(
     backend_to_use = backend or _CONTENT_DB_BACKEND
     cfg = config or single_user_config
 
+    if _POSTGRES_CONTENT_MODE:
+        if backend_to_use is None or backend_to_use.backend_type != BackendType.POSTGRESQL:
+            raise RuntimeError(
+                "PostgreSQL content backend configured but backend could not be created. "
+                "Ensure psycopg is installed and TLDW_CONTENT_PG_* settings are set."
+            )
+        target_path = Path(db_path) if db_path else Path(single_user_db_path)
+        return MediaDatabase(
+            db_path=str(target_path),
+            client_id=client_id,
+            backend=backend_to_use,
+            config=cfg,
+        )
+
     return MediaDatabase(
         db_path=str(target_path),
         client_id=client_id,
         backend=backend_to_use,
         config=cfg,
     )
+
+
+def validate_postgres_content_backend() -> None:
+    """Ensure the configured PostgreSQL content backend is ready for use.
+
+    Raises RuntimeError when the shared backend is expected but migrations or
+    row-level security policies are missing. Acts as a no-op for SQLite.
+    """
+
+    backend: Optional[DatabaseBackend]
+    try:
+        backend = get_content_backend_instance()
+    except RuntimeError:
+        # Propagate configuration errors directly
+        raise
+
+    if backend is None:
+        if _POSTGRES_CONTENT_MODE:
+            raise RuntimeError(
+                "CONTENT_DB mode is set to PostgreSQL, but the backend could not be initialized."
+            )
+        return
+
+    if backend.backend_type != BackendType.POSTGRESQL:
+        if _POSTGRES_CONTENT_MODE:
+            raise RuntimeError(
+                "PostgreSQL content backend required but a different backend was provided."
+            )
+        return
+
+    validator = MediaDatabase(
+        db_path=":memory:",
+        client_id="content_backend_validator",
+        backend=backend,
+        config=single_user_config,
+    )
+    try:
+        with backend.transaction() as conn:  # type: ignore[arg-type]
+            version_result = backend.execute(
+                "SELECT version FROM schema_version LIMIT 1",
+                connection=conn,
+            )
+            current_version_raw = version_result.scalar if version_result else None
+            try:
+                current_version = int(current_version_raw or 0)
+            except (TypeError, ValueError):
+                current_version = 0
+
+            expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
+            if current_version != expected_version:
+                raise RuntimeError(
+                    "PostgreSQL content schema is outdated. "
+                    f"Current version={current_version}, expected={expected_version}."
+                )
+
+            required_policies = {
+                "media": [
+                    "media_scope_admin",
+                    "media_scope_personal",
+                    "media_scope_org",
+                    "media_scope_team",
+                ],
+                "sync_log": [
+                    "sync_scope_admin",
+                    "sync_scope_personal",
+                    "sync_scope_org",
+                    "sync_scope_team",
+                ],
+            }
+
+            for table, policies in required_policies.items():
+                for policy in policies:
+                    if not validator._postgres_policy_exists(conn, table, policy):
+                        raise RuntimeError(
+                            f"Missing Postgres RLS policy '{policy}' on table '{table}'."
+                        )
+    finally:
+        try:
+            validator.close_connection()
+        except Exception:
+            pass
 
 
 def create_chacha_database(

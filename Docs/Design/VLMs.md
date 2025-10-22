@@ -19,6 +19,12 @@ https://huggingface.co/moonshotai/Kimi-VL-A3B-Thinking-2506
 https://cookbook.openai.com/examples/custom_image_embedding_search
 https://github.com/CornelliusYW/Multimodal-RAG-Implementation
 https://github.com/CornelliusYW/Multimodal-RAG-Implementation
+https://github.com/Ravi-Teja-konda/Surveillance_Video_Summarizer
+https://nanonets.com/blog/bridging-images-and-text-a-survey-of-vlms/
+https://www.tigerdata.com/blog/building-a-reverse-video-search-system-with-mixpeek-postgresql
+https://github.com/illuin-tech/colpali
+https://huggingface.co/vidore/colpali-v1.3
+https://github.com/mithranm/study-buddy-old/blob/develop/backend/src/document_chunker.py
 https://aiscribe.pro/news/implementing-multi-modal-rag-systems-machinelearningmastery-com/
 https://pub.towardsai.net/deploy-an-in-house-vision-language-model-to-parse-millions-of-documents-say-goodbye-to-gemini-and-cdac6f77aff5
 https://huggingface.co/Skywork/Skywork-R1V3-38B

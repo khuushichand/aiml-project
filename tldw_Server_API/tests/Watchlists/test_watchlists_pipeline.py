@@ -271,3 +271,49 @@ async def test_watchlist_run_enqueues_embeddings(monkeypatch):
     assert res.get("items_ingested", 0) >= 1
     assert captured, "expected embeddings enqueue call"
     assert captured[0]["metadata"]["origin"] == "watchlist"
+
+
+@pytest.mark.asyncio
+async def test_site_scrape_rules_integration(monkeypatch):
+    user_id = 881
+    db = WatchlistsDatabase.for_user(user_id)
+
+    source = db.create_source(
+        name="Rules Site",
+        url="https://example.com/blog",
+        source_type="site",
+        active=True,
+        settings_json=json.dumps(
+            {
+                "scrape_rules": {
+                    "list_url": "https://example.com/blog",
+                    "limit": 2,
+                    "skip_article_fetch": True,
+                }
+            }
+        ),
+        tags=["scrape"],
+        group_ids=[],
+    )
+
+    job = db.create_job(
+        name="ScrapeJob",
+        description=None,
+        scope_json=json.dumps({"sources": [source.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+
+    first = await run_watchlist_job(user_id, job.id)
+    assert first.get("items_found") == 2
+    assert first.get("items_ingested") >= 2
+    assert db.has_seen_item(source.id, "https://example.com/blog/test-scrape-1")
+
+    second = await run_watchlist_job(user_id, job.id)
+    assert second.get("items_found") == 2
+    assert second.get("items_ingested") == 0

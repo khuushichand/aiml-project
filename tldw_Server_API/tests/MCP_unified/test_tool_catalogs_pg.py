@@ -25,6 +25,9 @@ def test_tool_catalogs_postgres_list_filter(monkeypatch):
     os.environ["MCP_ENABLE_MEDIA_MODULE"] = "true"
     reset_settings()
 
+    from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
+    asyncio.run(ensure_single_user_rbac_seed_if_needed())
+
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server

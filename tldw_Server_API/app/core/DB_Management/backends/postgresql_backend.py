@@ -28,6 +28,7 @@ from .base import (
     DatabaseError,
     NotSupportedError
 )
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 
 
 # Try to import psycopg v3. Keep the legacy flag name for test compatibility.
@@ -110,16 +111,34 @@ class PostgreSQLConnectionPool(ConnectionPool):
             conn = self._pool.getconn() if hasattr(self._pool, 'getconn') else self._pool.connection().__enter__()
             if hasattr(conn, 'row_factory'):
                 conn.row_factory = dict_row
+            try:
+                self._apply_scope_settings(conn)
+            except Exception as scope_exc:
+                logger.debug(f"Scope config failed for pooled connection: {scope_exc}")
             return conn
         # Fallback minimal pool
         if self._free:
-            return self._free.pop()
+            conn = self._free.pop()
+            try:
+                self._apply_scope_settings(conn)
+            except Exception as scope_exc:
+                logger.debug(f"Scope config failed for pooled connection: {scope_exc}")
+            return conn
         if len(self._connections) < self._max:
             conn = self._new_connection()
             self._connections.append(conn)
+            try:
+                self._apply_scope_settings(conn)
+            except Exception as scope_exc:
+                logger.debug(f"Scope config failed for new connection: {scope_exc}")
             return conn
         # As a last resort, create a new connection (no hard block)
-        return self._new_connection()
+        conn = self._new_connection()
+        try:
+            self._apply_scope_settings(conn)
+        except Exception as scope_exc:
+            logger.debug(f"Scope config failed for fallback connection: {scope_exc}")
+        return conn
 
     def return_connection(self, connection: Any) -> None:
         if self._closed or connection is None:
@@ -197,6 +216,109 @@ class PostgreSQLBackend(DatabaseBackend):
             returning_clause=True,    # RETURNING
             listen_notify=True        # LISTEN/NOTIFY
         )
+
+    def _apply_scope_settings(self, connection: Any) -> None:
+        """Apply scope-related GUC settings for row-level security."""
+        try:
+            scope = get_scope()
+        except Exception:
+            scope = None
+
+        user_id = ""
+        org_ids = ""
+        team_ids = ""
+        is_admin = "0"
+        session_role: Optional[str] = None
+
+        if scope:
+            if scope.user_id is not None:
+                try:
+                    user_id = str(int(scope.user_id))
+                except Exception:
+                    user_id = str(scope.user_id)
+            if scope.org_ids:
+                try:
+                    org_ids = ",".join(str(int(oid)) for oid in scope.org_ids if oid is not None)
+                except Exception:
+                    org_ids = ",".join(str(oid) for oid in scope.org_ids if oid is not None)
+            if scope.team_ids:
+                try:
+                    team_ids = ",".join(str(int(tid)) for tid in scope.team_ids if tid is not None)
+                except Exception:
+                    team_ids = ",".join(str(tid) for tid in scope.team_ids if tid is not None)
+            if scope.is_admin:
+                is_admin = "1"
+            session_role = getattr(scope, "session_role", None) or None
+
+        statements = [
+            ("SELECT set_config('app.current_user_id', %s, false)", (user_id,)),
+            ("SELECT set_config('app.org_ids', %s, false)", (org_ids,)),
+            ("SELECT set_config('app.team_ids', %s, false)", (team_ids,)),
+            ("SELECT set_config('app.is_admin', %s, false)", (is_admin,)),
+        ]
+
+        try:
+            if hasattr(connection, "autocommit") and not connection.autocommit:
+                try:
+                    connection.commit()
+                except Exception:
+                    pass
+
+            cursor_factory = getattr(connection, "cursor", None)
+            if cursor_factory:
+                with cursor_factory() as cur:
+                    if session_role:
+                        escaped_role = session_role.replace('"', '""')
+                        try:
+                            cur.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
+                        except Exception:
+                            try:
+                                cur.execute(f'SET ROLE "{escaped_role}"')
+                            except Exception as role_exc:
+                                raise DatabaseError(
+                                    f"Unable to adjust session role to {session_role}: {role_exc}"
+                                ) from role_exc
+                    else:
+                        try:
+                            cur.execute("RESET SESSION AUTHORIZATION")
+                        except Exception:
+                            cur.execute("RESET ROLE")
+
+                    try:
+                        cur.execute("SET row_security = on")
+                    except Exception:
+                        pass
+
+                    for sql_stmt, params in statements:
+                        cur.execute(sql_stmt, params)
+            else:
+                try:
+                    if session_role:
+                        escaped_role = session_role.replace('"', '""')
+                        try:
+                            connection.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
+                        except Exception:
+                            connection.execute(f'SET ROLE "{escaped_role}"')
+                    else:
+                        try:
+                            connection.execute("RESET SESSION AUTHORIZATION")
+                        except Exception:
+                            connection.execute("RESET ROLE")
+                except Exception as role_exc:
+                    raise DatabaseError(f"Unable to adjust session role via execute: {role_exc}") from role_exc
+
+                try:
+                    connection.execute("SET row_security = on")
+                except Exception:
+                    pass
+
+                for sql_stmt, params in statements:
+                    try:
+                        connection.execute(sql_stmt, params)
+                    except Exception as cfg_exc:
+                        logger.debug(f"Unable to apply scope settings via execute: {cfg_exc}")
+        except Exception as exc:
+            logger.debug(f"Failed to configure session scope settings: {exc}")
     
     def connect(self) -> Any:
         """Create a new PostgreSQL connection."""
@@ -215,6 +337,10 @@ class PostgreSQLBackend(DatabaseBackend):
         )
         conn = psycopg.connect(dsn)
         conn.row_factory = dict_row
+        try:
+            self._apply_scope_settings(conn)
+        except Exception as scope_exc:
+            logger.debug(f"Scope config failed for direct connection: {scope_exc}")
         return conn
     
     def disconnect(self, connection: Any) -> None:
@@ -247,7 +373,10 @@ class PostgreSQLBackend(DatabaseBackend):
     def get_pool(self) -> ConnectionPool:
         """Get or create the connection pool."""
         if self._pool is None:
-            self._pool = PostgreSQLConnectionPool(self.config)
+            pool = PostgreSQLConnectionPool(self.config)
+            # Propagate scope configuration helper so the pool can refresh session state.
+            setattr(pool, "_apply_scope_settings", self._apply_scope_settings)
+            self._pool = pool
         return self._pool
     
     def _prepare_query(

@@ -89,8 +89,9 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     prepare_backend_statement,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
-from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend, load_content_db_settings
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 
 # Use application-wide logging configuration; avoid configuring here.
 
@@ -169,7 +170,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 7  # Add DocumentStructureIndex for section/paragraph offsets
+    _CURRENT_SCHEMA_VERSION = 8  # Add scope columns for org/team visibility
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -202,6 +203,8 @@ class MediaDatabase:
         uuid TEXT UNIQUE NOT NULL,
         last_modified DATETIME NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
+        org_id INTEGER,
+        team_id INTEGER,
         client_id TEXT NOT NULL,
         deleted BOOLEAN NOT NULL DEFAULT 0,
         prev_version INTEGER,
@@ -353,6 +356,8 @@ class MediaDatabase:
         timestamp DATETIME NOT NULL,
         client_id TEXT NOT NULL,
         version INTEGER NOT NULL,
+        org_id INTEGER,
+        team_id INTEGER,
         payload TEXT
     );
     
@@ -369,6 +374,8 @@ class MediaDatabase:
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         version INTEGER NOT NULL DEFAULT 1,
+        org_id INTEGER,
+        team_id INTEGER,
         client_id TEXT NOT NULL,
         user_id TEXT,
         deleted BOOLEAN NOT NULL DEFAULT 0,
@@ -392,6 +399,8 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_media_deleted ON Media(deleted);
     CREATE INDEX IF NOT EXISTS idx_media_prev_version ON Media(prev_version);
     CREATE INDEX IF NOT EXISTS idx_media_merge_parent_uuid ON Media(merge_parent_uuid);
+    CREATE INDEX IF NOT EXISTS idx_media_org_id ON Media(org_id);
+    CREATE INDEX IF NOT EXISTS idx_media_team_id ON Media(team_id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_uuid ON Keywords(uuid);
     CREATE INDEX IF NOT EXISTS idx_keywords_last_modified ON Keywords(last_modified);
@@ -447,6 +456,8 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_sync_log_ts ON sync_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_sync_log_entity_uuid ON sync_log(entity_uuid);
     CREATE INDEX IF NOT EXISTS idx_sync_log_client_id ON sync_log(client_id);
+    CREATE INDEX IF NOT EXISTS idx_sync_log_org_id ON sync_log(org_id);
+    CREATE INDEX IF NOT EXISTS idx_sync_log_team_id ON sync_log(team_id);
     
     -- Chunking Templates Indices --
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_template_name 
@@ -607,6 +618,8 @@ class MediaDatabase:
         *,
         backend: DatabaseBackend | None = None,
         config: ConfigParser | None = None,
+        default_org_id: Optional[int] = None,
+        default_team_id: Optional[int] = None,
     ):
         """
         Initializes the Database instance, sets up the connection pool (via threading.local),
@@ -656,11 +669,14 @@ class MediaDatabase:
         # Resolve database backend (defaults to sqlite when none configured)
         self.backend = self._resolve_backend(backend=backend, config=config)
         self.backend_type = self.backend.backend_type
+        self.default_org_id = default_org_id
+        self.default_team_id = default_team_id
 
         # Initialize thread-local storage for connections
         self._local = threading.local()
         # Add lock for media insertion to prevent race conditions in concurrent uploads
         self._media_insert_lock = threading.Lock()
+        self._scope_cache: Tuple[Optional[int], Optional[int]] = (self.default_org_id, self.default_team_id)
 
         # Flag to track successful initialization before logging completion
         initialization_successful = False
@@ -693,6 +709,27 @@ class MediaDatabase:
                 # Logging here provides context that the __init__ block finished, albeit with failure.
                 logging.error(f"Database initialization block finished for {self.db_path_str}, but failed.")
 
+    def _resolve_scope_ids(self) -> Tuple[Optional[int], Optional[int]]:
+        """Determine effective org/team IDs for the current execution context."""
+        try:
+            scope = get_scope()
+        except Exception:
+            scope = None
+
+        org_id = self.default_org_id
+        team_id = self.default_team_id
+
+        if scope:
+            scope_org = scope.effective_org_id
+            scope_team = scope.effective_team_id
+            if scope_org is not None:
+                org_id = scope_org
+            if scope_team is not None:
+                team_id = scope_team
+
+        self._scope_cache = (org_id, team_id)
+        return org_id, team_id
+
     # --- Backend Resolution Helpers ---
     def _resolve_backend(
         self,
@@ -704,11 +741,35 @@ class MediaDatabase:
         if backend is not None:
             return backend
 
+        parser: ConfigParser | None = config
+        if parser is None:
+            try:
+                parser = load_comprehensive_config()
+            except Exception:
+                parser = None
+
+        backend_mode_env = (os.getenv("CONTENT_DB_MODE") or os.getenv("TLDW_CONTENT_DB_BACKEND") or "").strip().lower()
+        forced_postgres = backend_mode_env in {"postgres", "postgresql"}
+
+        if not forced_postgres and parser is not None:
+            try:
+                content_settings = load_content_db_settings(parser)
+                forced_postgres = content_settings.backend_type == BackendType.POSTGRESQL
+            except Exception:
+                pass
+
+        if forced_postgres:
+            if parser is None:
+                raise DatabaseError("PostgreSQL content backend requested but configuration could not be loaded")
+            resolved_backend = get_content_backend(parser)
+            if resolved_backend is None or resolved_backend.backend_type != BackendType.POSTGRESQL:
+                raise DatabaseError("PostgreSQL content backend requested but could not be initialized")
+            return resolved_backend
+
         # 2) If a concrete db_path (including ':memory:') was provided at construction,
         #    prefer a SQLite backend bound to that path. This ensures test fixtures and
         #    callers using custom paths do not accidentally share the global content DB
         #    from configuration.
-        #    Only fall back to config-resolved backend when no usable path is present.
         provided_path = self.db_path_str
         if provided_path:
             fallback_config = DatabaseConfig(
@@ -716,15 +777,6 @@ class MediaDatabase:
                 sqlite_path=provided_path,
             )
             return DatabaseBackendFactory.create_backend(fallback_config)
-
-        # 3) As a last resort (should not happen under normal ctor usage),
-        #    resolve from comprehensive config.
-        parser: ConfigParser | None = config
-        if parser is None:
-            try:
-                parser = load_comprehensive_config()
-            except Exception:
-                parser = None
 
         resolved = get_content_backend(parser) if parser else None
         if resolved is not None:
@@ -912,6 +964,14 @@ class MediaDatabase:
                     conn = None
                     self._local.conn = None
                 else:
+                    try:
+                        # Reapply scope for pooled PostgreSQL connections when context changes
+                        self.backend._apply_scope_settings(conn)  # type: ignore[attr-defined]
+                    except AttributeError:
+                        # Backend does not expose scope application (likely SQLite)
+                        pass
+                    except Exception as scope_exc:
+                        logging.debug(f"Unable to refresh scope settings: {scope_exc}")
                     return conn
 
         if conn is None:
@@ -1721,6 +1781,7 @@ class MediaDatabase:
                 except Exception:
                     pass
                 self._sync_postgres_sequences(conn)
+                self._ensure_postgres_rls(conn)
                 return
 
             result = backend.execute("SELECT version FROM schema_version LIMIT 1", connection=conn)
@@ -1773,6 +1834,7 @@ class MediaDatabase:
                 except Exception:
                     pass
                 self._sync_postgres_sequences(conn)
+                self._ensure_postgres_rls(conn)
                 return
 
             if current_version < target_version:
@@ -1805,6 +1867,7 @@ class MediaDatabase:
             except Exception:
                 pass
             self._sync_postgres_sequences(conn)
+            self._ensure_postgres_rls(conn)
 
     def _run_postgres_migrations(self, conn, current_version: int, target_version: int) -> None:
         """Execute sequential PostgreSQL migrations until the target version is reached."""
@@ -1818,6 +1881,8 @@ class MediaDatabase:
                 self._update_schema_version_postgres(conn, version)
                 applied_version = version
 
+        self._ensure_postgres_rls(conn)
+
         if applied_version < target_version:
             raise SchemaError(
                 f"PostgreSQL migration path incomplete for MediaDatabase: reached {applied_version}, expected {target_version}."
@@ -1830,6 +1895,7 @@ class MediaDatabase:
             5: self._postgres_migrate_to_v5,
             6: self._postgres_migrate_to_v6,
             7: self._postgres_migrate_to_v7,
+            8: self._postgres_migrate_to_v8,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -1927,6 +1993,32 @@ class MediaDatabase:
             backend.execute(
                 (
                     f"CREATE INDEX IF NOT EXISTS {ident(name)} ON {ident('documentstructureindex')} ({cols})"
+                ),
+                connection=conn,
+            )
+
+    def _postgres_migrate_to_v8(self, conn) -> None:
+        """Add org_id and team_id scope columns to content tables (PostgreSQL)."""
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        scoped_tables = [
+            "media",
+            "sync_log",
+        ]
+
+        for table in scoped_tables:
+            backend.execute(
+                (
+                    f"ALTER TABLE {ident(table)} "
+                    f"ADD COLUMN IF NOT EXISTS {ident('org_id')} BIGINT"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    f"ALTER TABLE {ident(table)} "
+                    f"ADD COLUMN IF NOT EXISTS {ident('team_id')} BIGINT"
                 ),
                 connection=conn,
             )
@@ -2047,6 +2139,106 @@ class MediaDatabase:
             )
         except Exception as e:
             logging.warning(f"Failed to ensure Postgres chunk-level FTS: {e}")
+
+    def _postgres_policy_exists(self, conn, table: str, policy: str) -> bool:
+        """Check whether a named RLS policy exists for the given table."""
+        try:
+            result = self.backend.execute(
+                "SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename = %s AND policyname = %s",
+                (table, policy),
+                connection=conn,
+            )
+            rows = getattr(result, "rows", None)
+            return bool(rows)
+        except Exception:
+            return False
+
+    def _ensure_postgres_rls(self, conn) -> None:
+        """Ensure row-level security policies exist for shared content tables."""
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        org_array = "COALESCE(string_to_array(NULLIF(current_setting('app.org_ids', true), ''), ',')::BIGINT[], ARRAY[]::BIGINT[])"
+        team_array = "COALESCE(string_to_array(NULLIF(current_setting('app.team_ids', true), ''), ',')::BIGINT[], ARRAY[]::BIGINT[])"
+
+        policy_sets = {
+            'media': [
+                ('media_scope_admin', "COALESCE(current_setting('app.is_admin', true), '0') = '1'"),
+                ('media_scope_personal', f"{ident('media')}.client_id = current_setting('app.current_user_id', true)"),
+                ('media_scope_org', f"{ident('media')}.org_id IS NOT NULL AND {ident('media')}.org_id = ANY({org_array})"),
+                ('media_scope_team', f"{ident('media')}.team_id IS NOT NULL AND {ident('media')}.team_id = ANY({team_array})"),
+            ],
+            'sync_log': [
+                ('sync_scope_admin', "COALESCE(current_setting('app.is_admin', true), '0') = '1'"),
+                ('sync_scope_personal', f"{ident('sync_log')}.client_id = current_setting('app.current_user_id', true)"),
+                ('sync_scope_org', f"{ident('sync_log')}.org_id IS NOT NULL AND {ident('sync_log')}.org_id = ANY({org_array})"),
+                ('sync_scope_team', f"{ident('sync_log')}.team_id IS NOT NULL AND {ident('sync_log')}.team_id = ANY({team_array})"),
+            ],
+        }
+
+        try:
+            backend.execute(f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY", connection=conn)
+            backend.execute(f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY", connection=conn)
+        except Exception as exc:
+            logging.debug(f"Could not enable RLS for media: {exc}")
+
+        try:
+            backend.execute(
+                f"DROP POLICY IF EXISTS {backend.escape_identifier('media_scope_policy')} ON {ident('media')}",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
+        for policy_name, predicate in policy_sets['media']:
+            try:
+                backend.execute(
+                    f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
+                    connection=conn,
+                )
+            except Exception:
+                pass
+            backend.execute(
+                f"""
+                CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
+                FOR ALL
+                USING ({predicate})
+                WITH CHECK ({predicate})
+                """,
+                connection=conn,
+            )
+
+        try:
+            backend.execute(f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY", connection=conn)
+            backend.execute(f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY", connection=conn)
+        except Exception as exc:
+            logging.debug(f"Could not enable RLS for sync_log: {exc}")
+
+        try:
+            backend.execute(
+                f"DROP POLICY IF EXISTS {backend.escape_identifier('sync_log_scope_policy')} ON {ident('sync_log')}",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
+        for policy_name, predicate in policy_sets['sync_log']:
+            try:
+                backend.execute(
+                    f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('sync_log')}",
+                    connection=conn,
+                )
+            except Exception:
+                pass
+            backend.execute(
+                f"""
+                CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('sync_log')}
+                FOR ALL
+                USING ({predicate})
+                WITH CHECK ({predicate})
+                """,
+                connection=conn,
+            )
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:
@@ -2406,6 +2598,7 @@ class MediaDatabase:
 
         current_time = self._get_current_utc_timestamp_str()  # Generate timestamp here
         client_id = self.client_id
+        scope_org_id, scope_team_id = self._resolve_scope_ids()
 
         # Exclude potentially large/binary fields from default payload logging
         if payload:
@@ -2427,19 +2620,19 @@ class MediaDatabase:
             if self.backend_type == BackendType.SQLITE:
                 conn.execute(
                     """
-                    INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, org_id, team_id, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (entity, entity_uuid, operation, current_time, client_id, version, payload_json),
+                    (entity, entity_uuid, operation, current_time, client_id, version, scope_org_id, scope_team_id, payload_json),
                 )
             else:
                 self._execute_with_connection(
                     conn,
                     """
-                    INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, org_id, team_id, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (entity, entity_uuid, operation, current_time, client_id, version, payload_json),
+                    (entity, entity_uuid, operation, current_time, client_id, version, scope_org_id, scope_team_id, payload_json),
                 )
             logging.debug(
                 f"Logged sync event: {entity} {entity_uuid} {operation} v{version} at {current_time}"
@@ -3531,7 +3724,10 @@ class MediaDatabase:
         Raises:
             DatabaseError: If fetching log entries fails.
         """
-        query = "SELECT change_id, entity, entity_uuid, operation, timestamp, client_id, version, payload FROM sync_log WHERE change_id > ? ORDER BY change_id ASC"
+        query = (
+            "SELECT change_id, entity, entity_uuid, operation, timestamp, client_id, version, "
+            "org_id, team_id, payload FROM sync_log WHERE change_id > ? ORDER BY change_id ASC"
+        )
         params = [since_change_id]
         if limit is not None:
             query += " LIMIT ?"
@@ -3820,6 +4016,7 @@ class MediaDatabase:
         def _media_payload(uuid_: str, version_: int, *, chunk_status: str) -> Dict[str, Any]:
             """Return a dict suitable for INSERT/UPDATE parameters and for sync logging."""
             bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+            scope_org_id, scope_team_id = self._resolve_scope_ids()
             return {
                 "url": url,
                 "title": title,
@@ -3837,6 +4034,8 @@ class MediaDatabase:
                 "uuid": uuid_,
                 "last_modified": now,
                 "version": version_,
+                "org_id": scope_org_id,
+                "team_id": scope_team_id,
                 "client_id": client_id,
                 "deleted": bool_false,
             }
@@ -4066,8 +4265,8 @@ class MediaDatabase:
                             INSERT INTO Media (url, title, type, content, author, ingestion_date,
                                                transcription_model, content_hash, is_trash, trash_date,
                                                chunking_status, vector_processing, uuid, last_modified,
-                                               version, client_id, deleted)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               version, org_id, team_id, client_id, deleted)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """
                         insert_params = (
                             payload['url'],
@@ -4085,6 +4284,8 @@ class MediaDatabase:
                             payload['uuid'],
                             payload['last_modified'],
                             payload['version'],
+                            payload['org_id'],
+                            payload['team_id'],
                             payload['client_id'],
                             payload['deleted'],
                         )

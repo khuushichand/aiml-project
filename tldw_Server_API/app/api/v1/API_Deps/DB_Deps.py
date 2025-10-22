@@ -9,7 +9,7 @@ from loguru import logger
 from typing import Dict, Optional
 
 # 3rd-party Libraries
-from fastapi import Header, HTTPException, status, Depends
+from fastapi import Header, HTTPException, status, Depends, Request
 try:
     from cachetools import LRUCache
     _HAS_CACHETOOLS = True
@@ -24,6 +24,9 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 # Import the specific Database class
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError, SchemaError # Adjust import path
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 #######################################################################################################################
 
@@ -88,6 +91,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
 # --- Main Dependency Function ---
 
 async def get_media_db_for_user(
+    request: Request,
     # Depends on the primary authentication/identification dependency
     current_user: User = Depends(get_request_user)
 ) -> MediaDatabase:
@@ -114,6 +118,29 @@ async def get_media_db_for_user(
 
     user_id = current_user.id # Will be SINGLE_USER_FIXED_ID in single-user mode
     db_instance: Optional[MediaDatabase] = None
+    backend_mode_hint = (os.getenv("CONTENT_DB_MODE") or str(settings.get("CONTENT_DB_BACKEND", "sqlite"))).strip().lower()
+    require_shared_backend = backend_mode_hint in {"postgres", "postgresql"}
+
+    try:
+        shared_backend = get_content_backend_instance()
+    except RuntimeError as exc:
+        logger.error(f"Content backend initialization failed: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="PostgreSQL content backend required but unavailable. Check server logs."
+        ) from exc
+
+    shared_backend_type = getattr(shared_backend, "backend_type", None)
+    if require_shared_backend and shared_backend_type != BackendType.POSTGRESQL:
+        logger.error("CONTENT_DB_MODE=postgres but shared backend is not PostgreSQL or missing.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="PostgreSQL content backend required but unavailable. Check server configuration.",
+        )
+
+    use_shared_backend = shared_backend_type == BackendType.POSTGRESQL
+    if require_shared_backend:
+        use_shared_backend = True
 
     # --- Check Cache ---
     # Read lock implicitly handled by context manager
@@ -138,12 +165,21 @@ async def get_media_db_for_user(
         # --- Get Path and Initialize ---
         db_path: Optional[Path] = None # Define scope for logging in except block
         try:
-            db_path = _get_db_path_for_user(user_id)
-            logger.info(f"Initializing Database instance for user {user_id} at path: {db_path}")
+            if use_shared_backend:
+                db_path = Path(":memory:")
+                logger.info(f"Initializing Database instance for user {user_id} using shared Postgres backend")
+                db_instance = MediaDatabase(
+                    db_path=str(db_path),
+                    client_id=str(current_user.id),
+                    backend=shared_backend,
+                )
+            else:
+                db_path = _get_db_path_for_user(user_id)
+                logger.info(f"Initializing Database instance for user {user_id} at path: {db_path}")
 
-            # Instantiate the Database class for the specific user ID's path
-            # Use SERVER_CLIENT_ID assigned from settings dict
-            db_instance = MediaDatabase(db_path=str(db_path), client_id=str(current_user.id))
+                # Instantiate the Database class for the specific user ID's path
+                # Use SERVER_CLIENT_ID assigned from settings dict
+                db_instance = MediaDatabase(db_path=str(db_path), client_id=str(current_user.id))
 
             # --- Store in Cache ---
             _user_db_instances[user_id] = db_instance
@@ -171,6 +207,13 @@ async def get_media_db_for_user(
             ) from e
 
     # Return the newly created and cached instance
+    try:
+        scope = get_scope()
+        if scope:
+            db_instance.default_org_id = scope.effective_org_id
+            db_instance.default_team_id = scope.effective_team_id
+    except Exception:
+        pass
     return db_instance
 
 

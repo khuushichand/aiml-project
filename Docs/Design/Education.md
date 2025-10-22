@@ -7,7 +7,8 @@ https://openscilm.allen.ai/
 https://arxiv.org/abs/2411.14199
 https://arxiv.org/html/2411.14199v1
 
-
+https://github.com/gudvardur/amazon_book_downloader
+https://github.com/presenton/presenton
 https://arxiv.org/abs/2412.02035
 https://github.com/andreamust/NEON-GPT
 https://arxiv.org/abs/2412.02035v1

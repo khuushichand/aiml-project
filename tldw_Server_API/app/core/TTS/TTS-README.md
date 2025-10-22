@@ -4,31 +4,36 @@
 
 The TTS module provides a production-ready, extensible Text-to-Speech service with support for multiple providers, voice cloning, and OpenAI-compatible API endpoints. Built with an adapter pattern architecture, it offers seamless fallback between providers, comprehensive error handling, and enterprise-grade features.
 
+Developer-oriented details (architecture, provider matrix, configuration, and test guidance) live in `tldw_Server_API/app/core/TTS/README.md`.
+
 ## Features
 
 ### Core Capabilities
-- **Multi-Provider Support**: OpenAI, ElevenLabs, and 7 open-source/local adapters (Kokoro, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS)
-- **Voice Cloning**: Support for voice reference audio with Higgs, Chatterbox, VibeVoice, NeuTTS, and IndexTTS2
-- **Streaming Audio**: Real-time audio streaming for all providers
-- **Format Support**: MP3, WAV, OPUS, FLAC, PCM output formats
+- **Multi-Provider Support**: OpenAI, ElevenLabs, and seven local adapters (Kokoro, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS) with a mock adapter for testing.
+- **Voice Cloning**: Voice reference audio accepted by Higgs, Chatterbox, Dia, VibeVoice, NeuTTS, and IndexTTS2 (ElevenLabs supports user voices via API).
+- **Streaming Audio**: Real-time chunked streaming across adapters; NeuTTS enables streaming when a quantized (GGUF) backbone is loaded.
+- **Format Support**: Adapter-specific coverage spanning MP3, WAV, OPUS, FLAC, PCM, AAC, and OGG via the shared `AudioFormat` enum.
 - **OpenAI Compatibility**: Drop-in replacement for OpenAI TTS API
-- **Fault Tolerance**: Circuit breaker pattern with automatic failover
-- **Performance Metrics**: Built-in monitoring and health checks
+- **Voice Management**: Upload, catalog, quota enforcement, and preview endpoints backed by the `voice_manager` service.
+- **Fault Tolerance**: Circuit breaker pattern with automatic failover and exponential backoff
+- **Performance Metrics**: Prometheus metrics (`tts_requests_total`, `tts_request_duration_seconds`, etc.) plus health checks
 - **Transcription/Translation**: OpenAI-compatible speech-to-text endpoints
 
 ### Supported Providers
 
 | Provider | Type | Languages | Voice Cloning | Key Features |
 |----------|------|-----------|---------------|--------------|
-| **OpenAI** | Commercial API | 50+ | ❌ | Industry standard, HD quality |
-| **ElevenLabs** | Commercial API | 29 | ✅ (Pro) | Premium quality, emotion control |
-| **Kokoro** | Local ONNX | EN | ❌ | Lightweight, CPU-friendly, offline |
+| **OpenAI** | Commercial API | EN* | ❌ | Industry standard, HD quality |
+| **ElevenLabs** | Commercial API | 29 | ✅ (Pro/user voices) | Premium quality, emotion control |
+| **Kokoro** | Local ONNX | EN (US/GB) | ❌ | Lightweight, CPU-friendly, offline |
 | **Higgs** | Local PyTorch | 50+ | ✅ (3-10s) | Music generation, multi-lingual |
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
-| **Dia** | Local PyTorch | EN | ❌ | Multi-speaker dialogue specialist |
+| **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
 | **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
-| **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, GGUF streaming |
+| **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, optional GGUF streaming |
+
+\* Current adapter configuration targets English (`tts-1` / `tts-1-hd`). Additional languages depend on OpenAI model availability.
 
 ### IndexTTS2 Adapter
 
@@ -55,6 +60,16 @@ providers:
 - **Emotion Controls**: Provide `extra_params` such as `emo_audio_reference`, `emo_alpha`, `emo_vector`, or `emo_text` to tap into QwenEmotion-guided delivery.
 
 > **Manual GPU smoke test**: See `TTS-DEPLOYMENT.md` for a short checklist covering environment validation and end-to-end streaming playback on real hardware.
+
+### Voice Management & Cloning
+
+- `voice_manager.py` validates uploads (extensions, duration, sample rate, size) and enforces quotas (`VOICE_RATE_LIMITS`).
+- API surface:
+  - `POST /api/v1/audio/voices/upload`
+  - `GET /api/v1/audio/voices/catalog`
+  - `GET /api/v1/audio/voices`, `GET/DELETE /api/v1/audio/voices/{voice_id}`
+  - `POST /api/v1/audio/voices/{voice_id}/preview`
+- Provider-specific requirements are documented in `TTS-VOICE-CLONING.md`; NeuTTS and IndexTTS2 require voice references for best results.
 
 ## Architecture
 
@@ -341,6 +356,9 @@ performance:
   # When false, raise errors so the API returns proper HTTP errors
   stream_errors_as_audio: true
   cache_enabled: false
+
+# Environment override (takes precedence over YAML)
+# export TTS_STREAM_ERRORS_AS_AUDIO=false
 ```
 
 #### Generic vs Provider-Prefixed Keys

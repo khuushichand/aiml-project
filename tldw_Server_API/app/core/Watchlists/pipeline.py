@@ -24,11 +24,11 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase, SourceRow
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
-from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_article
+from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_article, fetch_site_items_with_rules
 
 
 def _utcnow_iso() -> str:
@@ -104,7 +104,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
 
     # Resolve per-user media DB path and instantiate
     media_db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
-    mdb = MediaDatabase(db_path=media_db_path, client_id=str(user_id))
+    mdb = create_media_database(client_id=str(user_id), db_path=media_db_path)
 
     # Fetch scope and sources
     scope = {}
@@ -444,49 +444,134 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
                     except Exception:
                         settings = {}
-                    top_n = 1
-                    try:
-                        top_n = int(settings.get("top_n", 1))
-                    except Exception:
-                        top_n = 1
-                    discover_method = str(settings.get("discover_method", "auto")).lower()
 
+                    scrape_rules = settings.get("scrape_rules") if isinstance(settings.get("scrape_rules"), dict) else None
+                    prefetched_by_url: Dict[str, Dict[str, Any]] = {}
                     urls_to_fetch: List[str] = []
-                    if top_n > 1:
+
+                    if scrape_rules:
                         try:
-                            from tldw_Server_API.app.core.Watchlists.fetchers import fetch_site_top_links
-                            urls_to_fetch = await fetch_site_top_links(src.url, top_n=top_n, method=discover_method)
-                        except Exception:
+                            scraped_items = await fetch_site_items_with_rules(
+                                base_url=str(scrape_rules.get("list_url") or src.url),
+                                rules=scrape_rules,
+                                tenant_id="default",
+                            )
+                        except Exception as exc:
+                            logger.debug(f"Scrape rules fetch failed for source {getattr(src, 'id', '?')}: {exc}")
+                            scraped_items = []
+                        for entry in scraped_items:
+                            link = (entry.get("url") or "").strip()
+                            if not link:
+                                continue
+                            if link not in prefetched_by_url:
+                                prefetched_by_url[link] = entry
+                                urls_to_fetch.append(link)
+                        if "top_n" in settings:
+                            try:
+                                top_limit = max(0, int(settings.get("top_n", 0)))
+                            except Exception:
+                                top_limit = None
+                            if top_limit == 0:
+                                urls_to_fetch = []
+                            elif top_limit is not None and top_limit < len(urls_to_fetch):
+                                urls_to_fetch = urls_to_fetch[:top_limit]
+                        if urls_to_fetch:
+                            prefetched_by_url = {url: prefetched_by_url[url] for url in urls_to_fetch}
+                        if not urls_to_fetch:
                             urls_to_fetch = [src.url]
                     else:
-                        urls_to_fetch = [src.url]
+                        top_n = 1
+                        try:
+                            top_n = int(settings.get("top_n", 1))
+                        except Exception:
+                            top_n = 1
+                        if top_n <= 0:
+                            top_n = 1
+                        discover_method = str(settings.get("discover_method", "auto")).lower()
+                        if top_n > 1:
+                            try:
+                                from tldw_Server_API.app.core.Watchlists.fetchers import fetch_site_top_links
+
+                                urls_to_fetch = await fetch_site_top_links(src.url, top_n=top_n, method=discover_method)
+                            except Exception:
+                                urls_to_fetch = [src.url]
+                        else:
+                            urls_to_fetch = [src.url]
+
+                    if not urls_to_fetch:
+                        continue
+
+                    skip_article_fetch = bool(scrape_rules.get("skip_article_fetch")) if isinstance(scrape_rules, dict) else False
 
                     items_found += len(urls_to_fetch)
                     for page_url in urls_to_fetch:
-                        article = None if test_mode else fetch_site_article(page_url)
-                        if article is None and test_mode:
-                            article = {"title": src.name or "Untitled", "url": page_url, "content": "", "author": None}
+                        prefetch = prefetched_by_url.get(page_url)
+                        item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else page_url)
+                        skip_dedup = test_mode and is_first_run
+                        if prefetch and not skip_dedup:
+                            try:
+                                if db.has_seen_item(int(src.id), item_key):
+                                    _record_scraped(
+                                        status="duplicate",
+                                        url=page_url,
+                                        title=prefetch.get("title") or src.name,
+                                        summary=prefetch.get("summary"),
+                                        media_id=None,
+                                        media_uuid=None,
+                                        published_at=prefetch.get("published") or prefetch.get("published_raw"),
+                                    )
+                                    continue
+                            except Exception:
+                                pass
+
+                        article: Optional[Dict[str, Any]] = None
+                        if skip_article_fetch and prefetch:
+                            article = {
+                                "title": prefetch.get("title") or src.name or "Untitled",
+                                "url": page_url,
+                                "content": prefetch.get("content") or prefetch.get("summary") or "",
+                                "author": prefetch.get("author"),
+                            }
+                        if article is None:
+                            if test_mode:
+                                article = {"title": src.name or "Untitled", "url": page_url, "content": "", "author": None}
+                            else:
+                                article = fetch_site_article(page_url)
+                        if (not article or not article.get("content")) and prefetch:
+                            article = article or {}
+                            article["title"] = article.get("title") or prefetch.get("title") or src.name
+                            article["url"] = article.get("url") or page_url
+                            article["content"] = article.get("content") or prefetch.get("content") or prefetch.get("summary") or ""
+                            if prefetch.get("author") and not article.get("author"):
+                                article["author"] = prefetch.get("author")
                         if not article:
                             _record_scraped(
                                 status="error",
                                 url=page_url,
-                                title=src.name,
-                                summary=None,
+                                title=prefetch.get("title") if prefetch and prefetch.get("title") else src.name,
+                                summary=prefetch.get("summary") if prefetch else None,
                                 media_id=None,
                                 media_uuid=None,
-                                published_at=None,
+                                published_at=prefetch.get("published") if prefetch else None,
                             )
                             continue
+
+                        article["url"] = article.get("url") or page_url
+                        if not article.get("title"):
+                            article["title"] = prefetch.get("title") if prefetch and prefetch.get("title") else src.name
+
                         ingestion_ok = False
                         ingested_media_id: Optional[int] = None
                         ingested_media_uuid: Optional[str] = None
                         summary_text = article.get("content") or ""
+                        if not summary_text and prefetch:
+                            summary_text = prefetch.get("content") or prefetch.get("summary") or ""
                         try:
                             media_id, media_uuid, msg = mdb.add_media_with_keywords(
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
                                 media_type="article",
-                                content=article.get("content") or "",
+                                content=article.get("content") or summary_text or "",
                                 author=article.get("author"),
                                 keywords=_keywords_for_source(src),
                                 overwrite=False,
@@ -505,6 +590,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             if test_mode:
                                 ingestion_ok = True
                                 items_ingested += 1
+
                         if ingestion_ok:
                             content_text = article.get("content") or summary_text or ""
                             tags_for_item = _keywords_for_source(src)
@@ -516,6 +602,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 "media_uuid": ingested_media_uuid,
                                 "tags": tags_for_item,
                             }
+                            if prefetch and (prefetch.get("published") or prefetch.get("published_raw")):
+                                metadata_payload["prefetch_published"] = prefetch.get("published") or prefetch.get("published_raw")
                             item_row = None
                             try:
                                 item_row = collections_db.upsert_content_item(
@@ -529,7 +617,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     summary=_truncate(summary_text, 600),
                                     content_hash=_hash_content(content_text),
                                     word_count=_word_count(content_text),
-                                    published_at=None,
+                                    published_at=(prefetch.get("published") if prefetch else None),
                                     status="new",
                                     favorite=False,
                                     metadata=metadata_payload,
@@ -557,24 +645,34 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     )
                                 except Exception as exc:
                                     logger.debug(f"Embedding enqueue failed for watchlist item {item_row.id}: {exc}")
+                            if prefetch:
+                                try:
+                                    db.mark_seen_item(
+                                        int(src.id),
+                                        item_key,
+                                        etag=None,
+                                        last_modified=prefetch.get("published") or prefetch.get("published_raw"),
+                                    )
+                                except Exception:
+                                    pass
                             _record_scraped(
                                 status="ingested",
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
-                                summary=summary_text,
+                                summary=summary_text or (prefetch.get("summary") if prefetch else None),
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
-                                published_at=None,
+                                published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
                         else:
                             _record_scraped(
                                 status="error",
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
-                                summary=summary_text,
+                                summary=summary_text or (prefetch.get("summary") if prefetch else None),
                                 media_id=None,
                                 media_uuid=None,
-                                published_at=None,
+                                published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
                     try:
                         db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")

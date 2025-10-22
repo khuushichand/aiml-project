@@ -509,12 +509,15 @@ def load_settings():
             pass
 
 
+    content_backend_mode = os.getenv("TLDW_CONTENT_DB_BACKEND", "sqlite").strip().lower()
+
     config_dict = {
         # General App
         "APP_MODE_STR": single_user_mode_str,
         "SINGLE_USER_MODE": single_user_mode,
         "LOG_LEVEL": log_level,
         "PROJECT_ROOT": ACTUAL_PROJECT_ROOT, # Centralized project root definition
+        "CONTENT_DB_BACKEND": content_backend_mode,
 
         # Single User
         "SINGLE_USER_FIXED_ID": single_user_fixed_id,

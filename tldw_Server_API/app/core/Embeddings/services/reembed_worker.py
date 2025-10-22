@@ -58,6 +58,7 @@ from tldw_Server_API.app.core.Embeddings.messages import (
     CURRENT_VERSION,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     VectorStoreFactory,
@@ -136,7 +137,7 @@ def _get_media_db_for_user(user_id: str) -> MediaDatabase:
         pass
     # Default Media DB path from helpers
     db_path = os.getenv("MEDIA_DB_PATH", "Databases/Media_DB_v2.db")
-    return MediaDatabase(db_path=db_path, client_id=str(user_id))
+    return create_media_database(client_id=str(user_id), db_path=db_path)
 
 
 def _fetch_chunks(db: MediaDatabase, media_id: int) -> List[Tuple[str, int, int]]:

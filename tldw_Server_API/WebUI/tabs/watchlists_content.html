@@ -91,6 +91,170 @@
         <h3>Response</h3>
         <pre id="watchlistsUpdate_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="watchlists-sources">
+        <h2>Watchlist Sources</h2>
+        <p>Create and list RSS or site scraper sources without editing raw JSON. XPath selectors accept multiple lines; prefix with <code>css:</code> to use CSS rules.</p>
+
+        <div class="endpoint-subsection">
+            <h3>
+                <span class="endpoint-method get">GET</span>
+                <span class="endpoint-path">/api/v1/watchlists/sources</span>
+            </h3>
+            <div class="form-inline">
+                <div class="form-group">
+                    <label for="watchlistsSources_page">Page</label>
+                    <input type="number" id="watchlistsSources_page" min="1" value="1">
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsSources_size">Size</label>
+                    <input type="number" id="watchlistsSources_size" min="1" max="200" value="50">
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsSources_tag">Tag (optional)</label>
+                    <input type="text" id="watchlistsSources_tag" placeholder="news">
+                </div>
+            </div>
+            <button class="api-button subtle" onclick="watchlistsListSources()">List Sources</button>
+            <h4>Response</h4>
+            <pre id="watchlistsSources_response">---</pre>
+        </div>
+
+        <div class="endpoint-subsection">
+            <h3>
+                <span class="endpoint-method post">POST</span>
+                <span class="endpoint-path">/api/v1/watchlists/sources</span>
+            </h3>
+            <form class="form-grid" onsubmit="return false;">
+                <div class="form-group">
+                    <label for="watchlistsSource_name">Name <span class="required">*</span></label>
+                    <input type="text" id="watchlistsSource_name" placeholder="Tech News" required>
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsSource_url">URL <span class="required">*</span></label>
+                    <input type="text" id="watchlistsSource_url" placeholder="https://example.com" required oninput="watchlistsSyncListUrl()">
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsSource_type">Source Type</label>
+                    <select id="watchlistsSource_type" onchange="watchlistsSourceTypeChanged()">
+                        <option value="site">Site scraper</option>
+                        <option value="rss">RSS feed</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="watchlistsSource_tags">Tags (comma separated)</label>
+                    <input type="text" id="watchlistsSource_tags" placeholder="news, ai">
+                </div>
+                <div class="form-group checkbox-group">
+                    <label><input type="checkbox" id="watchlistsSource_active" checked> Active</label>
+                </div>
+
+                <div id="watchlistsSource_rssFields" class="span-2 form-row" style="display:none;">
+                    <div class="form-group">
+                        <label for="watchlistsSource_rssLimit">Item limit per poll</label>
+                        <input type="number" id="watchlistsSource_rssLimit" min="1" placeholder="50">
+                    </div>
+                </div>
+
+                <div id="watchlistsSource_siteFields" class="span-2 form-row">
+                    <div class="form-group">
+                        <label for="watchlistsSource_topN">Top links per run</label>
+                        <input type="number" id="watchlistsSource_topN" min="1" placeholder="3">
+                    </div>
+                    <div class="form-group">
+                        <label for="watchlistsSource_discover">Discovery method</label>
+                        <select id="watchlistsSource_discover">
+                            <option value="auto">Auto</option>
+                            <option value="frontpage">Front page</option>
+                            <option value="sitemap">Sitemap</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="watchlistsSource_limit">Scraped item limit</label>
+                        <input type="number" id="watchlistsSource_limit" min="1" placeholder="25">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="watchlistsSource_listUrl">List URL override</label>
+                        <input type="text" id="watchlistsSource_listUrl" placeholder="Defaults to primary URL">
+                    </div>
+
+                    <div class="form-group span-2">
+                        <button type="button" class="api-button subtle" onclick="watchlistsToggleScrapeAdvanced()">
+                            Toggle scrape rule selectors
+                        </button>
+                    </div>
+
+                    <div id="watchlistsSource_scrapeAdvanced" class="span-2" style="display:none;">
+                        <div class="form-grid">
+                            <div class="form-group span-2">
+                                <label for="watchlistsSource_entrySelectors">Entry selectors</label>
+                                <textarea id="watchlistsSource_entrySelectors" rows="3" placeholder="//article&#10;css:.post-card"></textarea>
+                                <small>One XPath or CSS selector per line to identify items.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_linkSelectors">Link selectors</label>
+                                <textarea id="watchlistsSource_linkSelectors" rows="3" placeholder=".//a/@href"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_titleSelectors">Title selectors</label>
+                                <textarea id="watchlistsSource_titleSelectors" rows="3" placeholder=".//h2/text()"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_summarySelectors">Summary selectors</label>
+                                <textarea id="watchlistsSource_summarySelectors" rows="3" placeholder=".//p/text()"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_contentSelectors">Content selectors</label>
+                                <textarea id="watchlistsSource_contentSelectors" rows="3" placeholder=".//div[@class='content']//text()"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_authorSelectors">Author selectors</label>
+                                <input type="text" id="watchlistsSource_authorSelectors" placeholder=".//span[@class='byline']/text()">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_publishedSelectors">Published selectors</label>
+                                <input type="text" id="watchlistsSource_publishedSelectors" placeholder=".//time/@datetime">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_publishedFormat">Published format</label>
+                                <input type="text" id="watchlistsSource_publishedFormat" placeholder="%Y-%m-%dT%H:%M:%S%z">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_summaryJoin">Summary join text</label>
+                                <input type="text" id="watchlistsSource_summaryJoin" placeholder=" ">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_contentJoin">Content join text</label>
+                                <input type="text" id="watchlistsSource_contentJoin" placeholder="\n\n">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_nextSelectors">Next page selectors</label>
+                                <textarea id="watchlistsSource_nextSelectors" rows="2" placeholder="//a[@class='next']/@href"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_nextAttr">Next link attribute</label>
+                                <input type="text" id="watchlistsSource_nextAttr" value="href">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_maxPages">Max pages</label>
+                                <input type="number" id="watchlistsSource_maxPages" min="1" placeholder="2">
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label><input type="checkbox" id="watchlistsSource_skipArticle"> Use list content without fetching article</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+            <div class="form-actions">
+                <button class="api-button" onclick="watchlistsCreateSource()" id="watchlistsSource_createBtn">Create Source</button>
+                <button class="api-button subtle" onclick="watchlistsResetSourceForm()">Reset Form</button>
+            </div>
+            <h4>Response</h4>
+            <pre id="watchlistsSource_createResponse">---</pre>
+        </div>
+    </div>
 </div>
 
 <!-- Watchlists Outputs Tab -->

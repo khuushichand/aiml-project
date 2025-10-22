@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
@@ -428,7 +428,10 @@ class WebScrapingService:
         # Default to user_id 1 if not provided (single-user mode)
         effective_user_id = user_id if user_id is not None else 1
         db_path = get_user_media_db_path(effective_user_id)
-        db = MediaDatabase(db_path=db_path, client_id=f"webscraping_service_{effective_user_id}")
+        db = create_media_database(
+            client_id=f"webscraping_service_{effective_user_id}",
+            db_path=db_path,
+        )
         
         try:
             # Metrics

@@ -22,10 +22,11 @@ try:
 except Exception:  # pragma: no cover
     aioredis = None  # type: ignore
 
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+
 
 async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-    db = MediaDatabase(db_path=db_path, client_id="embeddings_vector_compactor")
+    db = create_media_database(client_id="embeddings_vector_compactor", db_path=db_path)
     try:
         cur = db.execute_query("SELECT id FROM Media WHERE deleted = 1")
         rows = cur.fetchall() or []
@@ -111,4 +112,3 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
         except asyncio.CancelledError:
             logger.info("Compactor cancelled; exiting")
             break
-

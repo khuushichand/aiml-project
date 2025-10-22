@@ -2,7 +2,7 @@
 # Description: FastAPI dependency injection for authentication services
 #
 # Imports
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import re
 import os
 #
@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -46,6 +47,30 @@ security = HTTPBearer(auto_error=False)
 #######################################################################################################################
 #
 # Service Dependency Functions
+
+def _activate_scope_context(
+    request: Request,
+    *,
+    user_id: Optional[int],
+    org_ids: Optional[List[int]],
+    team_ids: Optional[List[int]],
+    is_admin: bool,
+) -> None:
+    """Record content scope information for downstream database access."""
+    try:
+        active_org = getattr(request.state, "active_org_id", None)
+        active_team = getattr(request.state, "active_team_id", None)
+        token = set_scope(
+            user_id=user_id,
+            org_ids=org_ids or (),
+            team_ids=team_ids or (),
+            active_org_id=active_org,
+            active_team_id=active_team,
+            is_admin=is_admin,
+        )
+        setattr(request.state, "_content_scope_token", token)
+    except Exception as exc:
+        logger.debug(f"Unable to establish content scope context: {exc}")
 
 async def get_db_transaction():
     """Get database connection in transaction mode.
@@ -369,6 +394,13 @@ async def get_current_user(
                     request.state.org_ids = []
                 except Exception:
                     pass
+                _activate_scope_context(
+                    request,
+                    user_id=settings.SINGLE_USER_FIXED_ID,
+                    org_ids=[],
+                    team_ids=[],
+                    is_admin=True,
+                )
                 return user
             # Also allow Authorization: Bearer <SINGLE_USER_API_KEY>
             if credentials and (credentials.scheme or '').lower() == 'bearer':
@@ -392,6 +424,13 @@ async def get_current_user(
                         request.state.org_ids = []
                     except Exception:
                         pass
+                    _activate_scope_context(
+                        request,
+                        user_id=settings.SINGLE_USER_FIXED_ID,
+                        org_ids=[],
+                        team_ids=[],
+                        is_admin=True,
+                    )
                     return user
     except Exception:
         # Fall through to other mechanisms if any issue arises
@@ -462,18 +501,31 @@ async def get_current_user(
                 )
 
             # Attach user_id for downstream rate limiting where used
+            team_ids: List[int] = []
+            org_ids: List[int] = []
             try:
                 request.state.user_id = user_id
                 request.state.api_key_id = key_info.get("id")
                 # Best-effort team/org membership resolution for downstream features
                 try:
                     memberships = await list_memberships_for_user(int(user_id))
-                    request.state.team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-                    request.state.org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+                    team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+                    org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+                    request.state.team_ids = team_ids
+                    request.state.org_ids = org_ids
                 except Exception:
-                    pass
+                    request.state.team_ids = []
+                    request.state.org_ids = []
             except Exception:
                 pass
+
+            _activate_scope_context(
+                request,
+                user_id=user_id,
+                org_ids=org_ids,
+                team_ids=team_ids,
+                is_admin=bool(user.get("is_admin") or ("admin" in (user.get("roles") or []))),
+            )
 
             return user
         except HTTPException:
@@ -563,17 +615,31 @@ async def get_current_user(
             user = dict(user)
 
         # Attach user_id for downstream rate limiting where used
+        team_ids: List[int] = []
+        org_ids: List[int] = []
         try:
             request.state.user_id = int(user_id)
             # Best-effort team/org membership resolution
             try:
                 memberships = await list_memberships_for_user(int(user_id))
-                request.state.team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-                request.state.org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+                team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+                org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+                request.state.team_ids = team_ids
+                request.state.org_ids = org_ids
             except Exception:
+                request.state.team_ids = []
+                request.state.org_ids = []
                 pass
         except Exception:
             pass
+
+        _activate_scope_context(
+            request,
+            user_id=int(user_id) if isinstance(user_id, int) else None,
+            org_ids=org_ids,
+            team_ids=team_ids,
+            is_admin=bool(user.get("is_admin") or ("admin" in (user.get("roles") or []))),
+        )
 
         return user
         

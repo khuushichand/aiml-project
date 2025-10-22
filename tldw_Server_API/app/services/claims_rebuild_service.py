@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any
 from loguru import logger
 
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
@@ -94,7 +94,10 @@ class ClaimsRebuildService:
                 self._queue.task_done()
 
     def _process_task(self, task: ClaimsRebuildTask) -> None:
-        db = MediaDatabase(db_path=task.db_path, client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
+        db = create_media_database(
+            client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+            db_path=task.db_path,
+        )
         try:
             media = db.get_media_by_id(task.media_id, include_deleted=False, include_trash=False)
             if not media:
