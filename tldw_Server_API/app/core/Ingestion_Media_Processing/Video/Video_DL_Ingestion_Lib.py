@@ -541,11 +541,32 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
         if cookies is None:
             return None
         if isinstance(cookies, str):
-            try:
-                cookies = json.loads(cookies)
-            except json.JSONDecodeError:
-                # Not a JSON string; ignore
+            text = cookies.strip()
+            if not text:
                 return None
+            try:
+                cookies = json.loads(text)
+            except json.JSONDecodeError:
+                pairs = []
+                for raw_line in text.splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if line.startswith('#HttpOnly_'):
+                        line = line[len('#HttpOnly_'):]
+                    elif line.startswith('#'):
+                        continue
+                    fields = line.split('\t')
+                    if len(fields) < 7:
+                        # Fallback to whitespace splitting if tabs are missing
+                        fields = [segment for segment in line.split(' ') if segment]
+                    if len(fields) < 7:
+                        continue
+                    name, value = fields[5], fields[6]
+                    if not name:
+                        continue
+                    pairs.append(f"{name}={value}")
+                return "; ".join(pairs) if pairs else None
         if isinstance(cookies, dict):
             parts = []
             for k, v in cookies.items():

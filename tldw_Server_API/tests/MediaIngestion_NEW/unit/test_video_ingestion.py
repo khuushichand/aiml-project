@@ -6,6 +6,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestio
     parse_and_expand_urls,
     _resolve_eval_api_key,
     process_videos,
+    _cookies_to_header_value,
 )
 
 
@@ -32,6 +33,13 @@ def test_parse_and_expand_urls_respects_vimeo_netloc_and_query():
     vimeo_url = "https://player.vimeo.com/video/12345?h=abc123"
     expanded = parse_and_expand_urls([vimeo_url])
     assert expanded == [vimeo_url]
+
+
+@pytest.mark.unit
+def test_cookies_to_header_value_supports_netscape_export():
+    netscape_blob = """# Netscape HTTP Cookie File\n#HttpOnly_example.com\tTRUE\t/\tFALSE\t0\tsessionid\tabc123\nexample.com\tTRUE\t/\tTRUE\t0\tcsrftoken\txyz456\n"""
+    header = _cookies_to_header_value(netscape_blob)
+    assert header == "sessionid=abc123; csrftoken=xyz456"
 
 
 @pytest.mark.unit

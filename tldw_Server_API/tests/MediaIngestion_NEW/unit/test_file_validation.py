@@ -8,6 +8,7 @@ and sanitization without any external dependencies.
 import os
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -357,3 +358,45 @@ class TestArchiveExtensionHandling:
     )
     def test_multi_suffix_archive_extension_resolves_media_type(self, filename):
         assert _resolve_media_type_key(filename) == "archive"
+
+    @pytest.mark.unit
+    def test_zip_symlink_is_rejected(self, tmp_path):
+        validator = FileValidator(custom_media_configs={
+            "archive": {"allowed_mimetypes": set()},
+            "document": {"allowed_mimetypes": set()},
+        })
+        validator.magic_available = False
+
+        archive_path = tmp_path / "link.zip"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            info = zipfile.ZipInfo("link_to_secret")
+            info.create_system = 3
+            info.external_attr = 0o120777 << 16  # symlink entry
+            zf.writestr(info, "../../etc/passwd")
+
+        result = process_and_validate_file(archive_path, validator)
+
+        assert not result.is_valid
+        joined = " ".join(result.issues)
+        assert "unsupported symbolic link" in joined
+
+    @pytest.mark.unit
+    def test_tar_symlink_is_rejected(self, tmp_path):
+        validator = FileValidator(custom_media_configs={
+            "archive": {"allowed_mimetypes": set()},
+            "document": {"allowed_mimetypes": set()},
+        })
+        validator.magic_available = False
+
+        archive_path = tmp_path / "link.tar"
+        with tarfile.open(archive_path, "w") as tar:
+            info = tarfile.TarInfo("link_to_secret")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "../../etc/passwd"
+            tar.addfile(info)
+
+        result = process_and_validate_file(archive_path, validator)
+
+        assert not result.is_valid
+        joined = " ".join(result.issues)
+        assert "unsupported link entry" in joined

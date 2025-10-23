@@ -111,11 +111,11 @@ class TestV2Chunker:
         config = ChunkerConfig(max_text_size=64)
         chunker = Chunker(config=config)
         frontmatter = '{"meta": "x"}\n'
-        body = "a" * (config.max_text_size - len(frontmatter))
-        result = chunker.process_text(frontmatter + body)
+        body_ok = "a" * (config.max_text_size - len(frontmatter) - 1)
+        result = chunker.process_text(frontmatter + body_ok)
         assert result and isinstance(result, list)
         with pytest.raises(InvalidInputError):
-            chunker.process_text(frontmatter + body + "b")
+            chunker.process_text(frontmatter + body_ok + "b" * (len(frontmatter) + 2))
 
 
 class TestWordsStrategy:

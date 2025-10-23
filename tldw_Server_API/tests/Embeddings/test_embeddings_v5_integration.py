@@ -103,7 +103,14 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Real HuggingFace embeddings disabled; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
+    @pytest.mark.skipif(
+        IN_CI and not RUN_REAL_EMBEDDINGS,
+        reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
     async def test_real_huggingface_embedding(self, setup):
         """Test actual HuggingFace embedding creation (no mocks)"""
         async def override_user():
@@ -144,6 +151,10 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Real OpenAI embeddings disabled; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
     @pytest.mark.skipif(
         not os.getenv("OPENAI_API_KEY"),
         reason="Integration test requires OPENAI_API_KEY environment variable"
@@ -187,8 +198,17 @@ class TestEmbeddingsIntegration:
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not REDIS_AVAILABLE, reason="Redis unreachable; cache persistence test skipped.")
-    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Real HuggingFace embeddings disabled; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
+    @pytest.mark.skipif(
+        not REDIS_AVAILABLE, reason="Redis unreachable; cache persistence test skipped."
+    )
+    @pytest.mark.skipif(
+        IN_CI and not RUN_REAL_EMBEDDINGS,
+        reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
     async def test_real_cache_persistence(self, setup):
         """Test cache persistence across requests (no mocks)"""
         async def override_user():
@@ -234,7 +254,14 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Real embeddings disabled; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
+    @pytest.mark.skipif(
+        IN_CI and not RUN_REAL_EMBEDDINGS,
+        reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
     async def test_different_providers_produce_different_embeddings(self, setup):
         """Test that different providers produce different embeddings for same text"""
         async def override_user():
@@ -327,7 +354,14 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Real HuggingFace embeddings disabled; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
+    @pytest.mark.skipif(
+        IN_CI and not RUN_REAL_EMBEDDINGS,
+        reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable",
+    )
     async def test_batch_processing(self, setup):
         """Test batch processing with real embeddings"""
         async def override_user():

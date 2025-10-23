@@ -665,9 +665,13 @@ class Chunker:
                         if sep.startswith('\n') and combined.endswith('\n'):
                             trimmed = sep[1:]
                             eff_sep = trimmed if trimmed else '\n'
-                        combined += eff_sep
-                        if eff_sep.endswith('\n') and (kind == 'header_atx' or method == 'structure_aware') and (not language or language.lower() not in languages_no_space):
+                        header_like = (kind == 'header_atx' or kind_hint == 'header_atx')
+                        if eff_sep.endswith('\n') and header_like and (not language or language.lower() not in languages_no_space):
+                            combined = combined.rstrip('\n')
                             combined += ' '
+                            combined += '\n\n'
+                        else:
+                            combined += eff_sep
                     else:
                         combined += ' '
 
