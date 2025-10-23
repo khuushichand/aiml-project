@@ -5,16 +5,19 @@ Tests focus on MIME type detection, file size validation, security checks,
 and sanitization without any external dependencies.
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import tempfile
 import os
+import tarfile
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     ValidationResult,
     FileValidationError,
-    FileValidator
+    FileValidator,
+    process_and_validate_file,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import DEFAULT_MEDIA_TYPE_CONFIG as _MEDIA_CFG
 
@@ -318,3 +321,26 @@ class TestEdgeCases:
         
         # May still detect as PDF based on header
         assert result.detected_extension == ".pdf"
+
+
+class TestArchiveExtensionHandling:
+    """Ensure multi-suffix archives like .tar.gz remain supported."""
+
+    @pytest.mark.unit
+    def test_tar_gz_archive_extension_is_accepted(self, tmp_path):
+        validator = FileValidator(custom_media_configs={
+            "archive": {"allowed_mimetypes": set()},
+            "document": {"allowed_mimetypes": set()},
+        })
+        validator.magic_available = False
+
+        payload = tmp_path / "payload.txt"
+        payload.write_text("payload")
+
+        archive_path = tmp_path / "bundle.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(payload, arcname="payload.txt")
+
+        result = process_and_validate_file(archive_path, validator)
+
+        assert result.is_valid, f"Expected archive to validate, got issues: {result.issues}"

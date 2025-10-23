@@ -221,6 +221,44 @@ class UsersDB:
             logger.error(f"Failed to get user by username {username}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
     
+    async def get_user_by_uuid(self, user_uuid: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user by UUID (textual identifier) when available.
+
+        Args:
+            user_uuid: UUID string stored with the user.
+
+        Returns:
+            User data dictionary or None if not found.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if not user_uuid:
+            return None
+
+        try:
+            result = await self.db_pool.fetchone(
+                "SELECT * FROM users WHERE uuid = ?",
+                user_uuid
+            )
+
+            if not result:
+                return None
+
+            user_dict = dict(result)
+
+            if not hasattr(self.db_pool, 'fetchval'):  # SQLite conversions
+                user_dict['is_active'] = bool(user_dict.get('is_active', 1))
+                user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
+                user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
+
+            return user_dict
+
+        except Exception as e:
+            logger.error(f"Failed to get user by uuid {user_uuid}: {e}")
+            raise DatabaseError(f"Failed to get user: {e}")
+    
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """
         Get user by email
@@ -531,6 +569,11 @@ async def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     """Get user by ID (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_id(user_id)
+
+async def get_user_by_uuid(user_uuid: str) -> Optional[Dict[str, Any]]:
+    """Get user by UUID (convenience function)"""
+    db = await get_users_db()
+    return await db.get_user_by_uuid(user_uuid)
 
 async def create_user(username: str, email: str, password_hash: str, **kwargs) -> Dict[str, Any]:
     """Create user (convenience function)"""

@@ -4657,6 +4657,7 @@ async def process_videos_endpoint(
     form_data: ProcessVideosForm = Depends(get_process_videos_form),
     # 4. File Uploads
     files: Optional[List[UploadFile]] = File(None, description="Video file uploads"),
+    current_user: User = Depends(get_request_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # user_info: dict = Depends(verify_token), # Optional Auth
 ):
@@ -4782,6 +4783,7 @@ async def process_videos_endpoint(
             # 'perform_diarization' seems redundant if 'diarize' is passed, check library usage
             # If perform_diarization is truly needed separately:
             # "perform_diarization": form_data.diarize, # Or map if different logic
+            "user_id": getattr(current_user, "id", None),
         }
 
         try:

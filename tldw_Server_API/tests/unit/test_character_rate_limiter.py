@@ -108,7 +108,7 @@ def test_rate_limiter_per_minute_specific_operation_limits():
         ok1, rem1 = await limiter.check_message_send_rate(user_id=999)
         ok2, rem2 = await limiter.check_message_send_rate(user_id=999)
         assert ok1 and ok2
-        assert rem1 == 2 and rem2 == 1
+        assert rem1 == 1 and rem2 == 0
         with pytest.raises(Exception):
             await limiter.check_message_send_rate(user_id=999)
 
@@ -136,8 +136,10 @@ def test_rate_limiter_redis_remaining_aligns_with_memory_path():
     async def run_checks():
         ok1, rem1 = await limiter.check_rate_limit(user_id=7, operation="test")
         ok2, rem2 = await limiter.check_rate_limit(user_id=7, operation="test")
+        ok3, rem3 = await limiter.check_rate_limit(user_id=7, operation="test")
         assert ok1 and ok2
-        assert rem1 == 1 and rem2 == 0
+        assert rem1 == 2 and rem2 == 1
+        assert ok3 and rem3 == 0
         with pytest.raises(Exception):
             await limiter.check_rate_limit(user_id=7, operation="test")
 

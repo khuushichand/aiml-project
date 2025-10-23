@@ -365,24 +365,20 @@ class EmailService:
         from_email: str,
         attachments: Optional[List[Dict[str, Any]]]
     ) -> bool:
-        """Send email via SMTP"""
-        
+        """Send email via SMTP (offloaded to a background thread)."""
         try:
-            # Create message
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = from_email
             msg['To'] = to_email
-            
-            # Add text and HTML parts
+
             if text_body:
                 text_part = MIMEText(text_body, 'plain')
                 msg.attach(text_part)
-            
+
             html_part = MIMEText(html_body, 'html')
             msg.attach(html_part)
-            
-            # Add attachments if any
+
             if attachments:
                 for attachment in attachments:
                     part = MIMEBase('application', 'octet-stream')
@@ -393,23 +389,25 @@ class EmailService:
                         f'attachment; filename= {attachment["filename"]}'
                     )
                     msg.attach(part)
-            
-            # Send email
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                if self.smtp_use_tls:
-                    server.starttls()
-                
-                if self.smtp_username and self.smtp_password:
-                    server.login(self.smtp_username, self.smtp_password)
-                
-                server.send_message(msg)
-            
+
+            await asyncio.to_thread(self._deliver_smtp_message, msg)
             logger.info(f"Email sent successfully to {to_email}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to send email via SMTP: {e}")
             return False
+
+    def _deliver_smtp_message(self, message: MIMEMultipart) -> None:
+        """Blocking SMTP delivery executed in a worker thread."""
+        with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+            if self.smtp_use_tls:
+                server.starttls()
+
+            if self.smtp_username and self.smtp_password:
+                server.login(self.smtp_username, self.smtp_password)
+
+            server.send_message(message)
     
     async def send_password_reset_email(
         self,

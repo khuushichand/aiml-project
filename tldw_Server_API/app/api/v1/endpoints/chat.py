@@ -971,12 +971,29 @@ async def create_chat_completion(
                     # Fallback disabled - use requested provider even if unhealthy
                     selected_provider = provider
                     logger.info(f"Using requested provider {selected_provider} (fallback disabled, health check not performed)")
-            
+
             # Update provider in cleaned_args
             # Note: chat_api_call expects 'api_endpoint', not 'api_provider'
             # Update the api_endpoint with the selected provider after health check
             cleaned_args['api_endpoint'] = selected_provider
-            
+            if selected_provider != provider:
+                try:
+                    refreshed_args, refreshed_model = rebuild_call_params_for_provider(selected_provider)
+                    cleaned_args = refreshed_args
+                    model = refreshed_model or model
+                except HTTPException:
+                    raise
+                except Exception as refresh_exc:
+                    logger.error(
+                        "Failed to rebuild call params for fallback provider '%s': %s",
+                        selected_provider,
+                        refresh_exc,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Fallback provider initialization failed. Please retry.",
+                    )
+
             # Request Queue Integration (Admission control / backpressure)
             # ------------------------------------------------------------------------
             is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
@@ -2205,7 +2222,7 @@ async def generate_document(
         service = DocumentGeneratorService(db)
         
         # Convert string enum to internal enum
-        doc_type = DocumentType[request.document_type.value.upper()]
+        doc_type = DocumentType(request.document_type.value)
         
         if request.async_generation:
             # Create async job
@@ -2241,9 +2258,76 @@ async def generate_document(
                 stream=request.stream
             )
             
+            if isinstance(content, dict):
+                if content.get("success") is False:
+                    detail = content.get("error") or "Document generation failed"
+                    logger.warning(
+                        "Document generation failed for conversation %s: %s",
+                        request.conversation_id,
+                        detail
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=detail
+                    )
+                logger.error(
+                    "Unexpected document generation payload for conversation %s: %s",
+                    request.conversation_id,
+                    type(content).__name__
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Unexpected document generation response format"
+                )
+            
             if request.stream:
-                # Return streaming response
-                return StreamingResponse(content, media_type="text/plain")
+                # Return SSE streaming response for consistency with chat streaming
+                streaming_source = content
+
+                def _normalize_chunk(chunk: Any) -> str:
+                    if chunk is None:
+                        return ""
+                    if isinstance(chunk, (bytes, bytearray)):
+                        try:
+                            return chunk.decode("utf-8")
+                        except Exception:
+                            return chunk.decode("utf-8", errors="ignore")
+                    return str(chunk)
+
+                def _encode_sse(text: str) -> str:
+                    lines = text.splitlines() or [""]
+                    return "".join(f"data: {line}\n" for line in lines) + "\n"
+
+                async def _sse_stream() -> AsyncIterator[str]:
+                    try:
+                        if hasattr(streaming_source, "__aiter__"):
+                            async for chunk in streaming_source:  # type: ignore[attr-defined]
+                                payload = _normalize_chunk(chunk)
+                                if payload:
+                                    yield _encode_sse(payload)
+                        elif hasattr(streaming_source, "__iter__") and not isinstance(
+                            streaming_source, (str, bytes, bytearray)
+                        ):
+                            for chunk in streaming_source:  # type: ignore[not-an-iterable]
+                                payload = _normalize_chunk(chunk)
+                                if payload:
+                                    yield _encode_sse(payload)
+                        else:
+                            payload = _normalize_chunk(streaming_source)
+                            if payload:
+                                yield _encode_sse(payload)
+                    finally:
+                        yield "data: [DONE]\n\n"
+
+                return StreamingResponse(
+                    _sse_stream(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
             
             # Get the saved document
             docs = service.get_generated_documents(
@@ -2277,6 +2361,8 @@ async def generate_document(
     except ChatAPIError as e:
         logger.error(f"API error generating document: {e}")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Unexpected error generating document: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -2397,7 +2483,7 @@ async def list_generated_documents(
         service = DocumentGeneratorService(db)
         
         # Convert string enum to internal enum if provided
-        doc_type = DocumentType[document_type.value.upper()] if document_type else None
+        doc_type = DocumentType(document_type.value) if document_type else None
         
         documents = service.get_generated_documents(
             conversation_id=conversation_id,
@@ -2435,10 +2521,7 @@ async def get_generated_document(
     try:
         service = DocumentGeneratorService(db)
         
-        documents = service.get_generated_documents(limit=1)
-        
-        # Find the specific document
-        doc = next((d for d in documents if d['id'] == document_id), None)
+        doc = service.get_generated_document_by_id(document_id)
         
         if not doc:
             raise HTTPException(
@@ -2502,7 +2585,7 @@ async def save_prompt_config(
         service = DocumentGeneratorService(db)
         
         # Convert string enum to internal enum
-        doc_type = DocumentType[config.document_type.value.upper()]
+        doc_type = DocumentType(config.document_type.value)
         
         success = service.save_user_prompt_config(
             document_type=doc_type,
@@ -2552,7 +2635,7 @@ async def get_prompt_config(
         service = DocumentGeneratorService(db)
         
         # Convert string enum to internal enum
-        doc_type = DocumentType[document_type.value.upper()]
+        doc_type = DocumentType(document_type.value)
         
         config = service.get_user_prompt_config(doc_type)
         
@@ -2612,7 +2695,7 @@ async def bulk_generate_documents(
         for conv_id in request.conversation_ids:
             for doc_type_str in request.document_types:
                 # Convert string enum to internal enum
-                doc_type = DocumentType[doc_type_str.value.upper()]
+                doc_type = DocumentType(doc_type_str.value)
                 
                 # Create job for each combination
                 job_id = service.create_generation_job(

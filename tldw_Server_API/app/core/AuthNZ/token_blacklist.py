@@ -199,8 +199,9 @@ class TokenBlacklist:
         """Create token blacklist table if it doesn't exist"""
         try:
             db_pool = await self._ensure_db_pool()
+            using_postgres = getattr(db_pool, "pool", None) is not None
             async with db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if using_postgres:
                     # PostgreSQL
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS token_blacklist (
@@ -351,8 +352,9 @@ class TokenBlacklist:
         # Add to database for persistence
         try:
             db_pool = await self._ensure_db_pool()
+            using_postgres = getattr(db_pool, "pool", None) is not None
             async with db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if using_postgres:
                     # PostgreSQL
                     await conn.execute("""
                         INSERT INTO token_blacklist 
@@ -618,8 +620,9 @@ class TokenBlacklist:
         
         try:
             db_pool = await self._ensure_db_pool()
+            using_postgres = getattr(db_pool, "pool", None) is not None
             async with db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if using_postgres:
                     # PostgreSQL
                     result = await conn.execute(
                         "DELETE FROM token_blacklist WHERE expires_at < $1",

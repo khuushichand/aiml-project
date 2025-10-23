@@ -94,10 +94,6 @@ class RequestBatcher:
         Returns:
             Embedding result when ready
         """
-        if not self.enabled:
-            # Batching disabled, process immediately
-            return await self._process_single(text, model, provider, metadata)
-        
         metadata = metadata or {}
         user_id = metadata.get("user_id")
 
@@ -120,6 +116,10 @@ class RequestBatcher:
                     f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}"
                 )
 
+        if not self.enabled:
+            # Batching disabled, process immediately
+            return await self._process_single(text, model, provider, metadata)
+        
         # Create request
         loop = asyncio.get_running_loop()
         request = BatchRequest(
@@ -170,6 +170,9 @@ class RequestBatcher:
                 # Process batch
                 await self._process_batch(batch, provider, model)
                 
+            except asyncio.CancelledError:
+                logger.debug(f"Processing task for queue {queue_key} cancelled; shutting down.")
+                raise
             except Exception as e:
                 logger.error(f"Error processing batch queue {queue_key}: {e}")
                 # Don't crash the processing task
@@ -347,8 +350,10 @@ class RequestBatcher:
         
         model_id = f"{provider}:{model}"
         
+        normalized_provider = self._normalize_provider_name(provider)
+        
         model_entry: Dict[str, Any] = {
-            "provider": provider,
+            "provider": normalized_provider,
             "model_name_or_path": model
         }
         if provider_config.api_key:
@@ -370,6 +375,14 @@ class RequestBatcher:
             user_app_config.update(provider_section)
         
         return user_app_config
+    
+    @staticmethod
+    def _normalize_provider_name(provider: str) -> str:
+        """Normalize provider identifiers for embedding config compatibility."""
+        mapping = {
+            "local": "local_api"
+        }
+        return mapping.get(provider.lower(), provider)
     
     @staticmethod
     def _build_provider_section(provider_config: ProviderConfig) -> Optional[Dict[str, Any]]:
@@ -500,7 +513,8 @@ def get_batcher() -> RequestBatcher:
 async def create_embeddings_batch_async(
     texts: List[str],
     config: Dict[str, Any],
-    model_id_override: Optional[str] = None
+    model_id_override: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> List[List[float]]:
     """
     Create embeddings with automatic batching.
@@ -526,7 +540,7 @@ async def create_embeddings_batch_async(
     # Submit requests
     tasks = []
     for text in texts:
-        task = batcher.submit_request(text, model, provider)
+        task = batcher.submit_request(text, model, provider, metadata=metadata)
         tasks.append(task)
     
     # Wait for all results

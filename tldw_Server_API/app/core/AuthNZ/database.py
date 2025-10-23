@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Any, Dict
 import asyncio
+from urllib.parse import urlparse, unquote
 #
 # 3rd-party imports
 import asyncpg
@@ -41,6 +42,8 @@ class DatabasePool:
         self.settings = settings or get_settings()
         self.pool: Optional[asyncpg.Pool] = None
         self.db_path: Optional[str] = None
+        self._sqlite_fs_path: Optional[str] = None
+        self._sqlite_uri: bool = False
         self._initialized = False
         self._lock = asyncio.Lock()
         # Track the event loop this pool is attached to (Postgres only)
@@ -56,7 +59,7 @@ class DatabasePool:
                 return
                 
             try:
-                if self.settings.AUTH_MODE == "multi_user" and self.settings.DATABASE_URL.startswith("postgresql"):
+                if self._should_use_postgres():
                     # PostgreSQL with connection pooling
                     logger.info("Initializing PostgreSQL connection pool...")
                     
@@ -85,13 +88,14 @@ class DatabasePool:
                     
                 else:
                     # SQLite for single-user mode or fallback
-                    self.db_path = self.settings.DATABASE_URL.replace("sqlite:///", "")
+                    self.db_path, self._sqlite_uri, self._sqlite_fs_path = self._resolve_sqlite_paths(self.settings.DATABASE_URL)
                     
                     # Ensure directory exists
-                    db_dir = Path(self.db_path).parent
-                    db_dir.mkdir(parents=True, exist_ok=True)
+                    if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
+                        db_dir = Path(self._sqlite_fs_path).parent
+                        db_dir.mkdir(parents=True, exist_ok=True)
                     
-                    logger.info(f"Using SQLite database: {self.db_path}")
+                    logger.info(f"Using SQLite database: {self._sqlite_fs_path or self.db_path}")
                     
                     # Initialize SQLite schema
                     await self._create_sqlite_schema()
@@ -103,6 +107,61 @@ class DatabasePool:
                 logger.error(f"Failed to initialize database pool: {e}")
                 raise DatabaseError(f"Database initialization failed: {e}")
     
+    def _should_use_postgres(self) -> bool:
+        """Return True if the configured DATABASE_URL resolves to PostgreSQL."""
+        if self.settings.AUTH_MODE != "multi_user":
+            return False
+        parsed = urlparse(self.settings.DATABASE_URL)
+        scheme = (parsed.scheme or "").lower()
+        if not scheme:
+            return False
+        return scheme.startswith("postgres")
+
+    @staticmethod
+    def _resolve_sqlite_paths(url: str) -> tuple[str, bool, Optional[str]]:
+        """Resolve sqlite connection string, uri flag, and filesystem path."""
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "").lower()
+        if scheme.startswith("file"):
+            fs_path = parsed.path or ""
+            if fs_path.startswith("//"):
+                fs_path = fs_path[1:]
+            fs_path = unquote(fs_path or "")
+            return url, True, fs_path or None
+
+        if not scheme.startswith("sqlite"):
+            # Fallback: treat entire string as path
+            return url, False, url
+
+        path_part = parsed.path or ""
+        netloc = parsed.netloc or ""
+        combined = f"{netloc}{path_part}" if netloc else path_part
+        combined = unquote(combined or "")
+
+        if combined in (":memory:", "/:memory:"):
+            filesystem_path = ":memory:"
+        else:
+            if path_part.startswith("//") or netloc:
+                filesystem_path = "/" + combined.lstrip("/")
+            elif combined.startswith("/"):
+                filesystem_path = combined.lstrip("/")
+            else:
+                filesystem_path = combined
+
+        if filesystem_path.startswith("///"):
+            filesystem_path = filesystem_path.lstrip("/")
+
+        if parsed.query:
+            if filesystem_path.startswith("/"):
+                uri = f"file:{filesystem_path}?{parsed.query}"
+            elif filesystem_path:
+                uri = f"file:{filesystem_path}?{parsed.query}"
+            else:
+                uri = f"file:?{parsed.query}"
+            return uri, True, filesystem_path or None
+
+        return filesystem_path, False, filesystem_path or None
+
     async def _create_postgresql_schema(self):
         """Create PostgreSQL schema if it doesn't exist"""
         schema_file = Path(__file__).parent.parent.parent.parent / "Databases" / "Postgres" / "Schema" / "postgresql_users.sql"
@@ -143,7 +202,7 @@ class DatabasePool:
             logger.warning(f"SQLite schema file not found: {schema_file}")
 
         try:
-            async with aiosqlite.connect(self.db_path) as conn:
+            async with aiosqlite.connect(self.db_path, uri=self._sqlite_uri) as conn:
                 # Enable WAL mode for better concurrency
                 await conn.execute("PRAGMA journal_mode=WAL")
                 await conn.execute("PRAGMA busy_timeout=5000")
@@ -165,7 +224,8 @@ class DatabasePool:
 
             # Ensure AuthNZ migrations are up to date (handles legacy columns)
             try:
-                await asyncio.to_thread(ensure_authnz_tables, Path(self.db_path))
+                if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
+                    await asyncio.to_thread(ensure_authnz_tables, Path(self._sqlite_fs_path))
             except Exception as migration_error:
                 logger.debug(f"SQLite migration harmonization skipped: {migration_error}")
                     
@@ -201,7 +261,7 @@ class DatabasePool:
             # SQLite transaction
             conn = None
             try:
-                conn = await aiosqlite.connect(self.db_path)
+                conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
                 await conn.execute("PRAGMA foreign_keys = ON")
                 await conn.execute("BEGIN")
                 
@@ -266,7 +326,7 @@ class DatabasePool:
             # SQLite connection
             conn = None
             try:
-                conn = await aiosqlite.connect(self.db_path)
+                conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
                 await conn.execute("PRAGMA foreign_keys = ON")
                 conn.row_factory = aiosqlite.Row
                 # Yield a shim with normalized execute() signature (see transaction())
@@ -408,11 +468,14 @@ class DatabasePool:
                     }
             else:
                 # SQLite health check
-                async with aiosqlite.connect(self.db_path) as conn:
+                async with aiosqlite.connect(self.db_path, uri=self._sqlite_uri) as conn:
                     await conn.execute("SELECT 1")
                     
                     # Get database file size
-                    db_size = os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
+                    fs_path = self._sqlite_fs_path
+                    db_size = 0
+                    if fs_path and fs_path != ":memory:" and os.path.exists(fs_path):
+                        db_size = os.path.getsize(fs_path)
                     
                     return {
                         "status": "healthy",

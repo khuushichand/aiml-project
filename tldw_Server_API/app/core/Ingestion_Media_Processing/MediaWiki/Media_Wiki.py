@@ -17,7 +17,7 @@ from datetime import datetime, timezone  # Added for default ingestion_date
 from urllib.parse import quote
 #
 # 3rd-Party Imports
-from loguru import logger
+from loguru import logger as _base_logger
 import mwparserfromhell
 import mwxml
 import yaml
@@ -47,6 +47,10 @@ def load_mediawiki_import_config():
 
 
 media_wiki_import_config = load_mediawiki_import_config()
+
+logger = _base_logger.bind(component="mediawiki_import")
+_STDOUT_HANDLER_ID: Optional[int] = None
+_FILE_HANDLER_ID: Optional[int] = None
 
 
 def get_safe_log_path(log_filename: str) -> Optional[Path]:
@@ -112,14 +116,31 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
 
 def setup_media_wiki_logger(name: str, level: Union[int, str] = "INFO", log_file: Optional[str] = None) -> None:
     """Set up the logger with the given name and level."""
-    logger.remove()
-    logger.add(sys.stdout, format="{time} - {name} - {level} - {message}", level=level)
+    global logger, _STDOUT_HANDLER_ID, _FILE_HANDLER_ID
+    logger = _base_logger.bind(component=name)
+
+    if _STDOUT_HANDLER_ID is not None:
+        _base_logger.remove(_STDOUT_HANDLER_ID)
+    _STDOUT_HANDLER_ID = _base_logger.add(
+        sys.stdout,
+        format="{time} - {extra[component]} - {level} - {message}",
+        level=level,
+        filter=lambda record, n=name: record["extra"].get("component") == n,
+    )
+
     # Optionally disable file-based logs (useful in sandboxed test runs)
     disable_file_logs = os.getenv('TLDB_DISABLE_FILE_LOGS', '0') == '1'
     if log_file and not disable_file_logs:
         safe_log_path = get_safe_log_path(log_file)
         if safe_log_path:
-            logger.add(str(safe_log_path), format="{time} - {name} - {level} - {message}", level=level)
+            if _FILE_HANDLER_ID is not None:
+                _base_logger.remove(_FILE_HANDLER_ID)
+            _FILE_HANDLER_ID = _base_logger.add(
+                str(safe_log_path),
+                format="{time} - {extra[component]} - {level} - {message}",
+                level=level,
+                filter=lambda record, n=name: record["extra"].get("component") == n,
+            )
         else:
             logger.warning(f"Could not create log file: {log_file}. Logging to stdout only.")
 

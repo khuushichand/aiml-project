@@ -111,7 +111,12 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
     # Import Users_DB here to avoid import errors in single-user mode
     try:
-        from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id, UserNotFoundError
+        from tldw_Server_API.app.core.DB_Management.Users_DB import (
+            get_user_by_id,
+            get_user_by_uuid,
+            get_user_by_username,
+            UserNotFoundError,
+        )
     except ImportError:
         logger.error("Multi-user mode requires Users_DB module, but it's not available.")
         raise HTTPException(
@@ -129,13 +134,22 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     jwt_service = get_jwt_service()
     try:
         payload = jwt_service.decode_access_token(token)
-        user_id = payload.get("user_id") or payload.get("sub")  # Handle both formats
-        if not user_id:
+        raw_subject = payload.get("user_id") or payload.get("sub")  # Handle both formats
+        if raw_subject is None:
             logger.warning("Token payload missing user_id/sub claim")
             raise credentials_exception
-        # Convert to int if it's a string
-        if isinstance(user_id, str):
-            user_id = int(user_id)
+
+        user_id_int: Optional[int] = None
+        if isinstance(raw_subject, int):
+            user_id_int = raw_subject
+        elif isinstance(raw_subject, str):
+            try:
+                user_id_int = int(raw_subject)
+            except ValueError:
+                user_id_int = None
+        else:
+            # Leave as-is; downstream lookups will attempt to resolve
+            user_id_int = None
     except (InvalidTokenError, TokenExpiredError) as e:
         logger.warning(f"Token validation failed: {e}")
         raise credentials_exception
@@ -143,7 +157,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         logger.error(f"Unexpected error decoding token: {e}")
         raise credentials_exception
     
-    logger.debug(f"Token decoded successfully for user_id: {user_id}")
+    logger.debug(f"Token decoded successfully for subject: {raw_subject}")
 
     # Enforce blacklist revocation (fail-closed)
     try:
@@ -158,35 +172,47 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise credentials_exception
 
     # --- Fetch and Validate User Data ---
-    user_data: Optional[dict] = None # Initialize to satisfy linters potentially
+    subject_identifier = user_id_int if user_id_int is not None else raw_subject
+    user_data: Optional[dict] = None
     try:
-        user_data = await get_user_by_id(user_id) # Assume returns dict or None
+        if user_id_int is not None:
+            user_data = await get_user_by_id(user_id_int)
+        else:
+            identifier_str = str(raw_subject)
+            user_data = await get_user_by_uuid(identifier_str)
+            if not user_data and payload.get("username"):
+                # Fallback to username claim when UUID lookup misses
+                user_data = await get_user_by_username(str(payload["username"]))
 
-        # --- Explicit Check for dictionary type ---
+        if not user_data:
+            logger.warning(f"User record for subject '{subject_identifier}' not found.")
+            raise credentials_exception
+
         if not isinstance(user_data, dict):
-            # Log appropriately based on whether it was None or an unexpected type
-            if user_data is None:
-                 logger.warning(f"User with ID {user_id} from token not found in Users_DB.")
-                 # Raise the standard credentials exception if user not found
-                 raise credentials_exception
-            else:
-                 # This indicates an issue with the get_user_by_id implementation
-                 logger.error(f"Data retrieved for user {user_id} is not a dictionary (type: {type(user_data)}).")
-                 raise HTTPException(
-                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                     detail="Internal error retrieving user data format."
-                 )
-        # --- If we reach here, user_data is guaranteed to be a dictionary ---
+            logger.error(f"Data retrieved for subject {subject_identifier} is not a dictionary (type: {type(user_data)}).")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal error retrieving user data format."
+            )
 
-    except UserNotFoundError: # Catch specific exception if get_user_by_id raises it
-        logger.warning(f"User with ID {user_id} from token not found in Users_DB (UserNotFoundError).")
+    except UserNotFoundError:
+        logger.warning(f"User with ID {subject_identifier} from token not found in Users_DB (UserNotFoundError).")
         raise credentials_exception
-    except Exception as e: # Catch other errors during DB fetch
-        logger.error(f"Error fetching user {user_id} from Users_DB: {e}", exc_info=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching user {subject_identifier} from Users_DB: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving user information."
         )
+
+    # Prepare numeric ID (if available) for downstream lookups
+    subject_db_id_raw = user_data.get("id")
+    try:
+        subject_db_id_int = int(subject_db_id_raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        subject_db_id_int = None
 
     # --- Enrich with roles/permissions from central AuthNZ RBAC tables ---
     roles: List[str] = []
@@ -195,6 +221,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     try:
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         pool = await get_db_pool()
+        if subject_db_id_int is None:
+            raise ValueError("User ID is non-numeric; skipping RBAC enrichment.")
         # Roles
         rows = await pool.fetchall(
             """
@@ -203,7 +231,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             JOIN roles r ON r.id = ur.role_id
             WHERE ur.user_id = ?
             """,
-            user_id,
+            subject_db_id_int,
         )
         for r in rows or []:
             name = r["role"] if isinstance(r, dict) else r[0]
@@ -219,7 +247,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             JOIN permissions p ON p.id = rp.permission_id
             WHERE ur.user_id = ?
             """,
-            user_id,
+            subject_db_id_int,
         )
         base_perms = set()
         for pr in p_rows or []:
@@ -234,7 +262,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             JOIN permissions p ON p.id = up.permission_id
             WHERE up.user_id = ?
             """,
-            user_id,
+            subject_db_id_int,
         )
         for orow in o_rows or []:
             pname = orow["perm"] if isinstance(orow, dict) else orow[0]
@@ -250,19 +278,19 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         if is_admin:
             perms = sorted(set(perms) | {"system.configure"})
     except Exception as e:
-        logger.debug(f"RBAC enrichment failed for user {user_id}: {e}")
+        logger.debug(f"RBAC enrichment failed for user {subject_identifier}: {e}")
 
     # --- Create and validate the User Pydantic model ---
     try:
         user = User(**{**user_data, "roles": roles, "permissions": perms, "is_admin": is_admin})
     except ValidationError as e:  # Catch Pydantic validation errors specifically
-        logger.error(f"Failed to validate user data for user {user_id} into User model: {e}", exc_info=True)
+        logger.error(f"Failed to validate user data for user {subject_identifier} into User model: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing user data: Invalid format - {e}"
         )
     except Exception as e:  # Catch other potential errors during model creation
-        logger.error(f"Unexpected error creating User model for user {user_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error creating User model for user {subject_identifier}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal error processing user data."
@@ -282,7 +310,10 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     team_ids: List[int] = []
     org_ids: List[int] = []
     try:
-        memberships = await list_memberships_for_user(int(user.id))
+        membership_lookup_id = user.id_int
+        if membership_lookup_id is None:
+            raise ValueError("User ID is non-numeric; skipping membership lookup.")
+        memberships = await list_memberships_for_user(membership_lookup_id)
         team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
         org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
         try:
@@ -455,7 +486,14 @@ async def get_request_user(
         if api_key:
             try:
                 api_mgr = await get_api_key_manager()
-                key_info = await api_mgr.validate_api_key(api_key)
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
                 if not key_info:
                     logger.warning("Multi-User Mode: Invalid X-API-KEY presented.")
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")

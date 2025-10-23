@@ -287,9 +287,12 @@ class PostgreSQLBackend(DatabaseBackend):
         try:
             if hasattr(connection, "autocommit") and not connection.autocommit:
                 try:
-                    connection.commit()
-                except Exception:
-                    pass
+                    connection.rollback()
+                except Exception as rollback_exc:
+                    logger.debug(
+                        "Rollback failed while preparing scope settings: %s",
+                        rollback_exc,
+                    )
 
             cursor_factory = getattr(connection, "cursor", None)
             if cursor_factory:
@@ -383,6 +386,50 @@ class PostgreSQLBackend(DatabaseBackend):
         return text
 
     @staticmethod
+    def _split_parenthesized_block(text: str) -> Tuple[str, str]:
+        """Return the inner content and remainder after a balanced (...) block."""
+        if not text.startswith("("):
+            return "", text
+
+        depth = 1
+        idx = 1
+        length = len(text)
+        while idx < length and depth > 0:
+            ch = text[idx]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    idx += 1
+                    break
+            elif ch in ("'", '"'):
+                quote = ch
+                idx += 1
+                while idx < length:
+                    c = text[idx]
+                    if c == quote:
+                        if idx + 1 < length and text[idx + 1] == quote:
+                            idx += 2
+                            continue
+                        break
+                    idx += 1
+            idx += 1
+
+        if depth > 0:
+            return "", ""
+
+        body = text[1:idx - 1]
+        remainder = text[idx:]
+        return body, remainder
+
+    @staticmethod
+    def _skip_parenthesized_block(text: str) -> str:
+        """Return the substring after the first balanced parenthesized block."""
+        _, remainder = PostgreSQLBackend._split_parenthesized_block(text)
+        return remainder
+
+    @staticmethod
     def _command_after_cte(sql: str) -> str:
         """Return the first command keyword following an optional CTE block."""
         text = PostgreSQLBackend._strip_leading_comments(sql)
@@ -405,40 +452,37 @@ class PostgreSQLBackend(DatabaseBackend):
             length = len(text)
             while idx < length and (text[idx].isalnum() or text[idx] in ('_', '.', '"')):
                 idx += 1
-            text = text[idx:].lstrip()
-            if text.upper().startswith("AS"):
+            original_text = text
+            text = PostgreSQLBackend._strip_leading_comments(text[idx:].lstrip())
+
+            # Optional column list e.g., WITH c(id, name) AS ...
+            if text.startswith("("):
+                _, remainder = PostgreSQLBackend._split_parenthesized_block(text)
+                if remainder == "":
+                    return ""
+                potential_tail = PostgreSQLBackend._strip_leading_comments(remainder.lstrip())
+                if potential_tail.upper().startswith("AS"):
+                    text = potential_tail
+                else:
+                    text = original_text
+
+            upper_tail = text.upper()
+            if upper_tail.startswith("AS"):
                 text = text[2:].lstrip()
                 upper_tail = text.upper()
                 if upper_tail.startswith("NOT MATERIALIZED"):
                     text = text[len("NOT MATERIALIZED"):].lstrip()
                 elif upper_tail.startswith("MATERIALIZED"):
                     text = text[len("MATERIALIZED"):].lstrip()
+                text = PostgreSQLBackend._strip_leading_comments(text)
 
             if not text.startswith("("):
                 break
 
-            depth = 1
-            idx = 1
-            while idx < len(text) and depth > 0:
-                ch = text[idx]
-                if ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                elif ch in ("'", '"'):
-                    quote = ch
-                    idx += 1
-                    while idx < len(text):
-                        c = text[idx]
-                        if c == quote:
-                            if idx + 1 < len(text) and text[idx + 1] == quote:
-                                idx += 2
-                                continue
-                            break
-                        idx += 1
-                idx += 1
-
-            text = text[idx:].lstrip()
+            _, remainder = PostgreSQLBackend._split_parenthesized_block(text)
+            if remainder == "":
+                return ""
+            text = PostgreSQLBackend._strip_leading_comments(remainder.lstrip())
             if text.startswith(","):
                 text = text[1:].lstrip()
                 continue
@@ -451,12 +495,74 @@ class PostgreSQLBackend(DatabaseBackend):
             return ""
         return text.split(None, 1)[0].upper()
 
+    @staticmethod
+    def _cte_contains_write(sql: str) -> bool:
+        """Check whether any CTE body contains a write command."""
+        text = PostgreSQLBackend._strip_leading_comments(sql)
+        if not text or not text.upper().startswith("WITH"):
+            return False
+
+        text = text[4:].lstrip()
+        if text.upper().startswith("RECURSIVE"):
+            text = text[len("RECURSIVE"):].lstrip()
+
+        while text:
+            idx = 0
+            length = len(text)
+            while idx < length and (text[idx].isalnum() or text[idx] in ('_', '.', '"')):
+                idx += 1
+            original_text = text
+            text = PostgreSQLBackend._strip_leading_comments(text[idx:].lstrip())
+
+            if text.startswith("("):
+                body_candidate, remainder = PostgreSQLBackend._split_parenthesized_block(text)
+                if remainder == "":
+                    return False
+                potential_tail = PostgreSQLBackend._strip_leading_comments(remainder.lstrip())
+                if potential_tail.upper().startswith("AS"):
+                    text = potential_tail
+                else:
+                    text = original_text
+
+            upper_tail = text.upper()
+            if upper_tail.startswith("AS"):
+                text = text[2:].lstrip()
+                upper_tail = text.upper()
+                if upper_tail.startswith("NOT MATERIALIZED"):
+                    text = text[len("NOT MATERIALIZED"):].lstrip()
+                elif upper_tail.startswith("MATERIALIZED"):
+                    text = text[len("MATERIALIZED"):].lstrip()
+                text = PostgreSQLBackend._strip_leading_comments(text)
+
+            if not text.startswith("("):
+                break
+
+            body, remainder = PostgreSQLBackend._split_parenthesized_block(text)
+            if body == "" and remainder == "":
+                return False
+
+            body_head = PostgreSQLBackend._strip_leading_comments(body)
+            if body_head:
+                command = body_head.split(None, 1)[0].upper()
+                if command in _WRITE_COMMANDS:
+                    return True
+
+            text = PostgreSQLBackend._strip_leading_comments(remainder.lstrip())
+            if text.startswith(","):
+                text = text[1:].lstrip()
+                continue
+            break
+
+        return False
+
     def _is_write_command(self, command_tag: str, sql: str) -> bool:
         """Determine whether a statement should be treated as a write."""
         normalized = (command_tag or "").upper()
         if not normalized or normalized == "WITH":
             normalized = self._command_after_cte(sql)
-        return normalized in _WRITE_COMMANDS
+        if normalized in _WRITE_COMMANDS:
+            return True
+        return PostgreSQLBackend._cte_contains_write(sql)
 
     def connect(self) -> Any:
         """Create a new PostgreSQL connection."""
@@ -609,6 +715,11 @@ class PostgreSQLBackend(DatabaseBackend):
             )
             
         except Exception as e:
+            if not external_conn:
+                try:
+                    conn.rollback()
+                except Exception as rollback_exc:  # noqa: BLE001
+                    logger.debug(f"Rollback after failed execute() also failed: {rollback_exc}")
             logger.error(f"Query execution failed: {e}")
             raise DatabaseError(f"PostgreSQL error: {e}")
         finally:
@@ -664,6 +775,11 @@ class PostgreSQLBackend(DatabaseBackend):
             )
             
         except Exception as e:
+            if not external_conn:
+                try:
+                    conn.rollback()
+                except Exception as rollback_exc:  # noqa: BLE001
+                    logger.debug(f"Rollback after failed execute_many() also failed: {rollback_exc}")
             logger.error(f"Batch execution failed: {e}")
             raise DatabaseError(f"PostgreSQL error: {e}")
         finally:

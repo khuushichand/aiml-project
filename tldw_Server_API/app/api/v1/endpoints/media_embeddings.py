@@ -225,6 +225,7 @@ async def generate_embeddings_for_media(
     user_id: str = "1"
 ) -> Dict[str, Any]:
     """Generate embeddings for media content"""
+    request_metadata = {"user_id": str(user_id)}
     try:
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
             create_embeddings_batch_async
@@ -251,7 +252,8 @@ async def generate_embeddings_for_media(
             embeddings = await create_embeddings_batch_async(
                 texts=chunk_texts,
                 provider=embedding_provider,
-                model_id=embedding_model
+                model_id=embedding_model,
+                metadata=request_metadata,
             )
             
             # Store in ChromaDB using per-user collections
@@ -307,7 +309,8 @@ async def generate_embeddings_for_media(
                 embeddings = await create_embeddings_batch_async(
                     texts=chunk_texts,
                     provider="huggingface",
-                    model_id=FALLBACK_EMBEDDING_MODEL
+                    model_id=FALLBACK_EMBEDDING_MODEL,
+                    metadata=request_metadata,
                 )
                 
                 # Store with fallback model info in per-user collection
@@ -593,10 +596,13 @@ async def search_embeddings(
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
             create_embeddings_batch_async
         )
+        query_metadata = {"user_id": user_id}
+
         query_embeddings = await create_embeddings_batch_async(
             texts=[request.query],
             provider=embedding_provider,
-            model_id=embedding_model
+            model_id=embedding_model,
+            metadata=query_metadata,
         )
     except Exception as exc:
         logger.error(f"Failed to embed search query: {exc}")

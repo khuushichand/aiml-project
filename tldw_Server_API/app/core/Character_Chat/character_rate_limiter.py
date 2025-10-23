@@ -121,6 +121,8 @@ class CharacterRateLimiter:
                 logger.debug(f"Rate limit check for user {user_id}: {remaining} operations remaining (redis)")
                 return True, remaining
                 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Redis error in rate limiter: {e}. Falling back to memory.")
                 # Fall through to in-memory implementation
@@ -389,6 +391,8 @@ class CharacterRateLimiter:
                 remaining = max(max_count - current_count - 1, 0)
                 return True, remaining
                 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Redis error in rate limiter: {e}. Falling back to memory.")
         

@@ -8,7 +8,7 @@ import re
 from typing import List, Optional, Dict, Any, Generator
 from loguru import logger
 
-from ..base import BaseChunkingStrategy
+from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
 
 
 class SentenceChunkingStrategy(BaseChunkingStrategy):
@@ -78,35 +78,11 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
             overlap = max_size - 1
         
-        # Split text into sentences
-        sentences = self._split_sentences(text)
-        
-        if not sentences:
+        records, combined_sentences = self._prepare_chunk_records(text, max_size, overlap, **options)
+        if not combined_sentences or not records:
             return []
-        
-        logger.debug(f"Split text into {len(sentences)} sentences")
-        
-        # Optionally combine short sentences
-        if options.get('combine_short', False):
-            min_length = options.get('min_sentence_length', 10)
-            sentences = self._combine_short_sentences(sentences, min_length)
-        
-        # Create chunks
-        chunks = []
-        step = max(1, max_size - overlap)
-        
-        for i in range(0, len(sentences), step):
-            chunk_sentences = sentences[i:i + max_size]
-            
-            # Join sentences with appropriate delimiter
-            if self.language in ['zh', 'zh-cn', 'zh-tw', 'ja']:
-                chunk = ''.join(chunk_sentences)
-            else:
-                chunk = ' '.join(chunk_sentences)
-            
-            chunks.append(chunk.strip())
-        
-        logger.info(f"Created {len(chunks)} chunks from {len(sentences)} sentences")
+        chunks = [record['text'] for record in records]
+        logger.info(f"Created {len(chunks)} chunks from {len(combined_sentences)} sentences")
         return chunks
     
     def _split_sentences(self, text: str) -> List[str]:
@@ -283,6 +259,44 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         logger.debug(f"Regex split text into {len(sentences)} sentences")
         return sentences
     
+    def _combine_short_sentences_with_spans(
+        self,
+        sentences_with_spans: List[tuple[str, int, int]],
+        min_length: int,
+    ) -> List[tuple[str, int, int]]:
+        """Combine short sentences while preserving spans."""
+        combined: List[tuple[str, int, int]] = []
+        current_text = ""
+        current_start: Optional[int] = None
+        current_end: Optional[int] = None
+        min_length = max(0, int(min_length))
+        
+        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja'}
+        
+        for sentence, start, end in sentences_with_spans:
+            if current_start is None:
+                current_text = sentence
+                current_start = start
+                current_end = end
+                continue
+            
+            if len(current_text) + len(sentence) < min_length:
+                if self.language in no_space_languages:
+                    current_text += sentence
+                else:
+                    current_text = (current_text + " " + sentence).strip()
+                current_end = end
+            else:
+                combined.append((current_text, current_start, current_end if current_end is not None else end))
+                current_text = sentence
+                current_start = start
+                current_end = end
+        
+        if current_start is not None:
+            combined.append((current_text, current_start, current_end if current_end is not None else current_start))
+        
+        return combined
+    
     def _combine_short_sentences(self, sentences: List[str], min_length: int) -> List[str]:
         """
         Combine short sentences to meet minimum length.
@@ -334,3 +348,101 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         chunks = self.chunk(text, max_size, overlap, **options)
         for chunk in chunks:
             yield chunk
+    
+    def _prepare_chunk_records(
+        self,
+        text: str,
+        max_size: int,
+        overlap: int,
+        **options,
+    ) -> tuple[List[Dict[str, Any]], List[tuple[str, int, int]]]:
+        """Prepare chunk records with accurate offsets."""
+        sentences_with_spans = self._split_sentences_with_spans(text)
+        if not sentences_with_spans:
+            return [], []
+        
+        logger.debug(f"Split text into {len(sentences_with_spans)} sentences")
+        
+        combined = sentences_with_spans
+        if options.get('combine_short', False):
+            try:
+                min_length = int(options.get('min_sentence_length', 10))
+            except Exception:
+                min_length = 10
+            combined = self._combine_short_sentences_with_spans(sentences_with_spans, min_length)
+        # Ensure we operate on a copy to avoid mutating shared state
+        combined = list(combined)
+        
+        records: List[Dict[str, Any]] = []
+        step = max(1, max_size - overlap)
+        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja'}
+        
+        for i in range(0, len(combined), step):
+            window = combined[i:i + max_size]
+            if not window:
+                continue
+            start_char = window[0][1]
+            end_char = window[-1][2]
+            sentences_only = [item[0] for item in window]
+            if self.language in no_space_languages:
+                chunk_text = ''.join(sentences_only).strip()
+            else:
+                chunk_text = ' '.join(sentences_only).strip()
+            records.append({
+                'text': chunk_text,
+                'start_char': start_char,
+                'end_char': end_char,
+                'sentence_count': len(window),
+            })
+        
+        return records, combined
+    
+    def chunk_with_metadata(self,
+                            text: str,
+                            max_size: int,
+                            overlap: int = 0,
+                            **options) -> List[ChunkResult]:
+        """Chunk text and include metadata with reliable offsets."""
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+        
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
+            overlap = max_size - 1
+        
+        records, combined = self._prepare_chunk_records(text, max_size, overlap, **options)
+        if not records:
+            return []
+        
+        try:
+            min_length_opt = int(options.get('min_sentence_length', 10))
+        except Exception:
+            min_length_opt = 10
+        
+        results: List[ChunkResult] = []
+        total = len(records)
+        for idx, record in enumerate(records):
+            chunk_text = record['text']
+            start_char = record['start_char']
+            end_char = record['end_char']
+            sentence_count = record['sentence_count']
+            word_count = len(chunk_text.split()) if chunk_text else 0
+            metadata = ChunkMetadata(
+                index=idx,
+                start_char=start_char,
+                end_char=end_char,
+                word_count=word_count,
+                sentence_count=sentence_count,
+                language=self.language,
+                overlap_with_previous=overlap if idx > 0 else 0,
+                overlap_with_next=overlap if idx < total - 1 else 0,
+                method='sentences',
+                options={
+                    'combine_short': bool(options.get('combine_short', False)),
+                    'min_sentence_length': min_length_opt,
+                }
+            )
+            results.append(ChunkResult(text=chunk_text, metadata=metadata))
+        
+        logger.info(f"Created {len(results)} chunks with metadata from {len(combined)} sentences")
+        return results

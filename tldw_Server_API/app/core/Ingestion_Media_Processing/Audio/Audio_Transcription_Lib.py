@@ -138,13 +138,14 @@ WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
 
 def perform_transcription(
     video_path: str,
-    offset: int, # Note: Offset is passed to convert_to_wav but not used there currently
+    offset: int,
     transcription_model: str,
     vad_use: bool,
     diarize: bool = False,
     overwrite: bool = False,
     transcription_language: str = 'en',
     temp_dir: Optional[str] = None,
+    end_seconds: Optional[int] = None,
     ):
     """
     Converts a video or audio file to WAV format, performs transcription,
@@ -173,6 +174,8 @@ def perform_transcription(
             transcription. Defaults to 'en'.
         temp_dir: An optional path to a temporary directory. (Note: This
             parameter is not currently used in the function body).
+        end_seconds: Optional absolute end time (in seconds) for transcription.
+            When provided, audio is clipped to the interval [offset, end_seconds).
 
     Returns:
         A tuple containing:
@@ -197,7 +200,12 @@ def perform_transcription(
         logging.info(f"Initiating transcription process for: {video_path}")
         # 1. Convert to WAV - Catch ConversionError specifically
         try:
-            audio_file_path = convert_to_wav(video_path, offset=offset, overwrite=overwrite) # Pass overwrite flag?
+            audio_file_path = convert_to_wav(
+                video_path,
+                offset=offset,
+                end_time=end_seconds,
+                overwrite=overwrite
+            )
             if not audio_file_path or not os.path.exists(audio_file_path):
                  # This case might occur if convert_to_wav returns None/empty path without raising error
                  logging.error(f"Conversion to WAV failed or produced no file for {video_path}")
@@ -2252,7 +2260,12 @@ def validate_audio_file(file_path: str) -> tuple:
 #DEBUG
 #@profile
 @timeit
-def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = False) -> str:
+def convert_to_wav(
+    video_file_path: str,
+    offset: int = 0,
+    end_time: Optional[int] = None,
+    overwrite: bool = False,
+) -> str:
     """
     Converts a video or audio file to a standardized WAV format using ffmpeg.
 
@@ -2265,6 +2278,8 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
         video_file_path: The path to the input video or audio file.
         offset: The start offset in seconds from the beginning of the input
             file. ffmpeg's `-ss` parameter will be set to this value.
+        end_time: Optional absolute end time in seconds. When provided, only the
+            portion between `offset` and `end_time` is converted.
         overwrite: If True, overwrite the output WAV file if it already
             exists. If False and the file exists, the conversion is skipped,
             and the path to the existing file is returned.
@@ -2293,6 +2308,15 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
         logging.info(f"Skipping conversion as WAV file already exists and overwrite=False: {out_path}")
         log_counter("convert_to_wav_skipped", labels={"file_path": video_file_path})
         return str(out_path)
+
+    if end_time is not None:
+        if end_time <= offset:
+            raise ConversionError(
+                f"Invalid end time ({end_time}) provided; must be greater than offset ({offset})."
+            )
+        duration_seconds = end_time - offset
+    else:
+        duration_seconds = None
 
     # Determine ffmpeg executable path
     ffmpeg_cmd = "ffmpeg" # Default for non-Windows or if specific path fails
@@ -2378,12 +2402,16 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
         "-probesize", "50M",          # Increase probe size for difficult files
         "-i", str(input_path),        # Input file - FFmpeg will auto-detect format
         "-ss", str(offset),           # Use offset if needed (e.g., "00:00:10" or 10)
+    ]
+    if duration_seconds is not None:
+        command.extend(["-t", str(duration_seconds)])
+    command.extend([
         "-ar", "16000",               # Audio sample rate (good for Whisper)
         "-ac", "1",                   # Mono audio channel (good for Whisper)
         "-c:a", "pcm_s16le",          # Standard WAV audio codec
         "-y",                         # Overwrite output file without asking
         str(out_path)
-    ]
+    ])
 
     try:
         # Execute ffmpeg command with enhanced parameters
@@ -2408,12 +2436,16 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
                 "-err_detect", "ignore_err",  # Ignore errors and continue
                 "-i", str(input_path),        # Let FFmpeg auto-detect format
                 "-ss", str(offset),
+            ]
+            if duration_seconds is not None:
+                fallback_command.extend(["-t", str(duration_seconds)])
+            fallback_command.extend([
                 "-ar", "16000",
                 "-ac", "1",
                 "-c:a", "pcm_s16le",
                 "-y",
                 str(out_path)
-            ]
+            ])
             
             # Don't force format - let FFmpeg figure it out
             # The file extension might be wrong (e.g., m4a file with .mp3 extension)

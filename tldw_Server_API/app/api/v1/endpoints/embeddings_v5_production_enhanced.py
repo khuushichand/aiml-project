@@ -90,12 +90,11 @@ from fnmatch import fnmatch
 
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-        create_embeddings_batch,
         EmbeddingConfigSchema,
         HFModelCfg,
         ONNXModelCfg,
         OpenAIModelCfg,
-        LocalAPICfg
+        LocalAPICfg,
     )
     EMBEDDINGS_AVAILABLE = True
 except Exception as e:
@@ -103,6 +102,10 @@ except Exception as e:
     logger.error(f"Embeddings implementation unavailable: {e}")
     logger.error("Embeddings endpoints will respond 503 until dependencies are installed")
     EMBEDDINGS_AVAILABLE = False
+
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    create_embeddings_batch_async as batching_create_embeddings_batch_async,
+)
 
 # ============================================================================
 # Metrics and Monitoring
@@ -556,6 +559,19 @@ def _get_model_max_tokens(provider: str, model: str) -> int:
         return 8192
     # Default for HF/local_api/others if not configured
     return 8192
+
+
+def _build_user_metadata(user: Optional[User]) -> Optional[Dict[str, Any]]:
+    """Create metadata dict for rate limiter propagation."""
+    try:
+        if user is None:
+            return None
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return None
+        return {"user_id": str(user_id)}
+    except Exception:
+        return None
 
 # ============================================================================
 # Enhanced TTL Cache with Better Cleanup
@@ -1314,7 +1330,8 @@ async def create_embeddings_with_circuit_breaker(
     texts: List[str],
     provider: str,
     model_id: str,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> List[List[float]]:
     """Create embeddings with circuit breaker protection"""
     breaker = get_or_create_circuit_breaker(provider)
@@ -1409,7 +1426,7 @@ async def create_embeddings_with_circuit_breaker(
             else:
                 raise ValueError(f"Unknown provider: {provider}")
             
-            # Wrap config in expected structure for create_embeddings_batch
+            # Wrap config in expected structure for embeddings service batch helper
             app_config = {
                 "embedding_config": {
                     "default_model_id": model_id,
@@ -1418,13 +1435,11 @@ async def create_embeddings_with_circuit_breaker(
                 }
             }
             
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                None,
-                create_embeddings_batch,
-                texts,
-                app_config,  # Pass wrapped config
-                model_id
+            return await batching_create_embeddings_batch_async(
+                texts=texts,
+                config=app_config,
+                model_id_override=model_id,
+                metadata=metadata,
             )
         
         return await breaker.call_async(_create)
@@ -1445,7 +1460,8 @@ async def create_embeddings_batch_async(
     model_id: Optional[str] = None,
     dimensions: Optional[int] = None,
     api_key: Optional[str] = None,
-    api_url: Optional[str] = None
+    api_url: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> List[List[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
     
@@ -1511,7 +1527,8 @@ async def create_embeddings_batch_async(
                         batch_texts,
                         provider,
                         model_id,
-                        config
+                        config,
+                        metadata=metadata,
                     )
                     all_new_embeddings.extend(batch_embeddings)
                 except HTTPException:
@@ -1586,6 +1603,8 @@ async def create_embedding_endpoint(
     active_embedding_requests.inc()
     start_time = time.time()
     
+    user_metadata = _build_user_metadata(current_user)
+
     try:
         # Backpressure and tenant quotas
         exc = await _check_backpressure_and_quotas(request, current_user)
@@ -1778,7 +1797,8 @@ async def create_embedding_endpoint(
                         texts=texts_to_embed,
                         provider=p,
                         model_id=target_model_id,
-                        dimensions=embedding_request.dimensions
+                        dimensions=embedding_request.dimensions,
+                        metadata=user_metadata,
                     )
                     provider = p
                     # Add response headers to indicate fallback
@@ -2013,11 +2033,14 @@ async def create_embeddings_batch_endpoint(
     except Exception:
         pass
 
+    user_metadata = _build_user_metadata(current_user)
+
     embeddings = await create_embeddings_batch_async(
         texts=texts,
         provider=provider,
         model_id=model,
-        dimensions=payload.dimensions
+        dimensions=payload.dimensions,
+        metadata=user_metadata,
     )
 
     # Attach quota headers if present (parity with single-item endpoint)
@@ -2090,11 +2113,14 @@ async def get_embedding_model_info(
     if not is_model_allowed(resolved_provider, model):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not available")
 
+    user_metadata = _build_user_metadata(current_user)
+
     try:
         vectors = await create_embeddings_batch_async(
             texts=["model probe"],
             provider=resolved_provider,
-            model_id=model
+            model_id=model,
+            metadata=user_metadata,
         )
     except HTTPException:
         raise
@@ -2197,11 +2223,14 @@ async def warmup_model(
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
+    user_metadata = _build_user_metadata(current_user)
+
     try:
         await create_embeddings_batch_async(
             texts=["model warmup test"],
             provider=provider,
-            model_id=payload.model
+            model_id=payload.model,
+            metadata=user_metadata,
         )
         return {"status": "ok", "provider": provider, "model": payload.model, "warmed": True}
     except HTTPException:
@@ -2220,12 +2249,15 @@ async def download_model(
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
+    user_metadata = _build_user_metadata(current_user)
+
     try:
         # Trigger a load without depending on real content by generating a small embedding
         await create_embeddings_batch_async(
             texts=["download model"],
             provider=provider,
-            model_id=payload.model
+            model_id=payload.model,
+            metadata=user_metadata,
         )
         return {"status": "ok", "provider": provider, "model": payload.model, "downloaded": True}
     except HTTPException:
@@ -2282,6 +2314,8 @@ async def create_collection(
 
     manager = _chroma_manager_for_user(current_user)
 
+    user_metadata = _build_user_metadata(current_user)
+
     try:
         manager.client.get_collection(name=name)
     except Exception:
@@ -2301,7 +2335,8 @@ async def create_collection(
         vectors = await create_embeddings_batch_async(
             texts=["collection probe"],
             provider=provider,
-            model_id=model
+            model_id=model,
+            metadata=user_metadata,
         )
         if vectors and vectors[0]:
             first = vectors[0]

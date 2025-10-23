@@ -524,7 +524,13 @@ class RateLimitedQueue(RequestQueue):
         request_data: Any,
         client_id: str,
         priority: RequestPriority = RequestPriority.NORMAL,
-        estimated_tokens: int = 0
+        estimated_tokens: int = 0,
+        *,
+        processor: Optional[Callable[..., Any]] = None,
+        processor_args: Tuple[Any, ...] = (),
+        processor_kwargs: Optional[Dict[str, Any]] = None,
+        streaming: bool = False,
+        stream_channel: Optional[asyncio.Queue] = None,
     ) -> asyncio.Future:
         """
         Add a request to the queue with rate limiting.
@@ -535,6 +541,11 @@ class RateLimitedQueue(RequestQueue):
             client_id: Client identifier
             priority: Request priority
             estimated_tokens: Estimated token count
+            processor: Optional callable executed when the request is serviced
+            processor_args: Positional args for the processor
+            processor_kwargs: Keyword args for the processor
+            streaming: Whether the request expects streaming output
+            stream_channel: Channel used to emit streaming chunks
             
         Returns:
             Future that will contain the result
@@ -546,9 +557,21 @@ class RateLimitedQueue(RequestQueue):
         if not self._check_rate_limit(client_id):
             raise ValueError(f"Rate limit exceeded for client {client_id}")
         
+        if processor_kwargs is None:
+            processor_kwargs = {}
+
         # Proceed with normal enqueue
         return await super().enqueue(
-            request_id, request_data, client_id, priority, estimated_tokens
+            request_id,
+            request_data,
+            client_id,
+            priority,
+            estimated_tokens,
+            processor=processor,
+            processor_args=processor_args,
+            processor_kwargs=processor_kwargs,
+            streaming=streaming,
+            stream_channel=stream_channel,
         )
 
 

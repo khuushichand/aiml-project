@@ -173,16 +173,30 @@ class AsyncChunker:
         method_name = method or (self._chunker.config.default_method.value if hasattr(self, "_chunker") else "words")
         method_lower = str(method_name).lower()
         
+        def _coerce_overlap_value(value: Any) -> str:
+            """Ensure overlap carry-over stays textual even for structured chunks."""
+            if isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                text_val = value.get('text') or value.get('content')
+                if isinstance(text_val, str):
+                    return text_val
+            try:
+                return str(value) if value is not None else ""
+            except Exception:
+                return ""
+
         async for text_piece in text_stream:
             buffer += text_piece
             
             # Process buffer when it's large enough
             if len(buffer) >= buffer_size:
-                # Chunk the buffer
-                # Concatenate with a space for word mode to avoid gluing partial tokens
-                sep = ' ' if method_lower == 'words' and overlap_buffer and buffer and not buffer[0].isspace() else ''
+                # Chunk the buffer using precise boundary concatenation
+                overlap_text = _coerce_overlap_value(overlap_buffer)
+                sep = ' ' if method_lower == 'words' and overlap_text and buffer and not buffer[0].isspace() else ''
+                combined = overlap_text + sep + buffer
                 chunks = await self.chunk_text(
-                    overlap_buffer + sep + buffer,
+                    combined,
                     method, max_size, overlap, **options
                 )
                 
@@ -201,14 +215,14 @@ class AsyncChunker:
                     else:
                         for chunk in chunks[:-1]:
                             yield chunk
-                        overlap_buffer = chunks[-1] if chunks else ''
+                        overlap_buffer = _coerce_overlap_value(chunks[-1]) if chunks else ''
                 else:
                     for chunk in chunks[:-1]:
                         yield chunk
                     withheld = chunks[-1] if chunks else None
                     if withheld:
                         # No explicit overlap: carry full last chunk forward so it will be emitted on next iteration/final flush
-                        overlap_buffer = withheld
+                        overlap_buffer = _coerce_overlap_value(withheld)
                     else:
                         overlap_buffer = ""
                 
@@ -222,9 +236,11 @@ class AsyncChunker:
             else:
                 should_flush = True
         if should_flush:
-            sep = ' ' if method_lower == 'words' and overlap_buffer and buffer and not buffer[0].isspace() else ''
+            overlap_text = _coerce_overlap_value(overlap_buffer)
+            sep = ' ' if method_lower == 'words' and overlap_text and buffer and not buffer[0].isspace() else ''
+            combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
-                overlap_buffer + sep + buffer,
+                combined,
                 method, max_size, overlap, **options
             )
             for chunk in chunks:

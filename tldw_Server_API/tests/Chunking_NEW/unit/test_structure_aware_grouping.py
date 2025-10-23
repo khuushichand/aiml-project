@@ -43,6 +43,10 @@ def test_structure_aware_section_level_grouping_elements_per_chunk():
     assert "Para 1" in flat[0]["text"] and "Para 2" in flat[0]["text"]
     assert "Para 2" in flat[1]["text"] and "Para 3" in flat[1]["text"]
     assert "Para 4" in flat[2]["text"] and "Para 5" in flat[2]["text"]
+    # Ensure regrouped text preserves spacing between elements
+    assert "Para 1 line.Para 2 line." not in flat[0]["text"]
+    assert "Para 2 line.Para 3 line." not in flat[1]["text"]
+    assert "Para 4 line.Para 5 line." not in flat[2]["text"]
 
 
 @pytest.mark.unit
@@ -124,3 +128,27 @@ def test_structure_aware_nested_headers_preserve_section_path():
     ]
 
     assert "H1 > H1.1" in nested_paths
+
+
+@pytest.mark.unit
+def test_structure_aware_header_paragraph_spacing():
+    text = (
+        "# Heading\n"
+        "Paragraph text follows.\n"
+    )
+
+    ck = Chunker()
+    flat = ck.chunk_text_hierarchical_flat(
+        text=text,
+        method="structure_aware",
+        max_size=4,
+        overlap=0,
+        language="en",
+    )
+
+    assert len(flat) == 1
+    content = flat[0]["text"]
+    assert "# Heading" in content
+    assert "Paragraph text follows." in content
+    # There should be visible separation between heading and paragraph text
+    assert "HeadingParagraph" not in content.replace("\n", "")

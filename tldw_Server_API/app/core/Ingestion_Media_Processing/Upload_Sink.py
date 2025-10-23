@@ -2,6 +2,7 @@
 # Description: Contains classes and functions to handle file uploads,
 #              validate their safety and integrity, and perform sanitization.
 #
+import copy
 import os
 import shutil
 import tempfile
@@ -9,8 +10,14 @@ from pathlib import Path
 from typing import List, Optional, Dict, Set, Union, Tuple
 #
 # 3rd-party Libraries
-import puremagic
-import yara
+try:
+    import puremagic  # type: ignore
+except ImportError:  # puremagic is optional; fall back to extension checks only
+    puremagic = None
+try:
+    import yara  # type: ignore
+except ImportError:  # yara rules are optional; disable malware scanning if missing
+    yara = None
 import zipfile
 import tarfile
 import re
@@ -154,6 +161,26 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.eml': 'email',
 }
 
+def _extension_candidates(filename: Union[str, Path]) -> List[str]:
+    """Return suffix candidates (longest to shortest) for a filename/path."""
+    path_obj = Path(filename)
+    suffixes = [suffix.lower() for suffix in path_obj.suffixes if suffix]
+    candidates: List[str] = []
+    for idx in range(len(suffixes)):
+        candidate = ''.join(suffixes[idx:])
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _resolve_media_type_key(filename: Union[str, Path]) -> Optional[str]:
+    """Resolve media type key using the extension candidates helper."""
+    for candidate in _extension_candidates(filename):
+        media_key = EXT_TO_MEDIA_TYPE_KEY.get(candidate)
+        if media_key:
+            return media_key
+    return None
+
 
 class FileValidator:
     def __init__(self, yara_rules_path: Optional[str] = None, custom_media_configs: Optional[Dict] = None):
@@ -173,7 +200,7 @@ class FileValidator:
                 "Install with: pip install puremagic"
             )
 
-        self.media_configs = DEFAULT_MEDIA_TYPE_CONFIG.copy()
+        self.media_configs = copy.deepcopy(DEFAULT_MEDIA_TYPE_CONFIG)
         if custom_media_configs:
             for media_type, config_val in custom_media_configs.items():
                 if media_type in self.media_configs:
@@ -234,8 +261,8 @@ class FileValidator:
 
         # Determine original filename if not provided
         _original_filename = original_filename or current_file_path.name
-        # Get extension from the actual file path on disk
-        disk_file_ext = current_file_path.suffix.lower()
+        disk_candidates = _extension_candidates(current_file_path.name)
+        disk_file_ext = disk_candidates[0] if disk_candidates else None
 
         # 1. Check existence and if it's a file
         if not current_file_path.exists():
@@ -274,13 +301,21 @@ class FileValidator:
                           f"exceeds limit of {final_max_size_bytes / (1024 * 1024):.2f}MB.")
 
         # 3. Validate extension (based on original_filename provided by user/client)
-        claimed_ext = Path(_original_filename).suffix.lower()
+        claimed_candidates = _extension_candidates(_original_filename)
+        claimed_ext_display = claimed_candidates[0] if claimed_candidates else None
+        claimed_ext_display_str = claimed_ext_display or "<none>"
         if final_allowed_extensions:
-            if not claimed_ext:
+            allowed_lower = {ext.lower() for ext in final_allowed_extensions}
+            if not claimed_candidates:
                 issues.append(f"Claimed filename '{_original_filename}' has no extension.")
-            elif claimed_ext not in final_allowed_extensions:
-                issues.append(f"Claimed extension '{claimed_ext}' from '{_original_filename}' is not allowed. "
-                              f"Allowed: {final_allowed_extensions}")
+            else:
+                matched_claimed_ext = next((candidate for candidate in claimed_candidates if candidate in allowed_lower), None)
+                if matched_claimed_ext is None:
+                    allowed_list_display = sorted(final_allowed_extensions)
+                    issues.append(
+                        f"Claimed extension '{claimed_ext_display_str}' from '{_original_filename}' is not allowed. "
+                        f"Allowed: {allowed_list_display}"
+                    )
 
         # 4. Validate MIME type
         detected_mime_type: Optional[str] = None
@@ -422,8 +457,7 @@ class FileValidator:
                                 internal_file_path = extract_dir / member.filename
 
                                 # Determine media_type_key for internal file based on its extension
-                                internal_ext = internal_file_path.suffix.lower()
-                                internal_media_type_key = EXT_TO_MEDIA_TYPE_KEY.get(internal_ext)
+                                internal_media_type_key = _resolve_media_type_key(internal_file_path)
 
                                 logging.debug(
                                     f"Validating internal file: {member.filename} (as {internal_media_type_key or 'generic'})")
@@ -493,8 +527,7 @@ class FileValidator:
                                         # Older Python versions without 'filter'
                                         tar.extract(member, path=extract_dir)
                                     internal_file_path = extract_dir / member.name
-                                    internal_ext = internal_file_path.suffix.lower()
-                                    internal_media_type_key = EXT_TO_MEDIA_TYPE_KEY.get(internal_ext)
+                                    internal_media_type_key = _resolve_media_type_key(internal_file_path)
                                     logging.debug(
                                         f"Validating internal file: {member.name} (as {internal_media_type_key or 'generic'})")
                                     internal_validation_result = self.validate_file(
@@ -610,8 +643,9 @@ def process_and_validate_file(
 
     media_type_key = media_type_key_override
     if not media_type_key:
-        file_ext = Path(_original_filename).suffix.lower()
-        media_type_key = EXT_TO_MEDIA_TYPE_KEY.get(file_ext)
+        media_type_key = _resolve_media_type_key(_original_filename)
+    if not media_type_key:
+        media_type_key = _resolve_media_type_key(p_file_path.name)
 
     if not media_type_key:
         logging.warning(f"Could not determine specific media type for '{_original_filename}' based on extension. "

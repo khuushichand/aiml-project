@@ -12,7 +12,7 @@ import json
 from loguru import logger
 import os
 import re
-from typing import Dict, Callable, List, Any
+from typing import Dict, Callable, List, Any, Optional
 
 from tenacity import (
     RetryError,
@@ -75,7 +75,14 @@ def aggregate(
         "average_coherence": average_coherence,
     }
 
-def run_geval(transcript: str, summary: str, api_key: str, api_name: str = None, save: bool = False):
+def run_geval(
+    transcript: str,
+    summary: str,
+    api_key: str,
+    api_name: str = None,
+    save: bool = False,
+    user_identifier: Optional[str] = None,
+):
     # Check for test mode - if api_key starts with "test_", return mock data
     if api_key and api_key.startswith("test_"):
         return {
@@ -237,7 +244,13 @@ def run_geval(transcript: str, summary: str, api_key: str, api_name: str = None,
     for metric, prompt in prompts.items():
         full_prompt = prompt.replace("{{Document}}", transcript).replace("{{Summary}}", summary)
         try:
-            score = geval_summarization(full_prompt, 5 if metric != "fluency" else 3, api_name, api_key)
+            score = geval_summarization(
+                full_prompt,
+                5 if metric != "fluency" else 3,
+                api_name,
+                api_key,
+                user_identifier=user_identifier,
+            )
             scores[metric] = score
             explanations[metric] = "Score based on the evaluation criteria."
         except Exception as e:
@@ -313,6 +326,7 @@ def geval_summarization(
     max_score: float,
     api_endpoint: str,
     api_key: str,
+    user_identifier: Optional[str] = None,
 ) -> float:
     model = get_model_from_config(api_endpoint)
 
@@ -330,8 +344,21 @@ def geval_summarization(
                 temp = 0.7
                 logging.info(f"Debug - geval_summarization Function - API Endpoint: {api_endpoint}")
                 try:
-                    response = chat_api_call(api_endpoint, api_key, prompt_with_src_and_gen, "", temp, system_message, streaming=False, minp=None, maxp=None, model=None)
-                except Exception as e:
+                    messages_payload = [
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": prompt_with_src_and_gen},
+                    ]
+                    response = chat_api_call(
+                        api_endpoint=api_endpoint,
+                        messages_payload=messages_payload,
+                        api_key=api_key,
+                        temp=temp,
+                        system_message=system_message,
+                        streaming=False,
+                        model=model,
+                        user_identifier=user_identifier,
+                    )
+                except Exception:
                     raise ValueError(f"Unsupported API endpoint: {api_endpoint}")
     except RetryError:
         logger.exception(f"geval {api_endpoint} call failed\nInput prompt was: {prompt_with_src_and_gen}")

@@ -22,6 +22,7 @@ Key Adaptations from Single-User:
 - Background job support for long generations
 """
 
+import base64
 import json
 import time
 from datetime import datetime, timedelta
@@ -37,7 +38,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
-from tldw_Server_API.app.core.Chat.chat_helpers import load_conversation_history
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
@@ -214,58 +214,108 @@ class DocumentGeneratorService:
             raise CharactersRAGDBError(f"Failed to initialize document generator tables: {e}")
     
     def get_conversation_context(
-        self, 
-        conversation_id: str,  # Changed to str for UUID
+        self,
+        conversation_id: str,
         limit: int = 50,
         include_system: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Get conversation context including recent messages.
-        
+
         Args:
             conversation_id: ID of the conversation (UUID string)
             limit: Maximum number of messages to include
             include_system: Whether to include system messages
-            
+
         Returns:
-            List of message dictionaries
+            List of message dictionaries suitable for prompt construction.
         """
         try:
-            # Use the interop layer to get conversation messages
-            import asyncio
-            
-            # Get or create event loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            # Load conversation history using the chat helper
-            messages = loop.run_until_complete(
-                load_conversation_history(
-                    db=self.db,
-                    conversation_id=conversation_id,
-                    character_card=None,  # We don't need character card for document generation
-                    limit=limit,
-                    loop=loop
-                )
+            raw_history = self.db.get_messages_for_conversation(
+                conversation_id,
+                limit,
+                0,
+                "ASC",
             )
-            
-            # Filter out system messages if requested
-            if not include_system:
-                messages = [msg for msg in messages if msg.get('role') != 'system']
-            
-            # Messages from load_conversation_history are already in the right format
-            # with 'role', 'content', and other fields
-            return messages if messages else []
-                
-        except Exception as e:
-            logger.error(f"Failed to get conversation context: {e}")
+        except Exception as exc:
+            logger.error(f"Failed to get conversation context: {exc}")
             return []
+
+        messages: List[Dict[str, Any]] = []
+        for db_msg in raw_history:
+            sender = (db_msg.get("sender") or "").strip().lower()
+            if sender == "system" and not include_system:
+                continue
+            if sender == "system":
+                role = "system"
+            elif sender == "user":
+                role = "user"
+            else:
+                role = "assistant"
+
+            msg_parts: List[Dict[str, Any]] = []
+
+            text_content = db_msg.get("content") or ""
+            if text_content:
+                msg_parts.append({"type": "text", "text": text_content})
+
+            raw_images = db_msg.get("images") or []
+            if (not raw_images) and db_msg.get("image_data") and db_msg.get("image_mime_type"):
+                raw_images = [{
+                    "position": 0,
+                    "image_data": db_msg.get("image_data"),
+                    "image_mime_type": db_msg.get("image_mime_type"),
+                }]
+
+            for image_entry in raw_images:
+                try:
+                    img_bytes = image_entry.get("image_data")
+                    if isinstance(img_bytes, memoryview):
+                        img_bytes = img_bytes.tobytes()
+                    if not img_bytes:
+                        continue
+                    img_mime = (
+                        image_entry.get("image_mime_type")
+                        or db_msg.get("image_mime_type")
+                        or "image/png"
+                    )
+                    b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                    msg_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img_mime};base64,{b64_img}"},
+                    })
+                except Exception as img_err:
+                    logger.warning(
+                        "Error encoding image from history (msg_id %s): %s",
+                        db_msg.get("id"),
+                        img_err,
+                    )
+
+            if not msg_parts:
+                continue
+
+            message_entry: Dict[str, Any] = {"role": role}
+            if len(msg_parts) == 1 and msg_parts[0].get("type") == "text":
+                message_entry["content"] = msg_parts[0].get("text", "")
+            else:
+                message_entry["content"] = msg_parts
+
+            if role == "assistant":
+                sender_name = (db_msg.get("sender") or "Assistant")
+                safe_name = (
+                    sender_name.replace(" ", "_")
+                    .replace("<", "")
+                    .replace(">", "")
+                    .replace("|", "")
+                    .replace("\\", "")
+                    .replace("/", "")
+                )
+                if safe_name and safe_name.lower() not in {"user", "system"}:
+                    message_entry["name"] = safe_name
+
+            messages.append(message_entry)
+
+        return messages
     
     def format_context_for_llm(
         self, 
@@ -696,6 +746,44 @@ class DocumentGeneratorService:
         except Exception as e:
             logger.error(f"Failed to get generated documents: {e}")
             return []
+    
+    def get_generated_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a single generated document by its identifier.
+        
+        Args:
+            document_id: Document ID
+            
+        Returns:
+            Document dictionary if found, otherwise None
+        """
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM generated_documents WHERE id = ?",
+                    (document_id,)
+                )
+                row = cursor.fetchone()
+                
+                if not row:
+                    return None
+                
+                return {
+                    'id': row[0],
+                    'conversation_id': row[1],
+                    'document_type': row[2],
+                    'title': row[3],
+                    'content': row[4],
+                    'provider': row[5],
+                    'model': row[6],
+                    'generation_time_ms': row[7],
+                    'token_count': row[8],
+                    'created_at': row[9],
+                    'metadata': json.loads(row[10]) if row[10] else {}
+                }
+        except Exception as e:
+            logger.error(f"Failed to get generated document {document_id}: {e}")
+            return None
     
     def delete_generated_document(self, document_id: int) -> bool:
         """

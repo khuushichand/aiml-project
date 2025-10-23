@@ -66,6 +66,10 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Set RUN_REAL_EMBEDDINGS=true to enable real HuggingFace integration tests.",
+    )
     @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_real_huggingface_embedding(self, setup):
         """Test actual HuggingFace embedding creation (no mocks)"""
@@ -150,6 +154,10 @@ class TestEmbeddingsIntegration:
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Set RUN_REAL_EMBEDDINGS=true to enable real HuggingFace integration tests.",
+    )
     @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_real_cache_persistence(self, setup):
         """Test cache persistence across requests (no mocks)"""
@@ -196,6 +204,10 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not RUN_REAL_EMBEDDINGS,
+        reason="Set RUN_REAL_EMBEDDINGS=true to enable real HuggingFace integration tests.",
+    )
     @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_different_providers_produce_different_embeddings(self, setup):
         """Test that different providers produce different embeddings for same text"""

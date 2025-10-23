@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 import numpy as np
 
@@ -12,7 +12,12 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
 )
 
 
-async def _embed_texts(provider: str, model: str, texts: List[str]) -> List[List[float]]:
+async def _embed_texts(
+    provider: str,
+    model: str,
+    texts: List[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> List[List[float]]:
     """Create embeddings for texts using the enhanced embeddings endpoint utilities.
 
     Returns L2-normalized vectors for numeric outputs.
@@ -25,6 +30,7 @@ async def _embed_texts(provider: str, model: str, texts: List[str]) -> List[List
         texts=texts,
         provider=provider,
         model_id=model,
+        metadata=metadata,
     )
     # L2-normalize to ensure consistent scoring if caller relies on numeric vectors
     normed: List[List[float]] = []
@@ -56,4 +62,3 @@ async def prepare_query_embeddings_for_arms(config: EmbeddingsABTestConfig) -> D
             logger.error(f"Failed to embed queries for arm {arm_key}: {e}")
             results[arm_key] = []
     return results
-

@@ -224,19 +224,25 @@ class RateLimiter:
         async with self.db_pool.transaction() as conn:
             if hasattr(conn, 'fetchrow'):
                 # PostgreSQL - use ON CONFLICT
-                result = await conn.fetchrow("""
+                result = await conn.fetchrow(
+                    """
                     INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
                     VALUES ($1, $2, 1, $3)
                     ON CONFLICT (identifier, attempt_type)
                     DO UPDATE SET 
                         attempt_count = failed_attempts.attempt_count + 1,
                         window_start = CASE
-                            WHEN failed_attempts.window_start + INTERVAL '%s minutes' < $3
+                            WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
                             THEN $3
                             ELSE failed_attempts.window_start
                         END
                     RETURNING attempt_count, window_start
-                """, identifier, attempt_type, now, lockout_duration_minutes)
+                    """,
+                    identifier,
+                    attempt_type,
+                    now,
+                    int(lockout_duration_minutes),
+                )
                 
                 attempt_count = result['attempt_count']
                 
@@ -802,16 +808,17 @@ class RateLimiter:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
             
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
+                if hasattr(conn, 'fetch'):
                     # PostgreSQL
-                    deleted = await conn.fetchval(
+                    rows = await conn.fetch(
                         """
                         DELETE FROM rate_limits
                         WHERE window_start < $1
-                        RETURNING COUNT(*)
+                        RETURNING 1
                         """,
                         cutoff
                     )
+                    deleted = len(rows)
                 else:
                     # SQLite
                     cursor = await conn.execute(

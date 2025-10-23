@@ -185,19 +185,33 @@ class TemplateProcessor:
             method = options['method']  # override template/base method
 
         # Options can be top-level or nested under "config"
-        nested_cfg = chunk_ops.get("config", {}) or {}
+        nested_cfg = dict(chunk_ops.get("config", {}) or {})
         # max_size and overlap may be provided in either place; prefer explicit top-level first
         max_size = chunk_ops.get("max_size", nested_cfg.get("max_size", options.get("max_size", 400)))
         overlap = chunk_ops.get("overlap", nested_cfg.get("overlap", options.get("overlap", 50)))
 
         # Additional params may be under "params" or "config"
-        extra_params = chunk_ops.get("params")
-        if extra_params is None:
-            extra_params = nested_cfg
+        extra_params_src = chunk_ops.get("params")
+        if isinstance(extra_params_src, dict):
+            extra_params = dict(extra_params_src)
+        else:
+            extra_params = dict(nested_cfg)
+        # Determine language override precedence
+        language_override = None
+        for candidate in (
+            options.get('language'),
+            chunk_ops.get('language') if isinstance(chunk_ops, dict) else None,
+            nested_cfg.get('language'),
+            extra_params.get('language') if isinstance(extra_params, dict) else None,
+        ):
+            if isinstance(candidate, str) and candidate:
+                language_override = candidate
+                break
         # Avoid passing duplicates for standard args
-        for k in ("max_size", "overlap", "method", "language"):
-            if isinstance(extra_params, dict) and k in extra_params:
-                extra_params = {kk: vv for kk, vv in extra_params.items() if kk != k}
+        if isinstance(extra_params, dict):
+            for k in ("max_size", "overlap", "method", "language"):
+                if k in extra_params:
+                    extra_params = {kk: vv for kk, vv in extra_params.items() if kk != k}
 
         # Perform chunking (supports hierarchical via config and overrides)
         chunker = self._get_chunker()
@@ -225,6 +239,7 @@ class TemplateProcessor:
                 method=method,
                 max_size=max_size,
                 overlap=overlap,
+                language=language_override,
                 template=hier_template if isinstance(hier_template, dict) else None,
             )
             data["chunks"] = chunks
@@ -234,7 +249,7 @@ class TemplateProcessor:
                 method=method,
                 max_size=max_size,
                 overlap=overlap,
-                language=options.get('language'),
+                language=language_override,
                 **(extra_params or {})
             )
             # Normalize to dict structure

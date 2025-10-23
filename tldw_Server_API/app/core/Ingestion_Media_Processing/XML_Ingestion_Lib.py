@@ -1,10 +1,12 @@
 # XML_Ingestion.py
 # Description: This file contains functions for reading and writing XML files.
 # Imports
+from pathlib import Path
+from typing import Optional, Tuple
 import xml.etree.ElementTree as ET
 #
 # External Imports
-#
+# 
 # Local Imports
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
@@ -14,6 +16,44 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 #######################################################################################################################
 #
 # Functions:
+
+
+def _read_xml_source(import_file) -> Tuple[str, str]:
+    """
+    Return XML text and a display name from a variety of upload types.
+    Supports file paths, FastAPI UploadFile objects, and generic file-like objects.
+    """
+    display_name: Optional[str] = getattr(import_file, "filename", None) or getattr(import_file, "name", None)
+
+    if isinstance(import_file, (str, Path)):
+        path = Path(import_file)
+        display_name = display_name or path.name
+        xml_text = path.read_text(encoding="utf-8", errors="ignore")
+        return xml_text, display_name or "uploaded.xml"
+
+    file_like = getattr(import_file, "file", None)
+    if file_like is not None:
+        try:
+            current_pos = file_like.tell()
+        except Exception:
+            current_pos = None
+        try:
+            if current_pos is not None:
+                file_like.seek(0)
+            raw = file_like.read()
+        finally:
+            if current_pos is not None:
+                file_like.seek(current_pos)
+        xml_text = raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return xml_text, display_name or "uploaded.xml"
+
+    if hasattr(import_file, "read"):
+        raw = import_file.read()
+        xml_text = raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return xml_text, display_name or "uploaded.xml"
+
+    raise ValueError("Unsupported XML input type; expected path, file-like, or UploadFile.")
+
 
 def xml_to_text(xml_file):
     try:
@@ -36,9 +76,9 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
         return "Please upload an XML file"
 
     try:
+        xml_text, display_name = _read_xml_source(import_file)
         # Parse XML and extract text with structure
-        tree = ET.parse(import_file.name)
-        root = tree.getroot()
+        root = ET.fromstring(xml_text)
 
         # Create chunk options
         chunk_options = {
@@ -84,7 +124,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
         db_instance = create_media_database(client_id="xml_import")
         result = add_media_with_keywords(
             db_instance=db_instance,
-            url=import_file.name,  # Using filename as URL
+            url=display_name,  # Using filename as URL
             info_dict=info_dict,
             segments=segments,
             summary=summary,
@@ -95,7 +135,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
             overwrite=False
         )
 
-        return f"XML file '{import_file.name}' import complete. Database result: {result}"
+        return f"XML file '{display_name}' import complete. Database result: {result}"
 
     except ET.ParseError as e:
         logging.error(f"XML parsing error: {str(e)}")

@@ -672,6 +672,16 @@ class APIKeyManager:
             
             old_key = dict(old_key)
             
+            # Normalize stored JSON/JSONB fields that may already be parsed by the driver
+            def _coerce_json_field(value):
+                if value is None:
+                    return None
+                if isinstance(value, (dict, list)):
+                    return value
+                if isinstance(value, str) and value.strip():
+                    return json.loads(value)
+                return None
+
             # Create new key with same settings
             new_key_result = await self.create_api_key(
                 user_id=user_id,
@@ -680,8 +690,8 @@ class APIKeyManager:
                 scope=old_key['scope'],
                 expires_in_days=expires_in_days,
                 rate_limit=old_key['rate_limit'],
-                allowed_ips=json.loads(old_key['allowed_ips']) if old_key['allowed_ips'] else None,
-                metadata=json.loads(old_key['metadata']) if old_key['metadata'] else None
+                allowed_ips=_coerce_json_field(old_key.get('allowed_ips')),
+                metadata=_coerce_json_field(old_key.get('metadata'))
             )
             
             # Update rotation references
@@ -899,7 +909,7 @@ class APIKeyManager:
                     await conn.execute(
                         """
                         UPDATE api_keys 
-                        SET usage_count = usage_count + 1,
+                        SET usage_count = COALESCE(usage_count, 0) + 1,
                             last_used_at = $1,
                             last_used_ip = $2
                         WHERE id = $3
@@ -910,7 +920,7 @@ class APIKeyManager:
                     await conn.execute(
                         """
                         UPDATE api_keys 
-                        SET usage_count = usage_count + 1,
+                        SET usage_count = COALESCE(usage_count, 0) + 1,
                             last_used_at = ?,
                             last_used_ip = ?
                         WHERE id = ?

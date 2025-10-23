@@ -36,6 +36,8 @@
 # Imports
 import os
 import re
+import shutil
+import stat
 import tempfile
 import zipfile
 from datetime import datetime
@@ -61,6 +63,9 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 #######################################################################################################################
 # Function Definitions
 #
+
+MAX_ZIP_MEMBERS = 500
+MAX_ZIP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 
 def extract_epub_metadata_from_text(content: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -987,7 +992,61 @@ def process_zip_of_epubs(
 
             try:
                 with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir_path_obj)
+                    members = zip_ref.infolist()
+                    if len(members) > MAX_ZIP_MEMBERS:
+                        logging.error(f"ZIP file {zip_file_path} contains {len(members)} entries which exceeds safe limit.")
+                        return [{
+                            "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
+                            "error": f"ZIP archive contains too many entries (limit {MAX_ZIP_MEMBERS})."
+                        }]
+
+                    total_uncompressed = 0
+                    for member in members:
+                        total_uncompressed += member.file_size
+                        if total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
+                            logging.error(f"Uncompressed size for ZIP {zip_file_path} exceeds limit.")
+                            return [{
+                                "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
+                                "error": f"ZIP archive uncompressed size exceeds {MAX_ZIP_UNCOMPRESSED_BYTES // (1024 * 1024)}MB limit."
+                            }]
+
+                        member_path = Path(member.filename)
+                        if ".." in member_path.parts:
+                            logging.error(f"ZIP {zip_file_path} contains path traversal entry: {member.filename}")
+                            return [{
+                                "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
+                                "error": f"ZIP archive contains unsafe path: {member.filename}"
+                            }]
+
+                        # Detect symbolic links and reject them
+                        is_symlink = False
+                        if member.create_system == 3:  # Unix
+                            perms = member.external_attr >> 16
+                            is_symlink = stat.S_ISLNK(perms)
+                        elif member.create_system == 0 and (member.external_attr & 0x10):
+                            # DOS directory flag is fine, Windows symlink detection not reliable; skip
+                            is_symlink = False
+                        if is_symlink:
+                            logging.error(f"ZIP {zip_file_path} contains symlink entry: {member.filename}")
+                            return [{
+                                "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
+                                "error": f"ZIP archive contains symbolic link: {member.filename}"
+                            }]
+
+                        if member.is_dir():
+                            continue
+
+                        destination = (temp_dir_path_obj / member.filename).resolve()
+                        if not str(destination).startswith(str(temp_dir_path_obj.resolve())):
+                            logging.error(f"ZIP {zip_file_path} contains entry escaping temp dir: {member.filename}")
+                            return [{
+                                "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
+                                "error": f"ZIP archive contains unsafe destination: {member.filename}"
+                            }]
+
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        with zip_ref.open(member) as src, destination.open("wb") as dst:
+                            shutil.copyfileobj(src, dst)
             except zipfile.BadZipFile as zip_err:
                  logging.error(f"Invalid ZIP file: {zip_file_path} - {zip_err}")
                  # Return a single error result for the whole zip

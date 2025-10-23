@@ -148,9 +148,32 @@ class TestWordsStrategy:
         
         assert all(isinstance(chunk, ChunkResult) for chunk in chunks)
         assert chunks[0].metadata.word_count == 3
-        # Method field might not be set by base implementation
-        # assert chunks[0].metadata.method == 'words'
+        assert chunks[0].metadata.method == 'words'
         assert chunks[0].metadata.index == 0
+    
+    def test_words_metadata_preserves_offsets_with_whitespace(self):
+        """Offsets should reflect original spacing even when output normalizes whitespace."""
+        from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
+        
+        strategy = WordChunkingStrategy()
+        text = "Alpha  beta\tgamma\n\ndelta epsilon"
+        chunks = strategy.chunk_with_metadata(text, max_size=2, overlap=0)
+        
+        assert len(chunks) >= 2
+        first = chunks[0]
+        second = chunks[1]
+        
+        # Chunk text normalizes internal whitespace
+        assert first.text == "Alpha beta"
+        # Offsets should still capture the double space from the original source
+        assert text[first.metadata.start_char:first.metadata.end_char] == "Alpha  beta"
+        
+        second_slice = text[second.metadata.start_char:second.metadata.end_char]
+        assert "gamma" in second_slice
+        assert "delta" in second_slice
+        # Original slice retains the newline separator while normalized chunk text does not
+        assert second_slice != second.text
+        assert ' '.join(second_slice.split()) == second.text
 
 
 class TestSentencesStrategy:
@@ -179,6 +202,30 @@ class TestSentencesStrategy:
         assert len(chunks) == 2
         assert "Question? Exclamation!" in chunks[0]
         assert "Statement. Another?" in chunks[1]
+    
+    def test_sentences_metadata_preserves_offsets_with_whitespace(self):
+        """Sentence metadata should map back to original slices with preserved spacing."""
+        from tldw_Server_API.app.core.Chunking.strategies.sentences import SentenceChunkingStrategy
+        
+        strategy = SentenceChunkingStrategy()
+        text = "First sentence.\n\n   Second sentence!  Third sentence?\nFourth sentence."
+        chunks = strategy.chunk_with_metadata(text, max_size=2, overlap=1)
+        
+        assert len(chunks) >= 2
+        first = chunks[0]
+        first_slice = text[first.metadata.start_char:first.metadata.end_char]
+        # Chunk text is normalized, but original slice keeps the blank line and indentation
+        assert first.text == "First sentence. Second sentence!"
+        assert first_slice.startswith("First sentence.")
+        assert "Second sentence!" in first_slice
+        assert first_slice != first.text
+        assert ' '.join(first_slice.split()) == first.text
+        
+        second = chunks[1]
+        second_slice = text[second.metadata.start_char:second.metadata.end_char]
+        assert ' '.join(second_slice.split()).startswith("Second sentence!")
+        assert "Third sentence?" in second_slice
+        assert ' '.join(second_slice.split()) == second.text
 
 
 class TestParagraphsStrategy:

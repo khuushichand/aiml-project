@@ -495,10 +495,12 @@ class SessionManager:
                         UPDATE sessions
                         SET is_active = 0,
                             is_revoked = 1,
-                            revoked_at = datetime('now')
+                            revoked_at = datetime('now'),
+                            revoked_by = ?,
+                            revoke_reason = ?
                         WHERE id = ?
                         """,
-                        (session_id,)
+                        (revoked_by, reason, session_id)
                     )
                     await conn.commit()
                 

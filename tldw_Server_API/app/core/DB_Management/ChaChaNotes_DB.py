@@ -278,19 +278,57 @@ class BackendManagedTransaction:
 
     def __init__(self, db: 'CharactersRAGDB'):
         self._db = db
-        self._ctx = None
-        self._conn = None
+        self._raw_conn = None
+        self._wrapper = None
+        self._managed = False
+        self._depth = 0
 
     def __enter__(self):
-        self._ctx = self._db.backend.transaction()
-        raw_conn = self._ctx.__enter__()
-        self._conn = BackendConnectionWrapper(self._db, raw_conn)
-        return self._conn
+        self._raw_conn = self._db._get_thread_connection()
+        self._depth = getattr(self._db._local, "tx_depth", 0)
+        self._managed = self._depth == 0
+        setattr(self._db._local, "tx_depth", self._depth + 1)
+        self._wrapper = BackendConnectionWrapper(self._db, self._raw_conn)
+        return self._wrapper
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._ctx is None:
-            return False
-        return self._ctx.__exit__(exc_type, exc_val, exc_tb)
+        try:
+            if self._managed and self._raw_conn is not None:
+                if exc_type is None:
+                    try:
+                        self._raw_conn.commit()
+                    except Exception as commit_exc:
+                        logger.error(
+                            "Commit failed for backend transaction on %s: %s",
+                            self._db.db_path_str,
+                            commit_exc,
+                            exc_info=True,
+                        )
+                        try:
+                            self._raw_conn.rollback()
+                        except Exception as rollback_exc:  # noqa: BLE001
+                            logger.error(
+                                "Rollback after commit failure also failed on %s: %s",
+                                self._db.db_path_str,
+                                rollback_exc,
+                                exc_info=True,
+                            )
+                        raise CharactersRAGDBError(f"Database commit failed: {commit_exc}") from commit_exc
+                else:
+                    try:
+                        self._raw_conn.rollback()
+                    except Exception as rollback_exc:  # noqa: BLE001
+                        logger.error(
+                            "Rollback failed for backend transaction on %s: %s",
+                            self._db.db_path_str,
+                            rollback_exc,
+                            exc_info=True,
+                        )
+        finally:
+            setattr(self._db._local, "tx_depth", self._depth)
+            self._wrapper = None
+            self._raw_conn = None
+        return False
 
 
 # --- Database Class ---

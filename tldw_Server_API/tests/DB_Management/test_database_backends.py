@@ -232,3 +232,50 @@ class TestPostgreSQLBackend:
         assert features.json_support == True
         assert features.array_support == True
         assert features.listen_notify == True
+
+    def test_postgresql_failed_statement_rolls_back_before_reuse(self, pg_config):
+        """Ensure failed statements do not poison pooled connections."""
+        from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
+
+        backend = PostgreSQLBackend(pg_config)
+        table_name = "test_connection_reset_guard"
+
+        backend.execute(f"DROP TABLE IF EXISTS {table_name}")
+        backend.execute(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY)")
+        backend.execute(f"INSERT INTO {table_name} (id) VALUES (%s)", (1,))
+
+        try:
+            with pytest.raises(DatabaseError):
+                backend.execute(f"INSERT INTO {table_name} (id) VALUES (%s)", (1,))
+
+            result = backend.execute(f"SELECT COUNT(*) AS total FROM {table_name}")
+            assert result.rows[0]["total"] == 1
+        finally:
+            backend.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_postgresql_cte_insert_commits(self, pg_config):
+        """CTE bodies with INSERT should be treated as writes and commit automatically."""
+        from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
+
+        backend = PostgreSQLBackend(pg_config)
+        table_name = "test_cte_insert_commit"
+
+        backend.execute(f"DROP TABLE IF EXISTS {table_name}")
+        backend.execute(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, note TEXT)")
+
+        try:
+            backend.execute(
+                f"""
+                WITH inserted AS (
+                    INSERT INTO {table_name}(note) VALUES (%s)
+                    RETURNING id
+                )
+                SELECT id FROM inserted
+                """,
+                ("hello",),
+            )
+
+            result = backend.execute(f"SELECT COUNT(*) AS total FROM {table_name}")
+            assert result.rows[0]["total"] == 1
+        finally:
+            backend.execute(f"DROP TABLE IF EXISTS {table_name}")

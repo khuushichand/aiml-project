@@ -60,11 +60,21 @@ def _compute_pipeline_hash(config: EmbeddingsABTestConfig) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
-async def _embed_texts(provider: str, model: str, texts: List[str]) -> List[List[float]]:
+async def _embed_texts(
+    provider: str,
+    model: str,
+    texts: List[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> List[List[float]]:
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
         create_embeddings_batch_async,
     )
-    vectors = await create_embeddings_batch_async(texts=texts, provider=provider, model_id=model)
+    vectors = await create_embeddings_batch_async(
+        texts=texts,
+        provider=provider,
+        model_id=model,
+        metadata=metadata,
+    )
     out: List[List[float]] = []
     for v in vectors:
         arr = np.array(v, dtype=np.float32)
@@ -179,7 +189,8 @@ async def build_collections_vector_only(
                 metadatas.append(md)
 
         # Embed and store
-        vectors = await _embed_texts(arm.provider, arm.model, all_texts) if all_texts else []
+        user_metadata = {"user_id": str(user_id)}
+        vectors = await _embed_texts(arm.provider, arm.model, all_texts, metadata=user_metadata) if all_texts else []
         emb_dim = len(vectors[0]) if vectors else (arm.dimensions or 0)
 
         # store in chroma
@@ -258,9 +269,10 @@ async def run_vector_search_and_score(
         arm_id = mapping["arm_id"]
         arm = next(a for a in config.arms if arm_id.endswith(str(config.arms.index(a)))) if False else None  # placeholder
     # Use sequential arm order
+    query_metadata = {"user_id": str(user_id)}
     for i, arm in enumerate(config.arms):
         key = f"arm_{test_id}_{i}"
-        query_vecs_per_arm[key] = await _embed_texts(arm.provider, arm.model, texts)
+        query_vecs_per_arm[key] = await _embed_texts(arm.provider, arm.model, texts, metadata=query_metadata)
 
     # Run searches and score
     aggregates: Dict[str, Dict[str, float]] = {}

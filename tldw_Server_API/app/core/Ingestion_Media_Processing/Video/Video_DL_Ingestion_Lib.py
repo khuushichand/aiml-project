@@ -51,6 +51,7 @@ from tldw_Server_API.app.core.Utils.Utils import (
     extract_text_from_segments,
     logging
 )
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter, log_histogram
@@ -68,6 +69,57 @@ try:
 except NameError: # Fallback if __file__ is not defined
     PROJECT_ROOT = Path(os.getcwd())
     logging.warning(f"Could not determine project root from __file__, falling back to CWD: {PROJECT_ROOT}")
+
+
+_PROVIDER_SECTION_MAP: Dict[str, str] = {
+    "openai": "openai_api",
+    "anthropic": "anthropic_api",
+    "cohere": "cohere_api",
+    "groq": "groq_api",
+    "deepseek": "deepseek_api",
+    "mistral": "mistral_api",
+    "openrouter": "openrouter_api",
+    "huggingface": "huggingface_api",
+    "google": "google_api",
+    "qwen": "qwen_api",
+}
+
+_PROVIDER_ENV_MAP: Dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "huggingface": "HUGGINGFACE_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "qwen": "QWEN_API_KEY",
+}
+
+
+def _resolve_eval_api_key(api_name: Optional[str]) -> Optional[str]:
+    """
+    Resolve an API key for evaluation providers from loaded configuration or environment.
+    """
+    if not api_name:
+        return None
+    provider = api_name.lower().strip()
+    section_key = _PROVIDER_SECTION_MAP.get(provider, f"{provider}_api")
+    env_key = _PROVIDER_ENV_MAP.get(provider, f"{provider.upper().replace('-', '_')}_API_KEY")
+
+    api_key: Optional[Any] = None
+    try:
+        provider_section = loaded_config_data.get(section_key, {}) if loaded_config_data else {}
+        if isinstance(provider_section, dict):
+            api_key = provider_section.get("api_key")
+    except Exception:
+        api_key = None
+
+    if not api_key:
+        api_key = os.getenv(env_key)
+
+    return str(api_key) if api_key else None
 
 def normalize_title(title):
     # Normalize the string to 'NFKD' form and encode to 'ascii' ignoring non-ascii characters
@@ -400,7 +452,7 @@ def parse_and_expand_urls(urls):
                 expanded_urls.append(full_url)
 
             # Vimeo handling
-            elif 'http://vimeo.com' or 'https://vimeo.com' or 'https://wwww.vimeo.com' in parsed_url.netloc:
+            elif 'vimeo.com' in parsed_url.netloc.lower():
                 video_id = parsed_url.path.lstrip('/')
                 full_url = f'https://vimeo.com/{video_id}'
                 logging.info(f"Processed Vimeo URL: {full_url}")
@@ -540,6 +592,7 @@ def process_videos(
     temp_dir: Optional[str] = None, # Added temp_dir argument
     keep_original: bool = False, # Add if needed for intermediate files
     perform_diarization:bool = False,
+    user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Processes multiple videos or local file paths, transcribes, summarizes,
@@ -574,6 +627,7 @@ def process_videos(
     :param perform_confabulation_check: If True, run confabulation check on the summary.
     :param keep_original: If True, keep the downloaded file
     :param perform_diarization: If True, perform diarization on inputs
+    :param user_id: Identifier for the requesting user; used for downstream logging/context.
     :return: A dict with the overall results, e.g.:
              {
                "processed_count": int,
@@ -586,12 +640,8 @@ def process_videos(
     logging.info(f"Starting process_videos (DB-agnostic) for {len(inputs)} inputs.")
     errors = []
     results = []
-    all_transcripts_for_confab = {} # Renamed for clarity
-    all_summaries_for_confab = {} # Renamed for clarity
-
-    # Save all transcriptions and summaries to these dict/strings:
-    all_transcriptions = {}
-    all_summaries = ""
+    all_transcripts_for_confab: Dict[str, str] = {}
+    all_summaries_for_confab: Dict[str, str] = {}
 
     # Convert user times to seconds
     start_seconds = convert_to_seconds(start_time) if start_time else 0
@@ -735,28 +785,43 @@ def process_videos(
 
     # Optionally, run a confabulation check on the entire set of summaries
     confabulation_results = None
-    if confabulation_results and all_transcriptions:
-        confab_results = []
-        # Process each transcript-summary pair individually for g_eval check
-        for url, transcript in all_transcriptions.items():
-            # Extract the corresponding summary for this URL
-            url_pattern = f"Video Input: {re.escape(url)}\nTranscription:.*?\nSummary:\n(.*?)\n\n---\n\n"
-            summary_match = re.search(url_pattern, all_summaries, re.DOTALL)
-
-            if summary_match:
-                # FIXME - validate this call
-                individual_summary = summary_match.group(1)
-                # Create single-item collections for this transcript-summary pair
-                single_transcript_dict = f"URL: + {url} : {transcript}"
-                single_summary = f"Video Input: {url}\nTranscription:\n{transcript}\n\nSummary:\n{individual_summary}\n\n"
-
-                # Run g_eval on this single pair
-                pair_result = run_geval(single_transcript_dict, single_summary, None, api_name)  # Pass None for api_key
-                confab_results.append(f"URL: {url} - {pair_result}")
+    if perform_confabulation_check:
+        if not api_name:
+            logging.warning("Confabulation check requested, but no API name was provided; skipping g_eval.")
+        elif not all_transcripts_for_confab:
+            logging.info("Confabulation check requested, but no transcript/summary pairs were collected.")
+            confabulation_results = "Confabulation check skipped: no transcript/summary pairs available."
+        else:
+            resolved_api_key = _resolve_eval_api_key(api_name)
+            if not resolved_api_key:
+                warning_msg = f"Confabulation check skipped: missing API key for provider '{api_name}'."
+                logging.warning(warning_msg)
+                confabulation_results = warning_msg
             else:
-                logging.warning(f"Could not find matching summary for URL: {url}")
+                confab_results = []
+                user_identifier = str(user_id) if user_id is not None else None
+                for url, transcript in all_transcripts_for_confab.items():
+                    summary_text = all_summaries_for_confab.get(url)
+                    if not summary_text:
+                        logging.warning(f"Confabulation check skipped for {url}: missing summary text.")
+                        continue
+                    try:
+                        pair_result = run_geval(
+                            transcript,
+                            summary_text,
+                            resolved_api_key,
+                            api_name,
+                            user_identifier=user_identifier,
+                        )
+                        confab_results.append(f"URL: {url} - {pair_result}")
+                    except Exception as confab_err:
+                        logging.error(f"Confabulation check failed for {url}: {confab_err}", exc_info=True)
+                        confab_results.append(f"URL: {url} - Confabulation error: {confab_err}")
 
-        confabulation_results = f"Confabulation checks completed:\n" + "\n".join(confab_results)
+                if confab_results:
+                    confabulation_results = "Confabulation checks completed:\n" + "\n".join(confab_results)
+                else:
+                    confabulation_results = "Confabulation check completed: no valid transcript/summary pairs to evaluate."
 
     logger.debug(
         f"process_videos DEBUG: Final results list before return: {json.dumps(results, indent=2, default=str)}")
@@ -903,7 +968,7 @@ def process_single_video(
         intermediate_wav_path, segments = perform_transcription(
             video_path=local_file_path_for_transcription, # THE LOCAL PATH
             offset=start_seconds,
-            # end_seconds=end_seconds, # Pass if perform_transcription supports it
+            end_seconds=end_seconds,
             transcription_model=transcription_model,
             vad_use=vad_use,
             diarize=diarize,
