@@ -629,47 +629,48 @@ class Chunker:
             prev_md = parts[0][1]
 
             for text_part, md in parts[1:]:
-                if combined and text_part and not combined[-1].isspace() and not text_part[0].isspace():
-                    sep = default_sep
-                    language = None
-                    if isinstance(md, dict):
-                        language = md.get('language')
-                    if not language and isinstance(prev_md, dict):
-                        language = prev_md.get('language')
+                language = None
+                if isinstance(md, dict):
+                    language = md.get('language')
+                if not language and isinstance(prev_md, dict):
+                    language = prev_md.get('language')
 
-                    kind = kind_hint
-                    if kind is None and isinstance(md, dict):
-                        kind = md.get('paragraph_kind')
+                kind = kind_hint
+                if kind is None and isinstance(md, dict):
+                    kind = md.get('paragraph_kind')
 
-                    if kind in {'list_unordered', 'list_ordered', 'table_md', 'code_fence'}:
-                        sep = '\n'
-                    elif kind == 'header_atx':
-                        sep = '\n\n'
-                    elif method == 'structure_aware':
-                        sep = '\n\n'
+                sep = default_sep
+                if kind in {'list_unordered', 'list_ordered', 'table_md', 'code_fence'}:
+                    sep = '\n'
+                elif kind == 'header_atx' or method == 'structure_aware':
+                    sep = '\n\n'
 
-                    if language and language.lower() in languages_no_space and kind not in {'header_atx', 'list_unordered', 'list_ordered', 'table_md', 'code_fence'}:
-                        sep = ''
+                if language and language.lower() in languages_no_space and kind not in {'header_atx', 'list_unordered', 'list_ordered', 'table_md', 'code_fence'}:
+                    sep = ''
 
-                    needs_trailing_space = (
-                        sep and sep.endswith('\n') and
-                        (kind == 'header_atx' or method == 'structure_aware') and
-                        (not language or language.lower() not in languages_no_space)
-                    )
-                    if needs_trailing_space:
-                        combined += sep
-                        combined += ' '
+                need_sep = False
+                if combined and text_part:
+                    last_char = combined[-1]
+                    first_char = text_part[0]
+                    if not last_char.isspace() and not first_char.isspace():
+                        need_sep = True
+                    elif sep.startswith('\n') and not combined.endswith(sep):
+                        need_sep = True
+                    elif sep == '' and not last_char.isspace():
+                        need_sep = True
+
+                if need_sep:
+                    if sep:
+                        eff_sep = sep
+                        if sep.startswith('\n') and combined.endswith('\n'):
+                            trimmed = sep[1:]
+                            eff_sep = trimmed if trimmed else '\n'
+                        combined += eff_sep
+                        if eff_sep.endswith('\n') and (kind == 'header_atx' or method == 'structure_aware') and (not language or language.lower() not in languages_no_space):
+                            combined += ' '
                     else:
-                        combined += sep
-                if combined and combined.endswith('\n') and text_part and not text_part[0].isspace():
-                    header_like = (
-                        kind_hint == 'header_atx' or
-                        (isinstance(md, dict) and md.get('paragraph_kind') == 'header_atx') or
-                        method == 'structure_aware'
-                    )
-                    language = md.get('language') if isinstance(md, dict) else None
-                    if header_like and (not language or language.lower() not in languages_no_space):
                         combined += ' '
+
                 combined += text_part
                 prev_md = md
             return combined
@@ -1510,7 +1511,6 @@ class Chunker:
         increment_counter("chunker_process_total", labels=labels)
         if text is None or not isinstance(text, str):
             return []
-        self._enforce_text_size(text, source="process_text")
         # Shallow copy of options
         opts = dict(options or {})
 
@@ -1535,6 +1535,9 @@ class Chunker:
         except Exception:
             pass
         observe_histogram("chunker_frontmatter_duration_seconds", time.perf_counter() - fm_start, labels=labels)
+
+        # Recheck size constraints after optional trimming
+        self._enforce_text_size(processed_text, source="process_text")
 
         # Optional header text extraction (legacy heuristic)
         hdr_start = time.perf_counter()

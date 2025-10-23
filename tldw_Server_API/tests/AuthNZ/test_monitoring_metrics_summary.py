@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.monitoring import AuthNZMonitor
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+from tldw_Server_API.app.core.AuthNZ.scheduler import AuthNZScheduler
 
 
 @pytest.mark.asyncio
@@ -94,3 +95,25 @@ async def test_metrics_summary_uses_boolean_revoked_filter(monkeypatch):
     await pool.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     await pool.execute("DELETE FROM api_keys WHERE user_id = ?", (user_id,))
     await pool.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
+class _NoopDispatcher:
+    async def dispatch(self, **kwargs):
+        return True
+
+
+@pytest.mark.asyncio
+async def test_scheduler_monitor_queries_sqlite(monkeypatch):
+    """Scheduler monitoring helpers should run on SQLite without SQL errors."""
+    await reset_db_pool()
+    scheduler = AuthNZScheduler()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.scheduler.get_security_alert_dispatcher",
+        lambda: _NoopDispatcher(),
+    )
+
+    await scheduler._monitor_auth_failures()
+    await scheduler._monitor_api_usage()
+    await scheduler._monitor_rate_limits()
+    await reset_db_pool()

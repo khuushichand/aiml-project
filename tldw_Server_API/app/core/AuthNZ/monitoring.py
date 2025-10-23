@@ -409,6 +409,8 @@ class AuthNZMonitor:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(minutes=time_range_minutes)
+            is_postgres = getattr(db_pool, "pool", None) is not None
+            cutoff_param = cutoff if is_postgres else cutoff.isoformat()
             
             # Get authentication metrics
             auth_metrics = await db_pool.fetchone(
@@ -421,11 +423,14 @@ class AuthNZMonitor:
                 WHERE created_at > ?
                 AND action LIKE 'metric_%'
                 """,
-                cutoff.isoformat() if not hasattr(db_pool, 'fetchval') else cutoff
+                cutoff_param,
             )
             
             # Get active sessions count
             revoked_inactive_value = False
+            now_dt = datetime.utcnow()
+            expires_param = now_dt if is_postgres else now_dt.isoformat()
+
             sessions_count = await db_pool.fetchone(
                 """
                 SELECT COUNT(*) as active_sessions
@@ -433,8 +438,7 @@ class AuthNZMonitor:
                 WHERE expires_at > ?
                   AND (is_revoked = ? OR is_revoked IS NULL)
                 """,
-                datetime.utcnow().isoformat() if not hasattr(db_pool, 'fetchval') else datetime.utcnow(),
-                revoked_inactive_value,
+                (expires_param, revoked_inactive_value),
             )
             
             # Get active API keys count
@@ -466,7 +470,7 @@ class AuthNZMonitor:
                 'api_keys': {
                     'active': api_keys_count['active_keys'] or 0
                 },
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': now_dt.isoformat()
             }
             
         except Exception as e:

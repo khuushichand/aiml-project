@@ -49,6 +49,14 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
                 sqlite3.connect(backup_file) as target:
             source.backup(target)
 
+        # Copy associated WAL/SHM files when present to keep the journal consistent.
+        for suffix in ("-wal", "-shm"):
+            sidecar = f"{db_path}{suffix}"
+            if os.path.exists(sidecar):
+                backup_sidecar = f"{backup_file}{suffix}"
+                shutil.copy2(sidecar, backup_sidecar)
+                logger.info(f"Copied journal file: {backup_sidecar}")
+
         logger.info(f"Backup created successfully: {backup_file}")
         return f"Backup created: {backup_file}"
     except Exception as e:
@@ -105,10 +113,26 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
         # Backup current database before restore
         logger.info(f"Creating backup of current database: {current_backup}")
         shutil.copy2(db_path, current_backup)
+        for suffix in ("-wal", "-shm"):
+            existing_sidecar = f"{db_path}{suffix}"
+            backup_sidecar = f"{current_backup}{suffix}"
+            if os.path.exists(existing_sidecar):
+                shutil.copy2(existing_sidecar, backup_sidecar)
+                logger.info(f"Saved journal snapshot: {backup_sidecar}")
 
         # Restore the backup
         logger.info(f"Restoring database from {backup_name}")
         shutil.copy2(backup_path, db_path)
+        for suffix in ("-wal", "-shm"):
+            backup_sidecar = f"{backup_path}{suffix}"
+            target_sidecar = f"{db_path}{suffix}"
+            if os.path.exists(backup_sidecar):
+                shutil.copy2(backup_sidecar, target_sidecar)
+                logger.info(f"Restored journal file: {target_sidecar}")
+            elif os.path.exists(target_sidecar):
+                # Remove stale sidecar files that do not exist for the backup snapshot.
+                os.remove(target_sidecar)
+                logger.info(f"Removed stale journal file: {target_sidecar}")
 
         logger.info(f"Database restored from {backup_name}")
         return f"Database restored from {backup_name}"

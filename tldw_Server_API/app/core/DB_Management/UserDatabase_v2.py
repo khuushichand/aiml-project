@@ -335,17 +335,24 @@ class UserDatabase:
             query = f"UPDATE users SET {', '.join(set_clause)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
             
             result = self.backend.execute(query, tuple(values), connection=conn)
-            
-            # SQLite's sqlite3 cursor.rowcount can be -1 in some environments; treat
-            # a successful execute without exception as success for SQLite.
-            if self.backend.backend_type == BackendType.SQLITE:
-                self._audit_log('user_updated', user_id, None, updates, connection=conn)
-                return True
 
-            if result.rowcount > 0:
+            success = False
+            if self.backend.backend_type == BackendType.SQLITE:
+                try:
+                    change_result = self.backend.execute(
+                        "SELECT changes() AS changes",
+                        connection=conn,
+                    )
+                    changes = change_result.rows[0].get("changes", 0) if change_result.rows else 0
+                    success = bool(changes)
+                except Exception:
+                    success = False
+            else:
+                success = result.rowcount > 0
+
+            if success:
                 self._audit_log('user_updated', user_id, None, updates, connection=conn)
-                return True
-            return False
+            return success
     
     def delete_user(self, user_id: int) -> bool:
         """
@@ -632,16 +639,70 @@ class UserDatabase:
             
             code_id = code_result.rows[0]['id']
             
-            # Update usage count
-            self.backend.execute(
-                """
-                UPDATE registration_codes 
-                SET times_used = times_used + 1
-                WHERE id = ?
-                """,
-                (code_id,),
-                connection=conn,
-            )
+            active_value = True if self.backend.backend_type == BackendType.POSTGRESQL else 1
+            update_params = (code_id, active_value)
+
+            if self.backend.backend_type == BackendType.POSTGRESQL:
+                update_result = self.backend.execute(
+                    """
+                    UPDATE registration_codes
+                    SET times_used = times_used + 1,
+                        is_active = CASE WHEN times_used + 1 >= max_uses THEN FALSE ELSE is_active END
+                    WHERE id = ?
+                      AND is_active = ?
+                      AND times_used < max_uses
+                      AND expires_at > CURRENT_TIMESTAMP
+                    RETURNING times_used, max_uses, is_active
+                    """,
+                    update_params,
+                    connection=conn,
+                )
+                if not update_result.rows:
+                    return False
+                new_times_used = update_result.rows[0]['times_used']
+                max_uses = update_result.rows[0]['max_uses']
+            else:
+                self.backend.execute(
+                    """
+                    UPDATE registration_codes
+                    SET times_used = times_used + 1
+                    WHERE id = ?
+                      AND is_active = ?
+                      AND times_used < max_uses
+                      AND expires_at > CURRENT_TIMESTAMP
+                    """,
+                    update_params,
+                    connection=conn,
+                )
+                change_result = self.backend.execute(
+                    "SELECT changes() AS changes",
+                    connection=conn,
+                )
+                if not change_result.rows or change_result.rows[0].get("changes", 0) == 0:
+                    return False
+                fetch_result = self.backend.execute(
+                    "SELECT times_used, max_uses FROM registration_codes WHERE id = ?",
+                    (code_id,),
+                    connection=conn,
+                )
+                if not fetch_result.rows:
+                    return False
+                new_times_used = fetch_result.rows[0]['times_used']
+                max_uses = fetch_result.rows[0]['max_uses']
+
+                if new_times_used >= max_uses:
+                    self.backend.execute(
+                        "UPDATE registration_codes SET is_active = 0 WHERE id = ?",
+                        (code_id,),
+                        connection=conn,
+                    )
+
+            if new_times_used >= max_uses and self.backend.backend_type == BackendType.POSTGRESQL:
+                self.backend.execute(
+                    "UPDATE registration_codes SET is_active = FALSE WHERE id = ?",
+                    (code_id,),
+                    connection=conn,
+                )
             
             # Record usage
             self.backend.execute(

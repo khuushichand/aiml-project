@@ -196,6 +196,7 @@ def perform_transcription(
     local_media_path_to_convert = None
     temp_dir_manager = None
     downloaded_file_path = None  # Track the specific downloaded file
+    audio_file_path = None  # Track generated WAV path even if conversion fails early
     try:
         logging.info(f"Initiating transcription process for: {video_path}")
         # 1. Convert to WAV - Catch ConversionError specifically

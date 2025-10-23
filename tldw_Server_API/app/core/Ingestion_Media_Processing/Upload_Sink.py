@@ -5,6 +5,7 @@
 import copy
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Dict, Set, Union, Tuple
@@ -158,6 +159,7 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.html': 'html', '.htm': 'html',
     '.xml': 'xml', '.opml': 'xml',
     '.zip': 'archive', '.tar': 'archive', '.tgz': 'archive', '.tbz2': 'archive', '.txz': 'archive',
+    '.tar.gz': 'archive', '.tar.bz2': 'archive', '.tar.xz': 'archive',
     '.eml': 'email',
 }
 
@@ -446,6 +448,19 @@ class FileValidator:
                                     f"Exceeded max internal file limit ({max_internal_files}) during extraction.")
                                 break  # Stop extraction
 
+                            external_type = (member.external_attr >> 16) & 0xFFFF
+                            if external_type:
+                                if stat.S_ISLNK(external_type):
+                                    logging.warning(f"Skipping symbolic link inside archive: {member_filename}")
+                                    issues.append(f"Archive contains unsupported symbolic link: {member_filename}")
+                                    continue
+                                if not stat.S_ISREG(external_type):
+                                    logging.warning(
+                                        f"Skipping non-regular file inside archive: {member_filename} (mode={oct(external_type)})")
+                                    issues.append(
+                                        f"Archive contains unsupported entry type (mode {oct(external_type)}): {member_filename}")
+                                    continue
+
                             total_extracted_size += member.file_size  # uncompressed size
                             if total_extracted_size > max_uncompressed_size:
                                 issues.append(
@@ -497,7 +512,17 @@ class FileValidator:
                                 return ValidationResult(False, issues, archive_path_obj)
 
                             for member in members:
+                                if member.isdir():
+                                    continue
+                                if member.issym() or member.islnk():
+                                    logging.warning(f"Skipping symbolic/hard link inside archive: {member.name}")
+                                    issues.append(f"Archive contains unsupported link entry: {member.name}")
+                                    continue
                                 if not member.isfile():
+                                    logging.warning(
+                                        f"Skipping non-file archive member: {member.name} (type={member.type})")
+                                    issues.append(
+                                        f"Archive contains unsupported member type ({member.type}): {member.name}")
                                     continue
                                 member_filename = member.name
                                 if '..' in member_filename or member_filename.startswith('/') or ':' in member_filename:

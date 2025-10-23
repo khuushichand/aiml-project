@@ -423,12 +423,47 @@ def validate_inputs(document: str, summary: str, api_name: str, api_key: str) ->
         raise ValueError("Source document cannot be empty")
     if not summary.strip():
         raise ValueError("Summary cannot be empty")
-    if api_name.lower() not in ["openai", "anthropic", "cohere", "groq", "openrouter", "deepseek", "huggingface",
-                                "mistral", "llama.cpp", "kobold", "ooba", "tabbyapi", "vllm", "local-llm", "ollama"]:
+    allowed_apis = {
+        "openai",
+        "anthropic",
+        "cohere",
+        "groq",
+        "openrouter",
+        "deepseek",
+        "huggingface",
+        "mistral",
+        "google",
+        "qwen",
+        "custom-openai-api",
+        "custom-openai-api-2",
+        "llama.cpp",
+        "kobold",
+        "ooba",
+        "tabbyapi",
+        "vllm",
+        "local-llm",
+        "ollama",
+        "aphrodite",
+    }
+    if api_name.lower() not in allowed_apis:
         raise ValueError(f"Unsupported API: {api_name}")
     
     # Check if API key is required for the given API
-    commercial_apis = ["openai", "anthropic", "cohere", "groq", "openrouter", "deepseek", "huggingface", "mistral"]
+    commercial_apis = {
+        "openai",
+        "anthropic",
+        "cohere",
+        "groq",
+        "openrouter",
+        "deepseek",
+        "huggingface",
+        "mistral",
+        "google",
+        "qwen",
+        "custom-openai-api",
+        "custom-openai-api-2",
+        "aphrodite",
+    }
     if api_name.lower() in commercial_apis and not api_key:
         raise ValueError(f"API key is required for {api_name}. Please provide a valid API key.")
 

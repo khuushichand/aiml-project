@@ -105,6 +105,17 @@ class TestV2Chunker:
         chunks = list(generator)
         assert len(chunks) > 0
         assert all(isinstance(chunk, str) for chunk in chunks)
+    
+    def test_process_text_respects_max_size_after_frontmatter(self):
+        """process_text should trim headers before enforcing size limits."""
+        config = ChunkerConfig(max_text_size=64)
+        chunker = Chunker(config=config)
+        frontmatter = '{"meta": "x"}\n'
+        body = "a" * (config.max_text_size - len(frontmatter))
+        result = chunker.process_text(frontmatter + body)
+        assert result and isinstance(result, list)
+        with pytest.raises(InvalidInputError):
+            chunker.process_text(frontmatter + body + "b")
 
 
 class TestWordsStrategy:
@@ -174,6 +185,16 @@ class TestWordsStrategy:
         # Original slice retains the newline separator while normalized chunk text does not
         assert second_slice != second.text
         assert ' '.join(second_slice.split()) == second.text
+    
+    def test_thai_tokenizer_fallback_preserves_newlines(self):
+        """Fallback Thai tokenization should keep explicit newlines intact."""
+        from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
+        
+        strategy = WordChunkingStrategy(language='th')
+        text = "กแรก\nกสอง"
+        chunks = strategy.chunk(text, max_size=10, overlap=0)
+        assert chunks
+        assert text in chunks
 
 
 class TestSentencesStrategy:

@@ -235,8 +235,9 @@ class DocumentGeneratorService:
                 conversation_id,
                 limit,
                 0,
-                "ASC",
+                "DESC",
             )
+            raw_history = list(reversed(raw_history))
         except Exception as exc:
             logger.error(f"Failed to get conversation context: {exc}")
             return []
@@ -652,6 +653,56 @@ class DocumentGeneratorService:
         except Exception as e:
             logger.error(f"Failed to save generated document: {e}")
             raise CharactersRAGDBError(f"Failed to save document: {e}")
+    
+    def record_streamed_document(
+        self,
+        *,
+        conversation_id: Optional[int],
+        document_type: DocumentType,
+        content: str,
+        provider: str,
+        model: str,
+        generation_time_ms: int,
+        token_count: Optional[int] = None
+    ) -> Optional[int]:
+        """
+        Persist the result of a streamed document generation once all chunks are received.
+
+        Args:
+            conversation_id: Conversation ID associated with the document
+            document_type: Type of the generated document
+            content: Concatenated document content collected during streaming
+            provider: Provider that produced the document
+            model: Model name
+            generation_time_ms: Total generation time in milliseconds
+            token_count: Optional token count metadata
+
+        Returns:
+            Generated document ID if persisted, otherwise None.
+        """
+        if not content or not content.strip():
+            logger.info("Skipping persistence for streamed document with empty content (conversation_id=%s)", conversation_id)
+            return None
+        
+        try:
+            document_id = self._save_generated_document(
+                conversation_id=conversation_id,
+                document_type=document_type,
+                title=f"{document_type.value.replace('_', ' ').title()} - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                content=content,
+                provider=provider,
+                model=model,
+                generation_time_ms=generation_time_ms,
+                token_count=token_count
+            )
+            return document_id
+        except Exception as exc:
+            logger.error(
+                "Failed to persist streamed document for conversation %s: %s",
+                conversation_id,
+                exc
+            )
+            return None
 
     def create_manual_document(
         self,

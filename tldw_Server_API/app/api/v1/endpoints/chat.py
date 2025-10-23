@@ -2298,12 +2298,16 @@ async def generate_document(
                     lines = text.splitlines() or [""]
                     return "".join(f"data: {line}\n" for line in lines) + "\n"
 
+                stream_started_at = time.perf_counter()
+                collected_chunks: List[str] = []
+
                 async def _sse_stream() -> AsyncIterator[str]:
                     try:
                         if hasattr(streaming_source, "__aiter__"):
                             async for chunk in streaming_source:  # type: ignore[attr-defined]
                                 payload = _normalize_chunk(chunk)
                                 if payload:
+                                    collected_chunks.append(payload)
                                     yield _encode_sse(payload)
                         elif hasattr(streaming_source, "__iter__") and not isinstance(
                             streaming_source, (str, bytes, bytearray)
@@ -2311,13 +2315,38 @@ async def generate_document(
                             for chunk in streaming_source:  # type: ignore[not-an-iterable]
                                 payload = _normalize_chunk(chunk)
                                 if payload:
+                                    collected_chunks.append(payload)
                                     yield _encode_sse(payload)
                         else:
                             payload = _normalize_chunk(streaming_source)
                             if payload:
+                                collected_chunks.append(payload)
                                 yield _encode_sse(payload)
                     finally:
                         yield "data: [DONE]\n\n"
+                        try:
+                            document_body = "".join(collected_chunks).strip()
+                            if document_body:
+                                generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
+                                service.record_streamed_document(
+                                    conversation_id=request.conversation_id,
+                                    document_type=doc_type,
+                                    content=document_body,
+                                    provider=request.provider,
+                                    model=request.model,
+                                    generation_time_ms=generation_time_ms
+                                )
+                            else:
+                                logger.info(
+                                    "Streamed document produced no content for conversation %s; skipping persistence",
+                                    request.conversation_id
+                                )
+                        except Exception as persist_exc:  # pragma: no cover - defensive logging
+                            logger.error(
+                                "Failed to persist streamed document for conversation %s: %s",
+                                request.conversation_id,
+                                persist_exc
+                            )
 
                 return StreamingResponse(
                     _sse_stream(),

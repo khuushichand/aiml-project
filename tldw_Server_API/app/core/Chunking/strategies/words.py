@@ -296,7 +296,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         except ImportError:
             logger.warning("PyThaiNLP not available, using character splitting for Thai")
             # Thai doesn't use spaces between words
-        return list(text.replace(' ', '').replace('\n', ' '))
+            return [ch for ch in text if ch != '\r']
     
     def _join_words(self, words: List[str]) -> str:
         """

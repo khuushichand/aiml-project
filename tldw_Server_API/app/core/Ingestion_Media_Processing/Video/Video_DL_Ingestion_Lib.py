@@ -31,7 +31,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 #
 # 3rd-Party Imports
 import unicodedata
@@ -106,7 +106,7 @@ _PROVIDER_ENV_MAP: Dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "qwen": "QWEN_API_KEY",
     "custom-openai-api": "CUSTOM_OPENAI_API_KEY",
-    "custom-openai-api-2": "CUSTOM_OPENAI_API_2_API_KEY",
+    "custom-openai-api-2": "CUSTOM_OPENAI2_API_KEY",
     "llama.cpp": "LLAMA_CPP_API_KEY",
     "kobold": "KOBOLD_API_KEY",
     "ooba": "OOBA_API_KEY",
@@ -126,6 +126,11 @@ _PROVIDERS_REQUIRING_KEYS = {
     "deepseek",
     "huggingface",
     "mistral",
+    "google",
+    "qwen",
+    "custom-openai-api",
+    "custom-openai-api-2",
+    "aphrodite",
 }
 
 
@@ -490,9 +495,26 @@ def parse_and_expand_urls(urls):
                 expanded_urls.append(full_url)
 
             # Vimeo handling
-            elif 'vimeo.com' in parsed_url.netloc.lower():
-                video_id = parsed_url.path.lstrip('/')
-                full_url = f'https://vimeo.com/{video_id}'
+            elif 'vimeo.com' in (parsed_url.netloc or parsed_url.path).lower():
+                # Respect the supplied host while ensuring the URL is fully qualified.
+                scheme = parsed_url.scheme or 'https'
+                netloc = parsed_url.netloc
+                path = parsed_url.path
+
+                if not netloc:
+                    # Handle scheme-less inputs like "vimeo.com/12345"
+                    candidate_netloc, _, remainder = parsed_url.path.partition('/')
+                    netloc = candidate_netloc
+                    path = f'/{remainder}' if remainder else ''
+
+                # Normalise empty paths to '/' so downstream clients get a valid URL.
+                normalized_path = path or '/'
+
+                # Upgrade to HTTPS for canonical hosts while preserving other subdomains verbatim.
+                if netloc.lower() in {'vimeo.com', 'www.vimeo.com'}:
+                    scheme = 'https'
+
+                full_url = urlunparse((scheme, netloc, normalized_path, '', parsed_url.query, parsed_url.fragment))
                 logging.info(f"Processed Vimeo URL: {full_url}")
                 expanded_urls.append(full_url)
 

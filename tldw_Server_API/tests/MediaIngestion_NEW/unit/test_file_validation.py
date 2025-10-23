@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     FileValidationError,
     FileValidator,
     process_and_validate_file,
+    _resolve_media_type_key,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import DEFAULT_MEDIA_TYPE_CONFIG as _MEDIA_CFG
 
@@ -344,3 +345,15 @@ class TestArchiveExtensionHandling:
         result = process_and_validate_file(archive_path, validator)
 
         assert result.is_valid, f"Expected archive to validate, got issues: {result.issues}"
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "bundle.tar.gz",
+            "dataset.tar.bz2",
+            "archive.tar.xz",
+        ],
+    )
+    def test_multi_suffix_archive_extension_resolves_media_type(self, filename):
+        assert _resolve_media_type_key(filename) == "archive"

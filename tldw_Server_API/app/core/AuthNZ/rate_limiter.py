@@ -81,7 +81,8 @@ class RateLimiter:
             # If using SQLite (db_pool.pool is None), create required tables
             if not getattr(self.db_pool, 'pool', None):
                 await self._ensure_sqlite_schema()
-            # For PostgreSQL, schema should be created by migrations; optionally we could add checks here
+            else:
+                await self._ensure_postgres_schema()
         except Exception as e:
             logger.warning(f"RateLimiter schema ensure warning: {e}")
 
@@ -145,7 +146,54 @@ class RateLimiter:
             except Exception:
                 # aiosqlite transaction manager may commit outside; ignore
                 pass
-    
+
+    async def _ensure_postgres_schema(self):
+        """Create PostgreSQL tables used by the rate limiter if they do not exist."""
+        ddl_statements = [
+            (
+                """
+                CREATE TABLE IF NOT EXISTS rate_limits (
+                    identifier TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    request_count INTEGER NOT NULL,
+                    window_start TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (identifier, endpoint, window_start)
+                )
+                """,
+                (),
+            ),
+            (
+                """
+                CREATE TABLE IF NOT EXISTS failed_attempts (
+                    identifier TEXT NOT NULL,
+                    attempt_type TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL,
+                    window_start TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (identifier, attempt_type)
+                )
+                """,
+                (),
+            ),
+            (
+                """
+                CREATE TABLE IF NOT EXISTS account_lockouts (
+                    identifier TEXT PRIMARY KEY,
+                    locked_until TIMESTAMPTZ NOT NULL,
+                    reason TEXT
+                )
+                """,
+                (),
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)",
+                (),
+            ),
+        ]
+
+        async with self.db_pool.transaction() as conn:
+            for sql, params in ddl_statements:
+                await conn.execute(sql, *params)
+
     async def record_failed_attempt(
         self,
         identifier: str,
