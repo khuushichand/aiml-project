@@ -193,14 +193,14 @@ async def get_media_db_for_user(
                 detail=f"Could not initialize database for user: {e}"
             ) from e
         except IOError as e: # Catch error from _get_db_path_for_user
-            logging.error(f"Failed to get DB path for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Failed to get DB path for user {user_id}: {e}", exc_info=True)
             raise HTTPException(
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                  detail=str(e) # Use the message from IOError
              ) from e
         except Exception as e:
             log_path = db_path or f"directory for user_id {user_id}"
-            logging.error(f"Unexpected error initializing database for user {user_id} at {log_path}: {e}", exc_info=True)
+            logger.error(f"Unexpected error initializing database for user {user_id} at {log_path}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"An unexpected error occurred during database setup for user."
@@ -251,10 +251,10 @@ async def try_get_media_db_for_user(
     try:
         return await get_media_db_for_user(current_user=current_user)
     except HTTPException as e:
-        logging.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
+        logger.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
         return None
     except Exception as e:
-        logging.warning(
+        logger.warning(
             f"Optional Media DB unexpected error for user {getattr(current_user, 'id', '?')}: {e}",
             exc_info=True
         )

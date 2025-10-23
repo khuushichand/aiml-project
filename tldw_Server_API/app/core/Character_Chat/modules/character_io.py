@@ -19,10 +19,7 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError, InputError
 
 # Import validation and parsing functions from character_validation module
-from .character_validation import (
-    parse_v1_card, parse_v2_card, parse_pygmalion_card,
-    parse_textgen_card, parse_alpaca_card, validate_v2_card
-)
+from . import character_validation as _character_validation
 
 # Import database functions from character_db module
 from .character_db import create_new_character_from_data
@@ -203,7 +200,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
 
         if attempt_v2_processing:
             logger.debug("Attempting V2 validation based on card structure/spec.")
-            is_valid_v2_struct, v2_errors = validate_v2_card(card_data_dict)
+            is_valid_v2_struct, v2_errors = _character_validation.validate_v2_card(card_data_dict)
 
             if not is_valid_v2_struct:
                 logger.error(f"V2 Card structural validation failed: {'; '.join(v2_errors)}.")
@@ -216,7 +213,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
                     # No 'return None' here, proceed to V1 attempt below
             else:  # V2 structural validation passed
                 logger.info("V2 Card structural validation passed. Attempting to parse as V2 character card.")
-                parsed_card = parse_v2_card(card_data_dict)
+                parsed_card = _character_validation.parse_v2_card(card_data_dict)
                 if not parsed_card:
                     logger.warning(
                         "V2 parsing failed despite passing V2 structural validation. This might indicate an issue with the parser or an edge case. Attempting V1 parsing as fallback.")
@@ -227,24 +224,24 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
             # Try Pygmalion format
             if has_pygmalion_fields:
                 logger.info("Attempting to parse as Pygmalion format character card.")
-                parsed_card = parse_pygmalion_card(card_data_dict)
+                parsed_card = _character_validation.parse_pygmalion_card(card_data_dict)
             
             # Try Text Generation WebUI format
             elif has_textgen_fields:
                 logger.info("Attempting to parse as Text Generation WebUI format character card.")
-                parsed_card = parse_textgen_card(card_data_dict)
+                parsed_card = _character_validation.parse_textgen_card(card_data_dict)
             
             # Try Alpaca/instruction format
             elif has_alpaca_fields:
                 logger.info("Attempting to parse as Alpaca/instruction format.")
-                parsed_card = parse_alpaca_card(card_data_dict)
+                parsed_card = _character_validation.parse_alpaca_card(card_data_dict)
         
         # Fallback to V1 if other formats didn't work
         if parsed_card is None:
             logger.info("Attempting to parse as V1 character card.")
             try:
                 # parse_v1_card raises ValueError if required fields are missing, or returns None on other errors
-                parsed_card = parse_v1_card(card_data_dict)
+                parsed_card = _character_validation.parse_v1_card(card_data_dict)
             except ValueError as ve_v1:
                 logger.error(f"V1 card parsing error (likely missing required V1 fields): {ve_v1}")
                 parsed_card = None  # Ensure parsed_card is None on this error
@@ -279,26 +276,46 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
     if not content_str or not content_str.strip():
         logger.error("Content string is empty or whitespace.")
         return None
-    
-    # Try JSON first
-    try:
-        return import_character_card_from_json_string(content_str)
-    except:
-        pass
-    
+
+    trimmed_content = content_str.lstrip()
+    treat_as_frontmatter = trimmed_content.startswith("---")
+
+    # Try JSON first when content doesn't look like YAML frontmatter
+    if not treat_as_frontmatter:
+        try:
+            parsed = import_character_card_from_json_string(content_str)
+            if parsed:
+                return parsed
+        except Exception:
+            logger.debug("Failed JSON parsing attempt for character card string.", exc_info=True)
+
     # Try YAML
     try:
         yaml_data = yaml.safe_load(content_str)
         if isinstance(yaml_data, dict):
-            # Convert YAML to JSON string then parse
             json_str = json.dumps(yaml_data)
-            return import_character_card_from_json_string(json_str)
+            parsed_from_yaml = import_character_card_from_json_string(json_str)
+            if parsed_from_yaml:
+                return parsed_from_yaml
+    except ImportError:
+        # Surface import errors (e.g., yaml not installed)
+        raise
     except yaml.YAMLError as e:
-        logger.error(f"Failed to parse as YAML: {e}")
+        logger.error(f"Error parsing YAML frontmatter: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error parsing YAML content: {e}", exc_info=True)
+
+    # Fallback: treat the raw content as a plain-text description
+    fallback_payload = {
+        "name": "Character",
+        "description": content_str,
+        "tags": ["plain-text"],
+    }
+    try:
+        return import_character_card_from_json_string(json.dumps(fallback_payload))
     except Exception as e:
         logger.error(f"Unexpected error parsing content: {e}", exc_info=True)
-    
-    return None
+        return None
 
 
 def import_and_save_character_from_file(
@@ -336,13 +353,24 @@ def import_and_save_character_from_file(
             # Try to extract JSON from image metadata
             if file_path:
                 json_str = extract_json_from_image_file(file_path)
+                try:
+                    with open(file_path, 'rb') as image_file_obj:
+                        original_image_bytes = image_file_obj.read()
+                except Exception:
+                    original_image_bytes = None
             elif file_content and isinstance(file_content, bytes):
                 json_str = extract_json_from_image_file(file_content)
+                original_image_bytes = file_content
             else:
                 return False, "Image file requires bytes content or file path", None
             
             if json_str:
                 parsed_card = import_character_card_from_json_string(json_str)
+                if parsed_card is not None and original_image_bytes:
+                    if not parsed_card.get("image"):
+                        parsed_card["image"] = original_image_bytes
+                    if parsed_card.get("image_base64") in (None, "", []):
+                        parsed_card.pop("image_base64", None)
             else:
                 return False, "No character data found in image metadata", None
         

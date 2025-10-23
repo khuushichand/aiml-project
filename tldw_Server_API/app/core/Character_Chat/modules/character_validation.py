@@ -172,7 +172,7 @@ def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         required_spec_fields = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example']
         for field in required_spec_fields:
             if field not in card_data_json or card_data_json[field] is None:
-                raise ValueError(f"Missing required field '{field}' in V1 card.")
+                raise ValueError(f"Missing required field in V1 card: {field}")
 
         # Map to DB schema names
         parsed_data = {
@@ -410,7 +410,9 @@ def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Se
         valid_positions = ['before_char', 'after_char']
         if entry['position'] not in valid_positions:
             validation_messages.append(
-                f"Entry '{entry_name}' (index {idx}): 'position' must be one of {valid_positions}.")
+                f"Entry '{entry_name}' (index {idx}): 'position' ('{entry['position']}') is not a recognized value. "
+                f"Expected one of {valid_positions}."
+            )
 
     is_valid = len(validation_messages) == 0
     return is_valid, validation_messages
@@ -437,10 +439,14 @@ def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     validation_messages = []
 
     # Check top-level structure
-    if 'spec' in card_data and card_data['spec'] != 'chara_card_v2':
+    if 'spec' not in card_data:
+        validation_messages.append("Missing 'spec' field.")
+    elif card_data['spec'] != 'chara_card_v2':
         validation_messages.append(f"Invalid 'spec' value: '{card_data['spec']}'. Expected 'chara_card_v2'.")
 
-    if 'spec_version' in card_data and card_data['spec_version'] != '2.0':
+    if 'spec_version' not in card_data:
+        validation_messages.append("Missing 'spec_version' field.")
+    elif card_data['spec_version'] != '2.0':
         validation_messages.append(
             f"Invalid 'spec_version' value: '{card_data['spec_version']}'. Expected '2.0'.")
 

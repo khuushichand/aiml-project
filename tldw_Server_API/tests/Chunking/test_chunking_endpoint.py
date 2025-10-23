@@ -12,9 +12,10 @@ from fastapi import \
     FastAPI  # Removed: Body, File, UploadFile, Form, Depends, APIRouter, HTTPException, status (FastAPI itself is enough for app instance)
 from pydantic import BaseModel, Field
 from fastapi.testclient import TestClient
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from loguru import logger
 #
 # Local Imports
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 # The actual router from your application
 from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as actual_chunking_endpoint_router
 # The real default options to compare against if needed

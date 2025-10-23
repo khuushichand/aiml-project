@@ -801,7 +801,8 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
                   "scenario": "S"}
     json_file = tmp_path / "import.json";
     json_file.write_text(json.dumps(v1_content))
-    char_id_json = import_and_save_character_from_file(db, str(json_file))
+    success_json, message_json, char_id_json = import_and_save_character_from_file(db, str(json_file))
+    assert success_json and char_id_json is not None
     assert db.get_character_card_by_id(char_id_json)["name"] == "JSON Char"
 
     # PNG with chara
@@ -816,7 +817,8 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
     png_file = tmp_path / "chara.png";
     png_file.write_bytes(dummy_png_bytes)
 
-    char_id_png = import_and_save_character_from_file(db, str(png_file))
+    success_png, message_png, char_id_png = import_and_save_character_from_file(db, str(png_file))
+    assert success_png and char_id_png is not None
     retrieved_png = db.get_character_card_by_id(char_id_png)
     assert retrieved_png["name"] == "PNG Chara" and retrieved_png["image"] == dummy_png_bytes
 

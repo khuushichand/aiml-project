@@ -439,10 +439,40 @@ _db_pool: Optional[DatabasePool] = None
 async def get_db_pool() -> DatabasePool:
     """Get database pool singleton instance"""
     global _db_pool
+    current_settings = get_settings()
+
     if not _db_pool:
-        _db_pool = DatabasePool()
+        _db_pool = DatabasePool(current_settings)
         await _db_pool.initialize()
         return _db_pool
+
+    previous_settings: Optional[Settings] = getattr(_db_pool, "settings", None)
+    if previous_settings:
+        auth_mode_changed = previous_settings.AUTH_MODE != current_settings.AUTH_MODE
+        db_url_changed = previous_settings.DATABASE_URL != current_settings.DATABASE_URL
+        if auth_mode_changed or db_url_changed:
+            logger.info(
+                "AuthNZ database configuration changed "
+                "(AUTH_MODE: {} -> {}, DATABASE_URL: {} -> {}) — recreating pool",
+                previous_settings.AUTH_MODE,
+                current_settings.AUTH_MODE,
+                previous_settings.DATABASE_URL,
+                current_settings.DATABASE_URL,
+            )
+            try:
+                await _db_pool.close()
+            except Exception as e:
+                logger.debug(f"Ignoring error while closing pool during config change: {e}")
+            _db_pool = DatabasePool(current_settings)
+            await _db_pool.initialize()
+            return _db_pool
+    else:
+        _db_pool.settings = current_settings
+
+    if _db_pool.settings is not current_settings:
+        # Keep pool's settings reference in sync with latest resolved Settings object
+        _db_pool.settings = current_settings
+
     # Ensure the pool is compatible with the current running loop (Postgres path)
     try:
         current_loop = asyncio.get_running_loop()
@@ -456,7 +486,7 @@ async def get_db_pool() -> DatabasePool:
                 await _db_pool.close()
             except Exception as e:
                 logger.debug(f"Ignoring error while closing incompatible pool: {e}")
-            _db_pool = DatabasePool()
+            _db_pool = DatabasePool(current_settings)
             await _db_pool.initialize()
     return _db_pool
 

@@ -318,13 +318,10 @@ def load_character_and_image(
             try:
                 image_data_bytes = char_data["image"]
                 img = Image.open(io.BytesIO(image_data_bytes)).convert("RGBA")
-                logger.debug("Successfully loaded image for character '%s'", char_name_from_card)
+                logger.debug(f"Successfully loaded image for character '{char_name_from_card}'")
             except Exception as exc:
                 logger.error(
-                    "Error processing image for character '%s' (ID: %s): %s",
-                    char_name_from_card,
-                    character_id,
-                    exc,
+                    f"Error processing image for character '{char_name_from_card}' (ID: {character_id}): {exc}"
                 )
 
         return char_data, chat_history, img

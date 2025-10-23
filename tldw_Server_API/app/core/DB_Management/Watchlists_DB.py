@@ -363,19 +363,31 @@ class WatchlistsDatabase:
     def ensure_tag_ids(self, names: List[str]) -> List[int]:
         normed = [self._normalize_tag(n) for n in names if n and n.strip()]
         ids: List[int] = []
+        select_sql = "SELECT id FROM tags WHERE user_id = ? AND name = ?"
+        insert_sql = "INSERT INTO tags (user_id, name) VALUES (?, ?)"
         for nm in normed:
-            row = self.backend.execute(
-                "SELECT id FROM tags WHERE user_id = ? AND name = ?",
-                (self.user_id, nm),
-            ).first
+            params = (self.user_id, nm)
+            row = self.backend.execute(select_sql, params).first
             if row:
                 ids.append(int(row.get("id")))
                 continue
-            res = self.backend.execute(
-                "INSERT INTO tags (user_id, name) VALUES (?, ?)",
-                (self.user_id, nm),
-            )
-            ids.append(int(res.lastrowid or 0))
+            insert_exc: Optional[Exception] = None
+            tag_id: Optional[int] = None
+            try:
+                res = self.backend.execute(insert_sql, params)
+                if res.lastrowid:
+                    tag_id = int(res.lastrowid)
+            except Exception as exc:
+                insert_exc = exc
+            if tag_id is None:
+                row = self.backend.execute(select_sql, params).first
+                if row:
+                    tag_id = int(row.get("id"))
+            if tag_id is None:
+                if insert_exc:
+                    raise insert_exc
+                raise RuntimeError("failed_to_ensure_tag_id")
+            ids.append(tag_id)
         return ids
 
     def list_tags(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[TagRow], int]:
@@ -434,15 +446,28 @@ class WatchlistsDatabase:
             tag_ids = self.ensure_tag_ids(tags)
             for tid in tag_ids:
                 try:
-                    self.backend.execute("INSERT OR IGNORE INTO source_tags (source_id, tag_id) VALUES (?, ?)", (sid, tid))
+                    self.backend.execute(
+                        "INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?) ON CONFLICT(source_id, tag_id) DO NOTHING",
+                        (sid, tid),
+                    )
                 except Exception:
-                    pass
+                    # Fallback for engines without ON CONFLICT (should rarely trigger)
+                    self.backend.execute(
+                        "INSERT INTO source_tags (source_id, tag_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_tags WHERE source_id = ? AND tag_id = ?)",
+                        (sid, tid, sid, tid),
+                    )
         if group_ids:
             for gid in group_ids:
                 try:
-                    self.backend.execute("INSERT OR IGNORE INTO source_groups (source_id, group_id) VALUES (?, ?)", (sid, gid))
+                    self.backend.execute(
+                        "INSERT INTO source_groups (source_id, group_id) VALUES (?, ?) ON CONFLICT(source_id, group_id) DO NOTHING",
+                        (sid, gid),
+                    )
                 except Exception:
-                    pass
+                    self.backend.execute(
+                        "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
+                        (sid, gid, sid, gid),
+                    )
         return self.get_source(sid)
 
     def get_source(self, source_id: int) -> SourceRow:
@@ -565,9 +590,15 @@ class WatchlistsDatabase:
         self.backend.execute("DELETE FROM source_tags WHERE source_id = ?", (source_id,))
         for tid in tag_ids:
             try:
-                self.backend.execute("INSERT OR IGNORE INTO source_tags (source_id, tag_id) VALUES (?, ?)", (source_id, tid))
+                self.backend.execute(
+                    "INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?) ON CONFLICT(source_id, tag_id) DO NOTHING",
+                    (source_id, tid),
+                )
             except Exception:
-                pass
+                self.backend.execute(
+                    "INSERT INTO source_tags (source_id, tag_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_tags WHERE source_id = ? AND tag_id = ?)",
+                    (source_id, tid, source_id, tid),
+                )
         rows = self.backend.execute(
             "SELECT t.name FROM source_tags st JOIN tags t ON st.tag_id = t.id WHERE st.source_id = ?",
             (source_id,),
@@ -828,13 +859,18 @@ class WatchlistsDatabase:
         return [RunRow(**r) for r in rows], total
 
     def append_run_item(self, run_id: int, media_id: int, source_id: Optional[int] = None) -> None:
+        stmt = (
+            "INSERT INTO scrape_run_items (run_id, media_id, source_id) "
+            "VALUES (?, ?, ?) ON CONFLICT(run_id, media_id) DO NOTHING"
+        )
         try:
-            self.backend.execute(
-                "INSERT OR IGNORE INTO scrape_run_items (run_id, media_id, source_id) VALUES (?, ?, ?)",
-                (run_id, media_id, source_id),
-            )
+            self.backend.execute(stmt, (run_id, media_id, source_id))
         except Exception:
-            pass
+            self.backend.execute(
+                "INSERT INTO scrape_run_items (run_id, media_id, source_id) "
+                "SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM scrape_run_items WHERE run_id = ? AND media_id = ?)",
+                (run_id, media_id, source_id, run_id, media_id),
+            )
 
     def list_run_media_ids(self, run_id: int, limit: int = 1000) -> List[int]:
         rows = self.backend.execute(

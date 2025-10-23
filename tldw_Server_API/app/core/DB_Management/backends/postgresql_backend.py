@@ -45,6 +45,29 @@ except Exception:
     logger.warning("psycopg (v3) not available. PostgreSQL backend will not work.")
 
 
+_WRITE_COMMANDS = {
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "CREATE",
+    "ALTER",
+    "DROP",
+    "TRUNCATE",
+    "GRANT",
+    "REVOKE",
+    "COMMENT",
+    "ANALYZE",
+    "VACUUM",
+    "REFRESH",
+    "COPY",
+    "CALL",
+    "DO",
+    "REINDEX",
+    "CLUSTER",
+}
+
+
 class PostgreSQLConnectionPool(ConnectionPool):
     """PostgreSQL connection pool using psycopg (v3).
 
@@ -426,8 +449,6 @@ class PostgreSQLBackend(DatabaseBackend):
             else:
                 cursor.execute(query)
 
-            statement = query.strip()
-            statement_upper = statement.upper()
             has_description = cursor.description is not None
 
             if has_description:
@@ -441,12 +462,15 @@ class PostgreSQLBackend(DatabaseBackend):
                         {column_names[idx]: value for idx, value in enumerate(row)}
                         for row in rows
                     ]
-                if not statement_upper.startswith("SELECT"):
-                    conn.commit()
             else:
                 result_rows = []
-                if not statement_upper.startswith("SELECT"):
-                    conn.commit()
+
+            status = (cursor.statusmessage or "").split()
+            command_tag = status[0].upper() if status else ""
+            is_write = command_tag in _WRITE_COMMANDS
+
+            if not external_conn and is_write:
+                conn.commit()
 
             execution_time = time.time() - start_time
 
@@ -499,7 +523,13 @@ class PostgreSQLBackend(DatabaseBackend):
                     normalized_query = query
 
             cursor.executemany(normalized_query, params_list)
-            conn.commit()
+
+            status = (cursor.statusmessage or "").split()
+            command_tag = status[0].upper() if status else ""
+            is_write = command_tag in _WRITE_COMMANDS
+
+            if not external_conn and is_write:
+                conn.commit()
             
             execution_time = time.time() - start_time
             

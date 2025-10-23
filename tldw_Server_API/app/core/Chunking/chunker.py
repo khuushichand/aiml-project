@@ -363,8 +363,8 @@ class Chunker:
         # Build blocks from spans
         spans = self._compute_paragraph_spans(text, template)
         root = {'kind': 'root', 'level': 0, 'title': None, 'start_offset': 0, 'end_offset': len(text), 'children': []}
-        current_section = {'kind': 'section', 'level': 1, 'title': None, 'start_offset': 0, 'end_offset': None, 'children': []}
-        root['children'].append(current_section)
+        current_section: Optional[Dict[str, Any]] = None
+        preface_section: Optional[Dict[str, Any]] = None
 
         # Helper to add a leaf block with chunks
         def _add_block(parent: Dict[str, Any], start: int, end: int, kind: str):
@@ -457,7 +457,7 @@ class Chunker:
                         })
                 elif method == 'structure_aware':
                     # Carry block span directly as a precise chunk for structure-aware mode
-                    ch_text = segment
+                    ch_text = self._sanitize_input(segment, suppress_security_log=True)
                     out_chunks.append({
                         'type': 'text',
                         'text': ch_text,
@@ -517,19 +517,51 @@ class Chunker:
                 'children': []
             })
 
+        def _close_section(section: Optional[Dict[str, Any]], end: int):
+            if section is not None and section.get('end_offset') is None:
+                section['end_offset'] = end
+
+        def _ensure_preface_section(start: int) -> Dict[str, Any]:
+            nonlocal preface_section
+            if preface_section is None:
+                preface_section = {
+                    'kind': 'section',
+                    'level': 1,
+                    'title': None,
+                    'start_offset': start,
+                    'end_offset': None,
+                    'children': []
+                }
+                root['children'].append(preface_section)
+            elif preface_section.get('start_offset') is None:
+                preface_section['start_offset'] = start
+            return preface_section
+
         for (bstart, bend, bkind) in spans:
             # New section on header
             if bkind == 'header_atx':
-                # Close previous
-                current_section['end_offset'] = bstart
-                current_section = {'kind': 'section', 'level': 1, 'title': self._extract_header_title(text[bstart:bend]), 'start_offset': bstart, 'end_offset': None, 'children': []}
+                # Close previous sections (including any preface) before starting a new one
+                _close_section(current_section, bstart)
+                _close_section(preface_section, bstart)
+                header_segment = text[bstart:bend]
+                level_match = re.match(r'^\s*(#{1,6})\s', header_segment)
+                level = len(level_match.group(1)) if level_match else 1
+                current_section = {
+                    'kind': 'section',
+                    'level': level,
+                    'title': self._extract_header_title(header_segment),
+                    'start_offset': bstart,
+                    'end_offset': None,
+                    'children': []
+                }
                 root['children'].append(current_section)
             elif bkind != 'blank':
-                _add_block(current_section, bstart, bend, bkind)
+                target_parent = current_section if current_section is not None else _ensure_preface_section(bstart)
+                _add_block(target_parent, bstart, bend, bkind)
 
         # Close tail
-        if current_section and current_section.get('end_offset') is None:
-            current_section['end_offset'] = len(text)
+        _close_section(current_section, len(text))
+        _close_section(preface_section, len(text))
 
         return {
             'type': 'hierarchical',
@@ -775,7 +807,7 @@ class Chunker:
         )
         return self.flatten_hierarchical(tree)
     
-    def _sanitize_input(self, text: str) -> str:
+    def _sanitize_input(self, text: str, *, suppress_security_log: bool = False) -> str:
         """
         Sanitize input text for security.
         
@@ -803,9 +835,10 @@ class Chunker:
         if '\x00' in text:
             logger.warning("Null bytes detected in input")
             null_byte_count = text.count('\x00')
-            self._security_logger.log_suspicious_content(
-                "null_bytes", f"Found {null_byte_count} null bytes in input", source="sanitize_input"
-            )
+            if not suppress_security_log:
+                self._security_logger.log_suspicious_content(
+                    "null_bytes", f"Found {null_byte_count} null bytes in input", source="sanitize_input"
+                )
             if not _is_test_mode:
                 text = text.replace('\x00', ' ')
         
@@ -817,11 +850,12 @@ class Chunker:
                 text = normalized_text
             else:
                 logger.warning("Unicode normalization skipped to preserve source offsets (length changed)")
-                self._security_logger.log_suspicious_content(
-                    "unicode_normalization_skipped",
-                    "Unicode normalization would change text length; original text retained",
-                    source="sanitize_input"
-                )
+                if not suppress_security_log:
+                    self._security_logger.log_suspicious_content(
+                        "unicode_normalization_skipped",
+                        "Unicode normalization would change text length; original text retained",
+                        source="sanitize_input"
+                    )
         except Exception:
             pass
         
@@ -837,9 +871,10 @@ class Chunker:
         
         if control_characters:
             logger.warning(f"Suspicious control characters found: {control_char_samples}")
-            self._security_logger.log_suspicious_content(
-                "control_characters", f"Found {len(control_characters)} suspicious control characters", source="sanitize_input"
-            )
+            if not suppress_security_log:
+                self._security_logger.log_suspicious_content(
+                    "control_characters", f"Found {len(control_characters)} suspicious control characters", source="sanitize_input"
+                )
             # In test mode, preserve control characters to satisfy normalization properties
             if not _is_test_mode:
                 # Replace suspicious control characters with spaces to preserve offsets
@@ -856,11 +891,12 @@ class Chunker:
                 text = text.replace(bidi_char, ' ')
         if total_bidi_overrides:
             logger.warning("Bidirectional override characters detected and neutralized")
-            self._security_logger.log_suspicious_content(
-                "bidirectional_override",
-                f"Found {total_bidi_overrides} bidirectional override characters",
-                source="sanitize_input"
-            )
+            if not suppress_security_log:
+                self._security_logger.log_suspicious_content(
+                    "bidirectional_override",
+                    f"Found {total_bidi_overrides} bidirectional override characters",
+                    source="sanitize_input"
+                )
         
         return text
     

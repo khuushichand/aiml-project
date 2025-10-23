@@ -96,17 +96,24 @@ async def test_revoke_all_user_tokens_marks_sessions(monkeypatch):
     access_exp = datetime.utcnow() + timedelta(hours=2)
     refresh_exp = datetime.utcnow() + timedelta(days=7)
 
+    access_hash = "hash-" + access_jti
+    refresh_hash = "hash-" + refresh_jti
+
     async with db_pool.transaction() as conn:
         await conn.execute(
             """
             INSERT INTO sessions (
-                user_id, access_jti, refresh_jti, expires_at, refresh_expires_at,
+                user_id, token_hash, refresh_token_hash,
+                access_jti, refresh_jti,
+                expires_at, refresh_expires_at,
                 is_active, is_revoked
             )
-            VALUES (?, ?, ?, ?, ?, 1, 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)
             """,
             (
                 user_id,
+                access_hash,
+                refresh_hash,
                 access_jti,
                 refresh_jti,
                 access_exp.isoformat(),

@@ -892,58 +892,58 @@ async def execute_streaming_call(
                     resolved_action = eff_policy.output_action
                     redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == "redact" else None
                 if resolved_action == "block":
-                    try:
-                        if not stream_block_logged:
+                    if not stream_block_logged:
+                        try:
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
-                            stream_block_logged = True
-                    except Exception:
-                        pass
-                    try:
-                        if audit_service and audit_context and not stream_block_logged:
-                            import asyncio as _asyncio
-                            _asyncio.create_task(
-                                audit_service.log_event(
-                                    event_type=AuditEventType.SECURITY_VIOLATION,
-                                    context=audit_context,
-                                    action="moderation.output",
-                                    result="failure",
-                                    metadata={
-                                        "phase": "output",
-                                        "streaming": True,
-                                        "action": "block",
-                                        "pattern": sample,
-                                    },
+                        except Exception:
+                            pass
+                        try:
+                            if audit_service and audit_context:
+                                import asyncio as _asyncio
+                                _asyncio.create_task(
+                                    audit_service.log_event(
+                                        event_type=AuditEventType.SECURITY_VIOLATION,
+                                        context=audit_context,
+                                        action="moderation.output",
+                                        result="failure",
+                                        metadata={
+                                            "phase": "output",
+                                            "streaming": True,
+                                            "action": "block",
+                                            "pattern": sample,
+                                        },
+                                    )
                                 )
-                            )
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
+                        stream_block_logged = True
                     raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
                 if resolved_action == "redact":
-                    try:
-                        if not stream_redact_logged:
+                    if not stream_redact_logged:
+                        try:
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
-                            stream_redact_logged = True
-                    except Exception:
-                        pass
-                    try:
-                        if audit_service and audit_context and not stream_redact_logged:
-                            import asyncio as _asyncio
-                            _asyncio.create_task(
-                                audit_service.log_event(
-                                    event_type=AuditEventType.SECURITY_VIOLATION,
-                                    context=audit_context,
-                                    action="moderation.output",
-                                    result="success",
-                                    metadata={
-                                        "phase": "output",
-                                        "streaming": True,
-                                        "action": "redact",
-                                        "pattern": sample,
-                                    },
+                        except Exception:
+                            pass
+                        try:
+                            if audit_service and audit_context:
+                                import asyncio as _asyncio
+                                _asyncio.create_task(
+                                    audit_service.log_event(
+                                        event_type=AuditEventType.SECURITY_VIOLATION,
+                                        context=audit_context,
+                                        action="moderation.output",
+                                        result="success",
+                                        metadata={
+                                            "phase": "output",
+                                            "streaming": True,
+                                            "action": "redact",
+                                            "pattern": sample,
+                                        },
+                                    )
                                 )
-                            )
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
+                        stream_redact_logged = True
                     return redacted_s or moderation.redact_text(s, eff_policy)
                 return s
 
@@ -1296,7 +1296,7 @@ async def execute_non_stream_call(
                     try:
                         if audit_service and audit_context:
                             await audit_service.log_event(
-                                event_type=audit_service.EventType.SECURITY_VIOLATION if hasattr(audit_service, "EventType") else None,
+                                event_type=AuditEventType.SECURITY_VIOLATION,
                                 context=audit_context,
                                 action="moderation.output",
                                 result="success",

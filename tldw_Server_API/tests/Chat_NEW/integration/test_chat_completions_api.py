@@ -5,7 +5,6 @@ Tests the full request/response flow with real database and minimal mocking.
 Only external LLM APIs are mocked to avoid actual API calls.
 """
 
-import asyncio
 import os
 
 import pytest
@@ -344,15 +343,20 @@ class _ActiveQueueStub(_BaseQueueStub):
         self._running = True
         self._fail_with = fail_with
 
+    class _ResolvedAdmission:
+        """Simple awaitable that completes immediately."""
+
+        __slots__ = ()
+
+        def __await__(self):
+            return iter(())
+
     async def enqueue(self, *args, **kwargs):
         self.enqueue_calls += 1
         if self._fail_with is not None:
             raise self._fail_with
 
-        loop = asyncio.get_running_loop()
-        admission_future: asyncio.Future[None] = loop.create_future()
-        admission_future.set_result(None)
-        return admission_future
+        return self._ResolvedAdmission()
 
 
 class TestRequestQueueAdmission:

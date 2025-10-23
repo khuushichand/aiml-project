@@ -52,6 +52,7 @@ class SessionManager:
         """Initialize session manager"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
+        self._external_db_pool = db_pool is not None
         self.redis_client: Optional[redis_async.Redis] = None
         self.scheduler = AsyncIOScheduler()
         self._initialized = False
@@ -106,6 +107,17 @@ class SessionManager:
 
     async def _ensure_db_pool(self) -> DatabasePool:
         """Ensure we have a database pool compatible with the current event loop."""
+        current_settings = get_settings()
+
+        if not self._external_db_pool:
+            global_pool = await get_db_pool()
+            if self.db_pool is not global_pool:
+                logger.debug("SessionManager adopting refreshed AuthNZ DatabasePool instance")
+                self.db_pool = global_pool
+            self.settings = current_settings
+        else:
+            self.settings = current_settings
+
         if not self.db_pool:
             self.db_pool = await get_db_pool()
             return self.db_pool
@@ -127,8 +139,12 @@ class SessionManager:
                 "SessionManager refreshing database pool "
                 f"(pool_closed={pool_closed}, loop_changed={loop_changed})"
             )
-            await reset_db_pool()
-            self.db_pool = await get_db_pool()
+            if not self._external_db_pool:
+                await reset_db_pool()
+                self.db_pool = await get_db_pool()
+                return self.db_pool
+            await self.db_pool.close()
+            await self.db_pool.initialize()
             return self.db_pool
 
         if not getattr(self.db_pool, "_initialized", False):

@@ -333,19 +333,31 @@ class CollectionsDatabase:
             return []
 
         ids: List[int] = []
+        select_sql = "SELECT id FROM collection_tags WHERE user_id = ? AND name = ?"
+        insert_sql = "INSERT INTO collection_tags (user_id, name) VALUES (?, ?)"
         for nm in normed:
-            row = self.backend.execute(
-                "SELECT id FROM collection_tags WHERE user_id = ? AND name = ?",
-                (self.user_id, nm),
-            ).first
+            select_params = (self.user_id, nm)
+            row = self.backend.execute(select_sql, select_params).first
             if row:
                 ids.append(int(row.get("id")))
                 continue
-            res = self.backend.execute(
-                "INSERT INTO collection_tags (user_id, name) VALUES (?, ?)",
-                (self.user_id, nm),
-            )
-            ids.append(int(res.lastrowid or 0))
+            insert_exc: Optional[Exception] = None
+            tag_id: Optional[int] = None
+            try:
+                res = self.backend.execute(insert_sql, (self.user_id, nm))
+                if res.lastrowid:
+                    tag_id = int(res.lastrowid)
+            except Exception as exc:
+                insert_exc = exc
+            if tag_id is None:
+                row = self.backend.execute(select_sql, select_params).first
+                if row:
+                    tag_id = int(row.get("id"))
+            if tag_id is None:
+                if insert_exc:
+                    raise insert_exc
+                raise DatabaseError("Failed to ensure collection tag id")
+            ids.append(tag_id)
         return ids
 
     def _replace_item_tags(self, item_id: int, tag_ids: Iterable[int]) -> None:
@@ -737,6 +749,7 @@ class CollectionsDatabase:
                 if t:
                     tag_filters.append(self._normalize_collection_tag(str(t)))
         if tag_filters:
+            tag_filters = list(dict.fromkeys(tag_filters))
             joins.append("INNER JOIN content_item_tags cit ON cit.item_id = ci.id")
             joins.append("INNER JOIN collection_tags ct ON ct.id = cit.tag_id")
             placeholders = ",".join("?" for _ in tag_filters)
@@ -755,17 +768,25 @@ class CollectionsDatabase:
         limit = size
         offset = max(0, (page - 1) * size)
         rows_sql = f"""
+            WITH filtered AS (
+                SELECT
+                    ci.id,
+                    MAX(ci.updated_at) AS max_updated
+                {base_from}
+                WHERE {where_clause}
+                {group_by}
+                {having}
+                ORDER BY max_updated DESC, ci.id DESC
+                LIMIT ? OFFSET ?
+            )
             SELECT
                 ci.id, ci.user_id, ci.origin, ci.origin_type, ci.origin_id, ci.url, ci.canonical_url,
                 ci.domain, ci.title, ci.summary, ci.content_hash, ci.word_count, ci.published_at,
                 ci.status, ci.favorite, ci.metadata_json, ci.media_id, ci.job_id, ci.run_id,
                 ci.source_id, ci.read_at, ci.created_at, ci.updated_at
-            {base_from}
-            WHERE {where_clause}
-            {group_by}
-            {having}
-            ORDER BY datetime(ci.updated_at) DESC, ci.id DESC
-            LIMIT ? OFFSET ?
+            FROM filtered
+            JOIN content_items ci ON ci.id = filtered.id
+            ORDER BY filtered.max_updated DESC, ci.id DESC
         """
         row_params = tuple(params + [limit, offset])
         rows = self.backend.execute(rows_sql, row_params).rows

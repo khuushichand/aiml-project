@@ -331,22 +331,37 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         
         for start, end in processed_ranges:
             if start > last_end:
-                paragraph_text = text[last_end:start].strip()
-                if paragraph_text:
-                    elements.append(DocumentElement(
-                        type=StructureType.PARAGRAPH,
-                        content=paragraph_text
-                    ))
+                raw_segment = text[last_end:start]
+                if raw_segment and raw_segment.strip():
+                    # Compute trimmed boundaries so offsets match original source text
+                    leading_ws = len(raw_segment) - len(raw_segment.lstrip())
+                    trailing_ws = len(raw_segment) - len(raw_segment.rstrip())
+                    para_start = last_end + leading_ws
+                    para_end = start - trailing_ws if trailing_ws else start
+                    if para_end > para_start:
+                        paragraph_text = text[para_start:para_end]
+                        elements.append(DocumentElement(
+                            type=StructureType.PARAGRAPH,
+                            content=paragraph_text,
+                            metadata={'start': para_start, 'end': para_end}
+                        ))
             last_end = max(last_end, end)
         
         # Add final paragraph if any
         if last_end < len(text):
-            paragraph_text = text[last_end:].strip()
-            if paragraph_text:
-                elements.append(DocumentElement(
-                    type=StructureType.PARAGRAPH,
-                    content=paragraph_text
-                ))
+            raw_segment = text[last_end:]
+            if raw_segment and raw_segment.strip():
+                leading_ws = len(raw_segment) - len(raw_segment.lstrip())
+                trailing_ws = len(raw_segment) - len(raw_segment.rstrip())
+                para_start = last_end + leading_ws
+                para_end = len(text) - trailing_ws if trailing_ws else len(text)
+                if para_end > para_start:
+                    paragraph_text = text[para_start:para_end]
+                    elements.append(DocumentElement(
+                        type=StructureType.PARAGRAPH,
+                        content=paragraph_text,
+                        metadata={'start': para_start, 'end': para_end}
+                    ))
         
         # Sort elements by position
         elements.sort(key=lambda e: e.metadata.get('start', float('inf')))

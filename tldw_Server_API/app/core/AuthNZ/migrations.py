@@ -61,7 +61,11 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
             ip_address TEXT,
             user_agent TEXT,
             device_id TEXT,
+            is_active INTEGER DEFAULT 1,
             is_revoked INTEGER DEFAULT 0,
+            revoked_at TIMESTAMP,
+            revoked_by INTEGER,
+            revoke_reason TEXT,
             access_jti TEXT,
             refresh_jti TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -88,6 +92,11 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
         add_col('refresh_expires_at', "refresh_expires_at TIMESTAMP")
         add_col('access_jti', "access_jti TEXT")
         add_col('refresh_jti', "refresh_jti TEXT")
+        add_col('is_active', "is_active INTEGER DEFAULT 1")
+        add_col('is_revoked', "is_revoked INTEGER DEFAULT 0")
+        add_col('revoked_at', "revoked_at TIMESTAMP")
+        add_col('revoked_by', "revoked_by INTEGER")
+        add_col('revoke_reason', "revoke_reason TEXT")
     except Exception:
         pass
 
@@ -1109,6 +1118,33 @@ def rollback_026_drop_privilege_snapshots_table(conn: sqlite3.Connection) -> Non
     logger.info("Rollback 026: Dropped privilege_snapshots table")
 #######################################################################################################################
 #
+# Additional maintenance migrations
+#
+
+
+def migration_027_add_session_revocation_columns(conn: sqlite3.Connection) -> None:
+    """Ensure sessions table has revocation bookkeeping columns for legacy upgrades."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        rows = cursor.fetchall()
+        columns = {row[1] for row in rows}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("is_active", "is_active INTEGER DEFAULT 1")
+        add_col("is_revoked", "is_revoked INTEGER DEFAULT 0")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoke_reason", "revoke_reason TEXT")
+        conn.commit()
+        logger.info("Migration 027: Harmonized session revocation columns")
+    except Exception as exc:
+        logger.warning(f"Migration 027: Unable to harmonize session columns: {exc}")
+#######################################################################################################################
+#
 # Migration Registry
 #
 
@@ -1145,6 +1181,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Create privilege_snapshots table",
             migration_026_create_privilege_snapshots_table,
             rollback_026_drop_privilege_snapshots_table,
+        ),
+        Migration(
+            27,
+            "Ensure session revocation columns",
+            migration_027_add_session_revocation_columns,
         ),
     ]
 

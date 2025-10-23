@@ -39,6 +39,7 @@ class TokenBlacklist:
         """Initialize token blacklist service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
+        self._external_db_pool = db_pool is not None
         self.redis_client: Optional[redis_async.Redis] = None
         self._initialized = False
         
@@ -148,6 +149,18 @@ class TokenBlacklist:
 
     async def _ensure_db_pool(self) -> DatabasePool:
         """Ensure the blacklist has a usable database pool for the active loop."""
+        current_settings = get_settings()
+
+        if not self._external_db_pool:
+            global_pool = await get_db_pool()
+            if self.db_pool is not global_pool:
+                logger.debug("TokenBlacklist adopting refreshed AuthNZ DatabasePool instance")
+                self.db_pool = global_pool
+            self.settings = current_settings
+        else:
+            # External pools rely on caller to manage lifecycle; still refresh settings snapshot.
+            self.settings = current_settings
+
         if not self.db_pool:
             self.db_pool = await get_db_pool()
             return self.db_pool
@@ -169,8 +182,12 @@ class TokenBlacklist:
                 "TokenBlacklist refreshing database pool "
                 f"(pool_closed={pool_closed}, loop_changed={loop_changed})"
             )
-            await reset_db_pool()
-            self.db_pool = await get_db_pool()
+            if not self._external_db_pool:
+                await reset_db_pool()
+                self.db_pool = await get_db_pool()
+                return self.db_pool
+            await self.db_pool.close()
+            await self.db_pool.initialize()
             return self.db_pool
 
         if not getattr(self.db_pool, "_initialized", False):
@@ -252,6 +269,13 @@ class TokenBlacklist:
         try:
             cursor = await conn.execute("PRAGMA table_info(sessions)")
             rows = await cursor.fetchall()
+
+            # If the sessions table does not exist yet, defer harmonization so a later
+            # call (after the table is created) can retry instead of caching failure.
+            if not rows:
+                logger.debug("TokenBlacklist: sessions table missing; deferring revocation column harmonization")
+                return
+
             columns = {row[1] for row in rows}
             alterations = [
                 ("is_active", "is_active INTEGER DEFAULT 1"),
@@ -270,7 +294,6 @@ class TokenBlacklist:
             self._ensured_session_columns = True
         except Exception as exc:
             logger.debug(f"TokenBlacklist: unable to harmonize session columns: {exc}")
-            self._ensured_session_columns = True
     
     async def revoke_token(
         self,

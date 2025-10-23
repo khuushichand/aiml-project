@@ -734,17 +734,36 @@ async def fetch_rss_feed(
         if not items_nodes:
             items_nodes = root.findall('.//{http://www.w3.org/2005/Atom}entry')
         items: List[Dict[str, Any]] = []
+        atom_link_tag = "{http://www.w3.org/2005/Atom}link"
+        atom_title_tag = "{http://www.w3.org/2005/Atom}title"
+        atom_summary_tag = "{http://www.w3.org/2005/Atom}summary"
+        atom_content_tag = "{http://www.w3.org/2005/Atom}content"
+        atom_updated_tag = "{http://www.w3.org/2005/Atom}updated"
+        atom_published_tag = "{http://www.w3.org/2005/Atom}published"
+        atom_id_tag = "{http://www.w3.org/2005/Atom}id"
         for it in items_nodes:
-            title = _find_text(it, ["title", "{http://www.w3.org/2005/Atom}title"]) or ""
-            link = None
-            lnode = it.find("link")
-            if lnode is not None and (lnk := lnode.get("href")):
-                link = lnk
-            else:
-                link = _find_text(it, ["link", "{http://www.w3.org/2005/Atom}link"]) or ""
-            summary = _find_text(it, ["description", "{http://www.w3.org/2005/Atom}summary", "{http://www.w3.org/2005/Atom}content"]) or ""
-            published = _find_text(it, ["pubDate", "{http://www.w3.org/2005/Atom}updated", "{http://www.w3.org/2005/Atom}published"]) or None
-            guid = _find_text(it, ["guid", "{http://www.w3.org/2005/Atom}id"]) or None
+            title = _find_text(it, ["title", atom_title_tag]) or ""
+
+            link = ""
+            link_nodes = list(it.findall("link")) + list(it.findall(atom_link_tag))
+            preferred_link = ""
+            fallback_link = ""
+            for node in link_nodes:
+                candidate = (node.get("href") or (node.text or "")).strip()
+                if not candidate:
+                    continue
+                rel = (node.get("rel") or "").lower()
+                if rel == "alternate" and not preferred_link:
+                    preferred_link = candidate
+                elif rel not in {"self"} and not fallback_link:
+                    fallback_link = candidate
+                elif not fallback_link:
+                    fallback_link = candidate
+            link = preferred_link or fallback_link or _find_text(it, ["link", atom_link_tag]) or ""
+
+            summary = _find_text(it, ["description", atom_summary_tag, atom_content_tag]) or ""
+            published = _find_text(it, ["pubDate", atom_updated_tag, atom_published_tag]) or None
+            guid = _find_text(it, ["guid", atom_id_tag]) or None
             rec = {"title": title, "url": link or "", "summary": summary, "published": published}
             if guid:
                 rec["guid"] = guid

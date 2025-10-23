@@ -508,17 +508,17 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         prefetch = prefetched_by_url.get(page_url)
                         item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else page_url)
                         skip_dedup = test_mode and is_first_run
-                        if prefetch and not skip_dedup:
+                        if not skip_dedup:
                             try:
                                 if db.has_seen_item(int(src.id), item_key):
                                     _record_scraped(
                                         status="duplicate",
                                         url=page_url,
-                                        title=prefetch.get("title") or src.name,
-                                        summary=prefetch.get("summary"),
+                                        title=(prefetch.get("title") if prefetch and prefetch.get("title") else src.name),
+                                        summary=(prefetch.get("summary") if prefetch else None),
                                         media_id=None,
                                         media_uuid=None,
-                                        published_at=prefetch.get("published") or prefetch.get("published_raw"),
+                                        published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                                     )
                                     continue
                             except Exception:
@@ -645,16 +645,15 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     )
                                 except Exception as exc:
                                     logger.debug(f"Embedding enqueue failed for watchlist item {item_row.id}: {exc}")
-                            if prefetch:
-                                try:
-                                    db.mark_seen_item(
-                                        int(src.id),
-                                        item_key,
-                                        etag=None,
-                                        last_modified=prefetch.get("published") or prefetch.get("published_raw"),
-                                    )
-                                except Exception:
-                                    pass
+                            try:
+                                db.mark_seen_item(
+                                    int(src.id),
+                                    item_key,
+                                    etag=None,
+                                    last_modified=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
+                                )
+                            except Exception:
+                                pass
                             _record_scraped(
                                 status="ingested",
                                 url=article.get("url") or page_url,

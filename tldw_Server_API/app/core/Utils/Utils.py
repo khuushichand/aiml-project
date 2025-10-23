@@ -118,12 +118,29 @@ def cleanup_downloads():
 
 
 
-def get_project_root():
-    """Get the absolute path to the project root directory."""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    logging.trace(f"Project root: {project_root}")
-    return project_root
+def get_project_root() -> str:
+    """Get the absolute path to the project root directory.
+
+    Walk parent directories until we find the tldw_Server_API package root,
+    identified by the presence of the `app` and `Config_Files` folders.
+    Falls back to the historical location if the sentinel folders cannot
+    be located (defensive for tests with in-memory loaders).
+    """
+    current_path = Path(__file__).resolve()
+
+    for candidate in current_path.parents:
+        if (candidate / "app").exists() and (candidate / "Config_Files").exists():
+            project_root = str(candidate)
+            logging.trace(f"Project root: {project_root}")
+            return project_root
+
+    # Fallback: ensure we don't IndexError if the structure changes drastically.
+    try:
+        fallback_root = str(current_path.parents[3])
+    except IndexError:
+        fallback_root = str(current_path.parent)
+    logging.trace(f"Project root fallback: {fallback_root}")
+    return fallback_root
 
 
 def get_database_dir():

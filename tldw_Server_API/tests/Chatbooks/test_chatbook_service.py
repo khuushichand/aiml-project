@@ -234,6 +234,17 @@ class TestChatbookService:
         job = service._get_export_job("job-zulu")
         assert job is not None
         assert job.created_at is not None
+    
+    def test_parse_timestamp_accepts_numeric_epoch(self, service):
+        """Numeric epoch values should be parsed as UTC datetimes."""
+        epoch = 1_700_000_000
+        parsed = service._parse_timestamp(epoch)
+        assert parsed == datetime.utcfromtimestamp(epoch)
+
+    def test_parse_timestamp_normalizes_timezone_offsets(self, service):
+        """Timestamps with explicit offsets should normalize to naive UTC."""
+        parsed = service._parse_timestamp("2024-01-01T05:30:00+05:30")
+        assert parsed == datetime(2024, 1, 1, 0, 0)
 
     def test_import_conversation_restores_inline_images(self, service, mock_db, tmp_path):
         """Conversations imported from chatbooks should restore embedded images."""
@@ -305,6 +316,130 @@ class TestChatbookService:
         assert img_payload["image_data"] == image_bytes
         assert img_payload["image_mime_type"] == "image/png"
 
+    def test_import_conversation_skips_outside_attachments(self, service, mock_db, tmp_path):
+        """Attachment paths that escape extraction boundaries must be ignored."""
+        conv_id = "conv-path"
+        content_root = tmp_path / "content" / "conversations"
+        content_root.mkdir(parents=True, exist_ok=True)
+
+        conversation_payload = {
+            "id": conv_id,
+            "name": "Suspicious Conversation",
+            "created_at": "2024-01-01T00:00:00",
+            "messages": [
+                {
+                    "id": "msg-escape",
+                    "role": "user",
+                    "content": "Hello",
+                    "timestamp": "2024-01-01T00:00:00",
+                    "attachments": [
+                        {
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "file_path": "../outside.png",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        conversation_file = content_root / f"conversation_{conv_id}.json"
+        conversation_file.write_text(json.dumps(conversation_payload), encoding="utf-8")
+
+        mock_db.add_conversation.return_value = "new-conv-id"
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_conversation_by_name", return_value=None):
+            service._import_conversations(
+                tmp_path,
+                manifest,
+                [conv_id],
+                ConflictResolution.SKIP,
+                prefix_imported=False,
+                status=status,
+            )
+
+        assert mock_db.add_message.call_count == 1
+        message_payload = mock_db.add_message.call_args[0][0]
+        assert "images" not in message_payload
+        assert any("Skipped attachment outside extract dir" in warning for warning in status.warnings)
+        assert status.successful_items == 1
+
+    def test_import_conversation_warns_on_missing_attachment(self, service, mock_db, tmp_path):
+        """Missing attachment files should log warnings while continuing import."""
+        conv_id = "conv-missing"
+        content_root = tmp_path / "content" / "conversations"
+        content_root.mkdir(parents=True, exist_ok=True)
+
+        rel_path = "content/conversations/conversation_assets/missing.png"
+        assets_dir = content_root / "conversation_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+
+        conversation_payload = {
+            "id": conv_id,
+            "name": "Conversation Missing Attachment",
+            "created_at": "2024-01-01T00:00:00",
+            "messages": [
+                {
+                    "id": "msg-missing",
+                    "role": "assistant",
+                    "content": "Hi!",
+                    "timestamp": "2024-01-01T00:00:00",
+                    "attachments": [
+                        {
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "file_path": rel_path,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        conversation_file = content_root / f"conversation_{conv_id}.json"
+        conversation_file.write_text(json.dumps(conversation_payload), encoding="utf-8")
+
+        mock_db.add_conversation.return_value = "conv-id"
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_conversation_by_name", return_value=None):
+            service._import_conversations(
+                tmp_path,
+                manifest,
+                [conv_id],
+                ConflictResolution.SKIP,
+                prefix_imported=False,
+                status=status,
+            )
+
+        assert mock_db.add_message.call_count == 1
+        message_payload = mock_db.add_message.call_args[0][0]
+        assert "images" not in message_payload
+        assert any("Failed to read attachment" in warning for warning in status.warnings)
+        assert status.successful_items == 1
+
     def test_import_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
         """Temporary extraction directories should not linger after import errors."""
         temp_dir = tmp_path / "chatbooks_tmp"
@@ -342,6 +477,37 @@ class TestChatbookService:
         assert success is False
         assert "Error importing chatbook" in message
         assert not any(temp_dir.glob("import_*"))
+
+    def test_preview_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
+        """Preview extractions must be removed even when parsing fails."""
+        temp_dir = tmp_path / "chatbooks_preview_tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        service.temp_dir = temp_dir
+
+        bad_manifest = {
+            "version": "invalid",
+            "name": "Preview Failure",
+            "description": "Invalid version forces parse error",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00",
+            "content_items": [],
+            "configuration": {},
+            "statistics": {},
+            "metadata": {},
+            "user_info": {},
+        }
+
+        archive_path = tmp_path / "broken_preview.chatbook"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(bad_manifest))
+
+        assert not any(temp_dir.glob("preview_*"))
+
+        manifest, error = service.preview_chatbook(str(archive_path))
+
+        assert manifest is None
+        assert error is not None
+        assert not any(temp_dir.glob("preview_*"))
 
     @pytest.mark.asyncio
     async def test_export_chatbook_async_job(self, service, mock_db):

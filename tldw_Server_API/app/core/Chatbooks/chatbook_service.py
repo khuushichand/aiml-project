@@ -1457,6 +1457,7 @@ class ChatbookService:
         Returns:
             Tuple of (manifest, error_message)
         """
+        extract_dir: Optional[Path] = None
         try:
             # Defense-in-depth: validate the archive before extraction
             try:
@@ -1478,7 +1479,6 @@ class ChatbookService:
                     # Normalize and validate the path
                     normalized_path = os.path.normpath(member)
                     if os.path.isabs(normalized_path) or ".." in normalized_path or normalized_path.startswith("/"):
-                        shutil.rmtree(extract_dir, ignore_errors=True)
                         return None, f"Unsafe path in archive: {member}"
                     
                     # Additional check: ensure the path stays within extract_dir
@@ -1486,7 +1486,6 @@ class ChatbookService:
                     real_extract_dir = os.path.realpath(extract_dir)
                     real_target = os.path.realpath(os.path.dirname(target_path))
                     if not real_target.startswith(real_extract_dir):
-                        shutil.rmtree(extract_dir, ignore_errors=True)
                         return None, f"Path traversal attempt detected: {member}"
                 
                 # Safe to extract after validation
@@ -1495,7 +1494,6 @@ class ChatbookService:
             # Load manifest
             manifest_path = extract_dir / "manifest.json"
             if not manifest_path.exists():
-                shutil.rmtree(extract_dir)
                 return None, "Invalid chatbook: manifest.json not found"
             
             with open(manifest_path, 'r', encoding='utf-8') as f:
@@ -1503,14 +1501,14 @@ class ChatbookService:
             
             manifest = ChatbookManifest.from_dict(manifest_data)
             
-            # Cleanup
-            shutil.rmtree(extract_dir)
-            
             return manifest, None
             
         except Exception as e:
             logger.error(f"Error previewing chatbook: {e}")
             return None, f"Error previewing chatbook: {str(e)}"
+        finally:
+            if extract_dir and extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
 
     def _build_download_url(self, job_id: str, expires_at: Optional[datetime]) -> str:
         """Build a (possibly signed) download URL for a job."""
