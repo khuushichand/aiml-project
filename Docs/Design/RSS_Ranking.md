@@ -18,6 +18,10 @@ https://arxiv.org/abs/2411.19352
 https://www.newsminimalist.com/
 https://www.memeorandum.com/m/
 https://github.com/CrociDB/bulletty
+https://feed-me-up-scotty.vincenttunru.com/
+https://gitlab.com/vincenttunru/feed-me-up-scotty/
+
+
 https://github.com/FreshRSS/FreshRSS
 https://github.com/prof18/feed-flow
 https://github.com/AboutRSS/ALL-about-RSS

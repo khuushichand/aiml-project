@@ -7,14 +7,14 @@ including a CharacterChatManager wrapper class.
 
 from typing import Dict, List, Optional, Any
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.Character_Chat import Character_Chat_Lib as char_lib
+from tldw_Server_API.app.core.Character_Chat import Character_Chat_Lib_facade as char_lib
 
 
 class CharacterChatManager:
     """
     A wrapper class that provides a manager interface for character chat operations.
     
-    This class wraps the individual functions from Character_Chat_Lib to provide
+    This class wraps the individual functions from the Character Chat facade to provide
     a cohesive interface for testing purposes.
     """
     

@@ -13,8 +13,8 @@ This guide documents the Character Chat subsystem: character cards, world books 
 ## Architecture Overview
 
 - Core module: `tldw_Server_API/app/core/Character_Chat/`
-  - `Character_Chat_Lib.py` — canonical impl for import/CRUD/IO of characters, chats, messages.
-  - `Character_Chat_Lib_facade.py` — stable API used by endpoints (import, create chat, post messages, exports).
+  - `modules/` — refactored implementation split by concern (`character_db`, `character_chat`, `character_io`, `character_utils`, etc.).
+  - `Character_Chat_Lib_facade.py` — stable API imported by endpoints; re-exports the functions from `modules`.
   - `world_book_manager.py` — world book (lorebook) CRUD, entry search, attachment to characters, statistics.
   - `chat_dictionary.py` — legacy character‑scoped dictionary support (replacement, budgeting) used by older flows.
   - `character_rate_limiter.py` — rate limiting for character import, chat/session/message actions.
@@ -124,4 +124,3 @@ The Character Chat endpoints also expose a helper to prepare messages for comple
 - For changes that affect prompt assembly or streaming behavior, also review the Chat module docs and tests.
 
 See also: Chat Developer Guide (Code_Documentation/Chat_Developer_Guide.md) for the end‑to‑end chat orchestration, streaming, moderation, and provider dispatch details.
-

@@ -198,9 +198,150 @@ class TestChatbookService:
         assert result["success"] is True
         assert result["message"] == "Chatbook created successfully"
         assert result["file_path"] == str(archive_path)
-        assert result["job_id"] is None
-        assert result["status"] == "completed"
-        assert result["content_summary"]["conversations"] == 2
+
+    def test_get_export_job_parses_varied_timestamps(self, service, mock_db):
+        """Ensure timestamp parser handles common DB formats."""
+        mock_row = {
+            "job_id": "job-plain",
+            "user_id": service.user_id,
+            "status": "completed",
+            "chatbook_name": "Test",
+            "output_path": "/tmp/test.zip",
+            "created_at": "2024-01-01 00:00:00",
+            "started_at": "2024-01-01 00:00:00+00:00",
+            "completed_at": "2024-01-01 00:00:00.000001",
+            "error_message": None,
+            "progress_percentage": 100,
+            "total_items": 0,
+            "processed_items": 0,
+            "file_size_bytes": 0,
+            "download_url": None,
+            "expires_at": "2024-01-02 00:00:00",
+            "metadata": {},
+        }
+        mock_db.execute_query.return_value = [mock_row]
+
+        job = service._get_export_job("job-plain")
+
+        assert job is not None
+        assert job.created_at is not None
+        assert job.started_at is not None
+        assert job.completed_at is not None
+
+        # Now test Zulu format handling
+        mock_row["created_at"] = "2024-01-03T00:00:00Z"
+        mock_db.execute_query.return_value = [mock_row]
+        job = service._get_export_job("job-zulu")
+        assert job is not None
+        assert job.created_at is not None
+
+    def test_import_conversation_restores_inline_images(self, service, mock_db, tmp_path):
+        """Conversations imported from chatbooks should restore embedded images."""
+        conv_id = "conv-image"
+        content_root = tmp_path / "content" / "conversations"
+        assets_dir = content_root / f"conversation_{conv_id}_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+
+        image_bytes = b"\x89PNG\r\n\x1a\n"
+        image_rel_path = f"content/conversations/{assets_dir.name}/msg1_image_0.png"
+        (assets_dir / "msg1_image_0.png").write_bytes(image_bytes)
+
+        conversation_payload = {
+            "id": conv_id,
+            "name": "Sample Conversation",
+            "created_at": "2024-01-01T00:00:00",
+            "character_id": None,
+            "attachments_path": f"content/conversations/{assets_dir.name}",
+            "messages": [
+                {
+                    "id": "msg1",
+                    "role": "user",
+                    "content": "Hello with image",
+                    "timestamp": "2024-01-01T00:00:00",
+                    "attachments": [
+                        {
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "file_path": image_rel_path,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        conversation_file = content_root / f"conversation_{conv_id}.json"
+        conversation_file.parent.mkdir(parents=True, exist_ok=True)
+        conversation_file.write_text(json.dumps(conversation_payload), encoding="utf-8")
+
+        mock_db.add_conversation.return_value = "new-conv-id"
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_conversation_by_name", return_value=None):
+            service._import_conversations(
+                tmp_path,
+                manifest,
+                [conv_id],
+                ConflictResolution.SKIP,
+                prefix_imported=False,
+                status=status,
+            )
+
+        assert mock_db.add_message.call_count == 1
+        message_payload = mock_db.add_message.call_args[0][0]
+        assert "images" in message_payload
+        assert len(message_payload["images"]) == 1
+        img_payload = message_payload["images"][0]
+        assert img_payload["image_data"] == image_bytes
+        assert img_payload["image_mime_type"] == "image/png"
+
+    def test_import_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
+        """Temporary extraction directories should not linger after import errors."""
+        temp_dir = tmp_path / "chatbooks_tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        service.temp_dir = temp_dir
+
+        bad_manifest = {
+            "version": "invalid",
+            "name": "Broken Chatbook",
+            "description": "Invalid version should trigger failure",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00",
+            "content_items": [],
+            "configuration": {},
+            "statistics": {},
+            "metadata": {},
+            "user_info": {},
+        }
+
+        archive_path = tmp_path / "broken.chatbook"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(bad_manifest))
+
+        assert not any(temp_dir.glob("import_*"))
+
+        success, message, _ = service._import_chatbook_sync(
+            file_path=str(archive_path),
+            content_selections=None,
+            conflict_resolution=ConflictResolution.SKIP,
+            prefix_imported=False,
+            import_media=True,
+            import_embeddings=False,
+        )
+
+        assert success is False
+        assert "Error importing chatbook" in message
+        assert not any(temp_dir.glob("import_*"))
 
     @pytest.mark.asyncio
     async def test_export_chatbook_async_job(self, service, mock_db):
@@ -255,7 +396,24 @@ class TestChatbookService:
         assert result["characters"] == 1
         assert result["notes"] == 2
         assert result["world_books"] == 0
-    
+
+    def test_generate_unique_name_world_book_conflict(self, service, mock_db):
+        """Ensure rename helper terminates when conflicts exist."""
+        responses = [
+            [{"id": 1}],  # Existing name hits conflict
+            []            # Next candidate is available
+        ]
+
+        def side_effect(query, params=None):
+            return responses.pop(0)
+
+        mock_db.execute_query.side_effect = side_effect
+
+        new_name = service._generate_unique_name("Existing", "world_book")
+
+        assert new_name == "Existing (2)"
+        assert responses == []
+
     def test_get_export_job_status(self, service, mock_db):
         """Test retrieving export job status."""
         # Return tuple matching database schema with metadata

@@ -724,10 +724,11 @@ async def execute_streaming_call(
                         raise
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
+                    fallback_start_time = time.time()
                     llm_call_func_fb = lambda: perform_chat_api_call(**cleaned_args)
                     try:
                         raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func_fb)
-                        fallback_latency = time.time() - llm_start_time
+                        fallback_latency = time.time() - fallback_start_time
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
@@ -1118,9 +1119,10 @@ async def execute_non_stream_call(
                         raise
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
+                    fallback_start_time = time.time()
                     try:
                         llm_response = await perform_chat_api_call_async(**cleaned_args)
-                        fallback_latency = time.time() - llm_start_time
+                        fallback_latency = time.time() - fallback_start_time
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider

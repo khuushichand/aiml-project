@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tldw_server — an open-source Primer attempt</title>
+  <meta name="description" content="tldw_server: a lightweight, open-source service that distills streams into actionable guidance. Inspired by the Primer in The Diamond Age." />
+  <meta name="theme-color" content="#0b0b0c" />
+  <meta property="og:title" content="tldw_server" />
+  <meta property="og:description" content="An open-source attempt at building the Primer." />
+  <meta property="og:image" content="hero-tldw-server.jpg" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs/><rect width='64' height='64' rx='12' fill='black'/><path d='M12 44h40M12 20h40' stroke='white' stroke-width='4' stroke-linecap='round'/></svg>">
+  <style>
+    :root{
+      --bg:#0b0b0c; /* near-black */
+      --panel:#0f0f12; /* panels */
+      --muted:#a1a1aa; /* zinc-400 */
+      --text:#e5e7eb; /* zinc-200 */
+      --brand:#a855f7; /* fuchsia-500 */
+      --brand-2:#22d3ee; /* cyan-400 */
+      --ring:rgba(255,255,255,.12);
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    img{max-width:100%;display:block}
+    .container{max-width:1100px;margin:0 auto;padding:0 16px}
+    /* NAV */
+    .navbar{position:fixed;inset:0 0 auto 0;backdrop-filter:saturate(1.2) blur(8px);background:rgba(0,0,0,.4);border-bottom:1px solid var(--ring);z-index:50}
+    .nav-row{display:flex;align-items:center;justify-content:space-between;padding:12px 16px}
+    .brand{display:inline-flex;align-items:center;gap:10px;font-weight:600}
+    .brand-badge{width:24px;height:24px;border-radius:8px;background:conic-gradient(from 200deg at 50% 50%, var(--brand), var(--brand-2), #7c3aed, var(--brand));box-shadow:0 0 24px rgba(168,85,247,.45)}
+    .nav-links{display:none;gap:20px}
+    .nav-links a{font-size:14px;color:#d1d5db}
+    .nav-links a:hover{color:white}
+    @media (min-width:768px){.nav-links{display:flex}}
+
+    /* HERO */
+    .hero{position:relative;min-height:92vh;padding-top:72px;display:flex;align-items:flex-end;overflow:hidden;}
+    .hero-bg{position:absolute;inset:0;background:center/cover no-repeat url('hero-tldw-server.png');}
+    /* Show more of the image on wider screens (less zoom) */
+    @media (min-width:900px){
+      .hero-bg{background-size:contain;background-position:50% 40%;background-color:#0b0b0c}
+    }
+    .hero-overlay{
+      position:absolute;inset:0;
+      background:
+        radial-gradient(60% 40% at 50% 0%, rgba(139,92,246,.25), transparent 70%),
+        radial-gradient(30% 30% at 80% 40%, rgba(34,211,238,.25), transparent 70%),
+        radial-gradient(40% 40% at 20% 80%, rgba(236,72,153,.20), transparent 70%),
+        linear-gradient(to top, rgba(0,0,0,.9), rgba(0,0,0,.55), rgba(0,0,0,.15));
+    }
+    .hero-inner{position:relative;z-index:1;padding:0 0 64px 0}
+    .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--ring);background:rgba(0,0,0,.45);backdrop-filter:blur(6px);border-radius:999px;padding:6px 10px;color:#cbd5e1;font-size:12px}
+    .dot{width:8px;height:8px;border-radius:999px;background:var(--brand);box-shadow:0 0 0 0 rgba(168,85,247,.7);animation:pulse 2s infinite}
+    @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(168,85,247,.7)}70%{box-shadow:0 0 0 12px rgba(168,85,247,0)}100%{box-shadow:0 0 0 0 rgba(168,85,247,0)}}
+    h1{margin:10px 0 0 0;font-size:42px;line-height:1.1}
+    .lead{max-width:700px;color:#d4d4d8}
+    .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}
+    .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:16px;font-weight:600;border:1px solid transparent}
+    .btn-primary{background:#fff;color:#000}
+    .btn-primary:hover{background:#e5e5e5}
+    .btn-ghost{border-color:var(--ring);background:rgba(255,255,255,.06);color:white}
+    .btn-ghost:hover{background:rgba(255,255,255,.10)}
+
+    /* SECTIONS */
+    section{border-top:1px solid var(--ring)}
+    .section{padding:64px 0;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00))}
+    .section .grid{display:grid;gap:24px}
+    @media (min-width:900px){.section .grid{grid-template-columns:2fr 1fr}}
+    .panel{border:1px solid var(--ring);background:linear-gradient(160deg, #121217, #0b0b0c);border-radius:16px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+
+    /* Features */
+    .features{display:grid;gap:16px;margin-top:24px}
+    @media (min-width:900px){.features{grid-template-columns:repeat(3,1fr)}}
+    .card{border:1px solid var(--ring);background:rgba(255,255,255,0.04);border-radius:16px;padding:18px}
+    .muted{color:var(--muted)}
+
+    /* FAQ */
+    .faq{display:grid;gap:16px;margin-top:16px}
+    @media (min-width:900px){.faq{grid-template-columns:repeat(2,1fr)}}
+
+    /* Footer */
+    footer{border-top:1px solid var(--ring);padding:36px 0;color:#a1a1aa}
+
+    /* Reveal on view */
+    .reveal{opacity:0;transform:translateY(10px);transition:opacity .5s ease, transform .5s ease}
+    .reveal.show{opacity:1;transform:none}
+
+    /* Respect motion */
+    @media (prefers-reduced-motion: reduce){
+      html{scroll-behavior:auto}
+      .dot{animation:none}
+      .reveal{transition:none}
+    }
+
+    /* Accessibility */
+    .skip{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
+    .skip:focus{left:16px;top:16px;width:auto;height:auto;background:black;color:white;border:1px solid var(--ring);border-radius:8px;padding:6px 10px;z-index:100}
+  </style>
+</head>
+<body>
+  <a href="#main" class="skip">Skip to content</a>
+
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="container nav-row">
+      <a class="brand" href="#top">
+        <span class="brand-badge" aria-hidden="true"></span>
+        <span>tldw_server</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#cta">Get Started</a>
+        <a href="#about">About</a>
+        <a href="#features">Features</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/your-org/tldw_server" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <section id="top" class="hero" aria-label="Hero with background image of a teen reading the Primer beside a canal at night">
+    <div class="hero-bg" role="img" aria-label="Cyberpunk night city with canal; teen reading an illuminated book on a bench."></div>
+    <div class="hero-overlay" aria-hidden="true"></div>
+    <div class="container hero-inner reveal">
+      <div class="pill"><span class="dot" aria-hidden="true"></span> Inspired by <em>The Diamond Age</em> primer</div>
+      <h1>Your always‑on, street‑smart primer.</h1>
+      <p class="lead">Placeholder: one‑liner describing <strong>tldw_server</strong>—a lightweight, open‑source service that distills streams into actionable guidance, anywhere.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="#cta">Get Started
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/your-org/tldw_server" target="_blank" rel="noreferrer">
+          View on GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section id="cta" class="section" aria-labelledby="cta-title">
+    <div class="container">
+      <div class="grid">
+        <div class="reveal">
+          <h2 id="cta-title" style="margin:0 0 6px 0;font-size:28px">Quick start</h2>
+          <p class="muted" style="max-width:60ch">Placeholder: crisp sentence on how to deploy or try the demo. Include docker one‑liner or curl command later.</p>
+        </div>
+        <div class="reveal" style="display:flex;align-items:flex-start;justify-content:flex-start;gap:12px">
+          <a class="btn" style="background:var(--brand);color:white" href="#about">Read the overview
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ABOUT -->
+  <section id="about" class="section" aria-labelledby="about-title">
+    <div class="container">
+      <div class="grid">
+        <div class="reveal">
+          <h3 id="about-title" style="margin:0 0 6px 0;font-size:24px">What is tldw_server?</h3>
+          <p class="muted">Placeholder: a few sentences describing the core idea—capture audio/video/streams, summarize, ground in tools, and deliver step‑by‑step guidance like the Primer.</p>
+          <p class="muted">Placeholder: note security model, privacy stance, and extensible plugin surface.</p>
+        </div>
+        <div class="panel reveal">
+          <ul style="margin:0;padding:0;list-style:none;display:grid;gap:12px;font-size:15px">
+            <li>• Placeholder: CLI and REST endpoints for ingestion and retrieval.</li>
+            <li>• Placeholder: model‑agnostic summarization with retrieval and tool‑use.</li>
+            <li>• Placeholder: self‑host or one‑click deploy to your infra.</li>
+            <li>• Placeholder: examples—classroom tutoring, field manuals, on‑the‑job primers.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features" class="section" aria-labelledby="features-title">
+    <div class="container">
+      <h3 id="features-title" style="margin:0 0 8px 0;font-size:24px">What's possible</h3>
+      <p class="muted" style="max-width:60ch">Placeholder: short paragraph introducing use‑cases and extensibility.</p>
+      <div class="features">
+        <div class="card reveal"><strong>Live mentor</strong><p class="muted">Placeholder: real‑time guidance layered on noisy environments.</p></div>
+        <div class="card reveal"><strong>TLDW at scale</strong><p class="muted">Placeholder: summarize long calls and videos with citations.</p></div>
+        <div class="card reveal"><strong>Action loops</strong><p class="muted">Placeholder: connect outputs to automations and tools.</p></div>
+        <div class="card reveal"><strong>Edge‑friendly</strong><p class="muted">Placeholder: runs on modest hardware with streaming.</p></div>
+        <div class="card reveal"><strong>Privacy‑first</strong><p class="muted">Placeholder: local processing options; bring‑your‑own‑keys.</p></div>
+        <div class="card reveal"><strong>Plugin surface</strong><p class="muted">Placeholder: adapters for ASR, LLMs, vector stores, and UIs.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq" class="section" aria-labelledby="faq-title">
+    <div class="container">
+      <h3 id="faq-title" style="margin:0 0 8px 0;font-size:24px">FAQ</h3>
+      <div class="faq">
+        <div class="card reveal"><p><strong>Is this production‑ready?</strong></p><p class="muted">Placeholder: note current stability, APIs likely to change, roadmap, and contribution guidelines.</p></div>
+        <div class="card reveal"><p><strong>How is data handled?</strong></p><p class="muted">Placeholder: outline security/privacy posture, logging, encryption, and self‑hosting knobs.</p></div>
+        <div class="card reveal"><p><strong>Which models are supported?</strong></p><p class="muted">Placeholder: list of tested ASR/LLM providers; model‑agnostic adapters.</p></div>
+        <div class="card reveal"><p><strong>Can I contribute?</strong></p><p class="muted">Placeholder: link to CONTRIBUTING.md and good‑first‑issues.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer role="contentinfo">
+    <div class="container" style="display:flex;gap:16px;justify-content:space-between;align-items:center;flex-wrap:wrap">
+      <small>© <span id="year"></span> tldw_server. MIT License.</small>
+      <div style="display:flex;gap:16px;font-size:13px">
+        <a href="#about">About</a>
+        <a href="#features">Features</a>
+        <a href="https://github.com/your-org/tldw_server" target="_blank" rel="noreferrer">GitHub</a>
+      </div>
+    </div>
+  </footer>
+
+  <main id="main"></main>
+
+  <script>
+    // Dynamic year
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    // Reveal on view
+    const observer = new IntersectionObserver((entries)=>{
+      for(const e of entries){ if(e.isIntersecting){ e.target.classList.add('show'); observer.unobserve(e.target); } }
+    }, {threshold: .25});
+    document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
+  </script>
+</body>
+</html>

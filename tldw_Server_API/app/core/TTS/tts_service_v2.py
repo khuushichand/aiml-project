@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import inspect
 import os
 import time
 from typing import AsyncGenerator, Optional, Dict, Any, List, Set
@@ -47,6 +48,7 @@ from .tts_exceptions import (
     TTSInsufficientMemoryError,
     TTSGPUError,
     TTSFallbackExhaustedError,
+    TTSInvalidVoiceReferenceError,
     categorize_error,
     is_retryable_error
 )
@@ -124,6 +126,8 @@ class TTSServiceV2:
             max_concurrent = 4
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._stream_errors_as_audio = stream_errors_as_audio
+        self._active_request_counts: Dict[str, int] = {}
+        self._active_requests_lock = asyncio.Lock()
         
         # Initialize metrics
         self.metrics = get_metrics_registry()
@@ -345,9 +349,28 @@ class TTSServiceV2:
         # Convert OpenAI request to unified TTSRequest
         tts_request = self._convert_request(request)
         
+        provider_hint: Optional[str] = None
+        if provider:
+            provider_hint = provider.lower()
+        else:
+            try:
+                provider_source = None
+                if self.factory:
+                    provider_source = self.factory
+                elif self._factory and hasattr(self._factory, "get_provider_for_model"):
+                    provider_source = self._factory  # type: ignore[assignment]
+                if provider_source and hasattr(provider_source, "get_provider_for_model"):
+                    provider_enum = provider_source.get_provider_for_model(request.model)  # type: ignore[call-arg]
+                    if inspect.isawaitable(provider_enum):
+                        provider_enum = await provider_enum  # type: ignore[assignment]
+                    if provider_enum:
+                        provider_hint = getattr(provider_enum, "value", str(provider_enum)).lower()
+            except Exception:
+                provider_hint = None
+
         # Validate the request first
         try:
-            validate_tts_request(tts_request, provider=provider.lower() if provider else None)
+            validate_tts_request(tts_request, provider=provider_hint)
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed: {e}")
             if self._stream_errors_as_audio:
@@ -377,13 +400,8 @@ class TTSServiceV2:
         start_time = time.time()
         audio_size = 0
         chunks_count = 0
-        
-        # Update active requests gauge
-        self.metrics.set_gauge(
-            "tts_active_requests",
-            1,
-            labels={"provider": adapter.provider_name}
-        )
+        released_active_slot = False
+        await self._increment_active_requests(adapter.provider_name)
         
         # Generate speech with circuit breaker and comprehensive error handling
         try:
@@ -407,6 +425,8 @@ class TTSServiceV2:
                                 "tts_fallback_attempts",
                                 labels={"from_provider": adapter.provider_name, "to_provider": "any", "success": "pending"}
                             )
+                            await self._decrement_active_requests(adapter.provider_name)
+                            released_active_slot = True
                             exclude_tokens = self._build_exclude_tokens(adapter)
                             async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                                 yield chunk
@@ -436,6 +456,8 @@ class TTSServiceV2:
                     logger.error(error_msg)
                     if fallback:
                         await self._handle_provider_fallback(tts_request, adapter.provider_name, error_msg)
+                        await self._decrement_active_requests(adapter.provider_name)
+                        released_active_slot = True
                         exclude_tokens = self._build_exclude_tokens(adapter)
                         async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                             yield chunk
@@ -482,6 +504,8 @@ class TTSServiceV2:
                     "tts_fallback_attempts",
                     labels={"from_provider": adapter.provider_name, "to_provider": "any", "success": "pending"}
                 )
+                await self._decrement_active_requests(adapter.provider_name)
+                released_active_slot = True
                 exclude_tokens = self._build_exclude_tokens(adapter)
                 async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                     yield chunk
@@ -518,6 +542,8 @@ class TTSServiceV2:
             
             if fallback:
                 logger.info("Attempting fallback due to unexpected error")
+                await self._decrement_active_requests(adapter.provider_name)
+                released_active_slot = True
                 exclude_tokens = self._build_exclude_tokens(adapter)
                 async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
                     yield chunk
@@ -527,15 +553,10 @@ class TTSServiceV2:
                 else:
                     raise tts_error
         finally:
-            # Update active requests gauge (set to 0 for this provider)
             try:
-                self.metrics.set_gauge(
-                    "tts_active_requests",
-                    0,
-                    labels={"provider": adapter.provider_name}
-                )
+                if not released_active_slot:
+                    await self._decrement_active_requests(adapter.provider_name)
             except Exception:
-                # Metrics are non-critical; ignore if registry does not support gauges
                 pass
     
     async def _generate_with_adapter(
@@ -544,21 +565,55 @@ class TTSServiceV2:
         request: TTSRequest
     ) -> AsyncGenerator[bytes, None]:
         """Generate audio with a specific adapter"""
+        await self._increment_active_requests(adapter.provider_name)
+        start_time = time.time()
+        audio_size = 0
+        success = False
+        error_message: Optional[str] = None
         try:
-            response = await adapter.generate(request)
-            
-            if response.audio_stream:
-                async for chunk in response.audio_stream:
-                    yield chunk
-            elif response.audio_data:
-                yield response.audio_data
+            async with self._semaphore:
+                response = await adapter.generate(request)
                 
+                if response.audio_stream:
+                    async for chunk in response.audio_stream:
+                        audio_size += len(chunk)
+                        yield chunk
+                elif response.audio_data:
+                    audio_size = len(response.audio_data)
+                    yield response.audio_data
+                else:
+                    error_message = f"No audio data returned by {adapter.provider_name}"
+                    logger.error(error_message)
+                    if self._stream_errors_as_audio:
+                        yield f"ERROR: {error_message}".encode()
+                    raise TTSGenerationError(error_message, provider=adapter.provider_name)
+                success = True
         except Exception as e:
             logger.error(f"Fallback generation failed: {e}")
+            error_message = str(e)
             if self._stream_errors_as_audio:
                 yield f"ERROR: All providers failed - {str(e)}".encode()
-            else:
-                raise TTSGenerationError(f"All providers failed - {str(e)}")
+            raise TTSGenerationError(f"All providers failed - {str(e)}") from e
+        finally:
+            try:
+                await self._decrement_active_requests(adapter.provider_name)
+            except Exception:
+                pass
+            try:
+                duration = time.time() - start_time
+                self._record_tts_metrics(
+                    provider=adapter.provider_name,
+                    model=getattr(request, "model", None) or adapter.provider_name.lower(),
+                    voice=request.voice or "default",
+                    format=request.format.value,
+                    text_length=len(request.text),
+                    audio_size=audio_size,
+                    duration=duration if duration >= 0 else 0.0,
+                    success=success,
+                    error=error_message if not success else None
+                )
+            except Exception:
+                pass
     
     def _convert_request(self, request: OpenAISpeechRequest) -> TTSRequest:
         """Convert OpenAI request to unified TTS request"""
@@ -583,8 +638,11 @@ class TTSServiceV2:
         if getattr(request, 'voice_reference', None):
             try:
                 voice_ref_bytes = base64.b64decode(request.voice_reference)
-            except Exception:
-                voice_ref_bytes = None
+            except Exception as exc:
+                raise TTSInvalidVoiceReferenceError(
+                    "Voice reference data is not valid base64",
+                    details={"error": str(exc)}
+                ) from exc
         # Provider-specific extras passthrough
         extras = getattr(request, 'extra_params', None) or {}
 
@@ -645,6 +703,39 @@ class TTSServiceV2:
     def _build_exclude_tokens(self, adapter: TTSAdapter) -> List[str]:
         """Build normalized exclude tokens for a provider."""
         return list(self._provider_aliases(adapter))
+
+    async def _increment_active_requests(self, provider: str) -> None:
+        """Increment per-provider active request count and update gauge."""
+        async with self._active_requests_lock:
+            current = self._active_request_counts.get(provider, 0) + 1
+            self._active_request_counts[provider] = current
+        try:
+            self.metrics.set_gauge(
+                "tts_active_requests",
+                current,
+                labels={"provider": provider}
+            )
+        except Exception:
+            pass
+
+    async def _decrement_active_requests(self, provider: str) -> None:
+        """Decrement per-provider active request count and update gauge."""
+        async with self._active_requests_lock:
+            current = self._active_request_counts.get(provider, 0)
+            if current > 0:
+                current -= 1
+            if current == 0:
+                self._active_request_counts.pop(provider, None)
+            else:
+                self._active_request_counts[provider] = current
+        try:
+            self.metrics.set_gauge(
+                "tts_active_requests",
+                current,
+                labels={"provider": provider}
+            )
+        except Exception:
+            pass
 
     async def _get_fallback_adapter(
         self,
@@ -813,8 +904,17 @@ class TTSServiceV2:
         
         if fallback_adapter:
             try:
-                async for chunk in self._generate_with_adapter(fallback_adapter, request):
-                    yield chunk
+                original_model = getattr(request, "model", None)
+                fallback_model = (
+                    getattr(fallback_adapter, "default_model", None)
+                    or fallback_adapter.provider_name.lower()
+                )
+                setattr(request, "model", fallback_model)
+                try:
+                    async for chunk in self._generate_with_adapter(fallback_adapter, request):
+                        yield chunk
+                finally:
+                    setattr(request, "model", original_model)
                 logger.info(f"Successfully fell back to {fallback_adapter.provider_name}")
                 # Record successful fallback
                 self.metrics.increment(
@@ -847,8 +947,17 @@ class TTSServiceV2:
                     
                     if final_fallback:
                         try:
-                            async for chunk in self._generate_with_adapter(final_fallback, request):
-                                yield chunk
+                            secondary_original_model = getattr(request, "model", None)
+                            secondary_model = (
+                                getattr(final_fallback, "default_model", None)
+                                or final_fallback.provider_name.lower()
+                            )
+                            setattr(request, "model", secondary_model)
+                            try:
+                                async for chunk in self._generate_with_adapter(final_fallback, request):
+                                    yield chunk
+                            finally:
+                                setattr(request, "model", secondary_original_model)
                             logger.info(f"Final fallback to {final_fallback.provider_name} succeeded")
                             # Record successful final fallback
                             self.metrics.increment(

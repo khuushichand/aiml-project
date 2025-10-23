@@ -301,14 +301,20 @@ class OpenAIAdapter(TTSAdapter):
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from OpenAI API"""
         try:
-            response = await self.client.post(self.base_url, headers=headers, json=payload)
-            response.raise_for_status()
-            total_bytes = 0
-            async for chunk in response.aiter_bytes(chunk_size=1024):
-                total_bytes += len(chunk)
-                if chunk:
+            async with self.client.stream(
+                "POST",
+                self.base_url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                total_bytes = 0
+                async for chunk in response.aiter_bytes(chunk_size=1024):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
                     yield chunk
-            logger.debug(f"{self.provider_name}: Streamed {total_bytes} bytes")
+                logger.debug(f"{self.provider_name}: Streamed {total_bytes} bytes")
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise

@@ -548,35 +548,60 @@ class StreamingSessionManager:
     
     async def close_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Close a streaming session and return stats
-        
+
         Args:
             session_id: Session ID
-            
+
         Returns:
             Session statistics or None if not found
         """
         with self._lock:
             session = self.sessions.pop(session_id, None)
-            if session:
-                duration = time.time() - session.created_at
-                return {
-                    "session_id": session_id,
-                    "provider": session.provider,
-                    "duration": duration,
-                    "bytes_streamed": session.bytes_sent,
-                    "chunks_sent": session.chunks_sent,
-                    "error_count": session.error_count
-                }
+        if not session:
             return None
+
+        await session.close()
+        duration = time.time() - session.created_at
+        return {
+            "session_id": session_id,
+            "provider": session.provider,
+            "duration": duration,
+            "bytes_streamed": session.bytes_sent,
+            "chunks_sent": session.chunks_sent,
+            "error_count": session.error_count
+        }
     
     def end_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """End a streaming session and return stats"""
         with self._lock:
             session = self.sessions.pop(session_id, None)
-            if session:
-                session.end()
-                return session.get_stats()
+        if not session:
             return None
+
+        # Dispatch asynchronous close; if the caller awaits elsewhere it can
+        # manage completion, otherwise we best-effort kick it off.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop; close synchronously.
+            try:
+                asyncio.run(session.close())
+            except RuntimeError:
+                # Fallback: mark inactive without cleanup.
+                logger.warning("Could not run session.close(); marking session inactive")
+                session.is_active = False
+        else:
+            asyncio.create_task(session.close())
+            session.is_active = False
+        stats = {
+            "session_id": session_id,
+            "provider": session.provider,
+            "duration": time.time() - session.created_at,
+            "bytes_streamed": session.bytes_sent,
+            "chunks_sent": session.chunks_sent,
+            "error_count": session.error_count
+        }
+        return stats
     
     def cleanup_expired_sessions(self):
         """Clean up expired sessions"""
@@ -592,9 +617,22 @@ class StreamingSessionManager:
             if current_time - session.start_time > 3600:  # 1 hour timeout
                 expired.append(sid)
         
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
         for sid in expired:
             session = self.sessions.pop(sid)
-            session.end()
+            if loop and loop.is_running():
+                asyncio.create_task(session.close())
+            else:
+                try:
+                    asyncio.run(session.close())
+                except RuntimeError:
+                    logger.warning(f"Unable to close session {sid} during cleanup")
+                    session.is_active = False
     
     async def get_active_sessions(self) -> List[StreamingSession]:
         """Get list of active session objects"""

@@ -569,6 +569,51 @@ class TTSAdapterFactory:
     Provides high-level interface for TTS operations.
     """
     
+    MODEL_PROVIDER_MAP: Dict[str, TTSProvider] = {
+        # OpenAI models
+        "tts-1": TTSProvider.OPENAI,
+        "tts-1-hd": TTSProvider.OPENAI,
+
+        # Kokoro models
+        "kokoro": TTSProvider.KOKORO,
+        "kokoro-v0_19": TTSProvider.KOKORO,
+        "kokoro-onnx": TTSProvider.KOKORO,
+
+        # Higgs models
+        "higgs": TTSProvider.HIGGS,
+        "higgs-v2": TTSProvider.HIGGS,
+        "higgs-audio-v2": TTSProvider.HIGGS,
+
+        # ElevenLabs models
+        "elevenlabs": TTSProvider.ELEVENLABS,
+        "eleven_monolingual_v1": TTSProvider.ELEVENLABS,
+        "eleven_multilingual_v1": TTSProvider.ELEVENLABS,
+        "eleven_multilingual_v2": TTSProvider.ELEVENLABS,
+        "eleven_turbo_v2": TTSProvider.ELEVENLABS,
+
+        # Dia models
+        "dia": TTSProvider.DIA,
+        "dia-1.6b": TTSProvider.DIA,
+
+        # Chatterbox models
+        "chatterbox": TTSProvider.CHATTERBOX,
+        "chatterbox-emotion": TTSProvider.CHATTERBOX,
+
+        # VibeVoice models
+        "vibevoice": TTSProvider.VIBEVOICE,
+        "vibevoice-1.5b": TTSProvider.VIBEVOICE,
+        "vibevoice-7b": TTSProvider.VIBEVOICE,
+        "microsoft/vibevoice-1.5b": TTSProvider.VIBEVOICE,
+        "westzhang/vibevoice-large-pt": TTSProvider.VIBEVOICE,
+
+        # NeuTTS models
+        "neutts": TTSProvider.NEUTTS,
+        "neutts-air": TTSProvider.NEUTTS,
+        "neuphonic/neutts-air": TTSProvider.NEUTTS,
+        "neutts-air-q4-gguf": TTSProvider.NEUTTS,
+        "neutts-air-q8-gguf": TTSProvider.NEUTTS,
+    }
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the factory.
@@ -578,6 +623,20 @@ class TTSAdapterFactory:
         """
         self.registry = TTSAdapterRegistry(config)
     
+    def get_provider_for_model(self, model: Optional[str]) -> Optional[TTSProvider]:
+        """
+        Resolve which provider should serve a model name.
+
+        Args:
+            model: Model identifier from the request
+
+        Returns:
+            Matching TTSProvider enum or None
+        """
+        if not model:
+            return None
+        return self.MODEL_PROVIDER_MAP.get(model.lower())
+
     async def get_adapter_by_model(self, model: str) -> Optional[TTSAdapter]:
         """
         Get adapter based on model name.
@@ -589,54 +648,7 @@ class TTSAdapterFactory:
         Returns:
             Appropriate adapter or None
         """
-        # Model to provider mapping
-        model_mapping = {
-            # OpenAI models
-            "tts-1": TTSProvider.OPENAI,
-            "tts-1-hd": TTSProvider.OPENAI,
-            
-            # Kokoro models
-            "kokoro": TTSProvider.KOKORO,
-            "kokoro-v0_19": TTSProvider.KOKORO,
-            "kokoro-onnx": TTSProvider.KOKORO,
-            
-            # Higgs models
-            "higgs": TTSProvider.HIGGS,
-            "higgs-v2": TTSProvider.HIGGS,
-            "higgs-audio-v2": TTSProvider.HIGGS,
-            
-            # ElevenLabs models
-            "elevenlabs": TTSProvider.ELEVENLABS,
-            "eleven_monolingual_v1": TTSProvider.ELEVENLABS,
-            "eleven_multilingual_v1": TTSProvider.ELEVENLABS,
-            "eleven_multilingual_v2": TTSProvider.ELEVENLABS,
-            "eleven_turbo_v2": TTSProvider.ELEVENLABS,
-            
-            # Dia models
-            "dia": TTSProvider.DIA,
-            "dia-1.6b": TTSProvider.DIA,
-            
-            # Chatterbox models
-            "chatterbox": TTSProvider.CHATTERBOX,
-            "chatterbox-emotion": TTSProvider.CHATTERBOX,
-            
-            # VibeVoice models
-            "vibevoice": TTSProvider.VIBEVOICE,
-            "vibevoice-1.5b": TTSProvider.VIBEVOICE,
-            "vibevoice-7b": TTSProvider.VIBEVOICE,
-            "microsoft/VibeVoice-1.5B": TTSProvider.VIBEVOICE,
-            "WestZhang/VibeVoice-Large-pt": TTSProvider.VIBEVOICE
-            ,
-            # NeuTTS models
-            "neutts": TTSProvider.NEUTTS,
-            "neutts-air": TTSProvider.NEUTTS,
-            "neuphonic/neutts-air": TTSProvider.NEUTTS,
-            "neutts-air-q4-gguf": TTSProvider.NEUTTS,
-            "neutts-air-q8-gguf": TTSProvider.NEUTTS,
-        }
-        
-        # Get provider from model name
-        provider = model_mapping.get(model.lower())
+        provider = self.get_provider_for_model(model)
         if not provider:
             logger.warning(f"Unknown model: {model}")
             return None

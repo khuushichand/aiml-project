@@ -583,8 +583,15 @@ class Chunker:
                 group = items[i:i + max_elements]
                 if not group:
                     break
-                # Drop short trailing windows when we already emitted at least one window
-                if len(group) < max_elements and i > 0:
+                final_window = len(group) < max_elements
+                emit = True
+                if final_window and overlap > 0 and i > 0:
+                    try:
+                        if n <= i + overlap:
+                            emit = False
+                    except Exception:
+                        emit = True
+                if not emit:
                     break
                 # Concatenate texts preserving original content
                 texts: List[str] = []
@@ -619,6 +626,8 @@ class Chunker:
                         'grouped_elements': len(group),
                     }
                 })
+                if final_window:
+                    break
                 i += step
             return grouped
 
@@ -798,36 +807,60 @@ class Chunker:
                 "null_bytes", f"Found {null_byte_count} null bytes in input", source="sanitize_input"
             )
             if not _is_test_mode:
-                text = text.replace('\x00', '')
+                text = text.replace('\x00', ' ')
         
-        # Normalize unicode to prevent various unicode-based attacks
-        # Using NFC (Canonical Decomposition, followed by Canonical Composition)
-        text = unicodedata.normalize('NFC', text)
+        # Normalize unicode to prevent various unicode-based attacks (preserve offsets)
+        # Only keep normalization when it does not affect string length.
+        try:
+            normalized_text = unicodedata.normalize('NFC', text)
+            if len(normalized_text) == len(text):
+                text = normalized_text
+            else:
+                logger.warning("Unicode normalization skipped to preserve source offsets (length changed)")
+                self._security_logger.log_suspicious_content(
+                    "unicode_normalization_skipped",
+                    "Unicode normalization would change text length; original text retained",
+                    source="sanitize_input"
+                )
+        except Exception:
+            pass
         
         # Check for control characters (except common ones like \n, \t, \r)
         allowed_control_chars = {'\n', '\t', '\r', '\f'}
-        control_chars = []
+        control_characters: List[str] = []
+        control_char_samples: List[str] = []
         for char in text:
             if unicodedata.category(char) == 'Cc' and char not in allowed_control_chars:
-                control_chars.append(repr(char))
+                control_characters.append(char)
+                if len(control_char_samples) < 10:
+                    control_char_samples.append(repr(char))
         
-        if control_chars:
-            logger.warning(f"Suspicious control characters found: {control_chars[:10]}")
+        if control_characters:
+            logger.warning(f"Suspicious control characters found: {control_char_samples}")
             self._security_logger.log_suspicious_content(
-                "control_characters", f"Found {len(control_chars)} suspicious control characters", source="sanitize_input"
+                "control_characters", f"Found {len(control_characters)} suspicious control characters", source="sanitize_input"
             )
             # In test mode, preserve control characters to satisfy normalization properties
             if not _is_test_mode:
-                # Remove suspicious control characters in normal operation
-                for char in set(control_chars):
-                    text = text.replace(ast.literal_eval(char), '')
+                # Replace suspicious control characters with spaces to preserve offsets
+                translation_map = {ord(ch): ' ' for ch in set(control_characters)}
+                text = text.translate(translation_map)
         
         # Check for bidirectional text override characters (could be used for spoofing)
         bidi_chars = ['\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069']
+        total_bidi_overrides = 0
         for bidi_char in bidi_chars:
-            if bidi_char in text:
-                logger.warning("Bidirectional override characters detected and removed")
-                text = text.replace(bidi_char, '')
+            occurrences = text.count(bidi_char)
+            if occurrences:
+                total_bidi_overrides += occurrences
+                text = text.replace(bidi_char, ' ')
+        if total_bidi_overrides:
+            logger.warning("Bidirectional override characters detected and neutralized")
+            self._security_logger.log_suspicious_content(
+                "bidirectional_override",
+                f"Found {total_bidi_overrides} bidirectional override characters",
+                source="sanitize_input"
+            )
         
         return text
     
@@ -1087,7 +1120,32 @@ class Chunker:
         method = method or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
+        # Align overlap handling with primary chunk_text path
+        try:
+            if isinstance(max_size, int) and isinstance(overlap, int):
+                if overlap < 0:
+                    logger.warning(f"Negative overlap ({overlap}) adjusted to 0")
+                    overlap = 0
+                if max_size <= 0:
+                    pass
+                elif overlap >= max_size:
+                    logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
+                    overlap = max_size - 1
+        except Exception:
+            pass
         language = language or self.config.language
+        
+        # Handle code strategy mode routing consistently with chunk_text
+        if (method or '').lower() == 'code':
+            try:
+                code_mode = str((options or {}).get('code_mode', 'auto')).lower()
+            except Exception:
+                code_mode = 'auto'
+            lang_opt = str((options or {}).get('language') or language or '').lower()
+            if code_mode in ('ast', 'auto') and lang_opt.startswith('py'):
+                method = 'code_ast'
+            else:
+                method = 'code'
         
         # Get strategy lazily (supports factory registration)
         strategy = self.get_strategy(method)

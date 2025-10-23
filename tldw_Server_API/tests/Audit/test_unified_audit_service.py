@@ -221,6 +221,19 @@ class TestRiskScoring:
         score = scorer.calculate_risk_score(event)
         assert score >= 70  # AUTH_LOGIN_FAILURE (30) + failure (20) + consecutive_failures (20)
 
+    def test_consecutive_failures_with_string_metadata(self):
+        """Risk scoring should tolerate string JSON metadata."""
+        scorer = RiskScorer()
+        metadata = json.dumps({"consecutive_failures": 4})
+        event = AuditEvent(
+            event_type=AuditEventType.AUTH_LOGIN_FAILURE,
+            result="failure",
+            metadata=metadata,
+        )
+
+        score = scorer.calculate_risk_score(event)
+        assert score >= 70
+
 
 # ============================================================================
 # Test Unified Audit Service
@@ -295,7 +308,21 @@ class TestUnifiedAuditService:
         
         # Buffer should have been flushed at 10 events
         assert len(audit_service.event_buffer) < 10
-    
+
+    @pytest.mark.asyncio
+    async def test_log_event_allows_string_metadata(self, audit_service):
+        """Logging with string metadata should not crash risk scoring."""
+        context = AuditContext(user_id="string_meta_user")
+        await audit_service.log_event(
+            event_type=AuditEventType.AUTH_LOGIN_FAILURE,
+            context=context,
+            metadata="plain string metadata",
+            result="failure",
+        )
+        await audit_service.flush()
+        events = await audit_service.query_events(user_id="string_meta_user")
+        assert events
+
     @pytest.mark.asyncio
     async def test_pii_detection_in_metadata(self, audit_service):
         """Test PII detection in event metadata"""

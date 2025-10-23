@@ -46,6 +46,7 @@ class TokenBlacklist:
         self._local_cache: Dict[str, datetime] = {}
         self._local_order: deque[str] = deque()
         self._cache_size_limit = 1000
+        self._ensured_session_columns = False
 
     def _cache_remove(self, jti: str) -> None:
         """Remove a JTI from the local cache if present."""
@@ -107,6 +108,15 @@ class TokenBlacklist:
                 self._local_cache.pop(oldest, None)
                 continue
             break
+
+    def hint_blacklisted(self, jti: str, expires_at: Optional[datetime]) -> None:
+        """
+        Optimistically mark a token as blacklisted in the local cache.
+
+        This gives synchronous helpers a fast fail path while asynchronous
+        persistence (database, Redis) catches up.
+        """
+        self._cache_add(jti, expires_at)
         
     async def initialize(self):
         """Initialize blacklist service and create tables if needed"""
@@ -234,6 +244,33 @@ class TokenBlacklist:
         except Exception as e:
             logger.error(f"Failed to create token blacklist table: {e}")
             raise DatabaseError(f"Failed to create blacklist table: {e}")
+
+    async def _ensure_session_revocation_columns(self, conn) -> None:
+        """Ensure legacy SQLite session tables include revocation columns."""
+        if self._ensured_session_columns:
+            return
+        try:
+            cursor = await conn.execute("PRAGMA table_info(sessions)")
+            rows = await cursor.fetchall()
+            columns = {row[1] for row in rows}
+            alterations = [
+                ("is_active", "is_active INTEGER DEFAULT 1"),
+                ("is_revoked", "is_revoked INTEGER DEFAULT 0"),
+                ("revoked_at", "revoked_at TIMESTAMP"),
+                ("revoked_by", "revoked_by INTEGER"),
+                ("revoke_reason", "revoke_reason TEXT"),
+            ]
+            altered = False
+            for name, decl in alterations:
+                if name not in columns:
+                    await conn.execute(f"ALTER TABLE sessions ADD COLUMN {decl}")
+                    altered = True
+            if altered:
+                await conn.commit()
+            self._ensured_session_columns = True
+        except Exception as exc:
+            logger.debug(f"TokenBlacklist: unable to harmonize session columns: {exc}")
+            self._ensured_session_columns = True
     
     async def revoke_token(
         self,
@@ -445,6 +482,7 @@ class TokenBlacklist:
                     sessions = [dict(row) for row in rows]
                 else:
                     # SQLite
+                    await self._ensure_session_revocation_columns(conn)
                     cursor = await conn.execute(
                         """
                         SELECT id, access_jti, refresh_jti, expires_at, refresh_expires_at

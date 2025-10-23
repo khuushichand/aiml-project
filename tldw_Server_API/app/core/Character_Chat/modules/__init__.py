@@ -60,6 +60,7 @@ from .character_chat import (
 )
 
 from .character_templates import (
+    CHARACTER_TEMPLATES,
     get_character_template,
     list_character_templates,
     create_character_from_template
@@ -118,6 +119,7 @@ __all__ = [
     'find_messages_in_conversation',
     
     # Templates
+    'CHARACTER_TEMPLATES',
     'get_character_template',
     'list_character_templates',
     'create_character_from_template'

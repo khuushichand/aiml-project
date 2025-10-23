@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.Utils.image_validation import (
     validate_image_url
 )
 import asyncio
+import sys
 import datetime
 import json
 import os
@@ -21,6 +22,8 @@ from functools import partial
 from collections import defaultdict, deque
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 from unittest.mock import Mock
+from weakref import WeakKeyDictionary
+import threading
 
 from fastapi import (
     APIRouter,
@@ -223,30 +226,43 @@ _RECENT_CALLS_WINDOW_SEC = 0.25
 _RECENT_CALLS_MIN_CONCURRENT = 3
 _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
-_active_request_lock: Optional[asyncio.Lock] = None
+_active_request_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
+_active_request_guard = threading.Lock()
+
+
+def _get_active_request_lock() -> asyncio.Lock:
+    """
+    Return an asyncio.Lock scoped to the current event loop.
+    Using a WeakKeyDictionary avoids retaining locks for closed loops.
+    """
+    loop = asyncio.get_running_loop()
+    with _active_request_guard:
+        lock = _active_request_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _active_request_locks[loop] = lock
+    return lock
 
 
 async def _increment_active_request(user_id: str) -> int:
     """Increment the active request counter for a user and return the new count."""
-    global _active_request_lock
-    if _active_request_lock is None:
-        _active_request_lock = asyncio.Lock()
-    async with _active_request_lock:
-        _active_request_counts[user_id] += 1
-        return _active_request_counts[user_id]
+    lock = _get_active_request_lock()
+    async with lock:
+        with _active_request_guard:
+            _active_request_counts[user_id] += 1
+            return _active_request_counts[user_id]
 
 
 async def _decrement_active_request(user_id: str) -> None:
     """Decrement the active request counter for a user."""
-    global _active_request_lock
-    if _active_request_lock is None:
-        _active_request_lock = asyncio.Lock()
-    async with _active_request_lock:
-        current = _active_request_counts.get(user_id, 0)
-        if current <= 1:
-            _active_request_counts.pop(user_id, None)
-        else:
-            _active_request_counts[user_id] = current - 1
+    lock = _get_active_request_lock()
+    async with lock:
+        with _active_request_guard:
+            current = _active_request_counts.get(user_id, 0)
+            if current <= 1:
+                _active_request_counts.pop(user_id, None)
+            else:
+                _active_request_counts[user_id] = current - 1
 
 # --- Helper Functions ---
 
@@ -514,25 +530,25 @@ async def create_chat_completion(
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
     current_loop = asyncio.get_running_loop()
-    
+
     # Generate unique request ID for tracking and set it in context
     request_id = set_request_id()
-    
+
     # Database is provided via dependency; async wrapper not needed here
-    
+
     # Initialize metrics collector
     metrics = get_chat_metrics()
-    
+
     # Parse provider and model for metrics (no mutation)
     provider, model = parse_provider_model_for_metrics(request_data, DEFAULT_LLM_PROVIDER)
     initial_provider = provider
     raw_model_input = request_data.model
-    
+
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
-    
+
     # Get user ID for rate limiting and audit (use authenticated user)
     user_id = str(current_user.id) if current_user and getattr(current_user, 'id', None) is not None else client_id
-    
+
     # Initialize audit context for logging
     context = None
     if audit_service:
@@ -570,18 +586,20 @@ async def create_chat_completion(
         )
     except Exception:
         pass
-    
+
     # Start tracking the request
     # Serialize request once and reuse
     request_json = json.dumps(request_data.model_dump())
     request_json_bytes = request_json.encode()
-    
-    async with metrics.track_request(
+
+    _track_request_cm = metrics.track_request(
         provider=provider,
         model=model,
         streaming=request_data.stream,
         client_id=client_id
-    ) as span:
+    )
+    span = await _track_request_cm.__aenter__()
+    try:
         # Track request size
         metrics.metrics.request_size_bytes.record(len(request_json_bytes))
 
@@ -605,784 +623,787 @@ async def create_chat_completion(
                 raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=error_message)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
-    
-    # Validate specific fields with validators
-    try:
-        if request_data.conversation_id:
-            request_data.conversation_id = validate_conversation_id(request_data.conversation_id)
-        if request_data.character_id:
-            request_data.character_id = validate_character_id(request_data.character_id)
-        if request_data.tools:
-            # Convert ToolDefinition objects to dictionaries for validation
-            tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool 
-                              for tool in request_data.tools]
-            validated_tools = validate_tool_definitions(tools_as_dicts)
-            # Keep the validated tools as dicts since that's what the LLM API expects
-            request_data.tools = validated_tools
-        if request_data.temperature is not None:
-            request_data.temperature = validate_temperature(request_data.temperature)
-        if request_data.max_tokens is not None:
-            request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
-        
-        # Validate overall request size (reuse cached JSON)
-        validate_request_size(request_json)
-        
-        # Apply rate limiting
-        rate_limiter = get_rate_limiter()
-        # In some test scenarios we patch dependencies with Mocks. Historically we
-        # disabled rate limiting when mocks were detected to simplify unit tests.
-        # However, Chat_NEW integration tests rely on deterministic TEST_MODE rate
-        # limits to validate 429 behavior. So we only bypass the limiter for mocks
-        # when not running in TEST_MODE.
+
+        # Validate specific fields with validators
         try:
-            _is_test_mode = os.getenv("TEST_MODE", "").lower() == "true"
-        except Exception:
-            _is_test_mode = False
-        if not _is_test_mode and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock)):
-            rate_limiter = None
-        # Ensure a limiter exists in TEST_MODE even if startup didn't init it
-        if _is_test_mode and rate_limiter is None:
+            if request_data.conversation_id:
+                request_data.conversation_id = validate_conversation_id(request_data.conversation_id)
+            if request_data.character_id:
+                request_data.character_id = validate_character_id(request_data.character_id)
+            if request_data.tools:
+                # Convert ToolDefinition objects to dictionaries for validation
+                tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool 
+                                  for tool in request_data.tools]
+                validated_tools = validate_tool_definitions(tools_as_dicts)
+                # Keep the validated tools as dicts since that's what the LLM API expects
+                request_data.tools = validated_tools
+            if request_data.temperature is not None:
+                request_data.temperature = validate_temperature(request_data.temperature)
+            if request_data.max_tokens is not None:
+                request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
+            
+            # Validate overall request size (reuse cached JSON)
+            validate_request_size(request_json)
+            
+            # Apply rate limiting
+            rate_limiter = get_rate_limiter()
+            # In some test scenarios we patch dependencies with Mocks. Historically we
+            # disabled rate limiting when mocks were detected to simplify unit tests.
+            # However, Chat_NEW integration tests rely on deterministic TEST_MODE rate
+            # limits to validate 429 behavior. So we only bypass the limiter for mocks
+            # when not running in TEST_MODE.
             try:
-                from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
-                # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
-                rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
+                _is_test_mode = os.getenv("TEST_MODE", "").lower() == "true"
             except Exception:
+                _is_test_mode = False
+            if not _is_test_mode and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock)):
                 rate_limiter = None
-        if rate_limiter:
-            active_count = await _increment_active_request(user_id)
-            try:
-                # Estimate tokens for rate limiting (heuristic)
-                estimated_tokens = estimate_tokens_from_json(request_json)
-                # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
-                # when no explicit conversation_id is provided. This prevents cumulative
-                # state from prior tests from causing 429s here, while leaving production
-                # behavior unchanged.
-                limiter_conversation_id = request_data.conversation_id
-                if _is_test_mode and not limiter_conversation_id:
-                    limiter_conversation_id = request_id
+            # Ensure a limiter exists in TEST_MODE even if startup didn't init it
+            if _is_test_mode and rate_limiter is None:
+                try:
+                    from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
+                    # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
+                    rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
+                except Exception:
+                    rate_limiter = None
+            if rate_limiter:
+                active_count = await _increment_active_request(user_id)
+                try:
+                    # Estimate tokens for rate limiting (heuristic)
+                    estimated_tokens = estimate_tokens_from_json(request_json)
+                    # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
+                    # when no explicit conversation_id is provided. This prevents cumulative
+                    # state from prior tests from causing 429s here, while leaving production
+                    # behavior unchanged.
+                    limiter_conversation_id = request_data.conversation_id
+                    if _is_test_mode and not limiter_conversation_id:
+                        limiter_conversation_id = request_id
 
-                # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
-                per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
-                enable_burst_suppression = (
-                    _is_test_mode
-                    and isinstance(per_user_limit, (int, float))
-                    and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
-                )
-                concurrent_burst = active_count > 1
-                if enable_burst_suppression and not concurrent_burst:
-                    try:
-                        now_ts = time.time()
-                        dq = _recent_calls_by_user[str(user_id)]
-                        # prune window
-                        while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
-                            dq.popleft()
-                        dq.append(now_ts)
-                        concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
-                    except Exception:
-                        concurrent_burst = False
+                    # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
+                    per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
+                    enable_burst_suppression = (
+                        _is_test_mode
+                        and isinstance(per_user_limit, (int, float))
+                        and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
+                    )
+                    concurrent_burst = active_count > 1
+                    if enable_burst_suppression and not concurrent_burst:
+                        try:
+                            now_ts = time.time()
+                            dq = _recent_calls_by_user[str(user_id)]
+                            # prune window
+                            while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
+                                dq.popleft()
+                            dq.append(now_ts)
+                            concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
+                        except Exception:
+                            concurrent_burst = False
 
-                limiter_user_id = user_id
-                if enable_burst_suppression and concurrent_burst:
-                    try:
-                        limiter_user_id = f"{user_id}:{request_id}"
-                    except Exception:
-                        limiter_user_id = user_id
+                    limiter_user_id = user_id
+                    if enable_burst_suppression and concurrent_burst:
+                        try:
+                            limiter_user_id = f"{user_id}:{request_id}"
+                        except Exception:
+                            limiter_user_id = user_id
 
-                allowed, rate_error = await rate_limiter.check_rate_limit(
-                    user_id=limiter_user_id,
-                    conversation_id=limiter_conversation_id,
-                    estimated_tokens=estimated_tokens
-                )
-                
-                if not allowed:
-                    metrics.track_rate_limit(user_id)
-                    if audit_service and context:
-                        await audit_service.log_event(
-                            event_type=AuditEventType.API_RATE_LIMITED,
-                            context=context,
-                            action="rate_limit_exceeded",
-                            metadata={"reason": rate_error}
-                        )
-                    # In TEST_MODE, try a short wait-for-capacity to reduce
-                    # suite-order flakiness in concurrency tests. If still denied,
-                    # surface as 503 (service busy) rather than 429 which those
-                    # tests do not assert on.
-                    if _is_test_mode:
-                        # Only apply wait/503 fallback for global capacity exhaustion;
-                        # keep 429 for per-user/conversation/token limits to satisfy
-                        # deterministic rate-limit tests.
-                        is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
-                        if is_global_cap or concurrent_burst:
-                            try:
-                                allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
-                                    user_id=limiter_user_id,
-                                    conversation_id=limiter_conversation_id,
-                                    estimated_tokens=estimated_tokens,
-                                    timeout=5.0,
-                                )
-                            except Exception:
-                                allowed_after_wait = False
-                            if not allowed_after_wait:
+                    allowed, rate_error = await rate_limiter.check_rate_limit(
+                        user_id=limiter_user_id,
+                        conversation_id=limiter_conversation_id,
+                        estimated_tokens=estimated_tokens
+                    )
+                    
+                    if not allowed:
+                        metrics.track_rate_limit(user_id)
+                        if audit_service and context:
+                            await audit_service.log_event(
+                                event_type=AuditEventType.API_RATE_LIMITED,
+                                context=context,
+                                action="rate_limit_exceeded",
+                                metadata={"reason": rate_error}
+                            )
+                        # In TEST_MODE, try a short wait-for-capacity to reduce
+                        # suite-order flakiness in concurrency tests. If still denied,
+                        # surface as 503 (service busy) rather than 429 which those
+                        # tests do not assert on.
+                        if _is_test_mode:
+                            # Only apply wait/503 fallback for global capacity exhaustion;
+                            # keep 429 for per-user/conversation/token limits to satisfy
+                            # deterministic rate-limit tests.
+                            is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
+                            if is_global_cap or concurrent_burst:
+                                try:
+                                    allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
+                                        user_id=limiter_user_id,
+                                        conversation_id=limiter_conversation_id,
+                                        estimated_tokens=estimated_tokens,
+                                        timeout=5.0,
+                                    )
+                                except Exception:
+                                    allowed_after_wait = False
+                                if not allowed_after_wait:
+                                    raise HTTPException(
+                                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                        detail="Service busy. Please retry."
+                                    )
+                                # If capacity became available, continue processing
+                            else:
                                 raise HTTPException(
-                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                    detail="Service busy. Please retry."
+                                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                    detail=rate_error or "Rate limit exceeded"
                                 )
-                            # If capacity became available, continue processing
                         else:
                             raise HTTPException(
                                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail=rate_error or "Rate limit exceeded"
                             )
-                    else:
-                        raise HTTPException(
-                            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                            detail=rate_error or "Rate limit exceeded"
-                        )
-            finally:
-                await _decrement_active_request(user_id)
-    except ValueError as e:
-        logger.warning(f"Input validation error: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                finally:
+                    await _decrement_active_request(user_id)
+        except ValueError as e:
+            logger.warning(f"Input validation error: {e}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    # Moderation: apply global/per-user policy to input messages (redact or block)
-    try:
-        moderation = get_moderation_service()
+        # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
-            mon = get_topic_monitoring_service()
-        except Exception:
-            mon = None
-        await moderate_input_messages(
-            request_data=request_data,
-            request=request,
-            moderation_service=moderation,
-            topic_monitoring_service=mon,
-            metrics=metrics,
-            audit_service=audit_service,
-            audit_context=context,
-            client_id=client_id,
-            audit_event_type=AuditEventType.SECURITY_VIOLATION,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"Moderation input processing error: {e}")
-
-    # Normalize provider/model on the request for downstream logic
-    provider = normalize_request_provider_and_model(request_data, _get_default_provider())
-    model = request_data.model or model
-    
-    user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
-    logger.info(
-        f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
-        f"Stream={request_data.stream}, ConvID={request_data.conversation_id}, CharID={request_data.character_id}"
-    )
-
-    character_card_for_context: Optional[Dict[str, Any]] = None
-    final_conversation_id: Optional[str] = request_data.conversation_id
-    final_character_db_id: Optional[int] = None # Initialize
-
-    try:
-        # Get API keys and resolve provider default in a way that honors runtime patches
-        import os as _os_keys
-        # Gather possible module-level API key maps from both schemas and this module,
-        # so tests that patch either location are honored.
-        schema_keys = None
-        try:
-            from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
-            _sk = getattr(_schemas_mod, "API_KEYS", None)
-            if isinstance(_sk, dict) and _sk:
-                schema_keys = dict(_sk)
-        except Exception:
-            schema_keys = None
-        local_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
-        combined_keys = {}
-        if isinstance(schema_keys, dict):
-            combined_keys.update(schema_keys)
-        if isinstance(local_keys, dict):
-            combined_keys.update(local_keys)
-        module_keys = combined_keys or None
-        dynamic_keys = get_api_keys()
-
-        # If default provider resolved to 'local-llm' but an explicit provider key exists
-        # (e.g., 'openai') in module or dynamic keys, prefer that provider to satisfy
-        # integration tests that expect config-driven defaults in test mode.
-        if (
-            provider == "local-llm"
-            and getattr(request_data, "api_provider", None) in (None, "")
-        ):
-            if (module_keys and module_keys.get("openai")) or dynamic_keys.get("openai"):
-                provider = "openai"
-
-        target_api_provider = provider  # Already determined (possibly adjusted above)
-        _raw_key, provider_api_key = merge_api_keys_for_provider(
-            target_api_provider,
-            module_keys,
-            dynamic_keys,
-            requires_key_map={},
-        )
-
-        # Centralized provider capabilities
-        try:
-            from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
-        except Exception:
-            PROVIDER_REQUIRES_KEY = {}
-        # Use the raw value for validation so empty strings are treated as missing
-        if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key:
-            logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
-        # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
-        # This avoids depending on external network calls in CI and matches integration test expectations.
-        _test_mode_flag = _os_keys.getenv("TEST_MODE", "").lower() == "true"
-        if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
-            # Treat keys with obvious invalid patterns as authentication failures in test mode.
-            invalid_patterns = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
-            if any(str(provider_api_key).lower().startswith(p) for p in invalid_patterns):
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-
-        # --- Character/Conversation Context, History, and Current Turn ---
-        character_card_for_context, final_character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
-            chat_db=chat_db,
-            request_data=request_data,
-            loop=current_loop,
-            metrics=metrics,
-            default_save_to_db=DEFAULT_SAVE_TO_DB,
-            final_conversation_id=final_conversation_id,
-            save_message_fn=_save_message_turn_to_db,
-        )
-
-        # --- Prompt Templating (system + content transforms) ---
-        final_system_message, templated_llm_payload = apply_prompt_templating(
-            request_data=request_data,
-            character_card=character_card_for_context or {},
-            llm_payload_messages=llm_payload_messages,
-        )
-
-        # --- LLM Call ---
-        cleaned_args = build_call_params_from_request(
-            request_data=request_data,
-            target_api_provider=target_api_provider,
-            provider_api_key=provider_api_key,
-            templated_llm_payload=templated_llm_payload,
-            final_system_message=final_system_message,
-        )
-
-        def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
-            normalized = target_provider.replace(".", "_").replace("-", "_")
-            env_key = f"DEFAULT_MODEL_{normalized.upper()}"
-            env_val = os.getenv(env_key)
-            if env_val:
-                return env_val
-            config_key = f"default_model_{normalized.lower()}"
-            if _chat_config:
-                cfg_val = _chat_config.get(config_key)
-                if cfg_val:
-                    return cfg_val
-            return None
-
-        if not cleaned_args.get("model"):
-            default_model_for_provider = _get_default_model_for_provider_name(provider)
-            if default_model_for_provider:
-                cleaned_args["model"] = default_model_for_provider
-                if not request_data.model:
-                    request_data.model = default_model_for_provider
-                model = default_model_for_provider
-
-        def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
-            dynamic_keys_latest = get_api_keys()
-            raw_value_new, provider_api_key_new = merge_api_keys_for_provider(
-                target_provider,
-                module_keys,
-                dynamic_keys_latest,
-                PROVIDER_REQUIRES_KEY,
-            )
-            if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not raw_value_new:
-                logger.error(
-                    f"API key for provider '{target_provider}' is missing or not configured (fallback)."
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Service for '{target_provider}' is not configured (key missing)."
-                )
-
-            refreshed_args = build_call_params_from_request(
+            moderation = get_moderation_service()
+            try:
+                mon = get_topic_monitoring_service()
+            except Exception:
+                mon = None
+            await moderate_input_messages(
                 request_data=request_data,
-                target_api_provider=target_provider,
-                provider_api_key=provider_api_key_new,
+                request=request,
+                moderation_service=moderation,
+                topic_monitoring_service=mon,
+                metrics=metrics,
+                audit_service=audit_service,
+                audit_context=context,
+                client_id=client_id,
+                audit_event_type=AuditEventType.SECURITY_VIOLATION,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Moderation input processing error: {e}")
+
+        # Normalize provider/model on the request for downstream logic
+        provider = normalize_request_provider_and_model(request_data, _get_default_provider())
+        model = request_data.model or model
+        
+        user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
+        logger.info(
+            f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
+            f"Stream={request_data.stream}, ConvID={request_data.conversation_id}, CharID={request_data.character_id}"
+        )
+
+        character_card_for_context: Optional[Dict[str, Any]] = None
+        final_conversation_id: Optional[str] = request_data.conversation_id
+        final_character_db_id: Optional[int] = None # Initialize
+
+        try:
+            # Get API keys and resolve provider default in a way that honors runtime patches
+            import os as _os_keys
+            # Gather possible module-level API key maps from both schemas and this module,
+            # so tests that patch either location are honored.
+            schema_keys = None
+            try:
+                from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
+                _sk = getattr(_schemas_mod, "API_KEYS", None)
+                if isinstance(_sk, dict) and _sk:
+                    schema_keys = dict(_sk)
+            except Exception:
+                schema_keys = None
+            local_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
+            combined_keys = {}
+            if isinstance(schema_keys, dict):
+                combined_keys.update(schema_keys)
+            if isinstance(local_keys, dict):
+                combined_keys.update(local_keys)
+            module_keys = combined_keys or None
+            dynamic_keys = get_api_keys()
+
+            # If default provider resolved to 'local-llm' but an explicit provider key exists
+            # (e.g., 'openai') in module or dynamic keys, prefer that provider to satisfy
+            # integration tests that expect config-driven defaults in test mode.
+            if (
+                provider == "local-llm"
+                and getattr(request_data, "api_provider", None) in (None, "")
+            ):
+                if (module_keys and module_keys.get("openai")) or dynamic_keys.get("openai"):
+                    provider = "openai"
+
+            target_api_provider = provider  # Already determined (possibly adjusted above)
+            _raw_key, provider_api_key = merge_api_keys_for_provider(
+                target_api_provider,
+                module_keys,
+                dynamic_keys,
+                requires_key_map={},
+            )
+
+            # Centralized provider capabilities
+            try:
+                from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+            except Exception:
+                PROVIDER_REQUIRES_KEY = {}
+            # Use the raw value for validation so empty strings are treated as missing
+            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key:
+                logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
+            # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
+            # This avoids depending on external network calls in CI and matches integration test expectations.
+            _test_mode_flag = _os_keys.getenv("TEST_MODE", "").lower() == "true"
+            if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
+                # Treat keys with obvious invalid patterns as authentication failures in test mode.
+                invalid_patterns = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
+                if any(str(provider_api_key).lower().startswith(p) for p in invalid_patterns):
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+            # --- Character/Conversation Context, History, and Current Turn ---
+            character_card_for_context, final_character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+                chat_db=chat_db,
+                request_data=request_data,
+                loop=current_loop,
+                metrics=metrics,
+                default_save_to_db=DEFAULT_SAVE_TO_DB,
+                final_conversation_id=final_conversation_id,
+                save_message_fn=_save_message_turn_to_db,
+            )
+
+            # --- Prompt Templating (system + content transforms) ---
+            final_system_message, templated_llm_payload = apply_prompt_templating(
+                request_data=request_data,
+                character_card=character_card_for_context or {},
+                llm_payload_messages=llm_payload_messages,
+            )
+
+            # --- LLM Call ---
+            cleaned_args = build_call_params_from_request(
+                request_data=request_data,
+                target_api_provider=target_api_provider,
+                provider_api_key=provider_api_key,
                 templated_llm_payload=templated_llm_payload,
                 final_system_message=final_system_message,
             )
-            refreshed_model = refreshed_args.get("model")
-            use_default_model = False
-            if not refreshed_model:
-                use_default_model = True
-            elif target_provider != initial_provider and raw_model_input:
-                if "/" in raw_model_input:
-                    prefix = raw_model_input.split("/", 1)[0].strip().lower()
-                    if prefix and prefix != target_provider.lower():
-                        use_default_model = True
-            if use_default_model:
-                default_model = _get_default_model_for_provider_name(target_provider)
-                if default_model:
-                    refreshed_args["model"] = default_model
-                    refreshed_model = default_model
 
-            refreshed_args["api_endpoint"] = target_provider
-            return refreshed_args, refreshed_model
+            def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
+                normalized = target_provider.replace(".", "_").replace("-", "_")
+                env_key = f"DEFAULT_MODEL_{normalized.upper()}"
+                env_val = os.getenv(env_key)
+                if env_val:
+                    return env_val
+                config_key = f"default_model_{normalized.lower()}"
+                if _chat_config:
+                    cfg_val = _chat_config.get(config_key)
+                    if cfg_val:
+                        return cfg_val
+                return None
 
-        # Use provider manager for health checks and failover
-        provider_manager = get_provider_manager()
-        selected_provider = provider
-        
-        if provider_manager:
-            # Check if the requested provider is healthy first
-            # Use the circuit breaker check if the provider is registered
-            if provider in provider_manager.circuit_breakers and \
-               provider_manager.circuit_breakers[provider].can_attempt_call():
-                selected_provider = provider
-                logger.info(f"Using requested provider {selected_provider} (health check passed)")
-            elif ENABLE_PROVIDER_FALLBACK:
-                # Only try alternative providers if fallback is enabled
-                healthy_provider = provider_manager.get_available_provider(exclude=[provider])
-                if healthy_provider:
-                    selected_provider = healthy_provider
-                    logger.warning(f"Requested provider {provider} is unhealthy or not registered, using {selected_provider} instead (fallback enabled)")
-                else:
+            if not cleaned_args.get("model"):
+                default_model_for_provider = _get_default_model_for_provider_name(provider)
+                if default_model_for_provider:
+                    cleaned_args["model"] = default_model_for_provider
+                    if not request_data.model:
+                        request_data.model = default_model_for_provider
+                    model = default_model_for_provider
+
+            def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+                dynamic_keys_latest = get_api_keys()
+                raw_value_new, provider_api_key_new = merge_api_keys_for_provider(
+                    target_provider,
+                    module_keys,
+                    dynamic_keys_latest,
+                    PROVIDER_REQUIRES_KEY,
+                )
+                if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not raw_value_new:
+                    logger.error(
+                        f"API key for provider '{target_provider}' is missing or not configured (fallback)."
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Service for '{target_provider}' is not configured (key missing)."
+                    )
+
+                refreshed_args = build_call_params_from_request(
+                    request_data=request_data,
+                    target_api_provider=target_provider,
+                    provider_api_key=provider_api_key_new,
+                    templated_llm_payload=templated_llm_payload,
+                    final_system_message=final_system_message,
+                )
+                refreshed_model = refreshed_args.get("model")
+                use_default_model = False
+                if not refreshed_model:
+                    use_default_model = True
+                elif target_provider != initial_provider and raw_model_input:
+                    if "/" in raw_model_input:
+                        prefix = raw_model_input.split("/", 1)[0].strip().lower()
+                        if prefix and prefix != target_provider.lower():
+                            use_default_model = True
+                if use_default_model:
+                    default_model = _get_default_model_for_provider_name(target_provider)
+                    if default_model:
+                        refreshed_args["model"] = default_model
+                        refreshed_model = default_model
+
+                refreshed_args["api_endpoint"] = target_provider
+                return refreshed_args, refreshed_model
+
+            # Use provider manager for health checks and failover
+            provider_manager = get_provider_manager()
+            selected_provider = provider
+            
+            if provider_manager:
+                # Check if the requested provider is healthy first
+                # Use the circuit breaker check if the provider is registered
+                if provider in provider_manager.circuit_breakers and \
+                   provider_manager.circuit_breakers[provider].can_attempt_call():
                     selected_provider = provider
-                    logger.warning(f"No healthy providers available, using {provider} anyway")
-            else:
-                # Fallback disabled - use requested provider even if unhealthy
-                selected_provider = provider
-                logger.info(f"Using requested provider {selected_provider} (fallback disabled, health check not performed)")
-        
-        # Update provider in cleaned_args
-        # Note: chat_api_call expects 'api_endpoint', not 'api_provider'
-        # Update the api_endpoint with the selected provider after health check
-        cleaned_args['api_endpoint'] = selected_provider
-        
-        # Request Queue Integration (Admission control / backpressure)
-        # ------------------------------------------------------------------------
-        is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        try:
-            queue_candidate = get_request_queue()
-        except Exception:
-            queue_candidate = None
-
-        queue = None
-        if queue_candidate is not None:
-            if is_test_mode:
-                allow_queue_env = os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", "").lower() in {"1", "true", "yes", "on"}
-                queue_module = getattr(queue_candidate.__class__, "__module__", "")
-                allow_queue_override = getattr(queue_candidate, "allow_in_test_mode", False)
-                allow_queue_stub = (
-                    ".tests." in queue_module
-                    or queue_module.startswith("tests.")
-                    or queue_module.startswith("tldw_Server_API.tests.")
-                    or queue_module.startswith("pytest.")
-                )
-                try:
-                    from tldw_Server_API.app.core.Chat.request_queue import RequestQueue as _RequestQueue  # type: ignore
-                except Exception:  # pragma: no cover
-                    _RequestQueue = None
-                is_real_queue = bool(_RequestQueue) and isinstance(queue_candidate, _RequestQueue)
-                if allow_queue_env or allow_queue_override or allow_queue_stub or not is_real_queue:
-                    queue = queue_candidate
-            else:
-                queue = queue_candidate
-        if queue is not None and not queue_is_active(queue):
-            queue = None
-        if queue is not None and not QUEUED_EXECUTION:
+                    logger.info(f"Using requested provider {selected_provider} (health check passed)")
+                elif ENABLE_PROVIDER_FALLBACK:
+                    # Only try alternative providers if fallback is enabled
+                    healthy_provider = provider_manager.get_available_provider(exclude=[provider])
+                    if healthy_provider:
+                        selected_provider = healthy_provider
+                        logger.warning(f"Requested provider {provider} is unhealthy or not registered, using {selected_provider} instead (fallback enabled)")
+                    else:
+                        selected_provider = provider
+                        logger.warning(f"No healthy providers available, using {provider} anyway")
+                else:
+                    # Fallback disabled - use requested provider even if unhealthy
+                    selected_provider = provider
+                    logger.info(f"Using requested provider {selected_provider} (fallback disabled, health check not performed)")
+            
+            # Update provider in cleaned_args
+            # Note: chat_api_call expects 'api_endpoint', not 'api_provider'
+            # Update the api_endpoint with the selected provider after health check
+            cleaned_args['api_endpoint'] = selected_provider
+            
+            # Request Queue Integration (Admission control / backpressure)
+            # ------------------------------------------------------------------------
+            is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             try:
-                # Estimate tokens for queue gating (reuse serialized JSON size)
-                est_tokens_for_queue = max(1, len(request_json) // 4)
-                # Use user_id for per-client fairness; HIGH priority for streaming
-                priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
-                # Use request_id generated for this call
-                q_future = await queue.enqueue(
-                    request_id=request_id,
-                    request_data={"endpoint": "/api/v1/chat/completions"},
-                    client_id=str(user_id),
-                    priority=priority,
-                    estimated_tokens=est_tokens_for_queue,
-                )
-                # Await admission; if queue times out internally, it will raise
-                await q_future
-            except ValueError as e:
-                # Queue full or rate limit in queue -> 429
-                logger.warning(f"Queue admission rejected: {e}")
-                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
-            except Exception as e:
-                # Treat unexpected queue errors as service unavailable
-                logger.error(f"Queue admission error: {e}")
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
-        # The request queue system has been initialized in main.py but is not yet
-        # integrated here. Once the central scheduling/queue module is built, this
-        # endpoint should enqueue requests rather than processing them directly.
-        # 
-        # Integration points:
-        # 1. Get the request queue instance: queue = get_request_queue()
-        # 2. Determine priority based on user/request type
-        # 3. Enqueue the request with: 
-        #    future = await queue.enqueue(
-        #        request_id=request_id,
-        #        request_data={'cleaned_args': cleaned_args, 'request': request_data},
-        #        client_id=client_id,
-        #        priority=priority,
-        #        estimated_tokens=estimated_tokens
-        #    )
-        # 4. Await the future for the result
-        # 5. The queue's worker would call perform_chat_api_call
-        #
-        # Benefits of queue integration:
-        # - Prevents server overload with backpressure
-        # - Allows priority-based processing (e.g., premium users)
-        # - Better resource utilization with controlled concurrency
-        # - Request timeout management
-        # - Queue depth monitoring for scaling decisions
-        #
-        # Current implementation continues with direct processing:
-        # ------------------------------------------------------------------------
-        
-        mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
-        use_mock_provider = (
-            _test_mode_flag
-            and provider_api_key
-            and provider_api_key in mock_friendly_keys
-            and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
-        )
+                queue_candidate = get_request_queue()
+            except Exception:
+                queue_candidate = None
 
-        def _build_mock_response(messages_payload: List[Dict[str, Any]]) -> str:
-            for msg in reversed(messages_payload):
-                if isinstance(msg, dict) and msg.get("role") == "user":
-                    content = msg.get("content")
-                    if isinstance(content, str) and content.strip():
-                        return f"Mock response: {content.strip()}"
-            return "Mock response from test mode"
-
-        def _mock_chat_call(**kwargs):
-            messages_payload = kwargs.get("messages_payload") or []
-            streaming_flag = bool(kwargs.get("streaming"))
-            model_name = kwargs.get("model") or request_data.model or "mock-model"
-            content = _build_mock_response(messages_payload)
-
-            if streaming_flag:
-                chunk_text = content
-
-                def _stream_generator():
-                    data_chunk = {
-                        "choices": [
-                            {
-                                "delta": {"role": "assistant", "content": chunk_text},
-                                "finish_reason": None,
-                                "index": 0,
-                            }
-                        ]
-                    }
-                    yield f"data: {json.dumps(data_chunk)}\n\n"
-                    yield "data: [DONE]\n\n"
-
-                return _stream_generator()
-
-            prompt_tokens = max(1, len(json.dumps(messages_payload)) // 4)
-            completion_tokens = max(1, len(content) // 4)
-            total_tokens = prompt_tokens + completion_tokens
-
-            return {
-                "id": f"mock-{provider}-{uuid.uuid4().hex[:8]}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model_name,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": content},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                },
-            }
-
-        if use_mock_provider and provider in {"openai", "groq", "mistral"}:
-            llm_call_func = partial(_mock_chat_call, **cleaned_args)
-        else:
-            llm_call_func = partial(perform_chat_api_call, **cleaned_args)
-
-        if request_data.stream:
-            return await execute_streaming_call(
-                current_loop=current_loop,
-                cleaned_args=cleaned_args,
-                selected_provider=selected_provider,
-                provider=provider,
-                model=model,
-                request_json=request_json,
-                request=request,
-                metrics=metrics,
-                provider_manager=provider_manager,
-                templated_llm_payload=templated_llm_payload,
-                should_persist=should_persist,
-                final_conversation_id=final_conversation_id,
-                character_card_for_context=character_card_for_context,
-                chat_db=chat_db,
-                save_message_fn=_save_message_turn_to_db,
-                audit_service=audit_service,
-                audit_context=context,
-                client_id=user_id,
-                queue_execution_enabled=QUEUED_EXECUTION,
-                enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
-                llm_call_func=llm_call_func,
-                refresh_provider_params=rebuild_call_params_for_provider,
-                moderation_getter=get_moderation_service,
+            queue = None
+            if queue_candidate is not None:
+                if is_test_mode:
+                    allow_queue_env = os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", "").lower() in {"1", "true", "yes", "on"}
+                    queue_module = getattr(queue_candidate.__class__, "__module__", "")
+                    allow_queue_override = getattr(queue_candidate, "allow_in_test_mode", False)
+                    allow_queue_stub = (
+                        ".tests." in queue_module
+                        or queue_module.startswith("tests.")
+                        or queue_module.startswith("tldw_Server_API.tests.")
+                        or queue_module.startswith("pytest.")
+                    )
+                    try:
+                        from tldw_Server_API.app.core.Chat.request_queue import RequestQueue as _RequestQueue  # type: ignore
+                    except Exception:  # pragma: no cover
+                        _RequestQueue = None
+                    is_real_queue = bool(_RequestQueue) and isinstance(queue_candidate, _RequestQueue)
+                    if allow_queue_env or allow_queue_override or allow_queue_stub or not is_real_queue:
+                        queue = queue_candidate
+                else:
+                    queue = queue_candidate
+            if queue is not None and not queue_is_active(queue):
+                queue = None
+            if queue is not None and not QUEUED_EXECUTION:
+                try:
+                    # Estimate tokens for queue gating (reuse serialized JSON size)
+                    est_tokens_for_queue = max(1, len(request_json) // 4)
+                    # Use user_id for per-client fairness; HIGH priority for streaming
+                    priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
+                    # Use request_id generated for this call
+                    q_future = await queue.enqueue(
+                        request_id=request_id,
+                        request_data={"endpoint": "/api/v1/chat/completions"},
+                        client_id=str(user_id),
+                        priority=priority,
+                        estimated_tokens=est_tokens_for_queue,
+                    )
+                    # Await admission; if queue times out internally, it will raise
+                    await q_future
+                except ValueError as e:
+                    # Queue full or rate limit in queue -> 429
+                    logger.warning(f"Queue admission rejected: {e}")
+                    raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+                except Exception as e:
+                    # Treat unexpected queue errors as service unavailable
+                    logger.error(f"Queue admission error: {e}")
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
+            # The request queue system has been initialized in main.py but is not yet
+            # integrated here. Once the central scheduling/queue module is built, this
+            # endpoint should enqueue requests rather than processing them directly.
+            # 
+            # Integration points:
+            # 1. Get the request queue instance: queue = get_request_queue()
+            # 2. Determine priority based on user/request type
+            # 3. Enqueue the request with: 
+            #    future = await queue.enqueue(
+            #        request_id=request_id,
+            #        request_data={'cleaned_args': cleaned_args, 'request': request_data},
+            #        client_id=client_id,
+            #        priority=priority,
+            #        estimated_tokens=estimated_tokens
+            #    )
+            # 4. Await the future for the result
+            # 5. The queue's worker would call perform_chat_api_call
+            #
+            # Benefits of queue integration:
+            # - Prevents server overload with backpressure
+            # - Allows priority-based processing (e.g., premium users)
+            # - Better resource utilization with controlled concurrency
+            # - Request timeout management
+            # - Queue depth monitoring for scaling decisions
+            #
+            # Current implementation continues with direct processing:
+            # ------------------------------------------------------------------------
+            
+            mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
+            use_mock_provider = (
+                _test_mode_flag
+                and provider_api_key
+                and provider_api_key in mock_friendly_keys
+                and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
-        else: # Non-streaming
-            encoded_payload = await execute_non_stream_call(
-                current_loop=current_loop,
-                cleaned_args=cleaned_args,
-                selected_provider=selected_provider,
-                provider=provider,
-                model=model,
-                request_json=request_json,
-                request=request,
-                metrics=metrics,
-                provider_manager=provider_manager,
-                templated_llm_payload=templated_llm_payload,
-                should_persist=should_persist,
-                final_conversation_id=final_conversation_id,
-                character_card_for_context=character_card_for_context,
-                chat_db=chat_db,
-                save_message_fn=_save_message_turn_to_db,
-                audit_service=audit_service,
-                audit_context=context,
-                client_id=user_id,
-                queue_execution_enabled=QUEUED_EXECUTION,
-                enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
-                llm_call_func=llm_call_func,
-                refresh_provider_params=rebuild_call_params_for_provider,
-                moderation_getter=get_moderation_service,
-            )
-            # Track response size and return
-            if isinstance(encoded_payload, dict):
-                response_size = len(json.dumps(encoded_payload))
-                metrics.metrics.response_size_bytes.record(
-                    response_size,
-                    {
-                        "provider": provider,
-                        "model": model,
-                        "streaming": "false",
+            def _build_mock_response(messages_payload: List[Dict[str, Any]]) -> str:
+                for msg in reversed(messages_payload):
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        content = msg.get("content")
+                        if isinstance(content, str) and content.strip():
+                            return f"Mock response: {content.strip()}"
+                return "Mock response from test mode"
+
+            def _mock_chat_call(**kwargs):
+                messages_payload = kwargs.get("messages_payload") or []
+                streaming_flag = bool(kwargs.get("streaming"))
+                model_name = kwargs.get("model") or request_data.model or "mock-model"
+                content = _build_mock_response(messages_payload)
+
+                if streaming_flag:
+                    chunk_text = content
+
+                    def _stream_generator():
+                        data_chunk = {
+                            "choices": [
+                                {
+                                    "delta": {"role": "assistant", "content": chunk_text},
+                                    "finish_reason": None,
+                                    "index": 0,
+                                }
+                            ]
+                        }
+                        yield f"data: {json.dumps(data_chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+
+                    return _stream_generator()
+
+                prompt_tokens = max(1, len(json.dumps(messages_payload)) // 4)
+                completion_tokens = max(1, len(content) // 4)
+                total_tokens = prompt_tokens + completion_tokens
+
+                return {
+                    "id": f"mock-{provider}-{uuid.uuid4().hex[:8]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": model_name,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": content},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens,
                     },
-                )
-            return JSONResponse(content=encoded_payload)
+                }
 
-    # --- Exception Handling --- Improved with structured error handling
-    except HTTPException as e_http:
-        # Log with request context
-        if e_http.status_code >= 500:
+            if use_mock_provider and provider in {"openai", "groq", "mistral"}:
+                llm_call_func = partial(_mock_chat_call, **cleaned_args)
+            else:
+                llm_call_func = partial(perform_chat_api_call, **cleaned_args)
+
+            if request_data.stream:
+                return await execute_streaming_call(
+                    current_loop=current_loop,
+                    cleaned_args=cleaned_args,
+                    selected_provider=selected_provider,
+                    provider=provider,
+                    model=model,
+                    request_json=request_json,
+                    request=request,
+                    metrics=metrics,
+                    provider_manager=provider_manager,
+                    templated_llm_payload=templated_llm_payload,
+                    should_persist=should_persist,
+                    final_conversation_id=final_conversation_id,
+                    character_card_for_context=character_card_for_context,
+                    chat_db=chat_db,
+                    save_message_fn=_save_message_turn_to_db,
+                    audit_service=audit_service,
+                    audit_context=context,
+                    client_id=user_id,
+                    queue_execution_enabled=QUEUED_EXECUTION,
+                    enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                    llm_call_func=llm_call_func,
+                    refresh_provider_params=rebuild_call_params_for_provider,
+                    moderation_getter=get_moderation_service,
+                )
+
+            else: # Non-streaming
+                encoded_payload = await execute_non_stream_call(
+                    current_loop=current_loop,
+                    cleaned_args=cleaned_args,
+                    selected_provider=selected_provider,
+                    provider=provider,
+                    model=model,
+                    request_json=request_json,
+                    request=request,
+                    metrics=metrics,
+                    provider_manager=provider_manager,
+                    templated_llm_payload=templated_llm_payload,
+                    should_persist=should_persist,
+                    final_conversation_id=final_conversation_id,
+                    character_card_for_context=character_card_for_context,
+                    chat_db=chat_db,
+                    save_message_fn=_save_message_turn_to_db,
+                    audit_service=audit_service,
+                    audit_context=context,
+                    client_id=user_id,
+                    queue_execution_enabled=QUEUED_EXECUTION,
+                    enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                    llm_call_func=llm_call_func,
+                    refresh_provider_params=rebuild_call_params_for_provider,
+                    moderation_getter=get_moderation_service,
+                )
+                # Track response size and return
+                if isinstance(encoded_payload, dict):
+                    response_size = len(json.dumps(encoded_payload))
+                    metrics.metrics.response_size_bytes.record(
+                        response_size,
+                        {
+                            "provider": provider,
+                            "model": model,
+                            "streaming": "false",
+                        },
+                    )
+                return JSONResponse(content=encoded_payload)
+
+        # --- Exception Handling --- Improved with structured error handling
+        except HTTPException as e_http:
+            # Log with request context
+            if e_http.status_code >= 500:
+                logger.error(
+                    f"HTTPException (Server Error): {e_http.status_code} - {e_http.detail}",
+                    extra={"request_id": request_id, "status_code": e_http.status_code},
+                    exc_info=True
+                )
+            else:
+                logger.warning(
+                    f"HTTPException (Client Error): {e_http.status_code} - {e_http.detail}",
+                    extra={"request_id": request_id, "status_code": e_http.status_code}
+                )
+            # Allow-list expected HTTP errors raised intentionally by the endpoint
+            allowed_statuses = {
+                status.HTTP_400_BAD_REQUEST,
+                status.HTTP_401_UNAUTHORIZED,
+                status.HTTP_403_FORBIDDEN,
+                status.HTTP_404_NOT_FOUND,
+                status.HTTP_409_CONFLICT,
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status.HTTP_502_BAD_GATEWAY,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                status.HTTP_504_GATEWAY_TIMEOUT,
+            }
+            if e_http.status_code in allowed_statuses:
+                # Re-raise expected/intentional HTTP errors
+                raise e_http
+            # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected internal server error occurred."
+            )
+
+        except ChatModuleException as e_chat:
+            # Our custom exceptions with structured error handling
+            e_chat.log()
+            
+            # Map to appropriate HTTP status codes
+            status_map = {
+                ChatErrorCode.AUTH_MISSING_TOKEN: status.HTTP_401_UNAUTHORIZED,
+                ChatErrorCode.AUTH_INVALID_TOKEN: status.HTTP_401_UNAUTHORIZED,
+                ChatErrorCode.AUTH_EXPIRED_TOKEN: status.HTTP_401_UNAUTHORIZED,
+                ChatErrorCode.AUTH_INSUFFICIENT_PERMISSIONS: status.HTTP_403_FORBIDDEN,
+                ChatErrorCode.VAL_INVALID_REQUEST: status.HTTP_400_BAD_REQUEST,
+                ChatErrorCode.VAL_MESSAGE_TOO_LONG: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                ChatErrorCode.VAL_FILE_TOO_LARGE: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                ChatErrorCode.DB_NOT_FOUND: status.HTTP_404_NOT_FOUND,
+                ChatErrorCode.RATE_LIMIT_EXCEEDED: status.HTTP_429_TOO_MANY_REQUESTS,
+                ChatErrorCode.EXT_PROVIDER_ERROR: status.HTTP_502_BAD_GATEWAY,
+                ChatErrorCode.INT_CONFIGURATION_ERROR: status.HTTP_503_SERVICE_UNAVAILABLE,
+            }
+            
+            http_status = status_map.get(e_chat.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Log audit event if service available
+            if audit_service and context:
+                await audit_service.log_event(
+                    event_type=AuditEventType.API_ERROR,
+                    context=context,
+                    action="chat_error",
+                    result="failure",
+                    metadata={
+                        "error_code": e_chat.code.value,
+                        "request_id": request_id
+                    }
+                )
+            
+            # Tests expect detail to be a string; expose safe user_message when available
+            safe_detail = getattr(e_chat, 'user_message', None) or str(e_chat)
+            raise HTTPException(
+                status_code=http_status,
+                detail=safe_detail
+            )
+
+        except Exception as e_chat:
+            # Preserve explicit HTTPException raised earlier
+            if isinstance(e_chat, HTTPException):
+                raise e_chat
+            # Special-case DB errors here, because a generic Exception handler precedes
+            # the DB-specific except block below. Map to precise HTTP statuses.
+            if isinstance(e_chat, (InputError, ConflictError, CharactersRAGDBError)):
+                logger.error(
+                    "Database Error: {} - {}",
+                    type(e_chat).__name__,
+                    str(e_chat),
+                    exc_info=True,
+                )
+                db_status = (
+                    status.HTTP_400_BAD_REQUEST if isinstance(e_chat, InputError) else
+                    status.HTTP_409_CONFLICT if isinstance(e_chat, ConflictError) else
+                    status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                client_detail = (
+                    str(e_chat) if db_status < 500 else "A database error occurred. Please try again later."
+                )
+                raise HTTPException(status_code=db_status, detail=client_detail)
+            # Handle legacy chat library exceptions robustly, even if class identity differs.
+            # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
+            is_chat_lib_error = (
+                hasattr(e_chat, 'status_code') or hasattr(e_chat, 'provider') or
+                type(e_chat).__name__.startswith('Chat')
+            )
+            # Log audit event for chat error
+            if audit_service and context:
+                await audit_service.log_event(
+                    event_type=AuditEventType.API_ERROR,
+                    context=context,
+                    action="chat_error",
+                    result="failure",
+                    metadata={
+                        "error_type": type(e_chat).__name__,
+                        "error_message": str(e_chat),
+                        "provider": provider,
+                        "model": model
+                    }
+                )
+            # Determine status robustly across possible module/class identity mismatches
+            if is_chat_lib_error:
+                name_lower = type(e_chat).__name__.lower()
+                if 'authentication' in name_lower:
+                    err_status = status.HTTP_401_UNAUTHORIZED
+                elif 'ratelimit' in name_lower or 'rate_limit' in name_lower:
+                    err_status = status.HTTP_429_TOO_MANY_REQUESTS
+                elif 'badrequest' in name_lower or 'bad_request' in name_lower:
+                    err_status = status.HTTP_400_BAD_REQUEST
+                elif 'configuration' in name_lower:
+                    err_status = status.HTTP_503_SERVICE_UNAVAILABLE
+                elif 'provider' in name_lower:
+                    err_status = getattr(e_chat, 'status_code', status.HTTP_502_BAD_GATEWAY) or status.HTTP_502_BAD_GATEWAY
+                else:
+                    err_status = getattr(e_chat, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR) or status.HTTP_500_INTERNAL_SERVER_ERROR
+            else:
+                err_status = status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Don't use f-string when logging errors that might contain JSON with curly braces
+            # Use lazy formatting to avoid issues with curly braces in error messages
+            # Use safe fallbacks: standard Exception doesn't have `.message` or `.provider` attributes
+            safe_message = getattr(e_chat, 'message', str(e_chat))
+            safe_provider = getattr(e_chat, 'provider', provider)
             logger.error(
-                f"HTTPException (Server Error): {e_http.status_code} - {e_http.detail}",
-                extra={"request_id": request_id, "status_code": e_http.status_code},
+                "Chat Library Error: {} - {} (Provider: {}, UpstreamStatus: {})",
+                type(e_chat).__name__,
+                repr(safe_message),
+                safe_provider,
+                getattr(e_chat, 'status_code', 'N/A'),
                 exc_info=True
             )
-        else:
-            logger.warning(
-                f"HTTPException (Client Error): {e_http.status_code} - {e_http.detail}",
-                extra={"request_id": request_id, "status_code": e_http.status_code}
-            )
-        # Allow-list expected HTTP errors raised intentionally by the endpoint
-        allowed_statuses = {
-            status.HTTP_400_BAD_REQUEST,
-            status.HTTP_401_UNAUTHORIZED,
-            status.HTTP_403_FORBIDDEN,
-            status.HTTP_404_NOT_FOUND,
-            status.HTTP_409_CONFLICT,
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            status.HTTP_429_TOO_MANY_REQUESTS,
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            status.HTTP_502_BAD_GATEWAY,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            status.HTTP_504_GATEWAY_TIMEOUT,
-        }
-        if e_http.status_code in allowed_statuses:
-            # Re-raise expected/intentional HTTP errors
-            raise e_http
-        # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected internal server error occurred."
-        )
-
-    except ChatModuleException as e_chat:
-        # Our custom exceptions with structured error handling
-        e_chat.log()
-        
-        # Map to appropriate HTTP status codes
-        status_map = {
-            ChatErrorCode.AUTH_MISSING_TOKEN: status.HTTP_401_UNAUTHORIZED,
-            ChatErrorCode.AUTH_INVALID_TOKEN: status.HTTP_401_UNAUTHORIZED,
-            ChatErrorCode.AUTH_EXPIRED_TOKEN: status.HTTP_401_UNAUTHORIZED,
-            ChatErrorCode.AUTH_INSUFFICIENT_PERMISSIONS: status.HTTP_403_FORBIDDEN,
-            ChatErrorCode.VAL_INVALID_REQUEST: status.HTTP_400_BAD_REQUEST,
-            ChatErrorCode.VAL_MESSAGE_TOO_LONG: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            ChatErrorCode.VAL_FILE_TOO_LARGE: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            ChatErrorCode.DB_NOT_FOUND: status.HTTP_404_NOT_FOUND,
-            ChatErrorCode.RATE_LIMIT_EXCEEDED: status.HTTP_429_TOO_MANY_REQUESTS,
-            ChatErrorCode.EXT_PROVIDER_ERROR: status.HTTP_502_BAD_GATEWAY,
-            ChatErrorCode.INT_CONFIGURATION_ERROR: status.HTTP_503_SERVICE_UNAVAILABLE,
-        }
-        
-        http_status = status_map.get(e_chat.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        # Log audit event if service available
-        if audit_service and context:
-            await audit_service.log_event(
-                event_type=AuditEventType.API_ERROR,
-                context=context,
-                action="chat_error",
-                result="failure",
-                metadata={
-                    "error_code": e_chat.code.value,
-                    "request_id": request_id
-                }
-            )
-        
-        # Tests expect detail to be a string; expose safe user_message when available
-        safe_detail = getattr(e_chat, 'user_message', None) or str(e_chat)
-        raise HTTPException(
-            status_code=http_status,
-            detail=safe_detail
-        )
-
-    except Exception as e_chat:
-        # Preserve explicit HTTPException raised earlier
-        if isinstance(e_chat, HTTPException):
-            raise e_chat
-        # Special-case DB errors here, because a generic Exception handler precedes
-        # the DB-specific except block below. Map to precise HTTP statuses.
-        if isinstance(e_chat, (InputError, ConflictError, CharactersRAGDBError)):
-            logger.error(
-                "Database Error: {} - {}",
-                type(e_chat).__name__,
-                str(e_chat),
-                exc_info=True,
-            )
-            db_status = (
-                status.HTTP_400_BAD_REQUEST if isinstance(e_chat, InputError) else
-                status.HTTP_409_CONFLICT if isinstance(e_chat, ConflictError) else
-                status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-            client_detail = (
-                str(e_chat) if db_status < 500 else "A database error occurred. Please try again later."
-            )
-            raise HTTPException(status_code=db_status, detail=client_detail)
-        # Handle legacy chat library exceptions robustly, even if class identity differs.
-        # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
-        is_chat_lib_error = (
-            hasattr(e_chat, 'status_code') or hasattr(e_chat, 'provider') or
-            type(e_chat).__name__.startswith('Chat')
-        )
-        # Log audit event for chat error
-        if audit_service and context:
-            await audit_service.log_event(
-                event_type=AuditEventType.API_ERROR,
-                context=context,
-                action="chat_error",
-                result="failure",
-                metadata={
-                    "error_type": type(e_chat).__name__,
-                    "error_message": str(e_chat),
-                    "provider": provider,
-                    "model": model
-                }
-            )
-        # Determine status robustly across possible module/class identity mismatches
-        if is_chat_lib_error:
-            name_lower = type(e_chat).__name__.lower()
-            if 'authentication' in name_lower:
-                err_status = status.HTTP_401_UNAUTHORIZED
-            elif 'ratelimit' in name_lower or 'rate_limit' in name_lower:
-                err_status = status.HTTP_429_TOO_MANY_REQUESTS
-            elif 'badrequest' in name_lower or 'bad_request' in name_lower:
-                err_status = status.HTTP_400_BAD_REQUEST
-            elif 'configuration' in name_lower:
-                err_status = status.HTTP_503_SERVICE_UNAVAILABLE
-            elif 'provider' in name_lower:
-                err_status = getattr(e_chat, 'status_code', status.HTTP_502_BAD_GATEWAY) or status.HTTP_502_BAD_GATEWAY
+            # Standardize error messages - never expose internal details for 5xx errors
+            if err_status < 500:
+                # Client errors can have more detail
+                client_detail = getattr(e_chat, 'message', str(e_chat))
             else:
-                err_status = getattr(e_chat, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR) or status.HTTP_500_INTERNAL_SERVER_ERROR
-        else:
-            err_status = status.HTTP_500_INTERNAL_SERVER_ERROR
-        # Don't use f-string when logging errors that might contain JSON with curly braces
-        # Use lazy formatting to avoid issues with curly braces in error messages
-        # Use safe fallbacks: standard Exception doesn't have `.message` or `.provider` attributes
-        safe_message = getattr(e_chat, 'message', str(e_chat))
-        safe_provider = getattr(e_chat, 'provider', provider)
-        logger.error(
-            "Chat Library Error: {} - {} (Provider: {}, UpstreamStatus: {})",
-            type(e_chat).__name__,
-            repr(safe_message),
-            safe_provider,
-            getattr(e_chat, 'status_code', 'N/A'),
-            exc_info=True
-        )
-        # Standardize error messages - never expose internal details for 5xx errors
-        if err_status < 500:
-            # Client errors can have more detail
-            client_detail = getattr(e_chat, 'message', str(e_chat))
-        else:
-            # Server errors should be generic
-            if err_status == 502:
-                client_detail = "The chat service provider is currently unavailable."
-            elif err_status == 503:
-                client_detail = "The chat service is temporarily unavailable."
-            elif err_status == 504:
-                client_detail = "The chat service request timed out."
-            elif err_status == 500 and not is_chat_lib_error:
-                # For unexpected non-library errors, include the 'unexpected' variant to match tests
-                client_detail = "An unexpected internal server error occurred."
-            else:
-                client_detail = "An internal server error occurred."
-        raise HTTPException(status_code=err_status, detail=client_detail)
+                # Server errors should be generic
+                if err_status == 502:
+                    client_detail = "The chat service provider is currently unavailable."
+                elif err_status == 503:
+                    client_detail = "The chat service is temporarily unavailable."
+                elif err_status == 504:
+                    client_detail = "The chat service request timed out."
+                elif err_status == 500 and not is_chat_lib_error:
+                    # For unexpected non-library errors, include the 'unexpected' variant to match tests
+                    client_detail = "An unexpected internal server error occurred."
+                else:
+                    client_detail = "An internal server error occurred."
+            raise HTTPException(status_code=err_status, detail=client_detail)
 
-    
-
-    # Preserve intentionally raised HTTP errors (e.g., 400/401/429/503) from earlier logic
-    except HTTPException as http_exc:
-        raise http_exc
-
-    except Exception as e_final:
-        # Log the full traceback for debugging
-        import traceback
-        logger.error(f"Unexpected error in chat completion: {type(e_final).__name__}: {str(e_final)}")
-        logger.error(f"Full traceback:\n{traceback.format_exc()}")
         
-        # Create a structured error for unexpected exceptions
-        unexpected_error = ChatModuleException(
-            code=ChatErrorCode.INT_UNEXPECTED_ERROR,
-            message=f"Unexpected error in chat completion endpoint: {str(e_final)}",
-            details={
-                "error_type": type(e_final).__name__,
-                "error_str": str(e_final),
-                "request_id": request_id if 'request_id' in locals() else None,
-                "conversation_id": final_conversation_id if 'final_conversation_id' in locals() else None
-            },
-            cause=e_final,
-            user_message="An unexpected error occurred. Please try again or contact support if the issue persists."
-        )
-        unexpected_error.log(level="critical")
-        
-        # Send alert for critical errors
-        if hasattr(e_final, '__module__') and 'sqlite' not in e_final.__module__:
-            # Don't alert for database errors, they're handled separately
-            logger.critical(f"ALERT: Critical error in chat module - Request ID: {request_id if 'request_id' in locals() else 'Not set'}")
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected internal server error occurred."
-        )
+
+        # Preserve intentionally raised HTTP errors (e.g., 400/401/429/503) from earlier logic
+        except HTTPException as http_exc:
+            raise http_exc
+
+        except Exception as e_final:
+            # Log the full traceback for debugging
+            import traceback
+            logger.error(f"Unexpected error in chat completion: {type(e_final).__name__}: {str(e_final)}")
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            
+            # Create a structured error for unexpected exceptions
+            unexpected_error = ChatModuleException(
+                code=ChatErrorCode.INT_UNEXPECTED_ERROR,
+                message=f"Unexpected error in chat completion endpoint: {str(e_final)}",
+                details={
+                    "error_type": type(e_final).__name__,
+                    "error_str": str(e_final),
+                    "request_id": request_id if 'request_id' in locals() else None,
+                    "conversation_id": final_conversation_id if 'final_conversation_id' in locals() else None
+                },
+                cause=e_final,
+                user_message="An unexpected error occurred. Please try again or contact support if the issue persists."
+            )
+            unexpected_error.log(level="critical")
+            
+            # Send alert for critical errors
+            if hasattr(e_final, '__module__') and 'sqlite' not in e_final.__module__:
+                # Don't alert for database errors, they're handled separately
+                logger.critical(f"ALERT: Critical error in chat module - Request ID: {request_id if 'request_id' in locals() else 'Not set'}")
+            
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected internal server error occurred."
+            )
 
 
+    finally:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        await _track_request_cm.__aexit__(exc_type, exc_value, exc_tb)
 # ---------------------------------------------------------------------------
 # Chat Dictionary Endpoints
 # ---------------------------------------------------------------------------
@@ -1508,7 +1529,7 @@ async def create_chat_dictionary(
 ) -> ChatDictionaryResponse:
     """
     Create a new chat dictionary for pattern-based text replacements.
-    
+
     Dictionaries allow you to define patterns (literal or regex) that will be
     automatically replaced in chat messages.
     """
@@ -1699,7 +1720,7 @@ async def add_dictionary_entry(
 ) -> DictionaryEntryResponse:
     """
     Add a new entry to a dictionary.
-    
+
     The key can be:
     - A literal string: "hello"
     - A regex pattern: "/hel+o/i" (with optional flags: i=ignore case, m=multiline, s=dotall)
@@ -1894,7 +1915,7 @@ async def process_text_with_dictionaries(
 ) -> ProcessTextResponse:
     """
     Process text through active dictionaries to apply replacements.
-    
+
     This endpoint applies pattern-based replacements defined in the user's
     active dictionaries to the provided text.
     """
@@ -1955,12 +1976,12 @@ async def import_dictionary(
 ) -> ImportDictionaryResponse:
     """
     Import a dictionary from markdown format.
-    
+
     Format example:
     ```
     key: value
     /regex/i: replacement
-    
+
     ## Group Name
     grouped_key: grouped_value
     ```

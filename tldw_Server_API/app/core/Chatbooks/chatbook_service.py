@@ -26,7 +26,7 @@ import asyncio
 import aiofiles
 import aiofiles.os
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Set, Union
 from typing import Dict as _Dict
@@ -259,6 +259,47 @@ class ChatbookService:
         if isinstance(value, datetime):
             return value.isoformat()
         return value
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> Optional[datetime]:
+        """Robust timestamp parser for database rows."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, (int, float)):
+            try:
+                # Treat numeric input as Unix timestamp (UTC)
+                return datetime.utcfromtimestamp(value)
+            except Exception:
+                return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            # Support trailing Z (UTC)
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(text)
+                return ChatbookService._normalize_timestamp_to_naive(parsed)
+            except ValueError:
+                pass
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(text, fmt)
+                except ValueError:
+                    continue
+        return None
+
+    @staticmethod
+    def _normalize_timestamp_to_naive(value: Optional[datetime]) -> Optional[datetime]:
+        """Convert aware timestamps to naive UTC for consistent downstream handling."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
 
     def _normalize_prompt_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize prompt record for JSON export."""
@@ -821,6 +862,9 @@ class ChatbookService:
         Returns:
             Tuple of (success, message, file_path)
         """
+        work_dir: Optional[Path] = None
+        output_path: Optional[Path] = None
+        success = False
         try:
             # Create working directory in secure temp location
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -936,10 +980,8 @@ class ChatbookService:
             
             # Update manifest with file size
             manifest.total_size_bytes = output_path.stat().st_size
-            
-            # Cleanup working directory asynchronously
-            await asyncio.to_thread(shutil.rmtree, work_dir)
-            
+            success = True
+
             # Store file path in job record (will be retrieved by job_id)
             # No direct filename access for security
             download_url = None  # Will be generated from job_id
@@ -948,7 +990,18 @@ class ChatbookService:
             
         except Exception as e:
             logger.error(f"Error creating chatbook: {e}")
+            if output_path and output_path.exists():
+                try:
+                    await asyncio.to_thread(output_path.unlink)
+                except Exception as cleanup_err:
+                    logger.debug(f"Failed to remove partial archive {output_path}: {cleanup_err}")
             return False, f"Error creating chatbook: {str(e)}", None
+        finally:
+            if work_dir and work_dir.exists():
+                try:
+                    await asyncio.to_thread(shutil.rmtree, work_dir)
+                except Exception as cleanup_err:
+                    logger.debug(f"Failed to remove work directory {work_dir}: {cleanup_err}")
     
     async def _create_chatbook_job_async(
         self,
@@ -1168,6 +1221,7 @@ class ChatbookService:
         """
         Synchronously import a chatbook.
         """
+        extract_dir: Optional[Path] = None
         try:
             # Validate file first via centralized validator
             from .chatbook_validators import ChatbookValidator
@@ -1196,7 +1250,6 @@ class ChatbookService:
                     # Normalize and validate the path
                     normalized_path = os.path.normpath(member)
                     if os.path.isabs(normalized_path) or ".." in normalized_path or normalized_path.startswith("/"):
-                        shutil.rmtree(extract_dir, ignore_errors=True)
                         return False, f"Unsafe path in archive: {member}", None
                     
                     # Additional check: ensure the path stays within extract_dir
@@ -1204,7 +1257,6 @@ class ChatbookService:
                     real_extract_dir = os.path.realpath(extract_dir)
                     real_target = os.path.realpath(os.path.dirname(target_path))
                     if not real_target.startswith(real_extract_dir):
-                        shutil.rmtree(extract_dir, ignore_errors=True)
                         return False, f"Path traversal attempt detected: {member}", None
                     
                     # Extract individual file safely
@@ -1213,7 +1265,6 @@ class ChatbookService:
             # Load manifest
             manifest_path = extract_dir / "manifest.json"
             if not manifest_path.exists():
-                shutil.rmtree(extract_dir)
                 return False, "Error: Invalid chatbook - manifest.json not found", None
             
             with open(manifest_path, 'r', encoding='utf-8') as f:
@@ -1288,9 +1339,6 @@ class ChatbookService:
                     import_status
                 )
             
-            # Cleanup extracted contents
-            shutil.rmtree(extract_dir)
-            
             # Note: We do NOT delete the original import file - the caller owns it
             
             # Build result message
@@ -1314,6 +1362,9 @@ class ChatbookService:
         except Exception as e:
             logger.error(f"Error importing chatbook: {e}")
             return False, f"Error importing chatbook: {str(e)}", None
+        finally:
+            if extract_dir and extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
     
     async def _import_chatbook_async(
         self,
@@ -2496,6 +2547,7 @@ class ChatbookService:
                 
                 if new_conv_id:
                     # Import messages
+                    base_path = extract_dir.resolve()
                     for msg in conv_data.get('messages', []):
                         msg_dict = {
                             'conversation_id': new_conv_id,
@@ -2503,6 +2555,40 @@ class ChatbookService:
                             'content': msg['content'],
                             'timestamp': msg.get('timestamp')
                         }
+
+                        attachments = msg.get('attachments') or []
+                        images_payload: List[Dict[str, Any]] = []
+                        for attachment in attachments:
+                            if not isinstance(attachment, dict):
+                                continue
+                            if str(attachment.get("type", "")).lower() != "image":
+                                continue
+                            rel_path = attachment.get("file_path")
+                            if not rel_path:
+                                continue
+                            try:
+                                attachment_rel = Path(rel_path)
+                            except Exception:
+                                continue
+                            candidate_path = (base_path / attachment_rel).resolve()
+                            try:
+                                candidate_path.relative_to(base_path)
+                            except Exception:
+                                status.warnings.append(f"Skipped attachment outside extract dir: {rel_path}")
+                                continue
+                            try:
+                                image_bytes = candidate_path.read_bytes()
+                            except Exception as read_exc:
+                                status.warnings.append(f"Failed to read attachment {rel_path}: {read_exc}")
+                                continue
+                            mime_type = attachment.get("mime_type") or "application/octet-stream"
+                            images_payload.append({
+                                "image_data": image_bytes,
+                                "image_mime_type": mime_type
+                            })
+                        if images_payload:
+                            msg_dict['images'] = images_payload
+
                         self.db.add_message(msg_dict)
                     
                     status.successful_items += 1
@@ -2843,17 +2929,6 @@ class ChatbookService:
                     'expires_at': row[14] if len(row) > 14 else None
                 }
             
-            # Parse timestamps if they're strings
-            def parse_timestamp(ts):
-                if ts is None:
-                    return None
-                if isinstance(ts, datetime):
-                    return ts
-                if 'T' in ts:  # ISO format
-                    return datetime.fromisoformat(ts)
-                else:  # SQLite format
-                    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
-            
             # Parse metadata if it's a JSON string
             metadata = {}
             if 'metadata' in row and row['metadata']:
@@ -2871,16 +2946,16 @@ class ChatbookService:
                 status=ExportStatus(row['status']),
                 chatbook_name=row['chatbook_name'],
                 output_path=row['output_path'],
-                created_at=parse_timestamp(row['created_at']),
-                started_at=parse_timestamp(row['started_at']),
-                completed_at=parse_timestamp(row['completed_at']),
+                created_at=self._parse_timestamp(row['created_at']),
+                started_at=self._parse_timestamp(row['started_at']),
+                completed_at=self._parse_timestamp(row['completed_at']),
                 error_message=row['error_message'],
                 progress_percentage=row['progress_percentage'] or 0,
                 total_items=row['total_items'] or 0,
                 processed_items=row['processed_items'] or 0,
                 file_size_bytes=row['file_size_bytes'],
                 download_url=row.get('download_url'),
-                expires_at=parse_timestamp(row.get('expires_at')),
+                expires_at=self._parse_timestamp(row.get('expires_at')),
                 metadata=metadata
             )
         except Exception as e:
@@ -2954,25 +3029,14 @@ class ChatbookService:
                     'warnings': row[15] if len(row) > 15 else '[]'
                 }
             
-            # Parse timestamps if they're strings
-            def parse_timestamp(ts):
-                if ts is None:
-                    return None
-                if isinstance(ts, datetime):
-                    return ts
-                if 'T' in ts:  # ISO format
-                    return datetime.fromisoformat(ts)
-                else:  # SQLite format
-                    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
-            
             return ImportJob(
                 job_id=row['job_id'],
                 user_id=row['user_id'],
                 status=ImportStatus(row['status']),
                 chatbook_path=row['chatbook_path'],
-                created_at=parse_timestamp(row['created_at']),
-                started_at=parse_timestamp(row['started_at']),
-                completed_at=parse_timestamp(row['completed_at']),
+                created_at=self._parse_timestamp(row['created_at']),
+                started_at=self._parse_timestamp(row['started_at']),
+                completed_at=self._parse_timestamp(row['completed_at']),
                 error_message=row['error_message'],
                 progress_percentage=row['progress_percentage'] or 0,
                 total_items=row['total_items'] or 0,
@@ -3009,7 +3073,8 @@ class ChatbookService:
                     "SELECT id FROM world_books WHERE name = ?",
                     (new_name,)
                 )
-                if not result:
+                rows = self._fetch_results(result) if result is not None else []
+                if not rows:
                     return new_name
             elif item_type == "dictionary":
                 # Check in dictionaries table
@@ -3017,7 +3082,8 @@ class ChatbookService:
                     "SELECT id FROM chat_dictionaries WHERE name = ?",
                     (new_name,)
                 )
-                if not result:
+                rows = self._fetch_results(result) if result is not None else []
+                if not rows:
                     return new_name
             
             counter += 1

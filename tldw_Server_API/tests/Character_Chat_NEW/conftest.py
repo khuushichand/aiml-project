@@ -257,7 +257,7 @@ def mock_character_db():
     db.initialize_db = Mock(return_value=None)
     
     # Mock character methods
-    db.add_character_card = Mock(return_value=1)  # This is what Character_Chat_Lib calls
+    db.add_character_card = Mock(return_value=1)  # Matches facade behaviour
     db.create_character_card = Mock(return_value=1)  # Keep for direct tests
     db.get_character_card = Mock(return_value={  # Some tests expect this generic method
         'id': 1,

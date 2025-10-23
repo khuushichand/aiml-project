@@ -389,63 +389,185 @@ def load_chat_history_from_file_and_save_to_db(
     character_id: int,
     file_path: Optional[str] = None,
     file_content: Optional[str] = None,
-    title: Optional[str] = None
-) -> Tuple[bool, str, Optional[str]]:
-    """Load chat history from a file and save to database.
-    
+    title: Optional[str] = None,
+    user_name_for_placeholders: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[int]]:
+    """Load chat history from a file and persist it for the given character.
+
+    Historically this returned ``(conversation_id, character_id)``; the behaviour
+    is preserved for compatibility with existing callers and tests.
+
     Args:
-        db: Database instance
-        character_id: The character this chat belongs to
-        file_path: Path to the chat history file
-        file_content: Chat history content (if not using file_path)
-        title: Optional title for the conversation
-        
+        db: Database instance.
+        character_id: Identifier for the character that owns the chat history.
+        file_path: Optional filesystem path to the chat export.
+        file_content: Optional in-memory chat export (JSON/YAML/plain text).
+        title: Optional title to apply to the created conversation; if omitted a
+            timestamped title is generated.
+        user_name_for_placeholders: Optional user name used when replacing
+            placeholder tokens.
+
     Returns:
-        Tuple of (success, message, conversation_id)
+        Tuple of (conversation_id, character_id) on success, otherwise (None, None).
     """
     try:
-        # Load content
-        if file_content:
+        # Load content from path or provided string
+        if file_content is not None:
             content = file_content
         elif file_path:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            with open(file_path, "r", encoding="utf-8") as file_obj:
+                content = file_obj.read()
         else:
-            return False, "No file path or content provided", None
-        
-        # Try to parse as JSON
+            logger.error("No chat history source provided (file_path or file_content required).")
+            return None, None
+
+        # Parse content – prefer JSON, fall back to YAML, finally treat as plain text
+        chat_data: Dict[str, Any]
         try:
             chat_data = json.loads(content)
         except json.JSONDecodeError:
-            # Try other formats (YAML, plain text, etc.)
             try:
-                chat_data = yaml.safe_load(content)
-            except:
-                # Treat as plain text conversation
+                chat_data = yaml.safe_load(content) or {}
+            except Exception:
                 chat_data = {"messages": [{"role": "user", "content": content}]}
-        
-        # Create conversation
+
+        # Resolve placeholders and conversation metadata
+        inferred_user_name = user_name_for_placeholders or chat_data.get("user_name")
+        inferred_char_name = chat_data.get("char_name")
+
         if not title:
             title = f"Imported Chat - {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        
+
         from .character_chat import start_new_chat_session, post_message_to_conversation
-        
-        conversation_id = start_new_chat_session(db, character_id, title)
+        from .character_utils import replace_placeholders
+
+        (
+            conversation_id,
+            char_data,
+            _initial_ui_history,
+            _image,
+        ) = start_new_chat_session(
+            db,
+            character_id,
+            inferred_user_name,
+            custom_title=title,
+        )
+
         if not conversation_id:
-            return False, "Failed to create conversation", None
-        
-        # Add messages
-        messages = chat_data.get('messages', [])
-        if isinstance(messages, list):
-            for msg in messages:
-                if isinstance(msg, dict):
-                    role = msg.get('role', 'user')
-                    content = msg.get('content', '')
-                    if content:
-                        post_message_to_conversation(db, conversation_id, role, content)
-        
-        return True, f"Successfully imported chat history", conversation_id
-    
-    except Exception as e:
-        logger.error(f"Error loading chat history: {e}", exc_info=True)
-        return False, f"Error: {str(e)}", None
+            logger.error("Failed to create conversation while importing chat history.")
+            return None, None
+
+        character_name = (char_data or {}).get("name") or inferred_char_name or "Character"
+        user_name = inferred_user_name or "User"
+
+        # New conversations created via the facade may contain an auto-generated
+        # greeting. Remove any pre-seeded messages so the imported history is the
+        # sole content.
+        try:
+            seeded_messages = db.get_messages_for_conversation(conversation_id, limit=50)
+        except CharactersRAGDBError as fetch_exc:
+            logger.debug(
+                "Unable to inspect seeded messages for conversation %s: %s",
+                conversation_id,
+                fetch_exc,
+            )
+            seeded_messages = []
+
+        for seeded_msg in seeded_messages:
+            try:
+                db.soft_delete_message(seeded_msg["id"], seeded_msg.get("version", 1))
+            except (CharactersRAGDBError, ConflictError) as delete_exc:
+                logger.debug(
+                    "Non-fatal: failed to remove seeded message %s from conversation %s during import: %s",
+                    seeded_msg.get("id"),
+                    conversation_id,
+                    delete_exc,
+                )
+
+        messages_added = 0
+
+        def _normalise_role_to_is_user(role_value: Any) -> bool:
+            if role_value is None:
+                return True
+            role_text = str(role_value).strip()
+            if not role_text:
+                return True
+            lowered = role_text.lower()
+            if lowered in {"user", "human", "speaker", "speaker1", user_name.lower()}:
+                return True
+            if lowered in {
+                "assistant",
+                "bot",
+                "ai",
+                "character",
+                "npc",
+                "speaker2",
+                "system",
+                character_name.lower(),
+            }:
+                return False
+            # Default: treat unknown roles as character utterances to keep chronology
+            return False
+
+        def _add_message_to_conversation(message_text: str, is_user_message: bool) -> None:
+            nonlocal messages_added
+            cleaned = replace_placeholders(message_text, character_name, user_name)
+            post_message_to_conversation(
+                db=db,
+                conversation_id=conversation_id,
+                character_name=character_name,
+                message_content=cleaned,
+                is_user_message=is_user_message,
+            )
+            messages_added += 1
+
+        # Helper to process pair-based history entries (legacy export format)
+        def _process_pair_history(entries: List[Any]) -> None:
+            for idx, entry in enumerate(entries):
+                if not isinstance(entry, (list, tuple)):
+                    logger.warning("Skipping malformed message pair at index %s: not a list", idx)
+                    continue
+
+                if len(entry) > 2:
+                    logger.warning(
+                        "Skipping malformed message pair at index %s: expected at most 2 elements, got %s",
+                        idx,
+                        len(entry),
+                    )
+                    continue
+
+                user_chunk = entry[0] if len(entry) > 0 and isinstance(entry[0], str) else None
+                char_chunk = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else None
+
+                if user_chunk:
+                    _add_message_to_conversation(user_chunk, True)
+                if char_chunk:
+                    _add_message_to_conversation(char_chunk, False)
+                if not user_chunk and not char_chunk:
+                    logger.warning("Skipping malformed message pair at index %s: empty or non-string values", idx)
+
+        history_node = chat_data.get("history")
+        if isinstance(history_node, dict) and isinstance(history_node.get("internal"), list):
+            _process_pair_history(history_node["internal"])
+        else:
+            messages = chat_data.get("messages", [])
+            if isinstance(messages, list):
+                for entry in messages:
+                    if not isinstance(entry, dict):
+                        logger.warning("Skipping malformed message entry (expected dict): %s", entry)
+                        continue
+                    content = entry.get("content")
+                    if not isinstance(content, str) or not content.strip():
+                        logger.warning("Skipping message with empty or invalid content: %s", entry)
+                        continue
+                    is_user = _normalise_role_to_is_user(entry.get("role"))
+                    _add_message_to_conversation(content, is_user)
+
+        if messages_added == 0:
+            logger.info("Chat history import completed but contained no valid messages.")
+
+        return conversation_id, character_id
+
+    except Exception as exc:
+        logger.error("Error loading chat history: %s", exc, exc_info=True)
+        return None, None

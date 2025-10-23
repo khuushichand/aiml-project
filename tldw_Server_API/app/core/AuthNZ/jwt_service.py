@@ -658,6 +658,10 @@ class JWTService:
                             # Schedule blacklist in the current loop to avoid blocking
                             try:
                                 bl = _get_bl()
+                                try:
+                                    bl.hint_blacklisted(old_jti, exp_dt)
+                                except Exception as _hint_e:
+                                    logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                                 loop.create_task(bl.revoke_token(
                                     jti=old_jti,
                                     expires_at=exp_dt,
@@ -671,6 +675,10 @@ class JWTService:
                                 logger.debug(f"Refresh rotation: failed to schedule blacklist task: {_sched_e}")
                         else:
                             bl = _get_bl()
+                            try:
+                                bl.hint_blacklisted(old_jti, exp_dt)
+                            except Exception as _hint_e:
+                                logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                             # Run async revoke in a temporary loop
                             _asyncio.run(bl.revoke_token(
                                 jti=old_jti,

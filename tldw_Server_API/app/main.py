@@ -697,14 +697,29 @@ async def lifespan(app: FastAPI):
         if config and config.has_section('Chat-Module'):
             chat_config = dict(config.items('Chat-Module'))
 
-        request_queue = initialize_request_queue(
-            max_queue_size=int(chat_config.get('max_queue_size', 100)),
-            max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
-            global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
-            per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
-        )
-        await request_queue.start(num_workers=4)
-        logger.info("App Startup: Request queue initialized with 4 workers")
+        queued_execution_enabled = False
+        try:
+            env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
+            if env_queued is not None:
+                queued_execution_enabled = env_queued.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                queued_execution_enabled = (
+                    str(chat_config.get('queued_execution', 'False')).strip().lower() in {"1", "true", "yes", "on"}
+                )
+        except Exception:
+            queued_execution_enabled = False
+
+        if queued_execution_enabled:
+            request_queue = initialize_request_queue(
+                max_queue_size=int(chat_config.get('max_queue_size', 100)),
+                max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
+                global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
+                per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
+            )
+            await request_queue.start(num_workers=4)
+            logger.info("App Startup: Request queue initialized with 4 workers")
+        else:
+            logger.info("App Startup: Request queue disabled (QUEUED_EXECUTION is off)")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize request queue: {e}")
 

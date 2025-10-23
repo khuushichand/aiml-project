@@ -17,6 +17,7 @@ from fastapi import HTTPException
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     ConnectionPoolExhaustedError,
@@ -137,10 +138,10 @@ class DatabasePool:
         """Create SQLite schema if it doesn't exist"""
         schema_file = Path(__file__).parent.parent.parent.parent / "Databases" / "SQLite" / "Schema" / "sqlite_users.sql"
         
-        if not schema_file.exists():
+        schema_available = schema_file.exists()
+        if not schema_available:
             logger.warning(f"SQLite schema file not found: {schema_file}")
-            return
-        
+
         try:
             async with aiosqlite.connect(self.db_path) as conn:
                 # Enable WAL mode for better concurrency
@@ -153,7 +154,7 @@ class DatabasePool:
                 )
                 exists = await cursor.fetchone()
                 
-                if not exists:
+                if not exists and schema_available:
                     logger.info("Creating SQLite schema...")
                     schema_sql = schema_file.read_text()
                     await conn.executescript(schema_sql)
@@ -161,6 +162,12 @@ class DatabasePool:
                     logger.info("SQLite schema created successfully")
                 else:
                     logger.debug("SQLite schema already exists")
+
+            # Ensure AuthNZ migrations are up to date (handles legacy columns)
+            try:
+                await asyncio.to_thread(ensure_authnz_tables, Path(self.db_path))
+            except Exception as migration_error:
+                logger.debug(f"SQLite migration harmonization skipped: {migration_error}")
                     
         except Exception as e:
             logger.error(f"Failed to create SQLite schema: {e}")

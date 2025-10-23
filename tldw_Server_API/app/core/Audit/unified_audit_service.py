@@ -1,8 +1,8 @@
 """
 Unified Audit Service for tldw_server
 
-This module consolidates all audit logging functionality into a single, 
-consistent service that handles authentication, RAG, evaluations, and 
+This module consolidates all audit logging functionality into a single,
+consistent service that handles authentication, RAG, evaluations, and
 general audit events.
 
 Features:
@@ -16,23 +16,24 @@ Features:
 """
 
 import asyncio
-import os
 import csv
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import date, datetime, time as time_t, timedelta, timezone
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 import aiosqlite
-from typing import AsyncGenerator
+
 from loguru import logger
 try:
     # Prefer dict-like project settings if available
@@ -45,6 +46,61 @@ try:
     HIGH_RISK_SCORE = int(os.getenv("AUDIT_HIGH_RISK_SCORE", "70"))
 except Exception:
     HIGH_RISK_SCORE = 70
+
+
+def _normalize_json_value(value: Any) -> Any:
+    """Normalize arbitrary objects so they can be serialized as JSON."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, time_t):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+
+    if is_dataclass(value):
+        try:
+            return _normalize_json_value(asdict(value))
+        except Exception:
+            pass
+
+    if isinstance(value, dict):
+        return {
+            str(k): _normalize_json_value(v)
+            for k, v in value.items()
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_json_value(v) for v in list(value)]
+
+    if hasattr(value, "model_dump"):
+        try:
+            return _normalize_json_value(value.model_dump())
+        except Exception:
+            pass
+
+    if hasattr(value, "dict"):
+        try:
+            return _normalize_json_value(value.dict())
+        except Exception:
+            pass
+
+    try:
+        return json.loads(value)
+    except Exception:
+        pass
+
+    return str(value)
 
 
 # ============================================================================
@@ -187,9 +243,12 @@ class AuditEvent:
     
     # Additional metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage"""
+        normalized_metadata = _normalize_json_value(self.metadata)
+        normalized_flags = _normalize_json_value(self.compliance_flags)
+
         data = {
             "event_id": self.event_id,
             "timestamp": self.timestamp.isoformat(),
@@ -207,15 +266,18 @@ class AuditEvent:
             "result_count": self.result_count,
             "risk_score": self.risk_score,
             "pii_detected": self.pii_detected,
-            "compliance_flags": json.dumps(self.compliance_flags),
-            "metadata": json.dumps(self.metadata),
+            "compliance_flags": json.dumps(normalized_flags, ensure_ascii=False),
+            "metadata": json.dumps(normalized_metadata, ensure_ascii=False),
         }
-        
+
         # Add context fields
         context_dict = asdict(self.context)
         for key, value in context_dict.items():
-            data[f"context_{key}"] = value
-        
+            if value is None or isinstance(value, str):
+                data[f"context_{key}"] = value
+            else:
+                data[f"context_{key}"] = str(value)
+
         return data
 
 
@@ -421,7 +483,29 @@ class RiskScorer:
             score += 5
         
         # Multiple consecutive failures (from metadata)
-        if event.metadata.get("consecutive_failures", 0) > 3:
+        metadata: Dict[str, Any] = {}
+        raw_metadata = event.metadata
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+        elif isinstance(raw_metadata, str):
+            try:
+                parsed = json.loads(raw_metadata)
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except Exception:
+                metadata = {}
+        elif isinstance(raw_metadata, (list, tuple)):
+            try:
+                metadata = dict(raw_metadata)  # type: ignore[arg-type]
+            except Exception:
+                metadata = {}
+        else:
+            try:
+                metadata = dict(raw_metadata)  # type: ignore[arg-type]
+            except Exception:
+                metadata = {}
+
+        if metadata.get("consecutive_failures", 0) > 3:
             score += 20
         
         # Large data operations
@@ -483,6 +567,7 @@ class UnifiedAuditService:
         self.buffer_size = buffer_size
         self.flush_interval = flush_interval
         self.max_db_mb = max_db_mb
+        self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Detect test environments to avoid spawning busy background loops when
         # tests monkeypatch asyncio.sleep globally (common in our Workflows tests).
@@ -549,6 +634,7 @@ class UnifiedAuditService:
     
     async def initialize(self):
         """Initialize database and start background tasks"""
+        self._owner_loop = asyncio.get_running_loop()
         await self._init_database()
         # Open persistent connection for reuse
         await self._ensure_db_pool()
@@ -678,6 +764,9 @@ class UnifiedAuditService:
     
     async def stop(self):
         """Stop background tasks and flush remaining events"""
+        current_loop = asyncio.get_running_loop()
+        if self._owner_loop and current_loop is not self._owner_loop:
+            raise RuntimeError("UnifiedAuditService.stop must run on the owner event loop")
         # Cancel background tasks
         if self._flush_task:
             self._flush_task.cancel()
@@ -707,6 +796,11 @@ class UnifiedAuditService:
         if self._db_pool:
             await self._db_pool.close()
             self._db_pool = None
+        self._owner_loop = None
+
+    @property
+    def owner_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        return self._owner_loop
     
     async def _flush_loop(self):
         """Background task to periodically flush events"""
@@ -786,9 +880,10 @@ class UnifiedAuditService:
         # PII detection
         if self.enable_pii_detection:
             # Detect/redact in metadata
-            if metadata:
+            if metadata is not None:
                 try:
-                    metadata_str = json.dumps(metadata)
+                    normalized_for_detection = _normalize_json_value(metadata)
+                    metadata_str = json.dumps(normalized_for_detection, ensure_ascii=False)
                 except Exception:
                     metadata_str = str(metadata)
                 found_pii = self.pii_detector.detect(metadata_str)

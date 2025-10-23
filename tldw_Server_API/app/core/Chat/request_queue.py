@@ -196,9 +196,7 @@ class RequestQueue:
         # If a processor is provided, execute it; otherwise perform placeholder work
         start_ts = time.time()
         if request.processor is None:
-            logger.debug(f"Processing request {request.request_id} (no processor; placeholder)")
-            processing_time = 0.001 * request.estimated_tokens
-            await asyncio.sleep(processing_time)
+            logger.debug(f"Processing request {request.request_id} (no processor; admission-only)")
             duration = time.time() - start_ts
             # record activity
             self._recent_activity.append({

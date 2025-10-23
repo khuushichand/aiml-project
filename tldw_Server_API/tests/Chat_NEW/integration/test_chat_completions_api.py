@@ -5,8 +5,10 @@ Tests the full request/response flow with real database and minimal mocking.
 Only external LLM APIs are mocked to avoid actual API calls.
 """
 
-import pytest
+import asyncio
 import os
+
+import pytest
 from fastapi import status
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
@@ -308,6 +310,115 @@ class TestErrorHandling:
             assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
             data = response.json()
             assert "error" in data or "detail" in data
+
+# ========================================================================
+# Request Queue Admission (queued execution disabled)
+# ========================================================================
+
+
+class _BaseQueueStub:
+    """Common helpers for queue stubs used in integration tests."""
+
+    def __init__(self):
+        self.enqueue_calls = 0
+
+    def is_running(self) -> bool:
+        return True
+
+
+class _InactiveQueueStub(_BaseQueueStub):
+    def __init__(self):
+        super().__init__()
+        self._running = False
+
+    def is_running(self) -> bool:
+        return False
+
+    async def enqueue(self, *args, **kwargs):
+        raise AssertionError("enqueue should not be called when queue is inactive")
+
+
+class _ActiveQueueStub(_BaseQueueStub):
+    def __init__(self, *, fail_with: Exception | None = None):
+        super().__init__()
+        self._running = True
+        self._fail_with = fail_with
+
+    async def enqueue(self, *args, **kwargs):
+        self.enqueue_calls += 1
+        if self._fail_with is not None:
+            raise self._fail_with
+
+        loop = asyncio.get_running_loop()
+        admission_future: asyncio.Future[None] = loop.create_future()
+        admission_future.set_result(None)
+        return admission_future
+
+
+class TestRequestQueueAdmission:
+    """Validate queue gating behaviour when queued execution is disabled."""
+
+    @pytest.mark.integration
+    def test_inactive_queue_is_bypassed(self, test_client, auth_headers, monkeypatch):
+        """Requests skip enqueue when queue reports inactive state."""
+        from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
+
+        queue_stub = _InactiveQueueStub()
+        monkeypatch.setattr(chat_endpoint, "get_request_queue", lambda: queue_stub)
+        monkeypatch.setattr(chat_endpoint, "QUEUED_EXECUTION", False, raising=False)
+
+        response = test_client.post(
+            "/api/v1/chat/completions",
+            json={
+                "model": "gpt-5-mini",
+                "messages": [{"role": "user", "content": "Ensure inactive queue is ignored"}],
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert queue_stub.enqueue_calls == 0
+
+    @pytest.mark.integration
+    def test_active_queue_admission(self, test_client, auth_headers, monkeypatch):
+        """Active queue gates admission without delaying the response."""
+        from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
+
+        queue_stub = _ActiveQueueStub()
+        monkeypatch.setattr(chat_endpoint, "get_request_queue", lambda: queue_stub)
+        monkeypatch.setattr(chat_endpoint, "QUEUED_EXECUTION", False, raising=False)
+
+        response = test_client.post(
+            "/api/v1/chat/completions",
+            json={
+                "model": "gpt-5-mini",
+                "messages": [{"role": "user", "content": "Trigger queue gating"}],
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert queue_stub.enqueue_calls == 1
+
+    @pytest.mark.integration
+    def test_queue_admission_failure_returns_503(self, test_client, auth_headers, monkeypatch):
+        """Unexpected queue failures surface as 503 to the client."""
+        from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
+
+        queue_stub = _ActiveQueueStub(fail_with=RuntimeError("boom"))
+        monkeypatch.setattr(chat_endpoint, "get_request_queue", lambda: queue_stub)
+        monkeypatch.setattr(chat_endpoint, "QUEUED_EXECUTION", False, raising=False)
+
+        response = test_client.post(
+            "/api/v1/chat/completions",
+            json={
+                "model": "gpt-5-mini",
+                "messages": [{"role": "user", "content": "Failure path"}],
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
 # ========================================================================
 # Streaming Tests

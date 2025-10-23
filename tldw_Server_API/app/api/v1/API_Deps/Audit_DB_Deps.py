@@ -1,34 +1,111 @@
-# Audit_DB_Deps.py
 """
 Manages user-specific audit service instances for dependency injection.
 """
 
 import asyncio
 import threading
-from pathlib import Path
-from typing import Optional, Any
 from collections import OrderedDict
+from typing import Any, Callable, Optional, Set
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
+
 try:
-    from cachetools import LRUCache
+    from cachetools import Cache, LRUCache
+
     _HAS_CACHETOOLS = True
 except ImportError:
     _HAS_CACHETOOLS = False
-    logger.warning("cachetools not found. Using bounded fallback LRU. Install with: pip install cachetools")
+    logger.warning(
+        "cachetools not found. Using bounded fallback LRU. Install with: pip install cachetools"
+    )
 
 # Local Imports
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 #######################################################################################################################
 
+def _schedule_service_stop(user_id: int, service: UnifiedAuditService, reason: str) -> None:
+    """Schedule graceful shutdown of an audit service instance."""
+    if service is None:
+        return
+
+    if getattr(service, "_tldw_stop_scheduled", False):
+        return
+
+    setattr(service, "_tldw_stop_scheduled", True)
+
+    async def _stop():
+        try:
+            await service.stop()
+            logger.info(f"Audit service for user {user_id} stopped ({reason}).")
+        except Exception as exc:
+            logger.error(
+                f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
+                exc_info=True,
+            )
+
+    owner_loop = getattr(service, "owner_loop", None)
+    if owner_loop and owner_loop.is_closed():
+        owner_loop = None
+
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if owner_loop and owner_loop is not current_loop:
+        future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
+
+        def _log_result(fut):
+            exc = fut.exception()
+            if exc:
+                logger.error(
+                    f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
+                    exc_info=True,
+                )
+
+        future.add_done_callback(_log_result)
+        return
+
+    if current_loop:
+        current_loop.create_task(_stop())
+        return
+
+    def _run():
+        asyncio.run(_stop())
+
+    threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
+
+
+_services_stopping: Set[int] = set()
+_services_stopping_lock = threading.Lock()
+
+
+def _handle_cache_eviction(user_id: int, service: UnifiedAuditService, reason: str) -> None:
+    """Handle cache eviction/removal by scheduling a stop unless manually managed."""
+    if service is None:
+        return
+    with _services_stopping_lock:
+        if user_id in _services_stopping:
+            return
+    logger.debug(f"Evicting audit service for user {user_id} ({reason}).")
+    _schedule_service_stop(user_id, service, reason)
+
+
 class _SmallLRUCache:
-    def __init__(self, maxsize: int):
+    """Minimal LRU cache with eviction callback."""
+
+    def __init__(
+        self,
+        maxsize: int,
+        on_evict: Callable[[int, UnifiedAuditService, str], None],
+    ):
         self.maxsize = maxsize
+        self._on_evict = on_evict
         self._data: OrderedDict[int, UnifiedAuditService] = OrderedDict()
 
     def get(self, key: int) -> Optional[UnifiedAuditService]:
@@ -41,26 +118,78 @@ class _SmallLRUCache:
         self._data[key] = value
         self._data.move_to_end(key)
         while len(self._data) > self.maxsize:
-            self._data.popitem(last=False)
+            evicted_key, evicted_value = self._data.popitem(last=False)
+            self._on_evict(evicted_key, evicted_value, "capacity")
 
-    def pop(self, key: int, default: Optional[UnifiedAuditService] = None) -> Optional[UnifiedAuditService]:
-        return self._data.pop(key, default) if key in self._data else default
+    def pop(
+        self,
+        key: int,
+        default: Optional[UnifiedAuditService] = None,
+    ) -> Optional[UnifiedAuditService]:
+        if key in self._data:
+            value = self._data.pop(key)
+            self._on_evict(key, value, "removed")
+            return value
+        return default
 
     def keys(self):
         return list(self._data.keys())
+
+
+if _HAS_CACHETOOLS:
+
+    class _EvictingLRUCache(LRUCache):
+        """LRUCache variant that fires a callback whenever items are removed."""
+
+        _MISSING = object()
+
+        def __init__(
+            self,
+            maxsize: int,
+            on_evict: Callable[[int, UnifiedAuditService, str], None],
+        ):
+            super().__init__(maxsize=maxsize)
+            self._on_evict = on_evict
+
+        def popitem(self):
+            key, value = super().popitem()
+            self._on_evict(key, value, "capacity")
+            return key, value
+
+        def __delitem__(self, key):
+            value = self[key]
+            super().__delitem__(key)
+            self._on_evict(key, value, "removed")
+
+        def pop(self, key, default=_MISSING):
+            if key in self:
+                value = Cache.pop(self, key)
+                self._on_evict(key, value, "removed")
+                return value
+            if default is self._MISSING:
+                raise KeyError(key)
+            return default
 
 
 # --- Configuration ---
 MAX_CACHED_AUDIT_INSTANCES = settings.get("MAX_CACHED_AUDIT_INSTANCES", 20)
 
 if _HAS_CACHETOOLS:
-    # Keyed by user ID (int)
-    _user_audit_instances: Any = LRUCache(maxsize=MAX_CACHED_AUDIT_INSTANCES)
-    logger.info(f"Using cachetools.LRUCache for audit service instances (maxsize={MAX_CACHED_AUDIT_INSTANCES}).")
+    _user_audit_instances: Any = _EvictingLRUCache(
+        maxsize=MAX_CACHED_AUDIT_INSTANCES,
+        on_evict=_handle_cache_eviction,
+    )
+    logger.info(
+        f"Using cachetools.LRUCache for audit service instances (maxsize={MAX_CACHED_AUDIT_INSTANCES})."
+    )
 else:
-    # Keyed by user ID (int)
-    _user_audit_instances: Any = _SmallLRUCache(MAX_CACHED_AUDIT_INSTANCES)
-    logger.info(f"Using fallback _SmallLRUCache for audit service instances (maxsize={MAX_CACHED_AUDIT_INSTANCES}).")
+    _user_audit_instances: Any = _SmallLRUCache(
+        MAX_CACHED_AUDIT_INSTANCES,
+        on_evict=_handle_cache_eviction,
+    )
+    logger.info(
+        f"Using fallback _SmallLRUCache for audit service instances (maxsize={MAX_CACHED_AUDIT_INSTANCES})."
+    )
 
 _audit_service_lock = threading.Lock()
 _service_initialization_lock = asyncio.Lock()
@@ -180,16 +309,44 @@ async def shutdown_user_audit_service(user_id: int):
     Args:
         user_id: The user's ID
     """
+    service: Optional[UnifiedAuditService] = None
     with _audit_service_lock:
-        service = _user_audit_instances.pop(user_id, None)
+        existing = _user_audit_instances.get(user_id)
+        if existing:
+            with _services_stopping_lock:
+                _services_stopping.add(user_id)
+            service = _user_audit_instances.pop(user_id, None)
+            if service is None:
+                with _services_stopping_lock:
+                    _services_stopping.discard(user_id)
     
-    if service:
+    if not service:
+        return
+    
+    owner_loop = getattr(service, "owner_loop", None)
+    if owner_loop and owner_loop.is_closed():
+        owner_loop = None
+
+    try:
         try:
-            # UnifiedAuditService exposes stop(), not shutdown()
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if owner_loop and current_loop is not owner_loop:
+            future = asyncio.run_coroutine_threadsafe(service.stop(), owner_loop)
+            await asyncio.wrap_future(future)
+        else:
             await service.stop()
-            logger.info(f"Shut down audit service for user {user_id}")
-        except Exception as e:
-            logger.error(f"Error shutting down audit service for user {user_id}: {e}", exc_info=True)
+        logger.info(f"Shut down audit service for user {user_id}")
+    except Exception as e:
+        logger.error(
+            f"Error shutting down audit service for user {user_id}: {e}",
+            exc_info=True,
+        )
+    finally:
+        with _services_stopping_lock:
+            _services_stopping.discard(user_id)
 
 async def shutdown_all_audit_services():
     """

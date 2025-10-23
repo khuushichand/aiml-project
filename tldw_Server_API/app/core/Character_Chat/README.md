@@ -9,8 +9,8 @@ This document orients contributors to the current code layout, major responsibil
 ## High-Level Responsibilities
 | Concern | Implementation |
 | --- | --- |
-| Character card lifecycle | `Character_Chat_Lib.py`, `modules/character_io.py`, `modules/character_db.py`, `ccv3_parser.py` |
-| Conversation management | `modules/character_chat.py`, legacy helpers in `Character_Chat_Lib.py` |
+| Character card lifecycle | `modules/character_io.py`, `modules/character_db.py`, `ccv3_parser.py` |
+| Conversation management | `modules/character_chat.py` |
 | Text transformation | `chat_dictionary.py` (pattern-based replacements, token budgets) |
 | Lore/world context | `world_book_manager.py` (keyword matching, recursive scanning) |
 | Throughput guardrails | `character_rate_limiter.py` (Redis + in-memory fallbacks) |
@@ -23,9 +23,8 @@ All persistence flows through `ChaChaNotes_DB` (per-user SQLite/Postgres wrapper
 ## Module Layout & Entry Points
 ```
 Character_Chat/
-├── Character_Chat_Lib.py           # Legacy monolith (still heavily used)
-├── Character_Chat_Lib_facade.py    # Facade exposing refactored modules to legacy import sites
-├── modules/                        # Newer split modules with focused concerns
+├── Character_Chat_Lib_facade.py    # Facade exposing modular helpers under a single import path
+├── modules/                        # Split modules with focused concerns
 │   ├── character_utils.py          # Placeholder replacement, UI helpers
 │   ├── character_io.py             # Card import/export (PNG/WEBP/JSON/MD) + validation
 │   ├── character_validation.py     # V1/V2/Pygmalion/TextGen/Alpaca format parsers
@@ -39,11 +38,7 @@ Character_Chat/
 └── chat_dictionary.py / world_book_manager.py ...  # see sections below
 ```
 
-To maintain backwards compatibility while the refactor is in progress:
-- `Character_Chat_Lib_facade.py` re-exports the functions from `modules` and provides small wrappers (e.g. `retrieve_message_details` with placeholder substitution).
-- `modules/__init__.py` exposes a superset of the legacy function names so existing imports continue to work (`from Character_Chat.Character_Chat_Lib import ...`).
-
-**Contributors should prefer the new modular entry points**. Only use the legacy monolith when an API surface has not yet been migrated.
+`Character_Chat_Lib_facade.py` re-exports the functions from `modules` (and provides small wrappers such as placeholder substitution for `retrieve_message_details`) so downstream code can rely on a single import path. `modules/__init__.py` collects the public surface area; new helpers should be added there for discoverability.
 
 ---
 
@@ -77,13 +72,13 @@ Common helpers:
 ---
 
 ## Conversation & Message Management
-Key functions live in `modules/character_chat.py` and legacy `Character_Chat_Lib.py`:
+Key functions live in `modules/character_chat.py`:
 - `start_new_chat_session(...)`, `list_character_conversations(...)`, `delete_conversation_by_id(...)` – conversation CRUD.
 - `post_message_to_conversation(...)`, `edit_message_content(...)`, `set_message_ranking(...)`, `find_messages_in_conversation(...)` – message lifecycle helpers.
-- `process_db_messages_to_ui_history(...)` / `process_db_messages_to_ui_history` (legacy variant) – convert raw message rows into `(user, bot)` tuples for UI consumption, handling placeholder replacements and consecutive message merges.
+- `process_db_messages_to_ui_history(...)` – convert raw message rows into `(user, bot)` tuples for UI consumption, handling placeholder replacements and consecutive message merges.
 - `load_chat_and_character(...)` – fetches character metadata, conversation payload, and message list in a single call.
 
-Placeholder replacement is centralized via `replace_placeholders` (both in legacy file and `modules/character_utils.py`), ensuring tokens like `{{char}}` or `<USER>` resolve consistently.
+Placeholder replacement is centralized via `modules/character_utils.replace_placeholders`, ensuring tokens like `{{char}}` or `<USER>` resolve consistently.
 
 Endpoints `character_chat_sessions.py` and `character_messages.py` rely heavily on these functions, so maintain backwards compatibility when refactoring signatures.
 
@@ -140,7 +135,7 @@ Each endpoint resolves the per-user `CharactersRAGDB` via `get_chacha_db_for_use
 
 ## Testing Strategy
 Relevant suites:
-- `tldw_Server_API/tests/Characters/test_character_chat_lib.py` – large unit suite covering legacy helper behaviour.
+- `tldw_Server_API/tests/Characters/test_character_chat_lib.py` – large unit suite covering helper behaviour.
 - `tldw_Server_API/tests/Characters/test_ccv3_parser.py` – verifies v3 parsing.
 - `tldw_Server_API/tests/Character_Chat_NEW/*` – property tests and newer unit coverage for dictionary + world book interactions.
 - `tldw_Server_API/tests/integration/test_chatbook_integration.py` – exercises cross-module interactions (Chatbooks + Character Chat).

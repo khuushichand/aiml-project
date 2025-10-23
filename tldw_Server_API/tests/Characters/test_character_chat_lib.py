@@ -22,7 +22,7 @@ from loguru import logger as loguru_logger
 from hypothesis import given, strategies as st, settings, HealthCheck
 #
 # Local Imports
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import (
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     replace_placeholders,
     replace_user_placeholder,
     get_character_list_for_ui,
@@ -72,7 +72,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 MOCK_TIME_STRFTIME = "2023-10-27 10:30"
 
 # --- Module Path for Patching (if still needed for non-DB external deps) ---
-MODULE_PATH_PREFIX = "tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib"
+MODULE_PATH_PREFIX = "tldw_Server_API.app.core.Character_Chat.modules"
 
 
 # --- Mock PIL Image object for finer control during unit tests where PIL is mocked ---
@@ -246,6 +246,23 @@ def test_process_db_messages_to_ui_history_unit():
     assert process_db_messages_to_ui_history(db_messages_unknown, char_name, user_name) == expected_unknown
 
 
+def test_process_db_messages_to_ui_history_normalizes_common_roles():
+    char_name = "Botty"
+    user_name = "Human"
+    db_messages = [
+        {"sender": "user", "content": "hello {{char}}"},
+        {"sender": "assistant", "content": "hi {{user}}"},
+        {"sender": "system", "content": "meta message"},
+        {"sender": "USER", "content": "final turn"},
+    ]
+    expected = [
+        ("hello Botty", "hi Human"),
+        (None, "meta message"),
+        ("final turn", None),
+    ]
+    assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
+
+
 MINIMAL_V2_DATA_NODE_UNIT = {
     "name": "TestV2", "description": "Desc", "personality": "Pers",
     "scenario": "Scen", "first_mes": "First", "mes_example": "Example"
@@ -346,9 +363,9 @@ def test_validate_v2_card_unit():
     assert not is_valid_ns and "Missing 'spec' field" in errors_ns[0]
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.validate_v2_card")
-@mock.patch(f"{MODULE_PATH_PREFIX}.parse_v2_card")
-@mock.patch(f"{MODULE_PATH_PREFIX}.parse_v1_card")
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.validate_v2_card")
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.parse_v2_card")
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.parse_v1_card")
 def test_import_character_card_from_json_string_unit(mock_parse_v1, mock_parse_v2, mock_validate_v2):
     mock_validate_v2.return_value = (True, [])
     mock_parse_v2.return_value = {"name": "ParsedV2"}
@@ -361,8 +378,8 @@ def test_import_character_card_from_json_string_unit(mock_parse_v1, mock_parse_v
     assert import_character_card_from_json_string(v1_str)["name"] == "ParsedV1"
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.import_character_card_from_json_string")
-@mock.patch(f"{MODULE_PATH_PREFIX}.yaml")
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.import_character_card_from_json_string")
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.yaml")
 def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_import_json_str,
                                                       caplog_handler):  # caplog_handler now works
     mock_import_json_str.return_value = {"name": "Loaded"}
@@ -401,13 +418,13 @@ def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_imp
     mock_yaml_module.safe_load.side_effect = None
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.Image", new_callable=mock.MagicMock)
-@mock.patch(f"{MODULE_PATH_PREFIX}.base64")  # This is the base64 module *used by Character_Chat_Lib*
-@mock.patch(f"{MODULE_PATH_PREFIX}.json")    # This mock is 'mock_json_loads_mod'
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.base64")  # This is the base64 module used by the facade
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.json")    # This mock is 'mock_json_loads_mod'
 def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod, MockPILImageModule, tmp_path,
                                            caplog_handler):
     # --- FIX: Configure the mocked json module ---
-    # The SUT (Character_Chat_Lib) uses 'json.JSONDecodeError'.
+    # The SUT uses 'json.JSONDecodeError'.
     # Since MODULE_PATH_PREFIX.json is mocked (as mock_json_loads_mod),
     # we need to ensure that mock_json_loads_mod.JSONDecodeError refers to the actual exception class.
     # 'json' here refers to the 'import json' at the top of this test file (the real json module).
@@ -739,7 +756,7 @@ def test_get_character_list_for_ui_integration(db):
 
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.Image", new_callable=mock.MagicMock)  # Patches PIL.Image used in Character_Chat_Lib
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock)  # Patches PIL.Image used by the facade
 def test_load_character_and_image_integration(MockPILImageModule, db, caplog_handler):
     mock_opened_image = MockPILImageObject(format="PNG")  # This is what Image.open() will return
     mock_converted_image = MockPILImageObject(format="PNG", mode="RGBA")  # This is what .convert() will return
@@ -776,8 +793,8 @@ def test_load_character_and_image_integration(MockPILImageModule, db, caplog_han
 
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.yaml")
-@mock.patch(f"{MODULE_PATH_PREFIX}.Image", new_callable=mock.MagicMock)
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.yaml")
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
 def test_import_and_save_character_from_file_integration(MockPILImageModule, mock_yaml_module, db, tmp_path):
     # JSON file
     v1_content = {"name": "JSON Char", "description": "D", "first_mes": "FM", "mes_example": "ME", "personality": "P",
@@ -805,7 +822,7 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
 
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.time.strftime", return_value=MOCK_TIME_STRFTIME)
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
 def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, db, tmp_path,
                                                                 caplog_handler):  # caplog_handler now works
     char_name_in_db = "HistCharDB"  # Renamed to avoid clash with `char_name` variable if any
@@ -826,7 +843,12 @@ def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, d
         }
     }
     hist_file_path = tmp_path / "hist.json"; hist_file_path.write_text(json.dumps(chat_data))
-    conv_id, char_id_hist = load_chat_history_from_file_and_save_to_db(db, str(hist_file_path), user_name_for_placeholders=log_user)
+    conv_id, char_id_hist = load_chat_history_from_file_and_save_to_db(
+        db,
+        char_id_db,
+        str(hist_file_path),
+        user_name_for_placeholders=log_user
+    )
     assert conv_id is not None and char_id_hist == char_id_db
     msgs = db.get_messages_for_conversation(conv_id)
     assert len(msgs) == 3
@@ -841,8 +863,8 @@ def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, d
 
 
 
-@mock.patch(f"{MODULE_PATH_PREFIX}.time.strftime", return_value=MOCK_TIME_STRFTIME)
-@mock.patch(f"{MODULE_PATH_PREFIX}.Image", new_callable=mock.MagicMock)
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_chat.time.strftime", return_value=MOCK_TIME_STRFTIME)
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock)
 def test_full_chat_session_flow_integration(MockPILImageModule, mock_strftime, db):
     mock_img_instance = MockPILImageObject()
     MockPILImageModule.open.return_value = mock_img_instance
@@ -853,8 +875,20 @@ def test_full_chat_session_flow_integration(MockPILImageModule, mock_strftime, d
     conv_id, _, init_hist, _ = start_new_chat_session(db, char_id, user_name, "FlowTitle")
     assert conv_id and init_hist == [(None, "Hi FlowChar")]
 
+    conv_initial = db.get_conversation_by_id(conv_id)
+    assert conv_initial is not None
+
     user_msg_id = post_message_to_conversation(db, conv_id, "FlowChar", "User says {{user}}", True)
+    conv_after_user_msg = db.get_conversation_by_id(conv_id)
+    assert conv_after_user_msg is not None
+    assert conv_after_user_msg["version"] == conv_initial["version"] + 1
+    assert conv_after_user_msg["last_modified"] >= conv_initial["last_modified"]
+
     char_resp_id = post_message_to_conversation(db, conv_id, "FlowChar", "Char says {{char}}", False)
+    conv_after_char_msg = db.get_conversation_by_id(conv_id)
+    assert conv_after_char_msg is not None
+    assert conv_after_char_msg["version"] == conv_after_user_msg["version"] + 1
+    assert conv_after_char_msg["last_modified"] >= conv_after_user_msg["last_modified"]
 
     ui_hist = retrieve_conversation_messages_for_ui(db, conv_id, "FlowChar", user_name)
     assert ui_hist == [(None, "Hi FlowChar"), ("User says FlowUser", "Char says FlowChar")]
@@ -887,7 +921,7 @@ def test_load_chat_and_character_integration(db):
     db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Hi {{char}}"})
     db.add_message({"conversation_id": conv_id, "sender": "LoadChar", "content": "Yo {{user}}"})
 
-    with mock.patch(f"{MODULE_PATH_PREFIX}.Image", new_callable=mock.MagicMock) as MockPILImageModule:
+    with mock.patch(f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock) as MockPILImageModule:
         MockPILImageModule.open.return_value = MockPILImageObject()
         char_data, history, _ = load_chat_and_character(db, conv_id, user_name)
         assert char_data["name"] == "LoadChar" and history == [("Hi LoadChar", "Yo Loader")]
@@ -897,7 +931,7 @@ def test_load_chat_and_character_integration(db):
 def test_load_character_wrapper_integration(db):
     char_id = db.add_character_card({"name": "Wrap", "first_message": "FM {{user}}"})
     user_name = "Wrapper"
-    with mock.patch(f"{MODULE_PATH_PREFIX}.Image", new_callable=mock.MagicMock):
+    with mock.patch(f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock):
         _, hist_int, _ = load_character_wrapper(db, char_id, user_name)
         assert hist_int == [(None, "FM Wrapper")]
         _, hist_str, _ = load_character_wrapper(db, f"Wrap (ID: {char_id})", user_name)

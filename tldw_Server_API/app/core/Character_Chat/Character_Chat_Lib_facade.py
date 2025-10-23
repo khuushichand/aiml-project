@@ -1,9 +1,10 @@
 # Character_Chat_Lib_facade.py
 """
-Facade for Character_Chat_Lib to maintain backward compatibility.
+Facade exposing the public Character Chat helpers.
 
-This file imports from the refactored modules to provide the same interface
-as the original monolithic Character_Chat_Lib.py file.
+Historically this module wrapped the legacy ``Character_Chat_Lib`` monolith.
+Now it simply re-exports the refactored modular implementation while keeping
+the import path stable for existing callers.
 """
 
 # Import all functions from the refactored modules
@@ -28,16 +29,20 @@ def retrieve_message_details(
     resolved in returned message content. Delegate to modules for DB reads
     and apply placeholder substitution here to maintain behavior.
     """
-    msg = _retrieve_msg_basic(db, message_id)
-    if not msg:
-        return None
-    content = msg.get("content")
-    if isinstance(content, str):
-        msg["content"] = _replace_placeholders(
-            content,
-            character_name_for_placeholders,
-            user_name_for_placeholders,
-        )
+    msg = _retrieve_msg_basic(
+        db,
+        message_id,
+        character_name_for_placeholders or "Character",
+        user_name_for_placeholders,
+    )
+    if not msg or not isinstance(msg.get("content"), str):
+        return msg
+    # For legacy callers that expect double replacement semantics (idempotent)
+    msg["content"] = _replace_placeholders(
+        msg["content"],
+        character_name_for_placeholders,
+        user_name_for_placeholders,
+    )
     return msg
 
 # Future structure (when refactoring is complete):

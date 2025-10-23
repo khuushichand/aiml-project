@@ -176,10 +176,10 @@ class TTSInputValidator:
         "openai": 4096,
         "elevenlabs": 5000,
         "kokoro": 1000,
-        "higgs": 2000,
-        "dia": 1500,
-        "chatterbox": 2000,
-        "vibevoice": 3000,
+        "higgs": 50000,
+        "dia": 30000,
+        "chatterbox": 10000,
+        "vibevoice": 15000,
         "index_tts": 4000,
         "default": 1000
     }

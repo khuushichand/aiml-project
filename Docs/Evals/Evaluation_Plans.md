@@ -21,6 +21,7 @@ https://github.com/t3dotgg/SnitchBench
 https://arxiv.org/abs/2503.10357
 https://github.com/IAAR-Shanghai/CRUD_RAG
 https://github.com/johnbean393/SVGBench
+https://huggingface.co/blog/rteb
 https://github.com/scaleapi/SWE-bench_Pro-os
 https://simple-bench.com/
 https://arxiv.org/abs/2412.12300
