@@ -846,6 +846,9 @@ class Chunker:
                 else:
                     grouped_items = _group_items_by_elements(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0)
                 _append_with_titles(grouped_items, titles)
+                for child in node.get('children') or []:
+                    if isinstance(child, dict) and child.get('kind') == 'section':
+                        walk(child, titles)
                 # Do not descend into children again to avoid duplicating content
                 return
             # Default behavior: emit this node's chunks as-is

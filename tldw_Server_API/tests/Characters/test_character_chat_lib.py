@@ -439,6 +439,19 @@ def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_imp
     mock_yaml_module.safe_load.side_effect = None
 
 
+def test_load_character_card_from_plain_text_creates_minimal_card():
+    plain_text = "These are plain text notes for a character."
+    result = load_character_card_from_string_content(plain_text)
+
+    assert result is not None
+    assert result["description"] == plain_text
+    assert result["first_message"]
+    assert result["message_example"]
+    assert result["tags"] == ["plain-text"]
+    assert result["personality"]
+    assert result["scenario"]
+
+
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.base64")  # This is the base64 module used by the facade
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.json")    # This mock is 'mock_json_loads_mod'

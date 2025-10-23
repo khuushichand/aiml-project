@@ -99,6 +99,55 @@ async def test_world_book_negative_paths_and_duplicate_name():
 
 
 @pytest.mark.asyncio
+async def test_world_book_process_endpoint_handles_new_return_shape():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_wb_process_")
+    original_user_db_dir = os.environ.get("USER_DB_BASE_DIR")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create = {
+                "name": f"WB {_uuid.uuid4()}",
+                "description": "Lore book",
+                "scan_depth": 3,
+                "token_budget": 500,
+                "recursive_scanning": False,
+                "enabled": True,
+            }
+            resp = await client.post("/api/v1/characters/world-books", headers=headers, json=create)
+            assert resp.status_code == 201
+            wb_id = resp.json()["id"]
+
+            entry_payload = {"keywords": ["artifact"], "content": "Ancient artifact details.", "priority": 10}
+            resp = await client.post(
+                f"/api/v1/characters/world-books/{wb_id}/entries", headers=headers, json=entry_payload
+            )
+            assert resp.status_code == 201
+
+            process_request = {"text": "Tell me about the artifact.", "world_book_ids": [wb_id]}
+            resp = await client.post(
+                "/api/v1/characters/world-books/process", headers=headers, json=process_request
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["entries_matched"] == 1
+            assert isinstance(body["books_used"], int) and body["books_used"] == 1
+            assert body["tokens_used"] >= 0
+            assert "artifact" in body["injected_content"].lower()
+            assert len(body["entry_ids"]) == 1
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        if original_user_db_dir is None:
+            os.environ.pop("USER_DB_BASE_DIR", None)
+        else:
+            os.environ["USER_DB_BASE_DIR"] = original_user_db_dir
+
+
+@pytest.mark.asyncio
 async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
     # Ensure limiter picks up env by setting before import and resetting singleton
     tmpdir = tempfile.mkdtemp(prefix="chacha_limits_")

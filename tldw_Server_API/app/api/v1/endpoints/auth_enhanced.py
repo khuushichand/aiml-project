@@ -679,7 +679,7 @@ async def logout(
                 if jti:
                     # Get token expiration
                     payload = jwt_service.verify_token(token)
-                    expires_at = datetime.fromtimestamp(payload["exp"])
+                    expires_at = datetime.utcfromtimestamp(payload["exp"])
                     
                     await blacklist.revoke_token(
                         jti=jti,

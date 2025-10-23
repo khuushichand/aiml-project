@@ -117,8 +117,8 @@ class CharacterRateLimiter:
                         detail=f"Rate limit exceeded. Max {self.max_operations} character operations per hour."
                     )
                 
-                remaining = self.max_operations - current_count
-                logger.debug(f"Rate limit check for user {user_id}: {remaining} operations remaining")
+                remaining = max(self.max_operations - current_count - 1, 0)
+                logger.debug(f"Rate limit check for user {user_id}: {remaining} operations remaining (redis)")
                 return True, remaining
                 
             except Exception as e:
@@ -386,7 +386,7 @@ class CharacterRateLimiter:
                         detail=f"Rate limit exceeded. Max {max_count} {operation_type} operations per {window} seconds."
                     )
                 
-                remaining = max_count - current_count
+                remaining = max(max_count - current_count - 1, 0)
                 return True, remaining
                 
             except Exception as e:
@@ -435,11 +435,19 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
         from tldw_Server_API.app.core.config import settings
         import os
 
-        def _env_int(name: str, default_val: int) -> int:
-            try:
-                return int(os.getenv(name, str(default_val)))
-            except Exception:
-                return default_val
+        def _env_int(name: str, configured_value: Any, fallback: int) -> int:
+            raw = os.getenv(name)
+            if raw is not None:
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid environment override for {name}: {raw!r}. Using defaults.")
+            if configured_value is not None:
+                try:
+                    return int(configured_value)
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid configured value for {name}: {configured_value!r}. Using fallback {fallback}.")
+            return fallback
         
         redis_client = None
         if settings.get("REDIS_ENABLED", False):
@@ -456,17 +464,26 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
                 logger.warning(f"Redis not available for rate limiting: {e}. Using in-memory fallback.")
                 redis_client = None
         
+        default_max_ops = settings.get("CHARACTER_RATE_LIMIT_OPS", 100)
+        default_window = settings.get("CHARACTER_RATE_LIMIT_WINDOW", 3600)
+        default_max_chars = settings.get("MAX_CHARACTERS_PER_USER", 1000)
+        default_import_size = settings.get("MAX_CHARACTER_IMPORT_SIZE_MB", 10)
+        default_max_chats = settings.get("MAX_CHATS_PER_USER", 100)
+        default_max_messages = settings.get("MAX_MESSAGES_PER_CHAT", 1000)
+        default_chat_completions = settings.get("MAX_CHAT_COMPLETIONS_PER_MINUTE", 20)
+        default_message_sends = settings.get("MAX_MESSAGE_SENDS_PER_MINUTE", 60)
+
         _rate_limiter = CharacterRateLimiter(
             redis_client=redis_client,
-            max_operations=_env_int("CHARACTER_RATE_LIMIT_OPS", int(settings.get("CHARACTER_RATE_LIMIT_OPS", 100))),
-            window_seconds=_env_int("CHARACTER_RATE_LIMIT_WINDOW", int(settings.get("CHARACTER_RATE_LIMIT_WINDOW", 3600))),
-            max_characters=_env_int("MAX_CHARACTERS_PER_USER", int(settings.get("MAX_CHARACTERS_PER_USER", 1000))),
-            max_import_size_mb=_env_int("MAX_CHARACTER_IMPORT_SIZE_MB", int(settings.get("MAX_CHARACTER_IMPORT_SIZE_MB", 10))),
+            max_operations=_env_int("CHARACTER_RATE_LIMIT_OPS", default_max_ops, 100),
+            window_seconds=_env_int("CHARACTER_RATE_LIMIT_WINDOW", default_window, 3600),
+            max_characters=_env_int("MAX_CHARACTERS_PER_USER", default_max_chars, 1000),
+            max_import_size_mb=_env_int("MAX_CHARACTER_IMPORT_SIZE_MB", default_import_size, 10),
             # Chat-specific limits
-            max_chats_per_user=_env_int("MAX_CHATS_PER_USER", int(settings.get("MAX_CHATS_PER_USER", 100))),
-            max_messages_per_chat=_env_int("MAX_MESSAGES_PER_CHAT", int(settings.get("MAX_MESSAGES_PER_CHAT", 1000))),
-            max_chat_completions_per_minute=_env_int("MAX_CHAT_COMPLETIONS_PER_MINUTE", int(settings.get("MAX_CHAT_COMPLETIONS_PER_MINUTE", 20))),
-            max_message_sends_per_minute=_env_int("MAX_MESSAGE_SENDS_PER_MINUTE", int(settings.get("MAX_MESSAGE_SENDS_PER_MINUTE", 60)))
+            max_chats_per_user=_env_int("MAX_CHATS_PER_USER", default_max_chats, 100),
+            max_messages_per_chat=_env_int("MAX_MESSAGES_PER_CHAT", default_max_messages, 1000),
+            max_chat_completions_per_minute=_env_int("MAX_CHAT_COMPLETIONS_PER_MINUTE", default_chat_completions, 20),
+            max_message_sends_per_minute=_env_int("MAX_MESSAGE_SENDS_PER_MINUTE", default_message_sends, 60)
         )
     
     return _rate_limiter

@@ -858,6 +858,16 @@ async def execute_streaming_call(
 
             stream_block_logged = False
             stream_redact_logged = False
+            pending_audit_tasks: list[asyncio.Task[Any]] = []
+
+            def _track_audit_task(task: "asyncio.Task[Any]") -> None:
+                pending_audit_tasks.append(task)
+                def _cleanup(completed: "asyncio.Task[Any]") -> None:
+                    try:
+                        pending_audit_tasks.remove(completed)
+                    except ValueError:
+                        pass
+                task.add_done_callback(_cleanup)
 
             def _out_transform(s: str) -> str:
                 nonlocal stream_block_logged, stream_redact_logged
@@ -918,7 +928,7 @@ async def execute_streaming_call(
                         try:
                             if audit_service and audit_context:
                                 import asyncio as _asyncio
-                                _asyncio.create_task(
+                                task = _asyncio.create_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -932,6 +942,7 @@ async def execute_streaming_call(
                                         },
                                     )
                                 )
+                                _track_audit_task(task)
                         except Exception:
                             pass
                         stream_block_logged = True
@@ -945,7 +956,7 @@ async def execute_streaming_call(
                         try:
                             if audit_service and audit_context:
                                 import asyncio as _asyncio
-                                _asyncio.create_task(
+                                task = _asyncio.create_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -959,6 +970,7 @@ async def execute_streaming_call(
                                         },
                                     )
                                 )
+                                _track_audit_task(task)
                         except Exception:
                             pass
                         stream_redact_logged = True
@@ -974,12 +986,16 @@ async def execute_streaming_call(
                 heartbeat_interval=30,
                 text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None,
             )
-            async for chunk in generator:
-                if "heartbeat" in chunk:
-                    stream_tracker.add_heartbeat()
-                else:
-                    stream_tracker.add_chunk()
-                yield chunk
+            try:
+                async for chunk in generator:
+                    if "heartbeat" in chunk:
+                        stream_tracker.add_heartbeat()
+                    else:
+                        stream_tracker.add_chunk()
+                    yield chunk
+            finally:
+                if pending_audit_tasks:
+                    await asyncio.gather(*pending_audit_tasks, return_exceptions=True)
 
     streaming_generator = tracked_streaming_generator()
     return StreamingResponse(

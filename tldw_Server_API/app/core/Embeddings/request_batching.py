@@ -9,8 +9,9 @@ from collections import deque
 import uuid
 
 from loguru import logger
-from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
+from tldw_Server_API.app.core.Embeddings.simplified_config import get_config, ProviderConfig
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
+from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
 
 
 @dataclass
@@ -40,6 +41,7 @@ class RequestBatcher:
         """
         self.config = config or get_config()
         self.metrics = get_metrics()
+        self.rate_limiter = get_async_rate_limiter()
         
         # Batching settings
         self.enabled = self.config.batching.enabled
@@ -96,6 +98,28 @@ class RequestBatcher:
             # Batching disabled, process immediately
             return await self._process_single(text, model, provider, metadata)
         
+        metadata = metadata or {}
+        user_id = metadata.get("user_id")
+
+        if (
+            user_id
+            and getattr(self.config.security, "enable_rate_limiting", False)
+        ):
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(user_id)
+            if not allowed:
+                tier = "free"
+                limiter = getattr(self.rate_limiter, "rate_limiter", None)
+                if limiter and getattr(limiter, "user_tiers", None):
+                    tier = limiter.user_tiers.get(user_id, "free")
+                try:
+                    self.metrics.log_rate_limit_hit(user_id, tier)
+                except Exception:
+                    pass
+                retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
+                raise RuntimeError(
+                    f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}"
+                )
+
         # Create request
         loop = asyncio.get_running_loop()
         request = BatchRequest(
@@ -103,7 +127,7 @@ class RequestBatcher:
             text=text,
             model=model,
             provider=provider,
-            metadata=metadata or {},
+            metadata=metadata,
             future=loop.create_future(),
             timestamp=time.time()
         )
@@ -235,17 +259,7 @@ class RequestBatcher:
             )
             
             # Create config for batch
-            batch_config = {
-                "embedding_config": {
-                    "default_model_id": f"{provider}:{model}",
-                    "models": {
-                        f"{provider}:{model}": {
-                            "provider": provider,
-                            "model_name_or_path": model
-                        }
-                    }
-                }
-            }
+            batch_config = self._build_user_app_config(provider, model)
             
             # Get embeddings
             embeddings = await embeddings_create_embeddings_batch_async(
@@ -317,23 +331,67 @@ class RequestBatcher:
         # Import here to avoid circular dependency
         from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding
         
-        config = {
-            "embedding_config": {
-                "default_model_id": f"{provider}:{model}",
-                "models": {
-                    f"{provider}:{model}": {
-                        "provider": provider,
-                        "model_name_or_path": model
-                    }
-                }
-            }
-        }
+        config = self._build_user_app_config(provider, model)
         
         return create_embedding(
             text,
             config,
             model_id_override=f"{provider}:{model}"
         )
+    
+    def _build_user_app_config(self, provider: str, model: str) -> Dict[str, Any]:
+        """Construct full user app config for embeddings executor."""
+        provider_config = self.config.get_provider(provider)
+        if provider_config is None:
+            raise ValueError(f"Provider '{provider}' is not configured for embeddings batching.")
+        
+        model_id = f"{provider}:{model}"
+        
+        model_entry: Dict[str, Any] = {
+            "provider": provider,
+            "model_name_or_path": model
+        }
+        if provider_config.api_key:
+            model_entry["api_key"] = provider_config.api_key
+        if provider_config.api_url:
+            model_entry["api_url"] = provider_config.api_url
+        
+        user_app_config: Dict[str, Any] = {
+            "embedding_config": {
+                "default_model_id": model_id,
+                "models": {
+                    model_id: model_entry
+                }
+            }
+        }
+        
+        provider_section = self._build_provider_section(provider_config)
+        if provider_section:
+            user_app_config.update(provider_section)
+        
+        return user_app_config
+    
+    @staticmethod
+    def _build_provider_section(provider_config: ProviderConfig) -> Optional[Dict[str, Any]]:
+        """Build provider-specific top-level config payload (e.g., API keys)."""
+        section_key_map = {
+            "openai": "openai_api",
+            "huggingface": "huggingface_api",
+            "local_api": "local_api",
+            "local": "local_api"
+        }
+        
+        section_key = section_key_map.get(provider_config.name.lower())
+        if not section_key:
+            return None
+        
+        section_payload: Dict[str, Any] = {}
+        if provider_config.api_key:
+            section_payload["api_key"] = provider_config.api_key
+        if provider_config.api_url:
+            section_payload["api_url"] = provider_config.api_url
+        
+        return {section_key: section_payload} if section_payload else None
     
     def _update_adaptive_params(self, batch_size: int, processing_time: float):
         """

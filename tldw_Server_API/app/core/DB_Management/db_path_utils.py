@@ -45,13 +45,19 @@ class DatabasePaths:
             Path to the user's database directory
         """
         user_db_base = settings.get("USER_DB_BASE_DIR")
+        project_root = Path(get_project_root())
         if not user_db_base:
             # Fallback to default location
-            project_root = Path(get_project_root())
-            user_db_base = project_root / "Databases" / "user_databases"
-            logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {user_db_base}")
+            base_path = project_root / "Databases" / "user_databases"
+            logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {base_path}")
+        else:
+            base_path = Path(user_db_base).expanduser()
+            if not base_path.is_absolute():
+                base_path = (project_root / base_path).resolve()
+            else:
+                base_path = base_path.resolve()
 
-        user_dir = Path(user_db_base) / str(user_id)
+        user_dir = base_path / str(user_id)
         
         # Ensure directory exists
         try:

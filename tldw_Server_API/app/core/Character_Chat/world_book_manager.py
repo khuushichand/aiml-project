@@ -1025,6 +1025,15 @@ class WorldBookService:
         if character_id:
             char_books = self.get_character_world_books(character_id, enabled_only=True)
             books_to_use.extend(char_books)
+
+        if books_to_use:
+            unique_books: Dict[int, Dict[str, Any]] = {}
+            for book in books_to_use:
+                book_id = book.get('id')
+                if book_id is None or book_id in unique_books:
+                    continue
+                unique_books[book_id] = book
+            books_to_use = list(unique_books.values())
         
         if not books_to_use:
             empty = {
@@ -1035,8 +1044,18 @@ class WorldBookService:
             }
             return [] if compact_return else empty
         
+        def _normalize_depth(value: Any) -> Optional[int]:
+            try:
+                depth_val = int(value)
+            except (TypeError, ValueError):
+                return None
+            return depth_val if depth_val > 0 else None
+
+        request_depth = _normalize_depth(scan_depth)
+
         # Gather all entries from applicable books
         all_entries: List[WorldBookEntry] = []
+        book_entry_limits: Dict[int, Optional[int]] = {}
         for book in books_to_use:
             # Ensure we have object entries for matching
             if book['id'] in self._entry_cache:
@@ -1046,6 +1065,15 @@ class WorldBookService:
                 _ = self.get_entries(book['id'], enabled_only=True)
                 book_entries = self._entry_cache.get(book['id'], [])
             all_entries.extend(book_entries)
+            book_depth = _normalize_depth(book.get('scan_depth'))
+            book_id = book.get('id')
+            if book_id is None:
+                continue
+            if request_depth is not None:
+                limit = request_depth if book_depth is None else min(request_depth, book_depth)
+            else:
+                limit = book_depth
+            book_entry_limits[book_id] = limit
         
         # Sort by priority (highest first)
         all_entries.sort(key=lambda e: e.priority, reverse=True)
@@ -1053,16 +1081,24 @@ class WorldBookService:
         # Find matching entries
         matched_entries = []
         tokens_used = 0
+        per_book_match_count: Dict[int, int] = {}
         
         for entry in all_entries:
-            if entry.matches(text):
-                # Estimate tokens (simple approximation)
-                entry_tokens = self.count_tokens(entry.content)
-                if tokens_used + entry_tokens <= token_budget:
-                    matched_entries.append(entry)
-                    tokens_used += entry_tokens
-                else:
-                    continue  # Skip oversized entry but continue scanning
+            if not entry.matches(text):
+                continue
+            book_id = getattr(entry, 'world_book_id', None)
+            limit = book_entry_limits.get(book_id)
+            if limit is not None and per_book_match_count.get(book_id, 0) >= limit:
+                continue
+            # Estimate tokens (simple approximation)
+            entry_tokens = self.count_tokens(entry.content)
+            if tokens_used + entry_tokens <= token_budget:
+                matched_entries.append(entry)
+                tokens_used += entry_tokens
+                if limit is not None:
+                    per_book_match_count[book_id] = per_book_match_count.get(book_id, 0) + 1
+            else:
+                continue  # Skip oversized entry but continue scanning
 
         # Handle recursive scanning
         if recursive_scanning and matched_entries:
@@ -1074,11 +1110,17 @@ class WorldBookService:
                 for entry in all_entries:
                     if entry in seen:
                         continue
+                    book_id = getattr(entry, 'world_book_id', None)
+                    limit = book_entry_limits.get(book_id)
+                    if limit is not None and per_book_match_count.get(book_id, 0) >= limit:
+                        continue
                     if entry.matches(combined_content):
                         entry_tokens = self.count_tokens(entry.content)
                         if tokens_used + entry_tokens <= token_budget:
                             additional_entries.append(entry)
                             tokens_used += entry_tokens
+                            if limit is not None:
+                                per_book_match_count[book_id] = per_book_match_count.get(book_id, 0) + 1
                 if not additional_entries:
                     break
                 for e in additional_entries:

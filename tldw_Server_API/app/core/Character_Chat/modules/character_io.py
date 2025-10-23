@@ -311,6 +311,10 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
     fallback_payload = {
         "name": unique_name,
         "description": content_str,
+        "personality": content_str[:500] or "Plain text import",
+        "scenario": "Imported from plain text",
+        "first_mes": "Hello! I'm a character created from plain text content.",
+        "mes_example": "User: Hello\nCharacter: Hi there! Let's continue from your notes.",
         "tags": ["plain-text"],
     }
     try:

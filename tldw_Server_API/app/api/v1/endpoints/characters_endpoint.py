@@ -1079,7 +1079,7 @@ async def process_context_with_world_info(
     try:
         service = WorldBookService(db)
         
-        injected_content, stats = service.process_context(
+        result = service.process_context(
             text=request.text,
             world_book_ids=request.world_book_ids,
             character_id=request.character_id,
@@ -1087,13 +1087,51 @@ async def process_context_with_world_info(
             token_budget=request.token_budget,
             recursive_scanning=request.recursive_scanning
         )
-        
-        return ProcessContextResponse(
-            injected_content=injected_content,
-            entries_matched=stats['entries_matched'],
-            tokens_used=stats['tokens_used'],
-            books_used=stats['books_used'],
-            entry_ids=stats['entry_ids']
+
+        if isinstance(result, dict):
+            return ProcessContextResponse(
+                injected_content=result.get("processed_context", ""),
+                entries_matched=int(result.get("entries_matched", 0)),
+                tokens_used=int(result.get("tokens_used", 0)),
+                books_used=int(result.get("books_used", 0)),
+                entry_ids=[int(e) for e in result.get("entry_ids", [])]
+            )
+
+        if isinstance(result, list):
+            injected_content = "\n\n".join(
+                entry.get("content", "") for entry in result if isinstance(entry, dict)
+            )
+            entry_ids = [
+                int(entry.get("id"))
+                for entry in result
+                if isinstance(entry, dict) and entry.get("id") is not None
+            ]
+            books_used = {
+                entry.get("world_book_id")
+                for entry in result
+                if isinstance(entry, dict) and entry.get("world_book_id") is not None
+            }
+            # Best-effort token estimate mirrors service-level counting for consistency.
+            tokens_used = sum(
+                service.count_tokens(entry.get("content", ""))  # type: ignore[arg-type]
+                for entry in result
+                if isinstance(entry, dict)
+            )
+            return ProcessContextResponse(
+                injected_content=injected_content,
+                entries_matched=len(result),
+                tokens_used=tokens_used,
+                books_used=len(books_used),
+                entry_ids=entry_ids
+            )
+
+        logger.error(
+            "WorldBookService.process_context returned unexpected type %s",
+            type(result).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected world book processing result.",
         )
         
     except CharactersRAGDBError as e:

@@ -717,6 +717,7 @@ class SessionManager:
 
                     # Update cache
                     if self.redis_client:
+                        await self._clear_session_cache(session_data['id'])
                         await self._cache_session(
                             new_access_hash,
                             session_data['user_id'],

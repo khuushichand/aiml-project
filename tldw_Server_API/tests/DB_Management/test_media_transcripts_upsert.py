@@ -91,3 +91,95 @@ def test_postgres_upsert_transcript_roundtrip_if_available(tmp_path):
     latest = get_latest_transcription(db, media_id)
     assert latest == "pg updated"
 
+
+@pytest.mark.integration
+def test_postgres_transaction_context_commits_if_available(tmp_path):
+    host = os.getenv("POSTGRES_TEST_HOST")
+    user = os.getenv("POSTGRES_TEST_USER")
+    password = os.getenv("POSTGRES_TEST_PASSWORD")
+    database = os.getenv("POSTGRES_TEST_DATABASE", "tldw_content")
+    port = int(os.getenv("POSTGRES_TEST_PORT", "5432"))
+
+    if not host or not user:
+        pytest.skip("Postgres test env not configured")
+
+    cfg = DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=host,
+        pg_port=port,
+        pg_database=database,
+        pg_user=user,
+        pg_password=password,
+    )
+    try:
+        backend = DatabaseBackendFactory.create_backend(cfg)
+    except Exception:
+        pytest.skip("psycopg backend not available")
+
+    db = MediaDatabase(db_path=":memory:", client_id="txn-pg", backend=backend)
+
+    inserted_uuid = str(uuid.uuid4())
+    timestamp = db._get_current_utc_timestamp_str()
+    insert_sql = (
+        "INSERT INTO Media (url, title, type, content, content_hash, is_trash, chunking_status, "
+        "vector_processing, uuid, last_modified, version, client_id, deleted) "
+        "VALUES (?, ?, ?, ?, ?, 0, 'pending', 0, ?, ?, 1, ?, 0)"
+    )
+
+    with db.transaction() as conn:
+        db._execute_with_connection(
+            conn,
+            insert_sql,
+            (
+                f"http://example.com/{inserted_uuid}",
+                "Txn Commit Media",
+                "article",
+                "content",
+                inserted_uuid,
+                inserted_uuid,
+                timestamp,
+                db.client_id,
+            ),
+        )
+
+    db.close_connection()
+
+    with db.transaction() as conn:
+        row = db._fetchone_with_connection(
+            conn,
+            "SELECT uuid FROM Media WHERE uuid = ?",
+            (inserted_uuid,),
+        )
+        assert row is not None and row["uuid"] == inserted_uuid  # type: ignore[index]
+        db._execute_with_connection(conn, "DELETE FROM Media WHERE uuid = ?", (inserted_uuid,))
+
+    db.close_connection()
+
+    failed_uuid = str(uuid.uuid4())
+    with pytest.raises(RuntimeError):
+        with db.transaction() as conn:
+            db._execute_with_connection(
+                conn,
+                insert_sql,
+                (
+                    f"http://example.com/{failed_uuid}",
+                    "Txn Rollback Media",
+                    "article",
+                    "content",
+                    failed_uuid,
+                    failed_uuid,
+                    timestamp,
+                    db.client_id,
+                ),
+            )
+            raise RuntimeError("force rollback")
+
+    db.close_connection()
+
+    with db.transaction() as conn:
+        row = db._fetchone_with_connection(
+            conn,
+            "SELECT uuid FROM Media WHERE uuid = ?",
+            (failed_uuid,),
+        )
+        assert row is None

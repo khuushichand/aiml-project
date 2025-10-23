@@ -612,6 +612,38 @@ class TestStatistics:
         assert big_entry_id not in result.get('entry_ids', [])
         assert 'small info' in result.get('processed_context', "")
 
+    @pytest.mark.unit
+    def test_process_context_deduplicates_world_books(self, world_book_service):
+        """Duplicate world book IDs should not duplicate matched entries."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Dedup Book")
+        service.add_entry(wb_id, ['signal'], 'One signal entry')
+
+        result = service.process_context("signal", [wb_id, wb_id])
+
+        assert isinstance(result, dict)
+        assert result.get('entries_matched') == 1
+        assert result.get('books_used') == 1
+
+    @pytest.mark.unit
+    def test_process_context_respects_scan_depth_limits(self, world_book_service):
+        """Respect both book and request scan depth caps."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Depth Book", scan_depth=2)
+        service.add_entry(wb_id, ['topic'], 'First entry', priority=100)
+        service.add_entry(wb_id, ['topic'], 'Second entry', priority=90)
+        service.add_entry(wb_id, ['topic'], 'Third entry', priority=80)
+
+        result = service.process_context("topic", [wb_id], token_budget=100)
+        assert result.get('entries_matched') == 2
+        assert 'Third entry' not in result.get('processed_context', "")
+
+        # Request-level override should further reduce depth
+        result_override = service.process_context("topic", [wb_id], token_budget=100, scan_depth=1)
+        assert result_override.get('entries_matched') == 1
+
 # ========================================================================
 # Cloning Tests
 # ========================================================================

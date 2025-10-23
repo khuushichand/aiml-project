@@ -463,8 +463,8 @@ async def create_streaming_response_with_timeout(
         stream_gen = handler.safe_stream_generator(stream, save_callback)
         heartbeat_gen = handler.heartbeat_generator()
 
-        stream_task = asyncio.create_task(stream_gen.__anext__())
-        heartbeat_task = asyncio.create_task(heartbeat_gen.__anext__())
+        stream_task: Optional[asyncio.Task] = asyncio.create_task(stream_gen.__anext__())
+        heartbeat_task: Optional[asyncio.Task] = asyncio.create_task(heartbeat_gen.__anext__())
 
         try:
             while not handler.is_cancelled and not handler.error_occurred:
@@ -505,12 +505,14 @@ async def create_streaming_response_with_timeout(
                 if should_exit:
                     # Also cancel the latest scheduled tasks in case we created replacements
                     for t in (stream_task, heartbeat_task):
-                        if not t.done():
+                        if t is not None and not t.done():
                             t.cancel()
-                    try:
-                        await asyncio.gather(stream_task, heartbeat_task, return_exceptions=True)
-                    except Exception:
-                        pass
+                    gather_targets = tuple(filter(None, (stream_task, heartbeat_task)))
+                    if gather_targets:
+                        try:
+                            await asyncio.gather(*gather_targets, return_exceptions=True)
+                        except Exception:
+                            pass
                     # As a safety net, emit a final [DONE] only if it hasn't been sent yet
                     try:
                         if not handler.done_sent and not handler.is_cancelled:
@@ -520,6 +522,16 @@ async def create_streaming_response_with_timeout(
                         pass
                     break
         finally:
+            # Ensure any pending tasks are cancelled and awaited exactly once
+            remaining_tasks = [t for t in (stream_task, heartbeat_task) if t is not None]
+            for task in remaining_tasks:
+                if not task.done():
+                    task.cancel()
+            if remaining_tasks:
+                try:
+                    await asyncio.gather(*remaining_tasks, return_exceptions=True)
+                except Exception:
+                    pass
             # Ensure generators are properly closed; avoid yielding here
             try:
                 await stream_gen.aclose()

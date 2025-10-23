@@ -1319,14 +1319,48 @@ class MediaDatabase:
             return
 
         depth = getattr(self._local, "tx_depth", 0)
-        ctx = self.backend.transaction(conn) if depth == 0 else nullcontext(conn)
+        manages_backend_tx = depth == 0
+        ctx = self.backend.transaction(conn) if manages_backend_tx else nullcontext(conn)
         self._local.tx_depth = depth + 1
+        tx_conn = conn
         try:
-            with ctx as tx_conn:
-                yield tx_conn
+            with ctx as inner_conn:
+                tx_conn = inner_conn
+                yield inner_conn
         except Exception as exc:
+            if manages_backend_tx:
+                try:
+                    tx_conn.rollback()
+                except Exception as rb_exc:  # noqa: BLE001
+                    logging.error(
+                        "Rollback failed for backend transaction on %s: %s",
+                        self.db_path_str,
+                        rb_exc,
+                        exc_info=True,
+                    )
             logging.error("Backend transaction failed: %s", exc, exc_info=False)
             raise
+        else:
+            if manages_backend_tx:
+                try:
+                    tx_conn.commit()
+                except Exception as commit_exc:  # noqa: BLE001
+                    logging.error(
+                        "Commit failed for backend transaction on %s: %s",
+                        self.db_path_str,
+                        commit_exc,
+                        exc_info=True,
+                    )
+                    try:
+                        tx_conn.rollback()
+                    except Exception as rb_exc:  # noqa: BLE001
+                        logging.error(
+                            "Rollback after commit failure also failed on %s: %s",
+                            self.db_path_str,
+                            rb_exc,
+                            exc_info=True,
+                        )
+                    raise DatabaseError(f"Backend commit failed: {commit_exc}") from commit_exc
         finally:
             self._local.tx_depth = depth
 
