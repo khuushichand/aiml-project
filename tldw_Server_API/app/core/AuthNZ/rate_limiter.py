@@ -278,7 +278,7 @@ class RateLimiter:
                 lockout_expires = now + timedelta(minutes=lockout_duration_minutes)
                 
                 # Record lockout
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         """
                         INSERT INTO account_lockouts (identifier, locked_until, reason)
@@ -394,7 +394,7 @@ class RateLimiter:
         
         # Clear from database
         async with self.db_pool.transaction() as conn:
-            if hasattr(conn, 'execute'):
+            if hasattr(conn, 'fetchrow'):
                 # PostgreSQL
                 await conn.execute(
                     "DELETE FROM failed_attempts WHERE identifier = $1 AND attempt_type = $2",
@@ -754,7 +754,7 @@ class RateLimiter:
         
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     if endpoint:
                         await conn.execute(

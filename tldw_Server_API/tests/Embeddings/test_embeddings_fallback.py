@@ -34,7 +34,15 @@ def test_provider_fallback_to_hf(client, monkeypatch):
     app.dependency_overrides[get_request_user] = override_user
 
     # Patch the async batch creator to fail for openai and succeed for huggingface
-    async def fake_batch_async(texts: List[str], provider: str, model_id: Optional[str] = None, dimensions: Optional[int] = None, api_key: Optional[str] = None, api_url: Optional[str] = None):
+    async def fake_batch_async(
+        texts: List[str],
+        provider: str,
+        model_id: Optional[str] = None,
+        dimensions: Optional[int] = None,
+        api_key: Optional[str] = None,
+        api_url: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ):
         if provider == "openai":
             raise HTTPException(status_code=503, detail="openai down")
         elif provider == "huggingface":
@@ -85,7 +93,15 @@ def test_no_fallback_when_header_specified(client, monkeypatch):
     app.dependency_overrides[get_request_user] = override_user
 
     # Fail for openai, succeed for huggingface; header will disable fallback and keep failure
-    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None):
+    async def fake_batch_async(
+        texts,
+        provider,
+        model_id=None,
+        dimensions=None,
+        api_key=None,
+        api_url=None,
+        metadata=None,
+    ):
         from fastapi import HTTPException
         if provider == "openai":
             raise HTTPException(status_code=503, detail="openai down")

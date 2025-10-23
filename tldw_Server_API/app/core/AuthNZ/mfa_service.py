@@ -236,7 +236,7 @@ class MFAService:
             backup_codes_json = json.dumps(backup_codes)
             
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute("""
                         UPDATE users 
@@ -280,7 +280,7 @@ class MFAService:
         
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute("""
                         UPDATE users 
@@ -412,7 +412,7 @@ class MFAService:
                 updated_codes_json = json.dumps(backup_codes)
                 
                 # Update database
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute(
                         "UPDATE users SET backup_codes = $1 WHERE id = $2",
@@ -455,7 +455,7 @@ class MFAService:
             backup_codes_json = json.dumps(new_codes)
             
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute(
                         "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",

@@ -82,6 +82,16 @@ _PROVIDER_SECTION_MAP: Dict[str, str] = {
     "huggingface": "huggingface_api",
     "google": "google_api",
     "qwen": "qwen_api",
+    "custom-openai-api": "custom_openai_api",
+    "custom-openai-api-2": "custom_openai_api_2",
+    "llama.cpp": "llama_api",
+    "kobold": "kobold_api",
+    "ooba": "ooba_api",
+    "tabbyapi": "tabby_api",
+    "vllm": "vllm_api",
+    "local-llm": "local_llm",
+    "ollama": "ollama_api",
+    "aphrodite": "aphrodite_api",
 }
 
 _PROVIDER_ENV_MAP: Dict[str, str] = {
@@ -95,6 +105,27 @@ _PROVIDER_ENV_MAP: Dict[str, str] = {
     "huggingface": "HUGGINGFACE_API_KEY",
     "google": "GOOGLE_API_KEY",
     "qwen": "QWEN_API_KEY",
+    "custom-openai-api": "CUSTOM_OPENAI_API_KEY",
+    "custom-openai-api-2": "CUSTOM_OPENAI_API_2_API_KEY",
+    "llama.cpp": "LLAMA_CPP_API_KEY",
+    "kobold": "KOBOLD_API_KEY",
+    "ooba": "OOBA_API_KEY",
+    "tabbyapi": "TABBYAPI_API_KEY",
+    "vllm": "VLLM_API_KEY",
+    "local-llm": "LOCAL_LLM_API_KEY",
+    "ollama": "OLLAMA_API_KEY",
+    "aphrodite": "APHRODITE_API_KEY",
+}
+
+_PROVIDERS_REQUIRING_KEYS = {
+    "openai",
+    "anthropic",
+    "cohere",
+    "groq",
+    "openrouter",
+    "deepseek",
+    "huggingface",
+    "mistral",
 }
 
 
@@ -105,8 +136,15 @@ def _resolve_eval_api_key(api_name: Optional[str]) -> Optional[str]:
     if not api_name:
         return None
     provider = api_name.lower().strip()
-    section_key = _PROVIDER_SECTION_MAP.get(provider, f"{provider}_api")
-    env_key = _PROVIDER_ENV_MAP.get(provider, f"{provider.upper().replace('-', '_')}_API_KEY")
+    section_key = _PROVIDER_SECTION_MAP.get(
+        provider,
+        f"{provider.replace('-', '_').replace('.', '_')}_api",
+    )
+    normalized_env_name = provider.upper().replace("-", "_").replace(".", "_")
+    env_key = _PROVIDER_ENV_MAP.get(
+        provider,
+        f"{''.join(ch if ch.isalnum() or ch == '_' else '_' for ch in normalized_env_name)}_API_KEY",
+    )
 
     api_key: Optional[Any] = None
     try:
@@ -793,7 +831,8 @@ def process_videos(
             confabulation_results = "Confabulation check skipped: no transcript/summary pairs available."
         else:
             resolved_api_key = _resolve_eval_api_key(api_name)
-            if not resolved_api_key:
+            provider_requires_key = api_name.lower() in _PROVIDERS_REQUIRING_KEYS
+            if provider_requires_key and not resolved_api_key:
                 warning_msg = f"Confabulation check skipped: missing API key for provider '{api_name}'."
                 logging.warning(warning_msg)
                 confabulation_results = warning_msg

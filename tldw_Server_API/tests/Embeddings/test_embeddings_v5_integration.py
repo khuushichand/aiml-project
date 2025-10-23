@@ -12,10 +12,47 @@ import numpy as np
 RUN_REAL_EMBEDDINGS = os.getenv("RUN_REAL_EMBEDDINGS", "").lower() == "true"
 IN_CI = os.getenv("CI", "").lower() == "true"
 
+try:
+    import redis
+except Exception:  # pragma: no cover - optional dependency
+    redis = None  # type: ignore
+
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
+from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
+
+def _redis_available() -> bool:
+    """Detect whether a Redis instance is reachable for cache tests."""
+    if redis is None:
+        return False
+
+    try:
+        settings_url = str(app_settings.get("REDIS_URL", "")) or None
+        redis_enabled = bool(app_settings.get("REDIS_ENABLED", False))
+    except Exception:
+        settings_url = None
+        redis_enabled = True
+
+    if not redis_enabled:
+        return False
+
+    env_url = os.getenv("REDIS_URL")
+    url = env_url or settings_url or "redis://localhost:6379/0"
+    try:
+        client = redis.from_url(url)
+        try:
+            client.ping()
+        finally:
+            client.close()
+        return True
+    except Exception:
+        return False
+
+
+REDIS_AVAILABLE = _redis_available()
 
 
 # Disable rate limiting for all tests
@@ -66,10 +103,6 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not RUN_REAL_EMBEDDINGS,
-        reason="Set RUN_REAL_EMBEDDINGS=true to enable real HuggingFace integration tests.",
-    )
     @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_real_huggingface_embedding(self, setup):
         """Test actual HuggingFace embedding creation (no mocks)"""
@@ -154,10 +187,7 @@ class TestEmbeddingsIntegration:
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not RUN_REAL_EMBEDDINGS,
-        reason="Set RUN_REAL_EMBEDDINGS=true to enable real HuggingFace integration tests.",
-    )
+    @pytest.mark.skipif(not REDIS_AVAILABLE, reason="Redis unreachable; cache persistence test skipped.")
     @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_real_cache_persistence(self, setup):
         """Test cache persistence across requests (no mocks)"""
@@ -204,10 +234,6 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not RUN_REAL_EMBEDDINGS,
-        reason="Set RUN_REAL_EMBEDDINGS=true to enable real HuggingFace integration tests.",
-    )
     @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_different_providers_produce_different_embeddings(self, setup):
         """Test that different providers produce different embeddings for same text"""

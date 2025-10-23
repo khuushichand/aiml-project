@@ -1241,7 +1241,7 @@ class SessionManager:
     async def _update_last_activity(self, session_id: int, conn):
         """Update last activity timestamp for a session"""
         try:
-            if hasattr(conn, 'execute'):
+            if hasattr(conn, 'fetchrow'):
                 # PostgreSQL
                 await conn.execute(
                     "UPDATE sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = $1",

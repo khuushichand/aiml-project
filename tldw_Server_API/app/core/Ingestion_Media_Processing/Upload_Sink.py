@@ -347,8 +347,10 @@ class FileValidator:
             logging.warning(f"Validation failed for '{_original_filename}' (path: {current_file_path}): {issues}")
             return ValidationResult(False, issues, current_file_path, detected_mime_type, disk_file_ext)
 
+        claimed_ext_log = claimed_ext_display_str
+        disk_ext_log = disk_file_ext or "<none>"
         logging.info(f"File '{_original_filename}' (path: {current_file_path}) validated successfully. "
-                     f"MIME: {detected_mime_type}, Claimed Ext: {claimed_ext}, Disk Ext: {disk_file_ext}")
+                     f"MIME: {detected_mime_type}, Claimed Ext: {claimed_ext_log}, Disk Ext: {disk_ext_log}")
         return ValidationResult(True, file_path=current_file_path,
                                 detected_mime_type=detected_mime_type, detected_extension=disk_file_ext)
 

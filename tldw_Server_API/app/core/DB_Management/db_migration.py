@@ -201,8 +201,17 @@ class DatabaseMigrator:
         
         backup_path = os.path.join(self.backup_dir, backup_filename)
         
-        # Copy database file
-        shutil.copy2(self.db_path, backup_path)
+        # Create a consistent snapshot even when WAL journaling is enabled.
+        try:
+            with sqlite3.connect(self.db_path) as source, sqlite3.connect(backup_path) as target:
+                try:
+                    source.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except sqlite3.OperationalError:
+                    # Likely not in WAL mode; ignore.
+                    pass
+                source.backup(target)
+        except sqlite3.Error as exc:
+            raise MigrationError(f"Failed to create SQLite backup: {exc}") from exc
         
         # Create backup metadata
         metadata = {

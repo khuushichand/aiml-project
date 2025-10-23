@@ -45,7 +45,7 @@ def test_dimensions_reduce_policy(client, monkeypatch):
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"  # force async path
 
     # Patch async batch to return HF-like 384 dim
-    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None):
+    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):
         return [[0.1] * 384 for _ in texts]
 
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
@@ -71,7 +71,7 @@ def test_dimensions_pad_policy(client, monkeypatch):
     os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "pad"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"
 
-    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None):
+    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):
         return [[0.2] * 384 for _ in texts]
 
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
@@ -95,7 +95,7 @@ def test_dimensions_ignore_policy(client, monkeypatch):
     os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "ignore"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"
 
-    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None):
+    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):
         return [[0.3] * 384 for _ in texts]
 
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
@@ -113,4 +113,3 @@ def test_dimensions_ignore_policy(client, monkeypatch):
     # Should remain native size
     assert len(vec) == 384
     assert r.headers.get("X-Embeddings-Dimensions-Policy") == "ignore"
-

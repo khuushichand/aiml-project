@@ -661,6 +661,15 @@ class Chunker:
                         combined += ' '
                     else:
                         combined += sep
+                if combined and combined.endswith('\n') and text_part and not text_part[0].isspace():
+                    header_like = (
+                        kind_hint == 'header_atx' or
+                        (isinstance(md, dict) and md.get('paragraph_kind') == 'header_atx') or
+                        method == 'structure_aware'
+                    )
+                    language = md.get('language') if isinstance(md, dict) else None
+                    if header_like and (not language or language.lower() not in languages_no_space):
+                        combined += ' '
                 combined += text_part
                 prev_md = md
             return combined

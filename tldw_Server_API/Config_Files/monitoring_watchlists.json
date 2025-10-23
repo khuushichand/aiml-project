@@ -1,0 +1,296 @@
+{
+  "watchlists": [
+    {
+      "id": "a6b91ab4-e886-4137-893b-1ad7d5a61455",
+      "name": "Kid-Safe Defaults — Adult",
+      "description": "Detect common adult-content terms",
+      "enabled": true,
+      "scope_type": "global",
+      "scope_id": "*",
+      "rules": [
+        {
+          "pattern": "/\\bnsfw\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bporn(hub)?\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bxxx\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bonlyfans\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bnude(s)?\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bexplicit\\s+content\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\b18\\+\\b/i",
+          "category": "adult",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "d818f7ae-8aa0-459c-b57a-36f26b5e3f77",
+      "name": "Kid-Safe Defaults — Self Harm",
+      "description": "Detect self-harm or suicidal ideation terms",
+      "enabled": true,
+      "scope_type": "global",
+      "scope_id": "*",
+      "rules": [
+        {
+          "pattern": "/\\bsuicide\\b/i",
+          "category": "self_harm",
+          "severity": "critical",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bkill\\s+myself\\b/i",
+          "category": "self_harm",
+          "severity": "critical",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bself[-\\s]?harm\\b/i",
+          "category": "self_harm",
+          "severity": "critical",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bcut(ting)?\\b/i",
+          "category": "self_harm",
+          "severity": "critical",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\boverdose\\b/i",
+          "category": "self_harm",
+          "severity": "critical",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "11aff5a0-cb4b-4bd3-a99d-59c9189da227",
+      "name": "Kid-Safe Defaults — Drugs",
+      "description": "Detect illicit drug references and acquisition",
+      "enabled": true,
+      "scope_type": "global",
+      "scope_id": "*",
+      "rules": [
+        {
+          "pattern": "/\\bbuy\\s+(drugs|weed)\\b/i",
+          "category": "drugs",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\b(meth|heroin|cocaine|ecstasy|mdma)\\b/i",
+          "category": "drugs",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bmarijuana|cannabis|weed\\b/i",
+          "category": "drugs",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "22e7e6ab-ed38-42bf-8291-056f02ab52d8",
+      "name": "Kid-Safe Defaults — Violence",
+      "description": "Detect violent intent references",
+      "enabled": true,
+      "scope_type": "global",
+      "scope_id": "*",
+      "rules": [
+        {
+          "pattern": "/\\bkill\\b/i",
+          "category": "violence",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bmurder\\b/i",
+          "category": "violence",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bstab\\b/i",
+          "category": "violence",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        },
+        {
+          "pattern": "/\\bshoot(ing)?\\b/i",
+          "category": "violence",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "606103b2-600d-4107-97f0-893e947e6a29",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "88c836f9-4ed6-4ce0-ba43-412642a7cc9f",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "c50a53e2-3ca7-441d-9a4b-8462481447c3",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "4559d980-ca11-44a7-a2e2-3eed94cce55c",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "89f3ba8c-7eb0-493c-9f64-fb24aade0f80",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "661095c3-368f-45ac-9381-af91cbbd5e64",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    },
+    {
+      "id": "46a4433b-7f1b-47c7-b19c-d92d2368c4a9",
+      "name": "Test WL",
+      "description": "Detect 'badword'",
+      "enabled": true,
+      "scope_type": "user",
+      "scope_id": "u1",
+      "rules": [
+        {
+          "pattern": "badword",
+          "category": "custom",
+          "severity": "warning",
+          "note": null,
+          "tags": null
+        }
+      ]
+    }
+  ]
+}

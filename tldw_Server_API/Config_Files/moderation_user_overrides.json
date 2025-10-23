@@ -1,0 +1,11 @@
+{
+  "1": {
+    "enabled": true,
+    "input_enabled": true,
+    "output_enabled": true,
+    "input_action": "block",
+    "output_action": "redact",
+    "redact_replacement": "[REDACTED]"
+  }
+}
+

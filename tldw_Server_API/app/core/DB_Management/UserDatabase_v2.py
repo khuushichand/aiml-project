@@ -88,9 +88,15 @@ class UserDatabase:
             self.backend = DatabaseBackendFactory.create_backend(config)
         else:
             # Default to SQLite with Users.db
+            default_sqlite_path = (
+                Path(__file__).resolve()
+                .parent.parent.parent.parent.parent
+                / "Databases"
+                / "users.db"
+            )
             config = DatabaseConfig(
                 backend_type=BackendType.SQLITE,
-                sqlite_path="../Databases/Users.db"
+                sqlite_path=str(default_sqlite_path)
             )
             self.backend = DatabaseBackendFactory.create_backend(config)
         
@@ -187,7 +193,8 @@ class UserDatabase:
                 # Check for duplicates
                 existing = self.backend.execute(
                     "SELECT id FROM users WHERE username = ? OR email = ?",
-                    (username, email)
+                    (username, email),
+                    connection=conn,
                 )
                 
                 if existing.rows:
@@ -199,12 +206,14 @@ class UserDatabase:
                     INSERT INTO users (uuid, username, email, password_hash, metadata)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (user_uuid, username, email, password_hash, metadata)
+                    (user_uuid, username, email, password_hash, metadata),
+                    connection=conn,
                 )
                 # Retrieve ID using UUID to support backends without lastrowid
                 user_lookup = self.backend.execute(
                     "SELECT id FROM users WHERE uuid = ?",
-                    (user_uuid,)
+                    (user_uuid,),
+                    connection=conn,
                 )
                 if not user_lookup.rows:
                     raise UserDatabaseError("Failed to locate newly created user record")
@@ -213,19 +222,26 @@ class UserDatabase:
                 # Assign default role
                 role_result = self.backend.execute(
                     "SELECT id FROM roles WHERE name = ?",
-                    (role,)
+                    (role,),
+                    connection=conn,
                 )
                 
                 if role_result.rows:
                     role_id = role_result.rows[0]['id']
                     self.backend.execute(
                         "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)",
-                        (user_id, role_id)
+                        (user_id, role_id),
+                        connection=conn,
                     )
                 
                 # Log the creation
-                self._audit_log('user_created', user_id, None, 
-                              {'username': username, 'email': email, 'role': role})
+                self._audit_log(
+                    'user_created',
+                    user_id,
+                    None,
+                    {'username': username, 'email': email, 'role': role},
+                    connection=conn,
+                )
                 
                 logger.info(f"Created user {username} with ID {user_id}")
                 return user_id
@@ -301,7 +317,7 @@ class UserDatabase:
         Returns:
             bool: True if update successful
         """
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             # Build update query
             allowed_fields = ['email', 'is_active', 'is_verified', 'metadata']
             set_clause = []
@@ -318,16 +334,16 @@ class UserDatabase:
             values.append(user_id)
             query = f"UPDATE users SET {', '.join(set_clause)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
             
-            result = self.backend.execute(query, tuple(values))
+            result = self.backend.execute(query, tuple(values), connection=conn)
             
             # SQLite's sqlite3 cursor.rowcount can be -1 in some environments; treat
             # a successful execute without exception as success for SQLite.
             if self.backend.backend_type == BackendType.SQLITE:
-                self._audit_log('user_updated', user_id, None, updates)
+                self._audit_log('user_updated', user_id, None, updates, connection=conn)
                 return True
 
             if result.rowcount > 0:
-                self._audit_log('user_updated', user_id, None, updates)
+                self._audit_log('user_updated', user_id, None, updates, connection=conn)
                 return True
             return False
     
@@ -383,10 +399,11 @@ class UserDatabase:
         Returns:
             bool: True if assignment successful
         """
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             # Get role ID
             role_result = self.backend.execute(
-                "SELECT id FROM roles WHERE name = ?", (role_name,)
+                "SELECT id FROM roles WHERE name = ?", (role_name,),
+                connection=conn,
             )
             
             if not role_result.rows:
@@ -410,10 +427,15 @@ class UserDatabase:
                         DO UPDATE SET granted_by = EXCLUDED.granted_by, expires_at = EXCLUDED.expires_at
                     """
                 
-                self.backend.execute(query, (user_id, role_id, granted_by, expires_at))
+                self.backend.execute(
+                    query,
+                    (user_id, role_id, granted_by, expires_at),
+                    connection=conn,
+                )
                 
                 self._audit_log('role_assigned', user_id, granted_by,
-                              {'role': role_name, 'expires_at': expires_at.isoformat() if expires_at else None})
+                              {'role': role_name, 'expires_at': expires_at.isoformat() if expires_at else None},
+                              connection=conn)
                 return True
                 
             except Exception as e:
@@ -432,10 +454,11 @@ class UserDatabase:
         Returns:
             bool: True if revocation successful
         """
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             # Get role ID
             role_result = self.backend.execute(
-                "SELECT id FROM roles WHERE name = ?", (role_name,)
+                "SELECT id FROM roles WHERE name = ?", (role_name,),
+                connection=conn,
             )
             
             if not role_result.rows:
@@ -445,11 +468,12 @@ class UserDatabase:
             
             result = self.backend.execute(
                 "DELETE FROM user_roles WHERE user_id = ? AND role_id = ?",
-                (user_id, role_id)
+                (user_id, role_id),
+                connection=conn,
             )
             
             if result.rowcount > 0:
-                self._audit_log('role_revoked', user_id, revoked_by, {'role': role_name})
+                self._audit_log('role_revoked', user_id, revoked_by, {'role': role_name}, connection=conn)
                 return True
             return False
     
@@ -529,10 +553,11 @@ class UserDatabase:
         code = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
         
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             # Get role ID
             role_result = self.backend.execute(
-                "SELECT id FROM roles WHERE name = ?", (role,)
+                "SELECT id FROM roles WHERE name = ?", (role,),
+                connection=conn,
             )
             role_id = role_result.rows[0]['id'] if role_result.rows else None
             
@@ -541,11 +566,13 @@ class UserDatabase:
                 INSERT INTO registration_codes (code, created_by, expires_at, max_uses, role_id)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (code, created_by, expires_at, max_uses, role_id)
+                (code, created_by, expires_at, max_uses, role_id),
+                connection=conn,
             )
             
             self._audit_log('registration_code_created', None, created_by,
-                          {'code': code[:8] + '...', 'max_uses': max_uses, 'role': role})
+                          {'code': code[:8] + '...', 'max_uses': max_uses, 'role': role},
+                          connection=conn)
             
             logger.info(f"Created registration code {code[:8]}... with {max_uses} uses")
             return code
@@ -589,14 +616,15 @@ class UserDatabase:
         Returns:
             bool: True if code was successfully used
         """
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             # Get code info
             code_result = self.backend.execute(
                 """
                 SELECT id, times_used FROM registration_codes
                 WHERE code = ? AND is_active = ?
                 """,
-                (code, True if self.backend.backend_type == BackendType.POSTGRESQL else 1)
+                (code, True if self.backend.backend_type == BackendType.POSTGRESQL else 1),
+                connection=conn,
             )
             
             if not code_result.rows:
@@ -611,7 +639,8 @@ class UserDatabase:
                 SET times_used = times_used + 1
                 WHERE id = ?
                 """,
-                (code_id,)
+                (code_id,),
+                connection=conn,
             )
             
             # Record usage
@@ -620,11 +649,13 @@ class UserDatabase:
                 INSERT INTO registration_code_usage (code_id, user_id, ip_address, user_agent)
                 VALUES (?, ?, ?, ?)
                 """,
-                (code_id, user_id, ip_address, user_agent)
+                (code_id, user_id, ip_address, user_agent),
+                connection=conn,
             )
             
             self._audit_log('registration_code_used', user_id, None,
-                          {'code': code[:8] + '...', 'ip': ip_address})
+                          {'code': code[:8] + '...', 'ip': ip_address},
+                          connection=conn)
             
             return True
     
@@ -635,7 +666,7 @@ class UserDatabase:
     def record_login(self, user_id: int, ip_address: Optional[str] = None,
                     user_agent: Optional[str] = None) -> bool:
         """Record a successful login."""
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             self.backend.execute(
                 """
                 UPDATE users 
@@ -644,16 +675,18 @@ class UserDatabase:
                     locked_until = NULL
                 WHERE id = ?
                 """,
-                (user_id,)
+                (user_id,),
+                connection=conn,
             )
             
             self._audit_log('login_success', user_id, None,
-                          {'ip': ip_address, 'user_agent': user_agent})
+                          {'ip': ip_address, 'user_agent': user_agent},
+                          connection=conn)
             return True
     
     def record_failed_login(self, username: str, ip_address: Optional[str] = None) -> int:
         """Record a failed login attempt."""
-        with self.backend.transaction():
+        with self.backend.transaction() as conn:
             # Different syntax for SQLite vs PostgreSQL
             if self.backend.backend_type == BackendType.SQLITE:
                 self.backend.execute(
@@ -662,12 +695,14 @@ class UserDatabase:
                     SET failed_login_attempts = failed_login_attempts + 1
                     WHERE username = ?
                     """,
-                    (username,)
+                    (username,),
+                    connection=conn,
                 )
                 
                 result = self.backend.execute(
                     "SELECT failed_login_attempts, id FROM users WHERE username = ?",
-                    (username,)
+                    (username,),
+                    connection=conn,
                 )
             else:
                 result = self.backend.execute(
@@ -677,7 +712,8 @@ class UserDatabase:
                     WHERE username = ?
                     RETURNING failed_login_attempts, id
                     """,
-                    (username,)
+                    (username,),
+                    connection=conn,
                 )
             
             if result.rows:
@@ -689,11 +725,13 @@ class UserDatabase:
                     lock_until = datetime.now(timezone.utc) + timedelta(minutes=15)
                     self.backend.execute(
                         "UPDATE users SET locked_until = ? WHERE id = ?",
-                        (lock_until, user_id)
+                        (lock_until, user_id),
+                        connection=conn,
                     )
                 
                 self._audit_log('login_failed', None, None,
-                              {'username': username, 'ip': ip_address, 'attempts': attempts})
+                              {'username': username, 'ip': ip_address, 'attempts': attempts},
+                              connection=conn)
                 
                 return attempts
             return 0
@@ -714,8 +752,14 @@ class UserDatabase:
     # Helper Methods
     ########################################################################################################################
     
-    def _audit_log(self, event_type: str, user_id: Optional[int], 
-                  target_user_id: Optional[int], details: Optional[Dict[str, Any]] = None):
+    def _audit_log(
+        self,
+        event_type: str,
+        user_id: Optional[int],
+        target_user_id: Optional[int],
+        details: Optional[Dict[str, Any]] = None,
+        connection: Optional[Any] = None,
+    ):
         """Create an audit log entry."""
         try:
             self.backend.execute(
@@ -723,8 +767,9 @@ class UserDatabase:
                 INSERT INTO auth_audit_log (event_type, user_id, target_user_id, details)
                 VALUES (?, ?, ?, ?)
                 """,
-                (event_type, user_id, target_user_id, 
-                 json.dumps(details) if details else None)
+                (event_type, user_id, target_user_id,
+                 json.dumps(details) if details else None),
+                connection=connection,
             )
         except Exception as e:
             logger.error(f"Failed to create audit log: {e}")

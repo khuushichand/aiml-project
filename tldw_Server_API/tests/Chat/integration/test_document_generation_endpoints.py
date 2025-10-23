@@ -50,6 +50,7 @@ def test_document_generate_streams_as_sse(monkeypatch, authenticated_client):
     assert "data: first chunk\n\n" in body
     assert "data: second chunk\n\n" in body
     assert body.strip().endswith("data: [DONE]")
+    response.close()
 
 
 def test_document_generate_bubbles_service_error(monkeypatch, authenticated_client):
@@ -72,3 +73,4 @@ def test_document_generate_bubbles_service_error(monkeypatch, authenticated_clie
 
     assert response.status_code == 400, response.text
     assert response.json() == {"detail": "No messages found for conversation 42"}
+    response.close()

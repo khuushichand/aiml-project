@@ -9,6 +9,7 @@ import yaml
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 
@@ -458,25 +459,70 @@ def load_settings():
 
     # --- Redis Configuration ---
     # Initialize comprehensive_config early to avoid UnboundLocalError
-    comprehensive_config = {}
-    
-    # Load from comprehensive config first, then environment variables, then defaults
-    if comprehensive_config and 'Redis' in comprehensive_config:
-        redis_config = comprehensive_config.get('Redis', {})
-        redis_host = os.getenv("REDIS_HOST", redis_config.get('redis_host', 'localhost'))
-        redis_port = int(os.getenv("REDIS_PORT", redis_config.get('redis_port', '6379')))
-        redis_db = int(os.getenv("REDIS_DB", redis_config.get('redis_db', '0')))
-        cache_ttl = int(os.getenv("CACHE_TTL", redis_config.get('cache_ttl', '300')))
-        redis_enabled = os.getenv("REDIS_ENABLED", str(redis_config.get('redis_enabled', 'false'))).lower() == "true"
+    try:
+        comprehensive_config: Dict[str, Any] = load_and_log_configs() or {}
+    except Exception as e:
+        _log_error(f"Error loading comprehensive_config: {e}", exc_info=True)
+        comprehensive_config = {}
+    def _redis_section_get(key: str, default: Optional[str] = None) -> Optional[str]:
+        section = comprehensive_config.get('Redis') or {}
+        try:
+            if hasattr(section, "get"):
+                return section.get(key, fallback=default)  # type: ignore[arg-type]
+        except TypeError:
+            # Some objects (e.g., dict) don't support fallback kwarg
+            pass
+        if isinstance(section, dict):
+            return section.get(key, default)
+        return default
+    def _to_bool(value: Optional[str], default: bool = False) -> bool:
+        if value is None:
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    # Load from comprehensive config first, allowing env overrides
+    redis_host = os.getenv("REDIS_HOST") or _redis_section_get('redis_host', 'localhost') or 'localhost'
+    redis_port_raw = os.getenv("REDIS_PORT") or _redis_section_get('redis_port', '6379') or '6379'
+    redis_db_raw = os.getenv("REDIS_DB") or _redis_section_get('redis_db', '0') or '0'
+    cache_ttl_raw = os.getenv("CACHE_TTL") or _redis_section_get('cache_ttl', '300') or '300'
+    redis_enabled_env = os.getenv("REDIS_ENABLED")
+    redis_enabled = _to_bool(redis_enabled_env, _to_bool(_redis_section_get('redis_enabled', 'false'), False))
+
+    try:
+        redis_port = int(str(redis_port_raw))
+    except Exception:
+        redis_port = 6379
+    try:
+        redis_db = int(str(redis_db_raw))
+    except Exception:
+        redis_db = 0
+    try:
+        cache_ttl = int(str(cache_ttl_raw))
+    except Exception:
+        cache_ttl = 300
+
+    config_redis_url = _redis_section_get('redis_url')
+    redis_url_env = os.getenv("REDIS_URL")
+
+    if redis_url_env:
+        redis_url = redis_url_env
+    elif config_redis_url:
+        redis_url = config_redis_url
+        try:
+            parsed = urlparse(redis_url)
+            if parsed.hostname and not os.getenv("REDIS_HOST"):
+                redis_host = parsed.hostname
+            if parsed.port and not os.getenv("REDIS_PORT"):
+                redis_port = parsed.port
+            if parsed.path and parsed.path != "/" and not os.getenv("REDIS_DB"):
+                try:
+                    redis_db = int(parsed.path.lstrip("/"))
+                except Exception:
+                    pass
+        except Exception:
+            pass
     else:
-        # Fallback to environment variables and defaults
-        redis_host = os.getenv("REDIS_HOST", "localhost")
-        redis_port = int(os.getenv("REDIS_PORT", "6379"))
-        redis_db = int(os.getenv("REDIS_DB", "0"))
-        cache_ttl = int(os.getenv("CACHE_TTL", "300"))
-        redis_enabled = os.getenv("REDIS_ENABLED", "false").lower() == "true"
-    
-    redis_url = os.getenv("REDIS_URL", f"redis://{redis_host}:{redis_port}/{redis_db}")
+        redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
 
     # Base directory for all user-specific data: ACTUAL_PROJECT_ROOT/Databases/user_databases/
     default_user_data_base_dir = ACTUAL_PROJECT_ROOT / "Databases" / "user_databases"
@@ -492,15 +538,6 @@ def load_settings():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
     # Load comprehensive configurations (API keys, embedding settings, etc.)
-    try:
-        comprehensive_config = load_and_log_configs() # This function is already defined in your provided code
-        if comprehensive_config is None:
-            _log_error("Failed to load comprehensive_config, will use fallbacks for some settings.")
-            comprehensive_config = {} # Ensure it's a dict to avoid errors on .get()
-    except Exception as e:
-        _log_error(f"Error loading comprehensive_config: {e}", exc_info=True)
-        comprehensive_config = {}
-
     # If SINGLE_USER_API_KEY wasn't present before, try reading again now that configs/.env may be loaded
     if not single_user_api_key:
         try:

@@ -1,0 +1,50 @@
+{
+  "openai": {
+    "gpt-4o": { "prompt": 0.005, "completion": 0.015 },
+    "gpt-4o-mini": { "prompt": 0.001, "completion": 0.002 },
+    "gpt-4.1": { "prompt": 0.010, "completion": 0.030 },
+    "o3-mini": { "prompt": 0.001, "completion": 0.002 },
+    "text-embedding-3-small": { "prompt": 0.00002, "completion": 0.00002 },
+    "text-embedding-3-large": { "prompt": 0.00013, "completion": 0.00013 }
+  },
+  "anthropic": {
+    "claude-3-opus": { "prompt": 0.015, "completion": 0.075 },
+    "claude-3-sonnet": { "prompt": 0.003, "completion": 0.015 },
+    "claude-3-haiku": { "prompt": 0.00025, "completion": 0.00125 }
+  },
+  "mistral": {
+    "mistral-tiny": { "prompt": 0.00025, "completion": 0.00025 },
+    "mistral-small": { "prompt": 0.0006, "completion": 0.0006 },
+    "mistral-medium": { "prompt": 0.0027, "completion": 0.0027 },
+    "mistral-large": { "prompt": 0.008, "completion": 0.008 }
+  },
+  "groq": {
+    "llama3-70b": { "prompt": 0.0008, "completion": 0.0008 },
+    "llama3-8b": { "prompt": 0.0001, "completion": 0.0001 },
+    "mixtral-8x7b": { "prompt": 0.0006, "completion": 0.0006 }
+  },
+  "google": {
+    "gemini-1.5-pro": { "prompt": 0.002, "completion": 0.005 },
+    "gemini-1.5-flash": { "prompt": 0.0005, "completion": 0.001 },
+    "text-embedding-004": { "prompt": 0.00005, "completion": 0.00005 }
+  },
+  "cohere": {
+    "command": { "prompt": 0.0005, "completion": 0.0012 },
+    "command-r": { "prompt": 0.0015, "completion": 0.003 }
+  },
+  "qwen": {
+    "qwen2.5-7b": { "prompt": 0.0002, "completion": 0.0002 },
+    "qwen2.5-72b": { "prompt": 0.0005, "completion": 0.0005 }
+  },
+  "openrouter": {
+    "gpt-4o": { "prompt": 0.005, "completion": 0.015 },
+    "meta-llama/llama-3-70b": { "prompt": 0.0008, "completion": 0.0008 }
+  },
+  "xai": {
+    "grok-2": { "prompt": 0.003, "completion": 0.006 }
+  },
+  "huggingface": {
+    "default": { "prompt": 0.00005, "completion": 0.00005 }
+  }
+}
+

@@ -767,7 +767,7 @@ class APIKeyManager:
         
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     result = await conn.execute(
                         """
                         UPDATE api_keys 
@@ -858,7 +858,7 @@ class APIKeyManager:
         
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     result = await conn.execute(
                         """
                         UPDATE api_keys 
@@ -905,7 +905,7 @@ class APIKeyManager:
         """Update usage statistics for a key"""
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         """
                         UPDATE api_keys 
@@ -935,7 +935,7 @@ class APIKeyManager:
         """Mark a key as expired"""
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         "UPDATE api_keys SET status = $1 WHERE id = $2",
                         APIKeyStatus.EXPIRED.value, key_id

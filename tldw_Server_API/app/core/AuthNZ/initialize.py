@@ -159,7 +159,7 @@ async def setup_database():
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             pool = await get_db_pool()
             async with pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS sessions (
                             id SERIAL PRIMARY KEY,
@@ -374,7 +374,7 @@ async def setup_database():
             # Now create usage tables that reference api_keys
             pool = await get_db_pool()
             async with pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # Extend api_keys with Virtual Key fields (apply after base api_keys created)
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")

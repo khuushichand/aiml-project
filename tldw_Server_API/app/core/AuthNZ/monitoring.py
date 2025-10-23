@@ -235,7 +235,7 @@ class AuthNZMonitor:
             
             # Store in audit log for now (could have dedicated metrics table)
             async with db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute(
                         """

@@ -39,7 +39,7 @@ def test_fallback_model_mapping_openai_to_hf(client, monkeypatch):
     # Capture the model_id used for fallback call
     calls = {"args": None}
 
-    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None):
+    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):
         calls["args"] = {"provider": provider, "model_id": model_id}
         if provider == "openai":
             # simulate failure for openai to force fallback
