@@ -364,6 +364,7 @@ class Chunker:
         spans = self._compute_paragraph_spans(text, template)
         root = {'kind': 'root', 'level': 0, 'title': None, 'start_offset': 0, 'end_offset': len(text), 'children': []}
         current_section: Optional[Dict[str, Any]] = None
+        section_stack: List[Dict[str, Any]] = []
         preface_section: Optional[Dict[str, Any]] = None
 
         # Helper to add a leaf block with chunks
@@ -541,11 +542,14 @@ class Chunker:
             # New section on header
             if bkind == 'header_atx':
                 # Close previous sections (including any preface) before starting a new one
-                _close_section(current_section, bstart)
                 _close_section(preface_section, bstart)
                 header_segment = text[bstart:bend]
                 level_match = re.match(r'^\s*(#{1,6})\s', header_segment)
                 level = len(level_match.group(1)) if level_match else 1
+                while section_stack and section_stack[-1].get('level', 0) >= level:
+                    top = section_stack.pop()
+                    _close_section(top, bstart)
+                parent_section = section_stack[-1] if section_stack else root
                 current_section = {
                     'kind': 'section',
                     'level': level,
@@ -554,15 +558,18 @@ class Chunker:
                     'end_offset': None,
                     'children': []
                 }
-                root['children'].append(current_section)
+                parent_section.setdefault('children', []).append(current_section)
+                section_stack.append(current_section)
                 # Record the header itself as a block so offsets include the title text
                 _add_block(current_section, bstart, bend, bkind)
             elif bkind != 'blank':
+                current_section = section_stack[-1] if section_stack else None
                 target_parent = current_section if current_section is not None else _ensure_preface_section(bstart)
                 _add_block(target_parent, bstart, bend, bkind)
 
         # Close tail
-        _close_section(current_section, len(text))
+        while section_stack:
+            _close_section(section_stack.pop(), len(text))
         _close_section(preface_section, len(text))
 
         return {

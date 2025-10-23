@@ -96,3 +96,31 @@ def test_structure_aware_overlap_ge_maxsize_clamped_behavior():
     for item in flat:
         assert item["metadata"].get("grouped_elements") == 2
         assert item["metadata"].get("section_path") == "Sec"
+
+
+@pytest.mark.unit
+def test_structure_aware_nested_headers_preserve_section_path():
+    text = (
+        "# H1\n"
+        "Top level paragraph.\n\n"
+        "## H1.1\n"
+        "Nested paragraph.\n"
+    )
+
+    ck = Chunker()
+    tree = ck.chunk_text_hierarchical_tree(
+        text=text,
+        method="structure_aware",
+        max_size=3,
+        overlap=0,
+        language="en",
+    )
+    flat = ck.flatten_hierarchical(tree)
+
+    nested_paths = [
+        item["metadata"].get("section_path")
+        for item in flat
+        if item["metadata"].get("section_path")
+    ]
+
+    assert "H1 > H1.1" in nested_paths

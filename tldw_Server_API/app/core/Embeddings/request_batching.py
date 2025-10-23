@@ -230,7 +230,9 @@ class RequestBatcher:
             
             # Process batch
             # Import here to avoid circular dependency
-            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embeddings_batch
+            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+                create_embeddings_batch_async as embeddings_create_embeddings_batch_async,
+            )
             
             # Create config for batch
             batch_config = {
@@ -246,7 +248,7 @@ class RequestBatcher:
             }
             
             # Get embeddings
-            embeddings = await create_embeddings_batch_async(
+            embeddings = await embeddings_create_embeddings_batch_async(
                 texts,
                 batch_config,
                 model_id_override=f"{provider}:{model}"

@@ -71,8 +71,21 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         status = "success"
         
         # Check rate limit
-        if user_id and not await self.rate_limiter.check_rate_limit_async(user_id):
-            raise Exception("Rate limit exceeded")
+        if user_id:
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(user_id)
+            if not allowed:
+                status = "rate_limited"
+                retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
+                self.metrics.log_request(self.provider_name, model, status=status)
+                self.metrics.log_error(self.provider_name, "RateLimitExceeded")
+                logger.warning(
+                    "Rate limit exceeded for user '{user_id}' on provider '{provider}' model '{model}'.{extra}",
+                    user_id=user_id,
+                    provider=self.provider_name,
+                    model=model,
+                    extra=retry_after_msg,
+                )
+                raise Exception(f"Rate limit exceeded.{retry_after_msg}")
         
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
@@ -124,8 +137,20 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
         """Create embedding using HuggingFace API"""
         
         # Check rate limit
-        if user_id and not await self.rate_limiter.check_rate_limit_async(user_id):
-            raise Exception("Rate limit exceeded")
+        if user_id:
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(user_id)
+            if not allowed:
+                retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
+                self.metrics.log_request(self.provider_name, model, status="rate_limited")
+                self.metrics.log_error(self.provider_name, "RateLimitExceeded")
+                logger.warning(
+                    "Rate limit exceeded for user '{user_id}' on provider '{provider}' model '{model}'.{extra}",
+                    user_id=user_id,
+                    provider=self.provider_name,
+                    model=model,
+                    extra=retry_after_msg,
+                )
+                raise Exception(f"Rate limit exceeded.{retry_after_msg}")
         
         url = f"{self.base_url}/{model}"
         

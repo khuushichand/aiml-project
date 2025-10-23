@@ -408,6 +408,11 @@ class PostgreSQLBackend(DatabaseBackend):
             text = text[idx:].lstrip()
             if text.upper().startswith("AS"):
                 text = text[2:].lstrip()
+                upper_tail = text.upper()
+                if upper_tail.startswith("NOT MATERIALIZED"):
+                    text = text[len("NOT MATERIALIZED"):].lstrip()
+                elif upper_tail.startswith("MATERIALIZED"):
+                    text = text[len("MATERIALIZED"):].lstrip()
 
             if not text.startswith("("):
                 break
@@ -683,9 +688,11 @@ class PostgreSQLBackend(DatabaseBackend):
             for statement in statements:
                 if statement:
                     cursor.execute(statement)
-            conn.commit()
+            if not external_conn:
+                conn.commit()
         except Exception as e:
-            conn.rollback()
+            if not external_conn:
+                conn.rollback()
             logger.error(f"Schema creation failed: {e}")
             raise DatabaseError(f"Failed to create schema: {e}")
         finally:
@@ -805,11 +812,13 @@ class PostgreSQLBackend(DatabaseBackend):
                 BEFORE INSERT OR UPDATE ON {self.escape_identifier(source_table)}
                 FOR EACH ROW EXECUTE FUNCTION {self.escape_identifier(function_name)}()
             """)
-            
-            conn.commit()
-            
+
+            if not external_conn:
+                conn.commit()
+
         except Exception as e:
-            conn.rollback()
+            if not external_conn:
+                conn.rollback()
             logger.error(f"FTS setup failed: {e}")
             raise DatabaseError(f"Failed to create FTS: {e}")
         finally:
@@ -906,10 +915,12 @@ class PostgreSQLBackend(DatabaseBackend):
                 $$ LANGUAGE plpgsql IMMUTABLE;
                 """
             )
-            conn.commit()
+            if not external_conn:
+                conn.commit()
         except Exception as exc:
             try:
-                conn.rollback()
+                if not external_conn:
+                    conn.rollback()
             except Exception:
                 pass
             logger.error(f"Failed to ensure FTS synonyms support: {exc}")

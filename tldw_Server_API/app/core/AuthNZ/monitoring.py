@@ -425,13 +425,16 @@ class AuthNZMonitor:
             )
             
             # Get active sessions count
+            revoked_inactive_value = False
             sessions_count = await db_pool.fetchone(
                 """
                 SELECT COUNT(*) as active_sessions
                 FROM sessions
-                WHERE expires_at > ? AND is_revoked = 0
+                WHERE expires_at > ?
+                  AND (is_revoked = ? OR is_revoked IS NULL)
                 """,
-                datetime.utcnow().isoformat() if not hasattr(db_pool, 'fetchval') else datetime.utcnow()
+                datetime.utcnow().isoformat() if not hasattr(db_pool, 'fetchval') else datetime.utcnow(),
+                revoked_inactive_value,
             )
             
             # Get active API keys count
