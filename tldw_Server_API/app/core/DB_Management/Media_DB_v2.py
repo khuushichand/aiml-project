@@ -1095,6 +1095,17 @@ class MediaDatabase:
                 prepared_params,
                 connection=conn,
             )
+            if commit:
+                try:
+                    conn.commit()
+                except Exception as exc:
+                    logging.error(
+                        "Failed to commit backend query for %s: %s",
+                        self.db_path_str,
+                        exc,
+                        exc_info=True,
+                    )
+                    raise DatabaseError(f"Backend commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
             logging.error(
@@ -1187,6 +1198,17 @@ class MediaDatabase:
                 prepared_params_list,
                 connection=conn,
             )
+            if commit:
+                try:
+                    conn.commit()
+                except Exception as exc:
+                    logging.error(
+                        "Failed to commit backend batch for %s: %s",
+                        self.db_path_str,
+                        exc,
+                        exc_info=True,
+                    )
+                    raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
             logging.error(

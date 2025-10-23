@@ -9,7 +9,7 @@ from unittest.mock import patch
 import json
 import xml.etree.ElementTree as ET
 
-from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker
+from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker, ChunkType
 import json as _json
 
 def _to_text_list(chunks):
@@ -297,6 +297,42 @@ class TestStructureAwareStrategy:
         for t in code_chunks:
             # Should have opening and closing ```
             assert t.count('```') % 2 == 0
+
+    @pytest.mark.unit
+    @pytest.mark.strategy
+    def test_structure_aware_code_block_table_like_content_not_extracted_as_table(self):
+        """Ensure table-like text inside code fences is not re-emitted as a table chunk."""
+        text = (
+            "```markdown\n"
+            "| Col1 | Col2 |\n"
+            "| ---- | ---- |\n"
+            "| A    | B    |\n"
+            "```\n"
+        )
+
+        chunker = Chunker(options={
+            'method': 'structure_aware',
+            'max_size': 8,
+            'overlap': 0,
+            'structure_aware': True,
+            'preserve_code_blocks': True,
+            'preserve_tables': True,
+            'adaptive': False,
+        })
+        chunks = chunker.chunk_text_enhanced(text)
+
+        code_chunks = [c for c in chunks if getattr(c, "chunk_type", None) == ChunkType.CODE]
+        table_chunks = [c for c in chunks if getattr(c, "chunk_type", None) == ChunkType.TABLE]
+
+        assert len(code_chunks) == 1
+        assert not table_chunks
+
+        chunk = code_chunks[0]
+        # Only one copy of the table text should remain (inside the code fence)
+        assert chunk.content.count("| Col1 | Col2 |") == 1
+        # The fenced block should still be present
+        assert chunk.content.count("```markdown") == 1
+        assert chunk.content.count("```") >= 2
 
 # ========================================================================
 # Rolling Summarize Strategy Tests

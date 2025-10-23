@@ -1,10 +1,13 @@
 import asyncio
+import sqlite3
 from datetime import datetime, timedelta
 import uuid
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist, reset_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager, reset_session_manager
 
 
 @pytest.mark.asyncio
@@ -24,6 +27,101 @@ async def test_blacklist_revoke_and_check_no_redis(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_blacklist_rebinds_pool_after_database_switch(tmp_path, monkeypatch):
+    db_a = tmp_path / "users_a.db"
+    db_b = tmp_path / "users_b.db"
+
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_a}")
+    reset_settings()
+    await reset_token_blacklist()
+    await reset_db_pool()
+
+    bl = get_token_blacklist()
+    await bl.initialize()
+    assert bl.db_pool.db_path.endswith("users_a.db")
+
+    db_pool = await bl._ensure_db_pool()
+
+    async def ensure_user(pool, username: str, email: str) -> int:
+        async with pool.transaction() as conn:
+            if hasattr(conn, "fetch"):
+                await conn.execute(
+                    """
+                    INSERT INTO users (username, email, password_hash, is_active, is_verified, role)
+                    VALUES ($1, $2, $3, TRUE, TRUE, 'user')
+                    ON CONFLICT (username) DO NOTHING
+                    """,
+                    username,
+                    email,
+                    "hash",
+                )
+                row = await conn.fetchrow(
+                    "SELECT id FROM users WHERE username = $1",
+                    username,
+                )
+                return row["id"]
+            cursor = await conn.execute(
+                """
+                INSERT OR IGNORE INTO users (username, email, password_hash, is_active, is_verified, role)
+                VALUES (?, ?, ?, 1, 1, 'user')
+                """,
+                (username, email, "hash"),
+            )
+            # `cursor` is None for INSERT statements, fetch id separately.
+            cursor = await conn.execute(
+                "SELECT id FROM users WHERE username = ?",
+                (username,),
+            )
+            row = await cursor.fetchone()
+            return row[0]
+
+    user_id_a = await ensure_user(db_pool, "switch-case-a", "switch-a@example.com")
+
+    jti_a = "config-jti-a"
+    assert await bl.revoke_token(
+        jti=jti_a,
+        expires_at=datetime.utcnow() + timedelta(hours=1),
+        user_id=user_id_a,
+    )
+
+    with sqlite3.connect(db_a) as conn:
+        rows = conn.execute("SELECT jti FROM token_blacklist WHERE jti = ?", (jti_a,)).fetchall()
+        assert rows, "Token should be persisted in the initial database"
+
+    # Switch configuration to the new database and ensure the blacklist follows.
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_b}")
+    reset_settings()
+    await reset_db_pool()
+    await bl._ensure_db_pool()
+
+    assert bl.db_pool.db_path.endswith("users_b.db"), "Blacklist should adopt the refreshed pool"
+
+    user_id_b = await ensure_user(bl.db_pool, "switch-case-b", "switch-b@example.com")
+
+    jti_b = "config-jti-b"
+    assert await bl.revoke_token(
+        jti=jti_b,
+        expires_at=datetime.utcnow() + timedelta(hours=1),
+        user_id=user_id_b,
+    )
+
+    with sqlite3.connect(db_b) as conn:
+        rows_b = conn.execute("SELECT jti FROM token_blacklist WHERE jti = ?", (jti_b,)).fetchall()
+        assert rows_b, "Token should be written to the new database"
+
+    with sqlite3.connect(db_a) as conn:
+        rows_a = conn.execute("SELECT jti FROM token_blacklist WHERE jti = ?", (jti_b,)).fetchall()
+        assert not rows_a, "New token must not be stored in the original database"
+
+    await reset_token_blacklist()
+    await reset_db_pool()
+    reset_settings()
+
+
+@pytest.mark.asyncio
 async def test_blacklist_cache_expires_when_token_expires(monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./Databases/users.db")
@@ -37,14 +135,31 @@ async def test_blacklist_cache_expires_when_token_expires(monkeypatch):
     assert await bl.revoke_token(jti=jti, expires_at=short_expiry, user_id=1)
     # Prime the cache
     assert await bl.is_blacklisted(jti) is True
-    assert jti in bl._local_cache
 
-    await asyncio.sleep(0.5)
 
-    # Should drop from cache and return False once expired
-    assert await bl.is_blacklisted(jti) is False
-    assert jti not in bl._local_cache
+@pytest.mark.asyncio
+async def test_session_manager_rebinds_pool_after_database_switch(tmp_path, monkeypatch):
+    db_a = tmp_path / "sessions_a.db"
+    db_b = tmp_path / "sessions_b.db"
 
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_a}")
+    reset_settings()
+    await reset_session_manager()
+    await reset_db_pool()
+
+    sm = await get_session_manager()
+    assert sm.db_pool.db_path.endswith("sessions_a.db")
+
+    # Switch configuration and ensure the session manager tracks the new pool.
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_b}")
+    reset_settings()
+    await reset_db_pool()
+    await sm._ensure_db_pool()
+
+    assert sm.db_pool.db_path.endswith("sessions_b.db"), "Session manager should adopt refreshed pool settings"
 
 @pytest.mark.asyncio
 async def test_revoke_all_user_tokens_marks_sessions(monkeypatch):

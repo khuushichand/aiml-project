@@ -119,26 +119,33 @@ def cleanup_downloads():
 
 
 def get_project_root() -> str:
-    """Get the absolute path to the project root directory.
+    """Return the absolute path to the repository root directory.
 
-    Walk parent directories until we find the tldw_Server_API package root,
-    identified by the presence of the `app` and `Config_Files` folders.
-    Falls back to the historical location if the sentinel folders cannot
-    be located (defensive for tests with in-memory loaders).
+    Prefer a VCS marker (``.git``), then fall back to build metadata such as
+    ``pyproject.toml`` alongside the top-level ``tldw_Server_API`` package.
+    Retains the legacy fallback for environments where the project is bundled
+    without those markers (e.g., certain tests).
     """
     current_path = Path(__file__).resolve()
 
     for candidate in current_path.parents:
-        if (candidate / "app").exists() and (candidate / "Config_Files").exists():
+        if (candidate / ".git").exists():
             project_root = str(candidate)
-            logging.trace(f"Project root: {project_root}")
+            logging.trace(f"Project root (.git sentinel): {project_root}")
+            return project_root
+        if (candidate / "pyproject.toml").exists() and (candidate / "tldw_Server_API").is_dir():
+            project_root = str(candidate)
+            logging.trace(f"Project root (pyproject sentinel): {project_root}")
             return project_root
 
     # Fallback: ensure we don't IndexError if the structure changes drastically.
     try:
-        fallback_root = str(current_path.parents[3])
+        fallback_root = str(current_path.parents[4])
     except IndexError:
-        fallback_root = str(current_path.parent)
+        try:
+            fallback_root = str(current_path.parents[3])
+        except IndexError:
+            fallback_root = str(current_path.parent)
     logging.trace(f"Project root fallback: {fallback_root}")
     return fallback_root
 

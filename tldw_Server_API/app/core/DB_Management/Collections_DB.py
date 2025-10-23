@@ -768,25 +768,17 @@ class CollectionsDatabase:
         limit = size
         offset = max(0, (page - 1) * size)
         rows_sql = f"""
-            WITH filtered AS (
-                SELECT
-                    ci.id,
-                    MAX(ci.updated_at) AS max_updated
-                {base_from}
-                WHERE {where_clause}
-                {group_by}
-                {having}
-                ORDER BY max_updated DESC, ci.id DESC
-                LIMIT ? OFFSET ?
-            )
             SELECT
                 ci.id, ci.user_id, ci.origin, ci.origin_type, ci.origin_id, ci.url, ci.canonical_url,
                 ci.domain, ci.title, ci.summary, ci.content_hash, ci.word_count, ci.published_at,
                 ci.status, ci.favorite, ci.metadata_json, ci.media_id, ci.job_id, ci.run_id,
                 ci.source_id, ci.read_at, ci.created_at, ci.updated_at
-            FROM filtered
-            JOIN content_items ci ON ci.id = filtered.id
-            ORDER BY filtered.max_updated DESC, ci.id DESC
+            {base_from}
+            WHERE {where_clause}
+            {group_by}
+            {having}
+            ORDER BY ci.updated_at DESC, ci.id DESC
+            LIMIT ? OFFSET ?
         """
         row_params = tuple(params + [limit, offset])
         rows = self.backend.execute(rows_sql, row_params).rows

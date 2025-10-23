@@ -642,18 +642,33 @@ async def execute_streaming_call(
                         provider_manager.record_failure(selected_provider, proc_error)
                     raise
 
-            await queue_for_exec.enqueue(
-                request_id=(get_request_id() or "unknown"),
-                request_data={"endpoint": "/api/v1/chat/completions", "mode": "stream"},
-                client_id=str(client_id),
-                priority=RequestPriority.HIGH,
-                estimated_tokens=est_tokens_for_queue,
-                processor=_queued_processor,
-                processor_args=(),
-                processor_kwargs={},
-                streaming=True,
-                stream_channel=stream_channel,
-            )
+            try:
+                await queue_for_exec.enqueue(
+                    request_id=(get_request_id() or "unknown"),
+                    request_data={"endpoint": "/api/v1/chat/completions", "mode": "stream"},
+                    client_id=str(client_id),
+                    priority=RequestPriority.HIGH,
+                    estimated_tokens=est_tokens_for_queue,
+                    processor=_queued_processor,
+                    processor_args=(),
+                    processor_kwargs={},
+                    streaming=True,
+                    stream_channel=stream_channel,
+                )
+            except (ValueError, TimeoutError) as admission_error:
+                try:
+                    metrics.track_rate_limit(str(client_id))
+                except Exception:
+                    pass
+                detail = str(admission_error) or "Service busy. Please retry."
+                status_code = (
+                    status.HTTP_429_TOO_MANY_REQUESTS
+                    if "rate limit" in detail.lower()
+                    else status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+                queue_exc = HTTPException(status_code=status_code, detail=detail)
+                setattr(queue_exc, "_chat_queue_admission", True)
+                raise queue_exc
 
             async def _channel_stream():
                 while True:
@@ -685,6 +700,8 @@ async def execute_streaming_call(
                 except Exception:
                     pass
     except HTTPException as he:
+        if getattr(he, "_chat_queue_admission", False):
+            raise
         metrics.track_llm_call(
             selected_provider,
             model,
@@ -843,6 +860,7 @@ async def execute_streaming_call(
             stream_redact_logged = False
 
             def _out_transform(s: str) -> str:
+                nonlocal stream_block_logged, stream_redact_logged
                 try:
                     mon = None
                     try:
@@ -1054,18 +1072,33 @@ async def execute_non_stream_call(
                         provider_manager.record_failure(selected_provider, proc_error)
                     raise
 
-            fut = await queue_for_exec.enqueue(
-                request_id=(get_request_id() or "unknown"),
-                request_data={"endpoint": "/api/v1/chat/completions", "mode": "non-stream"},
-                client_id=str(client_id),
-                priority=RequestPriority.NORMAL,
-                estimated_tokens=est_tokens_for_queue,
-                processor=_queued_processor,
-                processor_args=(),
-                processor_kwargs={},
-                streaming=False,
-                stream_channel=None,
-            )
+            try:
+                fut = await queue_for_exec.enqueue(
+                    request_id=(get_request_id() or "unknown"),
+                    request_data={"endpoint": "/api/v1/chat/completions", "mode": "non-stream"},
+                    client_id=str(client_id),
+                    priority=RequestPriority.NORMAL,
+                    estimated_tokens=est_tokens_for_queue,
+                    processor=_queued_processor,
+                    processor_args=(),
+                    processor_kwargs={},
+                    streaming=False,
+                    stream_channel=None,
+                )
+            except (ValueError, TimeoutError) as admission_error:
+                try:
+                    metrics.track_rate_limit(str(client_id))
+                except Exception:
+                    pass
+                detail = str(admission_error) or "Service busy. Please retry."
+                status_code = (
+                    status.HTTP_429_TOO_MANY_REQUESTS
+                    if "rate limit" in detail.lower()
+                    else status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+                queue_exc = HTTPException(status_code=status_code, detail=detail)
+                setattr(queue_exc, "_chat_queue_admission", True)
+                raise queue_exc
             llm_response = await fut
             metrics_recorded = True
         else:
@@ -1088,6 +1121,10 @@ async def execute_non_stream_call(
                     )
                 except Exception:
                     pass
+    except HTTPException as he:
+        if getattr(he, "_chat_queue_admission", False):
+            raise
+        raise
     except Exception as e:
         llm_latency = time.time() - llm_start_time
         metrics.track_llm_call(

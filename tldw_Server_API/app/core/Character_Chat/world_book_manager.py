@@ -1062,8 +1062,8 @@ class WorldBookService:
                     matched_entries.append(entry)
                     tokens_used += entry_tokens
                 else:
-                    break  # Token budget exceeded
-        
+                    continue  # Skip oversized entry but continue scanning
+
         # Handle recursive scanning
         if recursive_scanning and matched_entries:
             current_depth = max(1, recursive_depth)
@@ -1098,10 +1098,15 @@ class WorldBookService:
         # Track activation counts
         try:
             if matched_entries:
-                wb_ids = set(e.world_book_id for e in matched_entries)
-                for wb in wb_ids:
-                    self._activation_counts[wb] = self._activation_counts.get(wb, 0) + len(matched_entries)
-                    self._last_activated_at[wb] = datetime.now()
+                per_book_counts: Dict[int, int] = {}
+                for entry in matched_entries:
+                    if entry.world_book_id is None:
+                        continue
+                    per_book_counts[entry.world_book_id] = per_book_counts.get(entry.world_book_id, 0) + 1
+                now = datetime.now()
+                for wb, count in per_book_counts.items():
+                    self._activation_counts[wb] = self._activation_counts.get(wb, 0) + count
+                    self._last_activated_at[wb] = now
         except Exception:
             pass
 

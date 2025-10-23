@@ -150,6 +150,56 @@ async def test_scope_resolution_groups_and_tags():
 
 
 @pytest.mark.asyncio
+async def test_scope_resolution_groups_only():
+    user_id = 781
+    db = WatchlistsDatabase.for_user(user_id)
+
+    g1 = db.create_group(name="OnlyGroup", description=None, parent_group_id=None)
+    g2 = db.create_group(name="OtherGroup", description=None, parent_group_id=None)
+
+    s_in = db.create_source(
+        name="InScope",
+        url="https://in.example.com/",
+        source_type="site",
+        active=True,
+        settings_json=json.dumps({"top_n": 1}),
+        tags=["inside"],
+        group_ids=[g1.id],
+    )
+    s_out = db.create_source(
+        name="OutScope",
+        url="https://out.example.com/",
+        source_type="site",
+        active=True,
+        settings_json=json.dumps({"top_n": 1}),
+        tags=["outside"],
+        group_ids=[g2.id],
+    )
+
+    job = db.create_job(
+        name="GroupOnly",
+        description=None,
+        scope_json=json.dumps({"groups": [g1.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+
+    res = await run_watchlist_job(user_id, job.id)
+    assert res.get("items_found", 0) >= 1
+    assert res.get("items_ingested", 0) >= 1
+
+    in_row = db.get_source(s_in.id)
+    out_row = db.get_source(s_out.id)
+    assert in_row.last_scraped_at is not None
+    assert out_row.last_scraped_at is None
+
+
+@pytest.mark.asyncio
 async def test_rss_dedup_and_meta_and_stats():
     user_id = 779
     db = WatchlistsDatabase.for_user(user_id)

@@ -567,6 +567,51 @@ class TestStatistics:
         
         assert stats.get('total_activations', 0) >= 5
 
+    @pytest.mark.unit
+    def test_activation_statistics_counts_per_book(self, world_book_service):
+        """Ensure activations are counted per world book."""
+        service = world_book_service
+
+        wb1 = service.create_world_book(name="WB One")
+        wb2 = service.create_world_book(name="WB Two")
+        service.add_entry(wb1, ['alpha'], 'Alpha lore')
+        service.add_entry(wb2, ['beta'], 'Beta lore')
+
+        service.process_context("alpha beta", [wb1, wb2])
+
+        stats1 = service.get_activation_statistics(wb1)
+        stats2 = service.get_activation_statistics(wb2)
+        assert stats1.get('total_activations', 0) == 1
+        assert stats2.get('total_activations', 0) == 1
+
+    @pytest.mark.unit
+    def test_process_context_skips_large_entries_when_over_budget(self, world_book_service):
+        """Large entries over the token budget should not block smaller matches."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Budget Book")
+        big_entry_id = service.add_entry(
+            wb_id,
+            ['topic'],
+            ' '.join(['large'] * 20),
+            priority=200,
+        )
+        small_entry_id = service.add_entry(
+            wb_id,
+            ['topic'],
+            'small info',
+            priority=50,
+        )
+
+        result = service.process_context("topic", [wb_id], token_budget=5)
+
+        assert isinstance(result, dict)
+        assert result.get('entries_matched') == 1
+        assert result.get('tokens_used', 0) <= 5
+        assert small_entry_id in result.get('entry_ids', [])
+        assert big_entry_id not in result.get('entry_ids', [])
+        assert 'small info' in result.get('processed_context', "")
+
 # ========================================================================
 # Cloning Tests
 # ========================================================================

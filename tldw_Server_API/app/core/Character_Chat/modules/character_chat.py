@@ -7,7 +7,8 @@ facade.
 """
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from collections import Counter
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from loguru import logger
 from PIL import Image
@@ -23,12 +24,80 @@ from .character_db import load_character_and_image
 from .character_utils import replace_placeholders
 
 
+_NON_CHARACTER_SENDER_ALIASES = {
+    "system",
+    "narrator",
+    "commentary",
+    "tool",
+    "assistant_tool",
+    "function",
+    "metadata",
+}
+
+
+def _infer_character_sender_aliases(
+    db_messages: List[Dict[str, Any]],
+    user_aliases: set[str],
+    primary_char_name: str,
+) -> List[str]:
+    """Infer legacy character sender aliases stored on existing messages."""
+
+    alias_counter: Counter[str] = Counter()
+    first_candidate: Optional[str] = None
+    primary_lower = primary_char_name.lower()
+
+    for msg in db_messages:
+        sender = msg.get("sender")
+        if not isinstance(sender, str):
+            continue
+        normalized = sender.strip()
+        if not normalized:
+            continue
+        lower = normalized.lower()
+
+        if lower == primary_lower:
+            continue
+        if lower in user_aliases:
+            continue
+        if lower in _NON_CHARACTER_SENDER_ALIASES:
+            continue
+        if normalized.startswith("["):
+            continue
+
+        alias_counter[normalized] += 1
+        if first_candidate is None:
+            first_candidate = normalized
+
+    inferred_aliases: List[str] = []
+    for alias, count in alias_counter.items():
+        if alias.lower() == primary_lower:
+            continue
+        if count >= 2 or alias == first_candidate:
+            inferred_aliases.append(alias)
+    return inferred_aliases
+
+
+def _compute_additional_char_aliases(
+    db_messages: List[Dict[str, Any]],
+    char_name_from_card: str,
+    user_name_for_placeholders: Optional[str],
+    actual_user_sender_id_in_db: str,
+) -> List[str]:
+    user_aliases = {"user"}
+    if actual_user_sender_id_in_db:
+        user_aliases.add(actual_user_sender_id_in_db.lower())
+    if user_name_for_placeholders:
+        user_aliases.add(str(user_name_for_placeholders).strip().lower())
+    return _infer_character_sender_aliases(db_messages, user_aliases, char_name_from_card)
+
+
 def process_db_messages_to_ui_history(
     db_messages: List[Dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str = "User",
     actual_char_sender_id_in_db: Optional[str] = None,
+    additional_char_sender_ids: Optional[Iterable[str]] = None,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
     """Convert database messages to UI-friendly paired chat history format."""
 
@@ -52,6 +121,13 @@ def process_db_messages_to_ui_history(
         user_identifiers.add(actual_user_sender_id_in_db.lower())
     if char_sender_identifier:
         char_identifiers.add(str(char_sender_identifier).strip().lower())
+    if additional_char_sender_ids:
+        for alias in additional_char_sender_ids:
+            if not alias:
+                continue
+            alias_norm = str(alias).strip().lower()
+            if alias_norm:
+                char_identifiers.add(alias_norm)
 
     user_msg_buffer: Optional[str] = None
 
@@ -70,6 +146,8 @@ def process_db_messages_to_ui_history(
                 user_msg_buffer = None
             else:
                 processed_history.append((None, processed_content))
+            if sender_lower:
+                char_identifiers.add(sender_lower)
         elif sender_lower in user_identifiers:
             if user_msg_buffer is not None:
                 processed_history.append((user_msg_buffer, None))
@@ -123,10 +201,19 @@ def load_chat_and_character(
                 limit=messages_limit,
                 order_by_timestamp="ASC",
             )
+            additional_aliases = _compute_additional_char_aliases(
+                raw_db_messages,
+                "Unknown Character",
+                user_name,
+                actual_user_sender_id_in_db="User",
+            )
             processed_ui_history = process_db_messages_to_ui_history(
                 raw_db_messages,
                 "Unknown Character",
                 user_name,
+                actual_user_sender_id_in_db="User",
+                actual_char_sender_id_in_db="Unknown Character",
+                additional_char_sender_ids=additional_aliases,
             )
             return None, processed_ui_history, None
 
@@ -143,10 +230,19 @@ def load_chat_and_character(
                 limit=messages_limit,
                 order_by_timestamp="ASC",
             )
+            additional_aliases = _compute_additional_char_aliases(
+                raw_db_messages,
+                "Unknown Character",
+                user_name,
+                actual_user_sender_id_in_db="User",
+            )
             processed_ui_history = process_db_messages_to_ui_history(
                 raw_db_messages,
                 "Unknown Character",
                 user_name,
+                actual_user_sender_id_in_db="User",
+                actual_char_sender_id_in_db="Unknown Character",
+                additional_char_sender_ids=additional_aliases,
             )
             return None, processed_ui_history, img
 
@@ -156,12 +252,19 @@ def load_chat_and_character(
             limit=messages_limit,
             order_by_timestamp="ASC",
         )
+        additional_aliases = _compute_additional_char_aliases(
+            raw_db_messages,
+            char_name_from_card,
+            user_name,
+            actual_user_sender_id_in_db="User",
+        )
         processed_ui_history = process_db_messages_to_ui_history(
             raw_db_messages,
             char_name_from_card,
             user_name,
             actual_user_sender_id_in_db="User",
             actual_char_sender_id_in_db=char_name_from_card,
+            additional_char_sender_ids=additional_aliases,
         )
 
         return char_data, processed_ui_history, img
@@ -587,12 +690,20 @@ def retrieve_conversation_messages_for_ui(
             order_by_timestamp=order_upper,
         )
 
+        additional_aliases = _compute_additional_char_aliases(
+            raw_db_messages,
+            character_name,
+            user_name,
+            actual_user_sender_id_in_db="User",
+        )
+
         processed_ui_history = process_db_messages_to_ui_history(
             raw_db_messages,
             char_name_from_card=character_name,
             user_name_for_placeholders=user_name,
             actual_user_sender_id_in_db="User",
             actual_char_sender_id_in_db=character_name,
+            additional_char_sender_ids=additional_aliases,
         )
         return processed_ui_history
 

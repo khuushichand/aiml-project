@@ -123,19 +123,19 @@ async def test_fetch_site_items_with_rules_pagination(monkeypatch):
         def __init__(self, *args, **kwargs):
             self.calls: list[str] = []
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, exc_type, exc, tb):
+        async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def get(self, url: str, headers=None):
+        async def get(self, url: str, headers=None):
             self.calls.append(url)
             if url not in responses:
                 raise ValueError(f"unexpected URL {url}")
             return FakeResponse(url)
 
-    monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.httpx.Client", FakeClient)
+    monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.httpx.AsyncClient", FakeClient)
     monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.is_url_allowed_for_tenant", lambda url, tenant_id: True)
     monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.is_url_allowed", lambda url: True)
 

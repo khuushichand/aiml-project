@@ -4,6 +4,28 @@ import pytest
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import CharacterRateLimiter
 
 
+class _FailingPipeline:
+    def zremrangebyscore(self, *args, **kwargs):
+        return self
+
+    def zcard(self, *args, **kwargs):
+        return self
+
+    def zadd(self, *args, **kwargs):
+        return self
+
+    def expire(self, *args, **kwargs):
+        return self
+
+    def execute(self):
+        raise RuntimeError("redis unavailable")
+
+
+class _FailingRedis:
+    def pipeline(self):
+        return _FailingPipeline()
+
+
 @pytest.mark.unit
 def test_rate_limiter_memory_fallback_allows_operations_without_redis():
     limiter = CharacterRateLimiter(redis_client=None, max_operations=3, window_seconds=60)
@@ -32,3 +54,16 @@ def test_rate_limiter_per_minute_specific_operation_limits():
 
     asyncio.run(run_checks())
 
+
+@pytest.mark.unit
+def test_rate_limiter_falls_back_when_redis_pipeline_fails():
+    limiter = CharacterRateLimiter(redis_client=_FailingRedis(), max_operations=3, window_seconds=60)
+
+    async def run_checks():
+        ok1, rem1 = await limiter.check_rate_limit(user_id=42, operation="test")
+        ok2, rem2 = await limiter.check_rate_limit(user_id=42, operation="test")
+        assert ok1 and ok2
+        assert rem1 == 2
+        assert rem2 == 1
+
+    asyncio.run(run_checks())

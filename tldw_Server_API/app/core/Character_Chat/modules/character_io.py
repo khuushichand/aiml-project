@@ -10,6 +10,7 @@ import io
 import json
 import os
 import time
+import uuid
 import yaml
 from typing import Dict, List, Optional, Tuple, Any, Union
 
@@ -306,8 +307,9 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
         logger.error(f"Unexpected error parsing YAML content: {e}", exc_info=True)
 
     # Fallback: treat the raw content as a plain-text description
+    unique_name = f"Character {uuid.uuid4().hex[:8]}"
     fallback_payload = {
-        "name": "Character",
+        "name": unique_name,
         "description": content_str,
         "tags": ["plain-text"],
     }

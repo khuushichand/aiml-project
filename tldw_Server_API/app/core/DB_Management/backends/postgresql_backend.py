@@ -219,6 +219,10 @@ class PostgreSQLConnectionPool(ConnectionPool):
 
 class PostgreSQLBackend(DatabaseBackend):
     """PostgreSQL implementation of the database backend."""
+
+    def __init__(self, config: DatabaseConfig):
+        super().__init__(config)
+        self._managed_tx_depths: Dict[int, int] = {}
     
     @property
     def backend_type(self) -> BackendType:
@@ -343,6 +347,112 @@ class PostgreSQLBackend(DatabaseBackend):
         except Exception as exc:
             logger.debug(f"Failed to configure session scope settings: {exc}")
     
+    def _tx_depth(self, connection: Any) -> int:
+        return self._managed_tx_depths.get(id(connection), 0)
+
+    def _tx_depth_inc(self, connection: Any) -> None:
+        key = id(connection)
+        self._managed_tx_depths[key] = self._managed_tx_depths.get(key, 0) + 1
+
+    def _tx_depth_dec(self, connection: Any) -> None:
+        key = id(connection)
+        current = self._managed_tx_depths.get(key, 0)
+        if current <= 1:
+            self._managed_tx_depths.pop(key, None)
+        else:
+            self._managed_tx_depths[key] = current - 1
+
+    @staticmethod
+    def _strip_leading_comments(sql: str) -> str:
+        """Remove leading SQL comments so keyword detection is reliable."""
+        text = sql.lstrip()
+        while text:
+            if text.startswith("--"):
+                newline = text.find("\n")
+                if newline == -1:
+                    return ""
+                text = text[newline + 1 :].lstrip()
+                continue
+            if text.startswith("/*"):
+                end = text.find("*/", 2)
+                if end == -1:
+                    return ""
+                text = text[end + 2 :].lstrip()
+                continue
+            break
+        return text
+
+    @staticmethod
+    def _command_after_cte(sql: str) -> str:
+        """Return the first command keyword following an optional CTE block."""
+        text = PostgreSQLBackend._strip_leading_comments(sql)
+        if not text:
+            return ""
+
+        upper = text.upper()
+        if not upper.startswith("WITH"):
+            return text.split(None, 1)[0].upper()
+
+        # Strip leading WITH (and optional RECURSIVE) keyword.
+        text = text[4:].lstrip()
+        if text.upper().startswith("RECURSIVE"):
+            text = text[len("RECURSIVE"):].lstrip()
+
+        # Skip one or more CTE definitions separated by commas.
+        while text:
+            # Skip identifier / optional schema qualifier.
+            idx = 0
+            length = len(text)
+            while idx < length and (text[idx].isalnum() or text[idx] in ('_', '.', '"')):
+                idx += 1
+            text = text[idx:].lstrip()
+            if text.upper().startswith("AS"):
+                text = text[2:].lstrip()
+
+            if not text.startswith("("):
+                break
+
+            depth = 1
+            idx = 1
+            while idx < len(text) and depth > 0:
+                ch = text[idx]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                elif ch in ("'", '"'):
+                    quote = ch
+                    idx += 1
+                    while idx < len(text):
+                        c = text[idx]
+                        if c == quote:
+                            if idx + 1 < len(text) and text[idx + 1] == quote:
+                                idx += 2
+                                continue
+                            break
+                        idx += 1
+                idx += 1
+
+            text = text[idx:].lstrip()
+            if text.startswith(","):
+                text = text[1:].lstrip()
+                continue
+            break
+
+        if not text:
+            return ""
+        text = PostgreSQLBackend._strip_leading_comments(text)
+        if not text:
+            return ""
+        return text.split(None, 1)[0].upper()
+
+    def _is_write_command(self, command_tag: str, sql: str) -> bool:
+        """Determine whether a statement should be treated as a write."""
+        normalized = (command_tag or "").upper()
+        if not normalized or normalized == "WITH":
+            normalized = self._command_after_cte(sql)
+        return normalized in _WRITE_COMMANDS
+
     def connect(self) -> Any:
         """Create a new PostgreSQL connection."""
         if not PSYCOPG2_AVAILABLE:
@@ -368,6 +478,7 @@ class PostgreSQLBackend(DatabaseBackend):
     
     def disconnect(self, connection: Any) -> None:
         """Close a PostgreSQL connection."""
+        self._managed_tx_depths.pop(id(connection), None)
         if connection and not connection.closed:
             connection.close()
     
@@ -382,14 +493,18 @@ class PostgreSQLBackend(DatabaseBackend):
             owns_connection = True
         
         try:
+            self._tx_depth_inc(conn)
             # PostgreSQL uses implicit transactions
             yield conn
-            conn.commit()
+            if owns_connection:
+                conn.commit()
         except Exception as e:
-            conn.rollback()
+            if owns_connection:
+                conn.rollback()
             logger.error(f"Transaction failed: {e}")
             raise
         finally:
+            self._tx_depth_dec(conn)
             if owns_connection:
                 self.get_pool().return_connection(conn)
     
@@ -451,6 +566,10 @@ class PostgreSQLBackend(DatabaseBackend):
 
             has_description = cursor.description is not None
 
+            status = (cursor.statusmessage or "").split()
+            command_tag = status[0].upper() if status else ""
+            is_write = self._is_write_command(command_tag, query)
+
             if has_description:
                 rows = cursor.fetchall()
                 # psycopg v3 will yield dicts if row_factory is set; otherwise adapt
@@ -465,11 +584,8 @@ class PostgreSQLBackend(DatabaseBackend):
             else:
                 result_rows = []
 
-            status = (cursor.statusmessage or "").split()
-            command_tag = status[0].upper() if status else ""
-            is_write = command_tag in _WRITE_COMMANDS
-
-            if not external_conn and is_write:
+            managed_depth = self._tx_depth(conn)
+            if is_write and managed_depth == 0 and not external_conn:
                 conn.commit()
 
             execution_time = time.time() - start_time
@@ -526,13 +642,14 @@ class PostgreSQLBackend(DatabaseBackend):
 
             status = (cursor.statusmessage or "").split()
             command_tag = status[0].upper() if status else ""
-            is_write = command_tag in _WRITE_COMMANDS
+            is_write = self._is_write_command(command_tag, normalized_query)
 
-            if not external_conn and is_write:
+            managed_depth = self._tx_depth(conn)
+            if is_write and managed_depth == 0 and not external_conn:
                 conn.commit()
-            
+
             execution_time = time.time() - start_time
-            
+
             return QueryResult(
                 rows=[],
                 rowcount=cursor.rowcount,

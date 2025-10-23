@@ -390,6 +390,38 @@ class WatchlistsDatabase:
             ids.append(tag_id)
         return ids
 
+    def _lookup_tag_ids(self, names: Iterable[str]) -> Dict[str, int]:
+        normed: List[str] = []
+        seen: set[str] = set()
+        for raw in names or []:
+            if not raw:
+                continue
+            nm = self._normalize_tag(str(raw))
+            if not nm or nm in seen:
+                continue
+            seen.add(nm)
+            normed.append(nm)
+        if not normed:
+            return {}
+
+        placeholders = ",".join("?" for _ in normed)
+        params = [self.user_id, *normed]
+        rows = self.backend.execute(
+            f"SELECT name, id FROM tags WHERE user_id = ? AND name IN ({placeholders})",
+            tuple(params),
+        ).rows
+        out: Dict[str, int] = {}
+        for row in rows:
+            name_val = row.get("name")
+            tag_id = row.get("id")
+            if name_val is None or tag_id is None:
+                continue
+            try:
+                out[str(name_val)] = int(tag_id)
+            except Exception:
+                continue
+        return out
+
     def list_tags(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[TagRow], int]:
         where = ["user_id = ?"]
         params: List[Any] = [self.user_id]
@@ -493,12 +525,23 @@ class WatchlistsDatabase:
             params.extend([like, like])
         # Tag filter: require all tags
         if tag_names:
-            tag_ids = self.ensure_tag_ids(tag_names)
-            for tid in tag_ids:
-                where.append(
-                    "EXISTS (SELECT 1 FROM source_tags st WHERE st.source_id = sources.id AND st.tag_id = ?)"
-                )
-                params.append(tid)
+            normalized_tags = []
+            for tag in tag_names:
+                if not tag:
+                    continue
+                nm = self._normalize_tag(str(tag))
+                if nm and nm not in normalized_tags:
+                    normalized_tags.append(nm)
+            if normalized_tags:
+                tag_map = self._lookup_tag_ids(normalized_tags)
+                if len(tag_map) < len(normalized_tags):
+                    return [], 0
+                for nm in normalized_tags:
+                    tid = tag_map[nm]
+                    where.append(
+                        "EXISTS (SELECT 1 FROM source_tags st WHERE st.source_id = sources.id AND st.tag_id = ?)"
+                    )
+                    params.append(tid)
         where_sql = " AND ".join(where)
         total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM sources WHERE {where_sql}", tuple(params)).scalar or 0)
         rows = self.backend.execute(
@@ -618,7 +661,8 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             f"""
             SELECT s.id, s.user_id, s.name, s.url, s.source_type, s.active, s.settings_json,
-                   s.last_scraped_at, s.etag, s.last_modified, s.defer_until, s.status, s.created_at, s.updated_at
+                   s.last_scraped_at, s.etag, s.last_modified, s.defer_until, s.status,
+                   s.consec_not_modified, s.created_at, s.updated_at
             FROM sources s
             WHERE s.user_id = ? {active_clause}
               AND EXISTS (

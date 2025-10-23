@@ -263,6 +263,27 @@ def test_process_db_messages_to_ui_history_normalizes_common_roles():
     assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
 
 
+def test_process_db_messages_to_ui_history_handles_additional_alias():
+    char_name = "RenamedBot"
+    user_name = "Human"
+    db_messages = [
+        {"sender": "OldBot", "content": "Greetings {{user}}"},
+        {"sender": "User", "content": "Hi"},
+        {"sender": "OldBot", "content": "Nice to meet you"},
+    ]
+    expected = [
+        (None, "Greetings Human"),
+        ("Hi", "Nice to meet you"),
+    ]
+    history = process_db_messages_to_ui_history(
+        db_messages,
+        char_name,
+        user_name,
+        additional_char_sender_ids=["OldBot"],
+    )
+    assert history == expected
+
+
 MINIMAL_V2_DATA_NODE_UNIT = {
     "name": "TestV2", "description": "Desc", "personality": "Pers",
     "scenario": "Scen", "first_mes": "First", "mes_example": "Example"
@@ -863,6 +884,21 @@ def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, d
     assert msgs[2]["content"] == "User only"
     assert msgs[2]["sender"] == "User"
 
+
+
+def test_load_chat_and_character_handles_legacy_alias(db):
+    char_id = db.add_character_card({"name": "NewName", "first_message": "Hi {{user}}"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Legacy"})
+    db.add_message({"conversation_id": conv_id, "sender": "OldName", "content": "Hello {{user}}"})
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Hi"})
+    db.add_message({"conversation_id": conv_id, "sender": "OldName", "content": "Welcome back, {{user}}"})
+
+    char_data, history, _ = load_chat_and_character(db, conv_id, "Friend")
+    assert char_data and char_data["name"] == "NewName"
+    assert history == [
+        (None, "Hello Friend"),
+        ("Hi", "Welcome back, Friend"),
+    ]
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_chat.time.strftime", return_value=MOCK_TIME_STRFTIME)

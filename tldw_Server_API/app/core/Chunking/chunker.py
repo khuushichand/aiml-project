@@ -555,6 +555,8 @@ class Chunker:
                     'children': []
                 }
                 root['children'].append(current_section)
+                # Record the header itself as a block so offsets include the title text
+                _add_block(current_section, bstart, bend, bkind)
             elif bkind != 'blank':
                 target_parent = current_section if current_section is not None else _ensure_preface_section(bstart)
                 _add_block(target_parent, bstart, bend, bkind)
@@ -595,11 +597,78 @@ class Chunker:
 
         def _gather_section_items(section_node: Dict[str, Any]) -> List[Dict[str, Any]]:
             items: List[Dict[str, Any]] = []
+            header_buffer: List[Dict[str, Any]] = []
+
+            def _flush_header_buffer(target_item: Dict[str, Any]) -> Dict[str, Any]:
+                """Merge buffered headers into the provided item without increasing element count."""
+                nonlocal header_buffer
+                if not header_buffer:
+                    return target_item
+                texts: List[str] = []
+                starts: List[int] = []
+                ends: List[int] = []
+                for h in header_buffer:
+                    txt = h.get('text') if isinstance(h, dict) else str(h)
+                    texts.append(txt)
+                    md_h = h.get('metadata') if isinstance(h, dict) else {}
+                    s = md_h.get('start_offset')
+                    e = md_h.get('end_offset')
+                    if isinstance(s, int):
+                        starts.append(s)
+                    if isinstance(e, int):
+                        ends.append(e)
+                header_buffer = []
+
+                t_txt = target_item.get('text') if isinstance(target_item, dict) else str(target_item)
+                texts.append(t_txt)
+
+                md_target = dict(target_item.get('metadata') or {}) if isinstance(target_item, dict) else {}
+                s_t = md_target.get('start_offset')
+                e_t = md_target.get('end_offset')
+                if isinstance(s_t, int):
+                    starts.append(s_t)
+                if isinstance(e_t, int):
+                    ends.append(e_t)
+                merged_start = min(starts) if starts else s_t
+                merged_end = max(ends) if ends else e_t
+
+                merged_item = {
+                    'type': target_item.get('type', 'text'),
+                    'text': ''.join(texts),
+                    'metadata': md_target
+                }
+                if merged_start is not None:
+                    merged_item['metadata']['start_offset'] = merged_start
+                if merged_end is not None:
+                    merged_item['metadata']['end_offset'] = merged_end
+                # Preserve paragraph kind (defaulting to target item) and flag header inclusion
+                pk = md_target.get('paragraph_kind')
+                if pk is not None:
+                    merged_item['metadata']['paragraph_kind'] = pk
+                merged_item['metadata']['has_section_header'] = True
+                return merged_item
+
             for child in section_node.get('children') or []:
-                if isinstance(child, dict):
-                    for ch in child.get('chunks') or []:
-                        if isinstance(ch, dict):
-                            items.append(ch)
+                if not isinstance(child, dict):
+                    continue
+                for ch in child.get('chunks') or []:
+                    if not isinstance(ch, dict):
+                        continue
+                    md = ch.get('metadata') or {}
+                    paragraph_kind = md.get('paragraph_kind')
+                    if paragraph_kind == 'header_atx':
+                        header_buffer.append(ch)
+                        continue
+                    if header_buffer:
+                        merged = _flush_header_buffer(ch)
+                        items.append(merged)
+                    else:
+                        items.append(ch)
+
+            if header_buffer:
+                # Section with header but no following content: keep header as-is
+                items.extend(header_buffer)
+
             return items
 
         def _group_items_by_elements(items: List[Dict[str, Any]], max_elements: int, overlap: int) -> List[Dict[str, Any]]:

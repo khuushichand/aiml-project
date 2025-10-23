@@ -10,6 +10,7 @@ from typing import Optional, Dict
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 
 
@@ -46,10 +47,10 @@ class DatabasePaths:
         user_db_base = settings.get("USER_DB_BASE_DIR")
         if not user_db_base:
             # Fallback to default location
-            project_root = Path(__file__).parent.parent.parent.parent.parent
+            project_root = Path(get_project_root())
             user_db_base = project_root / "Databases" / "user_databases"
             logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {user_db_base}")
-        
+
         user_dir = Path(user_db_base) / str(user_id)
         
         # Ensure directory exists

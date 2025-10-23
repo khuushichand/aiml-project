@@ -586,7 +586,7 @@ async def fetch_site_items_with_rules(
     collected: List[Dict[str, Any]] = []
 
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             while queue and len(visited) < max_pages:
                 page_url = queue.pop(0)
                 if page_url in visited:
@@ -603,7 +603,7 @@ async def fetch_site_items_with_rules(
                     continue
 
                 try:
-                    resp = client.get(page_url, headers=headers)
+                    resp = await client.get(page_url, headers=headers)
                 except Exception as exc:
                     logger.debug(f"fetch_site_items_with_rules request failed ({page_url}): {exc}")
                     continue
@@ -678,8 +678,8 @@ async def fetch_rss_feed(
         if last_modified:
             headers["If-Modified-Since"] = last_modified
 
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get(url, headers=headers)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
 
         status = int(resp.status_code)
         # Retry-After handling

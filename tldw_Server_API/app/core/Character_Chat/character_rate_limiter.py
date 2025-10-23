@@ -64,8 +64,8 @@ class CharacterRateLimiter:
         self.max_chat_completions_per_minute = max_chat_completions_per_minute
         self.max_message_sends_per_minute = max_message_sends_per_minute
         
-        # In-memory fallback storage
-        self.memory_store: Dict[int, List[float]] = defaultdict(list) if not redis_client else {}
+        # In-memory fallback storage (always ready for Redis failures)
+        self.memory_store: Dict[int, List[float]] = defaultdict(list)
         
         logger.info(
             f"CharacterRateLimiter initialized: "

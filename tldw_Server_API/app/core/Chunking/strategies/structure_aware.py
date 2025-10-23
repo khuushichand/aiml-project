@@ -396,7 +396,8 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
             line = lines[i]
             
             # Check if this looks like a markdown table
-            if '|' in line and not self._in_processed_range(i, processed_ranges):
+            line_start_char = line_starts[i] if i < len(line_starts) else 0
+            if '|' in line and not self._in_processed_range(line_start_char, processed_ranges):
                 # Try to parse as table
                 table_lines = [line]
                 j = i + 1

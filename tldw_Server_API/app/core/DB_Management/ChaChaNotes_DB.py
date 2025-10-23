@@ -1923,9 +1923,22 @@ UPDATE db_schema_version
                 cursor = conn.cursor()
                 cursor.execute(prepared_query, prepared_params or ())
 
-            if self.backend_type == BackendType.SQLITE and commit and not conn.in_transaction:
-                conn.commit()
-                logger.debug("Committed directly by execute_query.")
+            if commit:
+                try:
+                    if self.backend_type == BackendType.SQLITE:
+                        if not conn.in_transaction:
+                            conn.commit()
+                            logger.debug("Committed directly by execute_query.")
+                    else:
+                        conn.commit()
+                except Exception as exc:
+                    logger.error(
+                        "Commit failed after execute_query on backend %s: %s",
+                        self.backend_type.value,
+                        exc,
+                        exc_info=True,
+                    )
+                    raise CharactersRAGDBError(f"Database commit failed: {exc}") from exc
             return cursor
         except sqlite3.IntegrityError as e:
             logger.warning(f"Integrity constraint violation: {query[:300]}... Error: {e}")
@@ -1987,9 +2000,22 @@ UPDATE db_schema_version
             prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
             cursor = conn.cursor()
             cursor.executemany(prepared_query, prepared_params_list)
-            if self.backend_type == BackendType.SQLITE and commit and not conn.in_transaction:
-                conn.commit()
-                logger.debug("Committed Many directly by execute_many.")
+            if commit:
+                try:
+                    if self.backend_type == BackendType.SQLITE:
+                        if not conn.in_transaction:
+                            conn.commit()
+                            logger.debug("Committed Many directly by execute_many.")
+                    else:
+                        conn.commit()
+                except Exception as exc:
+                    logger.error(
+                        "Commit failed after execute_many on backend %s: %s",
+                        self.backend_type.value,
+                        exc,
+                        exc_info=True,
+                    )
+                    raise CharactersRAGDBError(f"Database commit failed: {exc}") from exc
             return cursor
         except sqlite3.IntegrityError as e:
             logger.warning(f"Integrity constraint violation during batch: {query[:150]}... Error: {e}")

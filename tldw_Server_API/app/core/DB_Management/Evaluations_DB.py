@@ -138,12 +138,19 @@ class _EvaluationsBackendConnection:
     def executemany(self, query: str, params_list: List[Any]):
         return self.cursor().executemany(query, params_list)
 
-    # Compatibility no-ops
     def commit(self) -> None:
-        return None
+        try:
+            self._conn.commit()
+        except Exception as exc:
+            logger.error(f"Failed to commit evaluations backend connection: {exc}", exc_info=True)
+            raise
 
     def rollback(self) -> None:
-        return None
+        try:
+            self._conn.rollback()
+        except Exception as exc:
+            logger.error(f"Failed to rollback evaluations backend connection: {exc}", exc_info=True)
+            raise
 
     def close(self) -> None:
         return None
