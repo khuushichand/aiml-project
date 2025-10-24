@@ -28,7 +28,10 @@ import re
 import subprocess
 import sys
 import uuid
+import tempfile
+import shutil
 from datetime import datetime
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse, parse_qs, urlunparse
@@ -133,6 +136,146 @@ _PROVIDERS_REQUIRING_KEYS = {
     "aphrodite",
 }
 
+media_config = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
+DEFAULT_MAX_VIDEO_FILE_SIZE_MB = media_config.get('max_video_file_size_mb', 1000)
+DEFAULT_MAX_VIDEO_FILE_SIZE_BYTES = DEFAULT_MAX_VIDEO_FILE_SIZE_MB * 1024 * 1024
+_TRANSCRIPTION_EXTRACTION_ERROR_SENTINEL = "Error: Unable to extract transcription"
+_KEEP_VIDEO_MAX_FILES = max(0, int(media_config.get('kept_video_max_files', 5)))  # per-user file cap
+_KEEP_VIDEO_MAX_STORAGE_MB = max(0, int(media_config.get('kept_video_max_storage_mb', 500)))
+_KEEP_VIDEO_MAX_BYTES = _KEEP_VIDEO_MAX_STORAGE_MB * 1024 * 1024
+_KEEP_VIDEO_RETENTION_SECONDS = max(0, int(media_config.get('kept_video_retention_hours', 2))) * 3600
+_VIDEO_STORAGE_ROOT = Path(tempfile.gettempdir()) / "tldw_kept_videos"
+
+
+def _safe_remove_file(file_path: Path) -> None:
+    """Attempt to remove a file while swallowing non-critical errors."""
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            logging.debug(f"Removed stored video: {file_path}")
+    except Exception as exc:
+        logging.warning(f"Failed to remove stored video '{file_path}': {exc}")
+
+
+def _collect_storage_entries(storage_dir: Path) -> List[Dict[str, Any]]:
+    """Return storage entries sorted by modification time (oldest first)."""
+    entries: List[Dict[str, Any]] = []
+    if not storage_dir.exists():
+        return entries
+    for item in storage_dir.iterdir():
+        if not item.is_file():
+            continue
+        try:
+            stat = item.stat()
+        except OSError as exc:
+            logging.warning(f"Could not stat stored video '{item}': {exc}")
+            continue
+        entries.append({"path": item, "mtime": stat.st_mtime, "size": stat.st_size})
+    entries.sort(key=lambda entry: entry["mtime"])
+    return entries
+
+
+def _purge_expired_videos(storage_dir: Path, retention_seconds: int) -> None:
+    """Remove stored videos older than the retention period."""
+    if retention_seconds <= 0 or not storage_dir.exists():
+        return
+    expiry_threshold = time.time() - retention_seconds
+    for entry in _collect_storage_entries(storage_dir):
+        if entry["mtime"] < expiry_threshold:
+            logging.debug(f"Purging expired stored video: {entry['path']}")
+            _safe_remove_file(entry["path"])
+
+
+def _enforce_storage_limits(storage_dir: Path, max_files: int, max_bytes: int) -> None:
+    """Ensure stored videos respect configured count and size limits."""
+    if not storage_dir.exists():
+        return
+    entries = _collect_storage_entries(storage_dir)
+    total_bytes = sum(entry["size"] for entry in entries)
+
+    def _needs_prune() -> bool:
+        file_limit_exceeded = max_files > 0 and len(entries) > max_files
+        size_limit_exceeded = max_bytes > 0 and total_bytes > max_bytes
+        return file_limit_exceeded or size_limit_exceeded
+
+    while entries and _needs_prune():
+        oldest = entries.pop(0)
+        logging.debug(f"Storage limit exceeded, removing oldest video: {oldest['path']}")
+        _safe_remove_file(oldest["path"])
+        total_bytes -= oldest["size"]
+
+
+def _ensure_storage_dir(user_id: Optional[int]) -> Path:
+    """Return the per-user storage directory, creating it on demand."""
+    user_segment = str(user_id) if user_id is not None else "default"
+    storage_dir = _VIDEO_STORAGE_ROOT / user_segment
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    return storage_dir
+
+
+def _store_video_file(source_path: Path, user_id: Optional[int]) -> Optional[Path]:
+    """
+    Persist a copy of the downloaded video for later retrieval, honoring limits.
+
+    Returns the stored path on success, or None when storage is disabled or fails.
+    """
+    def _coerce_limit(value: Optional[int]) -> int:
+        """Convert limit settings (possibly str/None) into a non-negative int."""
+        try:
+            return max(0, int(value))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0
+
+    max_files = _coerce_limit(_KEEP_VIDEO_MAX_FILES)
+    storage_mb_limit = _coerce_limit(_KEEP_VIDEO_MAX_STORAGE_MB)
+    bytes_limit_setting = _coerce_limit(_KEEP_VIDEO_MAX_BYTES)
+
+    # Derive an effective byte ceiling using both MB and explicit byte overrides.
+    storage_bytes_limit = storage_mb_limit * 1024 * 1024 if storage_mb_limit else 0
+    if storage_bytes_limit and bytes_limit_setting:
+        effective_max_bytes = min(storage_bytes_limit, bytes_limit_setting)
+    else:
+        effective_max_bytes = storage_bytes_limit or bytes_limit_setting
+
+    if max_files <= 0 or effective_max_bytes <= 0:
+        logging.info("Kept-video storage disabled by configuration; skipping persistence.")
+        return None
+
+    if not source_path.exists():
+        logging.warning(f"Cannot keep original video; source path missing: {source_path}")
+        return None
+
+    try:
+        source_size = source_path.stat().st_size
+    except OSError as exc:
+        logging.error(f"Unable to read size for stored video '{source_path}': {exc}")
+        return None
+
+    if source_size > effective_max_bytes:
+        logging.warning(
+            f"Skipping kept-video storage for '{source_path.name}': "
+            f"{source_size / (1024 * 1024):.2f}MB exceeds configured limit "
+            f"({effective_max_bytes / (1024 * 1024):.2f}MB)."
+        )
+        return None
+
+    storage_dir = _ensure_storage_dir(user_id)
+    _purge_expired_videos(storage_dir, _KEEP_VIDEO_RETENTION_SECONDS)
+
+    destination = storage_dir / source_path.name
+    if destination.exists():
+        destination = storage_dir / f"{source_path.stem}_{uuid.uuid4().hex[:6]}{source_path.suffix}"
+
+    try:
+        shutil.copy2(source_path, destination)
+        logging.info(f"Stored kept video copy at {destination}")
+    except Exception as exc:  # noqa: BLE001
+        logging.error(f"Failed to copy video '{source_path}' into kept storage: {exc}", exc_info=True)
+        return None
+
+    _enforce_storage_limits(storage_dir, max_files, effective_max_bytes)
+    return destination
+
 
 def _resolve_eval_api_key(api_name: Optional[str]) -> Optional[str]:
     """
@@ -163,6 +306,40 @@ def _resolve_eval_api_key(api_name: Optional[str]) -> Optional[str]:
         api_key = os.getenv(env_key)
 
     return str(api_key) if api_key else None
+
+
+def _extract_declared_filesize(info_dict: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Best-effort extraction of declared file size from yt-dlp metadata."""
+    if not isinstance(info_dict, dict):
+        return None
+
+    candidate_keys = (
+        "filesize",
+        "filesize_approx",
+        "filesize_before_download",
+        "filesize_after_download",
+    )
+    for key in candidate_keys:
+        size_val = info_dict.get(key)
+        if size_val is None:
+            continue
+        try:
+            return int(size_val)
+        except (TypeError, ValueError):
+            continue
+
+    # Check nested format entries
+    for table_key in ("requested_formats", "formats"):
+        for fmt in info_dict.get(table_key, []) or []:
+            for key in ("filesize", "filesize_approx"):
+                size_val = fmt.get(key)
+                if size_val is None:
+                    continue
+                try:
+                    return int(size_val)
+                except (TypeError, ValueError):
+                    continue
+    return None
 
 def normalize_title(title):
     # Normalize the string to 'NFKD' form and encode to 'ascii' ignoring non-ascii characters
@@ -241,203 +418,117 @@ def get_playlist_videos(playlist_url: str, *, use_cookies: bool = False, cookies
             return [], None
 
 
-def download_video(video_url, download_path, info_dict, download_video_flag, current_whisper_model=None,
-                   use_cookies: bool = False, cookies=None):
+def download_video(
+    video_url,
+    download_path,
+    info_dict,
+    download_video_flag,
+    current_whisper_model=None,
+    use_cookies: bool = False,
+    cookies=None,
+):
     """
-    Downloads video or audio using yt-dlp with refined option handling.
+    Download media using yt-dlp and return the path to the downloaded file.
+
+    By default downloads the best available audio stream to minimise bandwidth.
+    When ``download_video_flag`` is True, the best muxed audio+video stream is
+    downloaded instead so the original media can be retained.
     """
-    if not yt_dlp:
-        logging.error("yt-dlp module not available, cannot download.")
-        return None
+    download_dir = Path(download_path)
+    download_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- 1. Determine Filename and Extension ---
-    title = "unknown_video"
-    ext = "tmp" # Default temporary extension
+    # Reject when the declared size is already above the configured maximum.
+    declared_size = _extract_declared_filesize(info_dict) if info_dict else None
+    if (
+        declared_size
+        and DEFAULT_MAX_VIDEO_FILE_SIZE_BYTES
+        and declared_size > DEFAULT_MAX_VIDEO_FILE_SIZE_BYTES
+    ):
+        raise ValueError(
+            f"Declared download size {declared_size / (1024 * 1024):.2f}MB exceeds "
+            f"maximum allowed {DEFAULT_MAX_VIDEO_FILE_SIZE_BYTES / (1024 * 1024):.2f}MB."
+        )
 
-    if info_dict and isinstance(info_dict, dict):
-        title = info_dict.get('title', title)
-        ext = info_dict.get('ext') # Can be None
-    else:
-        logging.warning("info_dict missing or invalid, using fallbacks for title/ext.")
-        # Attempt fallback from URL (less reliable)
-        try:
-             path_part = Path(urlparse(video_url).path)
-             if path_part.stem:
-                 title = path_part.stem
-             if path_part.suffix:
-                 ext = path_part.suffix[1:]
-        except Exception:
-             logging.warning("Could not parse URL for fallback title/ext.")
+    format_string = "bestvideo+bestaudio/best" if download_video_flag else "bestaudio/best"
+    outtmpl = str(download_dir / "%(title).200B-%(id)s.%(ext)s")
 
-    normalized_video_title = normalize_title(title)
-    unique_suffix = uuid.uuid4().hex[:8]
-    download_path_obj = Path(download_path)
+    ydl_opts: Dict[str, Any] = {
+        "format": format_string,
+        "restrictfilenames": True,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": False,
+        "outtmpl": outtmpl,
+        "paths": {"home": str(download_dir)},
+        "retries": 3,
+        "continuedl": True,
+        "overwrites": False,
+        "concurrent_fragment_downloads": 3,
+        "postprocessors": [],
+    }
 
-    # Define target extension and preferred codec based on download type
-    valid_audio_codecs = {'m4a', 'mp3', 'opus', 'wav', 'aac', 'ogg', 'flac'}
-    preferred_codec = 'm4a' # Default audio codec
-    target_ext = 'mp4'      # Default overall target
+    if not download_video_flag:
+        # Convert to a stable audio container for downstream processing.
+        ydl_opts["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "m4a",
+                "preferredquality": "192",
+            }
+        ]
 
-    if download_video_flag:
-        target_ext = 'mp4' # Video+Audio target is MP4
-        logging.debug("Download type: Video+Audio")
-    else: # Audio only requested
-        logging.debug(f"Download type: Audio only. Extracted ext hint: '{ext}'")
-        local_ext = ext or 'm4a' # Use hint or default to m4a
-        if local_ext.lower() in valid_audio_codecs:
-             target_ext = local_ext.lower() # Use the valid audio extension
-             preferred_codec = target_ext    # Use it as the preferred codec
-             logging.debug(f"Using valid extracted audio extension: {target_ext}")
-        else:
-             target_ext = 'm4a' # Fallback if hint wasn't a valid audio type
-             preferred_codec = 'm4a'
-             logging.debug(f"Extracted ext '{ext}' not a recognized audio codec, using fallback: {target_ext}")
-
-    # Final output path construction
-    final_output_path = download_path_obj / f"{normalized_video_title}_{unique_suffix}.{target_ext}"
-    final_output_path_str = str(final_output_path)
-    logging.debug(f"Generated unique target path: {final_output_path_str}")
-
-    if final_output_path.exists():
-        logging.warning(f"Target file already exists: {final_output_path_str}. Skipping download.")
-        return final_output_path_str
-
-    # --- 2. Setup ffmpeg Path ---
-    import shutil
-    ffmpeg_path = None
-    
-    # Try to find ffmpeg using shutil.which first (works across platforms)
-    ffmpeg_path = shutil.which('ffmpeg')
-    
-    if not ffmpeg_path:
-        # Fallback to platform-specific logic
-        if sys.platform.startswith('win'):
-            local_ffmpeg = Path(os.getcwd()) / 'Bin' / 'ffmpeg.exe'
-            if local_ffmpeg.exists():
-                ffmpeg_path = str(local_ffmpeg)
-            else:
-                logging.warning(f"Local ffmpeg not found at '{local_ffmpeg}', trying 'ffmpeg' from PATH.")
-                ffmpeg_path = 'ffmpeg'
-        elif sys.platform == 'darwin':
-            # Common macOS locations for ffmpeg
-            possible_paths = [
-                '/opt/homebrew/bin/ffmpeg',  # Apple Silicon homebrew
-                '/usr/local/bin/ffmpeg',      # Intel homebrew
-                '/usr/bin/ffmpeg'              # System location
-            ]
-            for path in possible_paths:
-                if os.path.exists(path):
-                    ffmpeg_path = path
-                    break
-            if not ffmpeg_path:
-                ffmpeg_path = 'ffmpeg'  # Last resort
-        else:
-            ffmpeg_path = 'ffmpeg'
-    
-    if not ffmpeg_path:
-        logging.warning(f"Could not locate ffmpeg. yt-dlp postprocessing may fail.")
-        ffmpeg_path = 'ffmpeg'  # Use default and hope it's in PATH
-    
-    # Confirm ffmpeg works
-    try:
-        subprocess.run([ffmpeg_path, '-version'], check=True, capture_output=True, timeout=5)
-        logging.debug(f"Confirmed ffmpeg command: {ffmpeg_path}")
-    except (FileNotFoundError, subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired) as ffmpeg_err:
-        logging.warning(f"ffmpeg command '{ffmpeg_path}' check failed: {ffmpeg_err}. yt-dlp might still work or fail later.")
-        # Don't necessarily fail here, let yt-dlp try
-
-    # --- 3. Construct yt-dlp Options ---
-    ydl_opts = None
-    # Using a temporary path template for yt-dlp, as postprocessors rename the file
-    # Note: yt-dlp handles the final renaming to the 'outtmpl' name *if* no postprocessor runs or if it merges.
-    # When FFmpegExtractAudio runs, it often uses its own naming based on the original + codec.
-    # We will check for the final_output_path later.
-    base_template = str(download_path_obj / f"{normalized_video_title}_{unique_suffix}")
-
-    if download_video_flag:
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': {'default': final_output_path_str}, # Target the final mp4 path directly
-            'ffmpeg_location': ffmpeg_path,
-            'quiet': True, 'no_warnings': True,
-            'merge_output_format': 'mp4', # Ensure merged output is mp4
-        }
-        log_msg = "yt_dlp: Downloading video and audio..."
-    else: # Audio only
-         ydl_opts = {
-             'format': 'bestaudio/best',
-             # Let yt-dlp determine intermediate name, postprocessor handles final codec/ext
-             'outtmpl': {'default': base_template + '.%(ext)s'}, # Template for download before postprocessing
-             'ffmpeg_location': ffmpeg_path,
-             'quiet': True, 'no_warnings': True,
-             'postprocessors': [{
-                 'key': 'FFmpegExtractAudio',
-                 'preferredcodec': preferred_codec, # Use the valid audio codec
-                 # No need to specify output path here, FFmpegExtractAudio uses preferredcodec for ext
-             }],
-             'keepvideo': False, # Don't keep original if only audio is needed
-         }
-         log_msg = f"yt_dlp: Downloading and extracting audio only (codec: {preferred_codec})..."
-
-    # Attach cookies via HTTP header if requested
     if use_cookies and cookies:
         cookie_header = _cookies_to_header_value(cookies)
         if cookie_header:
-            ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
+            ydl_opts.setdefault("http_headers", {})["Cookie"] = cookie_header
 
-    # --- 4. Execute Download ---
-    if ydl_opts is None:
-        logging.error("Logic error: ydl_opts was not set.")
-        return None
+    downloaded_path: Optional[Path] = None
 
-    logging.debug(f"Attempting download with ydl_opts: {ydl_opts}")
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            logging.debug(log_msg)
-            ydl.download([video_url])
-            logging.debug(f"yt_dlp: Download/extraction process finished.")
+            result = ydl.extract_info(video_url, download=True)
 
-            # --- 5. Verify Output File ---
-            # Check if the *expected* final file exists after processing
-            if final_output_path.exists():
-                logging.info(f"Successfully obtained media file: {final_output_path_str}")
-                return final_output_path_str
-            else:
-                # If audio extraction happened, the file might have a slightly different name
-                # Let's search for the file based on the unique part
-                found_files = list(download_path_obj.glob(f"{normalized_video_title}_{unique_suffix}.*"))
-                # Filter out potentially incomplete '.part' files
-                valid_files = [f for f in found_files if not f.name.endswith('.part')]
+            def _collect_candidate_paths(data: Dict[str, Any]) -> List[Path]:
+                candidates: List[Path] = []
+                for key in ("filepath", "_filename", "filename"):
+                    value = data.get(key)
+                    if value:
+                        candidates.append(Path(value))
+                return candidates
 
-                if len(valid_files) == 1:
-                     actual_path = str(valid_files[0])
-                     logging.warning(f"Expected path '{final_output_path_str}' not found, but found unique match '{actual_path}'. Using it.")
-                     # Optionally rename to expected name if desired, but returning actual path is safer
-                     # try:
-                     #     valid_files[0].rename(final_output_path)
-                     #     logging.info(f"Renamed '{actual_path}' to '{final_output_path_str}'")
-                     #     return final_output_path_str
-                     # except OSError as rename_err:
-                     #     logging.error(f"Failed to rename downloaded file: {rename_err}")
-                     #     return actual_path # Return path found even if rename failed
-                     return actual_path
-                elif len(valid_files) > 1:
-                     logging.error(f"Multiple potential output files found after download for pattern '{normalized_video_title}_{unique_suffix}.*': {valid_files}. Cannot determine correct file.")
-                     return None
-                else:
-                     logging.error(f"yt_dlp: Target file '{final_output_path_str}' (or variations) not found after download/postprocessing.")
-                     return None
+            candidates: List[Path] = []
 
-    except yt_dlp.utils.DownloadError as e:
-        # More specific download errors (network, unavailable video etc.)
-        logging.error(f"yt_dlp: DownloadError for {video_url}: {e}")
-        return None
-    except Exception as e:
-        # Catches other errors (like potential init errors, unexpected issues)
-        logging.error(f"yt_dlp: Unexpected error during download/processing for {video_url}: {e}", exc_info=True)
-        # No UnboundLocalError should happen now if ydl_opts logic is correct
-        return None
+            requested = result.get("requested_downloads") or []
+            for entry in requested:
+                candidates.extend(_collect_candidate_paths(entry))
 
+            # Some providers expose the final filepath directly on the result dict.
+            candidates.extend(_collect_candidate_paths(result))
+
+            # Fallback to the template yt-dlp would have used.
+            if not candidates:
+                candidates.append(Path(ydl.prepare_filename(result)))
+
+        for candidate in candidates:
+            if candidate.exists():
+                downloaded_path = candidate
+                break
+            # Some postprocessors return relative paths; resolve relative to download dir.
+            resolved_candidate = (download_dir / candidate.name).resolve()
+            if resolved_candidate.exists():
+                downloaded_path = resolved_candidate
+                break
+
+        if not downloaded_path:
+            raise FileNotFoundError("Unable to determine downloaded file path.")
+
+        logging.info(f"Downloaded media for transcription: {downloaded_path}")
+        return str(downloaded_path)
+
+    except Exception as exc:
+        logging.error(f"Failed to download media from {video_url}: {exc}", exc_info=True)
+        raise
 
 def extract_video_info(url):
     try:
@@ -480,15 +571,39 @@ def parse_and_expand_urls(urls):
             logging.debug(f"Parsed URL components: {parsed_url}")
 
             # YouTube playlist handling
-            if 'youtube.com' in parsed_url.netloc and 'list' in parsed_url.query:
-                playlist_id = parse_qs(parsed_url.query)['list'][0]
-                logging.info(f"Detected YouTube playlist with ID: {playlist_id}")
-                playlist_urls = get_youtube_playlist_urls(playlist_id)
-                logging.info(f"Expanded playlist URLs: {playlist_urls}")
-                expanded_urls.extend(playlist_urls)
+            netloc_lower = (parsed_url.netloc or "").lower()
+            host_without_port = netloc_lower.split(":", 1)[0]
+            query_params = parse_qs(parsed_url.query)
+            youtube_playlist_hosts = (
+                "youtube.com",
+                "www.youtube.com",
+                "m.youtube.com",
+                "music.youtube.com",
+                "youtube-nocookie.com",
+            )
+
+            def _matches_youtube_host(hostname: str) -> bool:
+                return (
+                    host_without_port == hostname
+                    or host_without_port.endswith(f".{hostname}")
+                )
+
+            if any(_matches_youtube_host(host) for host in youtube_playlist_hosts):
+                playlist_ids = query_params.get("list")
+                if playlist_ids:
+                    playlist_id = playlist_ids[0]
+                    logging.info(f"Detected YouTube playlist with ID: {playlist_id}")
+                    playlist_urls = get_youtube_playlist_urls(playlist_id)
+                    logging.info(f"Expanded playlist URLs: {playlist_urls}")
+                    if playlist_urls:
+                        expanded_urls.extend(playlist_urls)
+                    else:
+                        logging.warning(f"No entries found for playlist '{url}'. Keeping original URL.")
+                        expanded_urls.append(url)
+                    continue
 
             # YouTube short URL handling
-            elif 'youtu.be' in parsed_url.netloc:
+            if 'youtu.be' in parsed_url.netloc:
                 video_id = parsed_url.path.lstrip('/')
                 full_url = f'https://www.youtube.com/watch?v={video_id}'
                 logging.info(f"Expanded YouTube short URL to: {full_url}")
@@ -526,17 +641,43 @@ def parse_and_expand_urls(urls):
 
         except Exception as e:
             logging.error(f"Error processing URL {url}: {str(e)}", exc_info=True)
-            # Optionally, you might want to add the problematic URL to expanded_urls
-            # expanded_urls.append(url)
+            expanded_urls.append(url)
 
     logging.info(f"Final expanded URLs: {expanded_urls}")
     return expanded_urls
 
 
+HTTPONLY_PREFIX = '#HttpOnly_'
+_HTTPONLY_PREFIX_LOWER = HTTPONLY_PREFIX.lower()
+
+
+def _parse_netscape_cookie_export(text: str) -> List[str]:
+    """Return cookie name=value pairs from a Netscape/Mozilla cookie export blob."""
+    pairs: List[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower_line = line.lower()
+        if lower_line.startswith(_HTTPONLY_PREFIX_LOWER):
+            line = line[len(HTTPONLY_PREFIX):]
+        elif line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if len(fields) < 7:
+            # Fallback to whitespace splitting if tabs are missing
+            fields = [segment for segment in line.split(' ') if segment]
+        if len(fields) < 7:
+            continue
+        name, value = fields[5], fields[6]
+        if not name:
+            continue
+        pairs.append(f"{name}={value}")
+    return pairs
+
+
 def _cookies_to_header_value(cookies) -> Optional[str]:
-    """Convert JSON string or dict cookies into a Cookie header value.
-    Returns None if input is invalid.
-    """
+    """Convert JSON string, dict, or Netscape export cookies into a Cookie header value."""
     try:
         if cookies is None:
             return None
@@ -547,25 +688,7 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
             try:
                 cookies = json.loads(text)
             except json.JSONDecodeError:
-                pairs = []
-                for raw_line in text.splitlines():
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    if line.startswith('#HttpOnly_'):
-                        line = line[len('#HttpOnly_'):]
-                    elif line.startswith('#'):
-                        continue
-                    fields = line.split('\t')
-                    if len(fields) < 7:
-                        # Fallback to whitespace splitting if tabs are missing
-                        fields = [segment for segment in line.split(' ') if segment]
-                    if len(fields) < 7:
-                        continue
-                    name, value = fields[5], fields[6]
-                    if not name:
-                        continue
-                    pairs.append(f"{name}={value}")
+                pairs = _parse_netscape_cookie_export(text)
                 return "; ".join(pairs) if pairs else None
         if isinstance(cookies, dict):
             parts = []
@@ -719,14 +842,15 @@ def process_videos(
              }
     """
     logging.info(f"Starting process_videos (DB-agnostic) for {len(inputs)} inputs.")
-    errors = []
+    expanded_inputs = parse_and_expand_urls(inputs)
+    if expanded_inputs != inputs:
+        logging.info(f"Expanded playlist and shortcut URLs into {len(expanded_inputs)} concrete entries.")
+    inputs = expanded_inputs
+    errors: List[str] = []
+    warnings_accum: List[str] = []
     results = []
     all_transcripts_for_confab: Dict[str, str] = {}
     all_summaries_for_confab: Dict[str, str] = {}
-
-    # Convert user times to seconds
-    start_seconds = convert_to_seconds(start_time) if start_time else 0
-    end_seconds = convert_to_seconds(end_time) if end_time else None
 
     # If user typed no inputs, bail out
     if not inputs:
@@ -734,8 +858,44 @@ def process_videos(
         return {
             "processed_count": 0,
             "errors_count": 1,
+            "warnings_count": 0,
             "errors": ["No inputs provided."],
-            "results": []
+            "warnings": [],
+            "results": [],
+            "confabulation_results": None,
+        }
+
+    # Convert user times to seconds
+    try:
+        start_seconds = convert_to_seconds(start_time) if start_time else 0
+        end_seconds = convert_to_seconds(end_time) if end_time else None
+    except ValueError as exc:
+        error_msg = f"Invalid time parameter: {exc}"
+        logging.error(error_msg)
+        return {
+            "processed_count": 0,
+            "errors_count": len(inputs),
+            "warnings_count": 0,
+            "errors": [error_msg],
+            "warnings": [],
+            "results": [
+                {
+                    "status": "Error",
+                    "input_ref": src,
+                    "processing_source": src,
+                    "media_type": "video",
+                    "metadata": {},
+                    "content": None,
+                    "segments": None,
+                    "chunks": None,
+                    "analysis": None,
+                    "analysis_details": {},
+                    "error": error_msg,
+                    "warnings": None,
+                }
+                for src in inputs
+            ],
+            "confabulation_results": None,
         }
 
     # Enforce temp_dir usage
@@ -746,8 +906,11 @@ def process_videos(
         return {
             "processed_count": 0,
             "errors_count": len(inputs),
+            "warnings_count": 0,
             "errors": ["Internal Error: Processing temporary directory was not provided."],
-            "results": [{"status": "Error", "input_ref": inp, "error": "Internal processing setup error"} for inp in inputs]
+            "warnings": [],
+            "results": [{"status": "Error", "input_ref": inp, "error": "Internal processing setup error"} for inp in inputs],
+            "confabulation_results": None,
         }
     processing_temp_dir = Path(temp_dir)
     # Ensure the directory exists (it should, as TempDirManager creates it)
@@ -756,8 +919,11 @@ def process_videos(
          # Handle error appropriately
          return {
              "processed_count": 0, "errors_count": len(inputs),
+             "warnings_count": 0,
              "errors": [f"Internal Error: Invalid temporary directory '{processing_temp_dir}'."],
-             "results": [{"status": "Error", "input_ref": inp, "error": "Internal processing setup error"} for inp in inputs]
+             "warnings": [],
+             "results": [{"status": "Error", "input_ref": inp, "error": "Internal processing setup error"} for inp in inputs],
+             "confabulation_results": None,
          }
     logging.info(f"process_videos using provided temporary directory: {processing_temp_dir}")
 
@@ -792,11 +958,16 @@ def process_videos(
                 temp_dir=str(processing_temp_dir), # Pass temp dir path
                 keep_intermediate_audio=False, # Pass if needed
                 perform_diarization=perform_diarization,
+                keep_original=keep_original,
+                user_id=user_id,
             )
 
             results.append(single_result) # Append regardless of status
 
             if single_result.get("status") == "Success":
+                item_warnings = single_result.get("warnings") or []
+                if item_warnings:
+                    warnings_accum.extend(item_warnings)
                 # Record per-item success metric
                 log_counter(
                     metric_name="videos_processed_total",
@@ -823,6 +994,9 @@ def process_videos(
                 # If status is "Error"
                 if single_result.get("status") == "Error":
                     errors.append(single_result.get("error", "Unknown processing error"))
+                item_warnings = single_result.get("warnings") or []
+                if item_warnings:
+                    warnings_accum.extend(item_warnings)
 
                 # Log failure metric
                 log_counter(
@@ -832,9 +1006,9 @@ def process_videos(
                 )
             elif single_result.get("status") == "Warning":
                 # If status is "Warning"
-                warnings = single_result.get("warnings", [])
-                if warnings:
-                    errors.extend(warnings)
+                item_warnings = single_result.get("warnings") or []
+                if item_warnings:
+                    warnings_accum.extend(item_warnings)
 
         except Exception as exc:
             msg = f"Exception processing '{video_input}': {exc}"
@@ -860,7 +1034,7 @@ def process_videos(
             )
 
     # --- Recalculate counts based on the correctly populated 'results' list ---
-    processed_count_calc = sum(1 for r in results if r.get("status") == "Success")
+    processed_count_calc = sum(1 for r in results if r.get("status") in {"Success", "Warning"})
     errors_count_calc = sum(1 for r in results if r.get("status") == "Error")
     warnings_count_calc = sum(1 for r in results if r.get("status") == "Warning")
 
@@ -868,7 +1042,9 @@ def process_videos(
     confabulation_results = None
     if perform_confabulation_check:
         if not api_name:
-            logging.warning("Confabulation check requested, but no API name was provided; skipping g_eval.")
+            warning_msg = "Confabulation check requested, but no API name was provided; skipping g_eval."
+            logging.warning(warning_msg)
+            warnings_accum.append(warning_msg)
         elif not all_transcripts_for_confab:
             logging.info("Confabulation check requested, but no transcript/summary pairs were collected.")
             confabulation_results = "Confabulation check skipped: no transcript/summary pairs available."
@@ -879,6 +1055,7 @@ def process_videos(
                 warning_msg = f"Confabulation check skipped: missing API key for provider '{api_name}'."
                 logging.warning(warning_msg)
                 confabulation_results = warning_msg
+                warnings_accum.append(warning_msg)
             else:
                 confab_results = []
                 user_identifier = str(user_id) if user_id is not None else None
@@ -909,12 +1086,14 @@ def process_videos(
         f"process_videos DEBUG: Final results list before return: {json.dumps(results, indent=2, default=str)}")
     logger.debug(f"process_videos DEBUG: Calculated processed_count: {processed_count_calc}")
     logger.debug(f"process_videos DEBUG: Calculated errors_count: {errors_count_calc}")
+    logger.debug(f"process_videos DEBUG: Calculated warnings_count: {warnings_count_calc}")
 
     return {
         "processed_count": processed_count_calc,
         "errors_count": errors_count_calc,
         "warnings_count": warnings_count_calc,
         "errors": errors, # List of error messages
+        "warnings": warnings_accum,
         "results": results,
         "confabulation_results": confabulation_results
     }
@@ -947,6 +1126,8 @@ def process_single_video(
     temp_dir: str, # Expect temp_dir path from caller (e.g., TempDirManager context)
     keep_intermediate_audio: bool = False, # Flag to keep the WAV file from transcription
     perform_diarization: bool = False, # Flag to perform diarization
+    keep_original: bool = False,
+    user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Processes a single video/file: Extracts metadata, downloads if URL,
@@ -969,6 +1150,7 @@ def process_single_video(
         "analysis_details": {},
         "error": None,
         "warnings": [],
+        "kept_video_path": None,
     }
     local_file_path_for_transcription = None
     # Temp dir for download is provided by the caller (`temp_dir`)
@@ -1004,18 +1186,28 @@ def process_single_video(
 
             download_target_dir_str = str(processing_temp_dir)
             logger.info(f"Downloading URL to directory: {download_target_dir_str}")
-            download_audio_only_flag = True
-            downloaded_path = download_video(
-                video_url=video_input,
-                download_path=download_target_dir_str,
-                info_dict=info_dict,
-                download_video_flag=not download_audio_only_flag,
-                use_cookies=use_cookies,
-                cookies=cookies,
-            )
+            download_video_flag = bool(keep_original)
+            if download_video_flag:
+                logger.info("keep_original requested; downloading full video stream for archival.")
+            try:
+                downloaded_path = download_video(
+                    video_url=video_input,
+                    download_path=download_target_dir_str,
+                    info_dict=info_dict,
+                    download_video_flag=download_video_flag,
+                    use_cookies=use_cookies,
+                    cookies=cookies,
+                )
+            except NotImplementedError as exc:
+                err_msg = str(exc) or "Video download is currently disabled."
+                logging.error(err_msg)
+                processing_result.update({"status": "Error", "error": err_msg})
+                return processing_result
 
             if not downloaded_path or not os.path.exists(downloaded_path):
-                raise FileNotFoundError(f"Download failed or file not found (target in {download_target_dir_str}) for URL: {video_input}")
+                raise FileNotFoundError(
+                    f"Download failed or file not found (target in {download_target_dir_str}) for URL: {video_input}"
+                )
 
             local_file_path_for_transcription = downloaded_path
             # *** Update only the processing_source, keep original input_ref ***
@@ -1032,14 +1224,32 @@ def process_single_video(
             # Extract/create minimal metadata for local files if not already present
             if not processing_result.get("metadata"):
                  # Basic info; could potentially use ffprobe or similar for more details if needed
+                 path_obj = Path(video_input)
                  info_dict = {
-                     "title": Path(video_input).stem,
+                     "title": path_obj.stem,
                      "description": "Local file",
-                     "webpage_url": f"local://{Path(video_input).resolve()}",
+                     "webpage_url": f"local://{path_obj.name}",
+                     "source_filename": path_obj.name,
                      # Add other fields as None or extract if possible
                  }
                  processing_result["metadata"] = info_dict
             logger.info(f"Input is local file: {local_file_path_for_transcription}")
+
+        if keep_original and local_file_path_for_transcription:
+            source_path = Path(local_file_path_for_transcription).resolve()
+            if _VIDEO_STORAGE_ROOT in source_path.parents:
+                processing_result["kept_video_path"] = str(source_path)
+            else:
+                kept_path = _store_video_file(source_path, user_id)
+                if kept_path:
+                    processing_result["kept_video_path"] = str(kept_path)
+                else:
+                    warn_msg = (
+                        f"Unable to retain original video '{source_path.name}' due to storage limits or errors."
+                    )
+                    # Add warning only if storage failed and warn_msg defined
+                    logging.warning(warn_msg)
+                    processing_result["warnings"].append(warn_msg)
 
         # 2. Perform Transcription using the LOCAL file path
         logging.info(f"Calling perform_transcription with LOCAL path: {local_file_path_for_transcription}")
@@ -1103,6 +1313,13 @@ def process_single_video(
 
         # Prepare main 'content' string
         transcription_text = extract_text_from_segments(segments, include_timestamps=timestamp_option)
+        if transcription_text == _TRANSCRIPTION_EXTRACTION_ERROR_SENTINEL:
+            error_msg = "Transcription failed: unable to extract text from generated segments."
+            logging.error(f"{error_msg} Input: {video_input}")
+            processing_result["status"] = "Error"
+            processing_result["error"] = error_msg
+            processing_result["content"] = None
+            return processing_result
         processing_result["content"] = transcription_text
         if not transcription_text:
              warn_msg = "Transcription resulted in empty text content."

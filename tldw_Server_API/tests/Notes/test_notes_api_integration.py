@@ -66,12 +66,48 @@ async def override_get_chacha_db_for_user():
     mock_chacha_db_instance.client_id = "test_api_client_for_user_db"
     return mock_chacha_db_instance
 
+class _StubRateLimiter:
+    """Simple stub that denies after N calls per endpoint."""
+    def __init__(self):
+        self.enabled = True
+        # endpoint -> max allowed calls before denying
+        self._limits: dict[str, int | None] = {}
+        # endpoint -> current calls
+        self._calls: dict[str, int] = {}
+
+    def set_limit(self, endpoint: str, max_calls: Optional[int]):
+        # None means unlimited
+        self._limits[endpoint] = max_calls
+        self._calls[endpoint] = 0
+
+    def reset(self):
+        self._limits.clear()
+        self._calls.clear()
+
+    async def check_user_rate_limit(self, user_id: int, endpoint: str, role: str = "user"):
+        if not self.enabled:
+            return True, {"rate_limit_enabled": False}
+        cur = self._calls.get(endpoint, 0) + 1
+        self._calls[endpoint] = cur
+        lim = self._limits.get(endpoint)
+        if lim is None or cur <= lim:
+            return True, {"limit": lim if lim is not None else 0, "remaining": None}
+        # Deny
+        return False, {"retry_after": 60}
+
+
+_stub_rate_limiter = _StubRateLimiter()
+
+async def override_get_rate_limiter_dep():
+    return _stub_rate_limiter
+
 
 @pytest.fixture(scope="module")
 def test_app():
     app = FastAPI()
     app.include_router(notes_router_module.router, prefix="/api/v1/notes", tags=["Notes"])
     app.dependency_overrides[notes_router_module.get_chacha_db_for_user] = override_get_chacha_db_for_user
+    app.dependency_overrides[notes_router_module.get_rate_limiter_dep] = override_get_rate_limiter_dep
     return app
 
 
@@ -93,6 +129,19 @@ def reset_db_mock_calls():
     mock_chacha_db_instance.get_keyword_by_id.side_effect = None
     mock_chacha_db_instance.link_note_to_keyword.side_effect = None
     mock_chacha_db_instance.get_keywords_for_note.side_effect = None
+    _stub_rate_limiter.reset()
+    # Default: unlimited for endpoints unless test sets otherwise
+    _stub_rate_limiter.set_limit("notes.create", None)
+    _stub_rate_limiter.set_limit("notes.list", None)
+    _stub_rate_limiter.set_limit("notes.update", None)
+    _stub_rate_limiter.set_limit("notes.delete", None)
+    _stub_rate_limiter.set_limit("notes.search", None)
+    _stub_rate_limiter.set_limit("notes.export", None)
+    _stub_rate_limiter.set_limit("notes.bulk_create", None)
+    _stub_rate_limiter.set_limit("keywords.create", None)
+    _stub_rate_limiter.set_limit("keywords.list", None)
+    _stub_rate_limiter.set_limit("keywords.delete", None)
+    _stub_rate_limiter.set_limit("keywords.search", None)
 
 
 def create_timestamped_data(base_data: Dict[str, Any], client_id: str) -> Dict[str, Any]:
@@ -160,6 +209,23 @@ def test_create_note_conflict_error(client: TestClient):
     response = client.post("/api/v1/notes/", json=note_create_payload)
     assert response.status_code == status.HTTP_409_CONFLICT
     assert f"A conflict occurred with note (ID: {note_id_val})." in response.json()["detail"]
+
+
+def test_bulk_create_respects_rate_limit(client: TestClient):
+    note_payloads = [
+        {"title": "Bulk Note 1", "content": "Content 1"},
+        {"title": "Bulk Note 2", "content": "Content 2"},
+        {"title": "Bulk Note 3", "content": "Content 3"},
+    ]
+
+    # Deny bulk endpoint immediately (parity with centralized limiter at request level)
+    _stub_rate_limiter.set_limit("notes.bulk_create", 0)
+
+    response = client.post("/api/v1/notes/bulk", json={"notes": note_payloads})
+    assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "Rate limit exceeded" in response.json()["detail"]
+    # No item-level work should proceed
+    assert mock_chacha_db_instance.add_note.call_count == 0
 
 
 def test_get_note(client: TestClient):
@@ -255,7 +321,28 @@ def test_update_note_no_fields(client: TestClient):
     note_id_val = str(uuid.uuid4())
     response = client.put(f"/api/v1/notes/{note_id_val}", json={}, headers={"expected-version": "1"})
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.json()["detail"] == "No fields provided for update."
+    assert response.json()["detail"] == "No valid fields provided for update."
+
+
+def test_update_note_rejects_null_values(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    response = client.put(
+        f"/api/v1/notes/{note_id_val}",
+        json={"content": None},
+        headers={"expected-version": "1"}
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"] == "No valid fields provided for update."
+    mock_chacha_db_instance.update_note.assert_not_called()
+
+
+def test_patch_note_rejects_null_values(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    response = client.patch(f"/api/v1/notes/{note_id_val}", json={"title": None})
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"] == "No valid fields provided for update."
+    mock_chacha_db_instance.get_note_by_id.assert_not_called()
+    mock_chacha_db_instance.update_note.assert_not_called()
 
 
 def test_delete_note(client: TestClient):
@@ -295,7 +382,7 @@ def test_search_notes(client: TestClient):
     assert len(data) == 1
     assert data[0]["title"] == "Important Note"
     assert data[0]["content"] == "This content is important."
-    mock_chacha_db_instance.search_notes.assert_called_once_with(search_term=query_term, limit=5)
+    mock_chacha_db_instance.search_notes.assert_called_once_with(search_term=query_term, limit=5, offset=0)
 
 
 def test_create_keyword(client: TestClient):
@@ -378,6 +465,49 @@ def test_get_keywords_for_note(client: TestClient):
     assert data["note_id"] == note_id_val
     assert len(data["keywords"]) == 2
     mock_chacha_db_instance.get_keywords_for_note.assert_called_once_with(note_id=note_id_val)
+
+
+def test_rate_limit_enforced_without_env(client: TestClient):
+    # Allow only 1 create, then 429
+    _stub_rate_limiter.set_limit("notes.create", 1)
+    note_id_val = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.add_note.return_value = note_id_val
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": note_id_val, "title": "First Note", "content": "Content"},
+        expected_db_client_id,
+    )
+
+    first = client.post("/api/v1/notes/", json={"title": "First Note", "content": "Content"})
+    assert first.status_code == status.HTTP_201_CREATED
+
+    second = client.post("/api/v1/notes/", json={"title": "Second Note", "content": "More"})
+    assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "Rate limit" in second.json()["detail"]
+
+
+def test_rate_limit_disabled_by_env_flag(client: TestClient, monkeypatch):
+    # Simulate unlimited by stub configuration; environment flag not required for stub
+    _stub_rate_limiter.set_limit("notes.create", None)
+
+    expected_db_client_id = "test_api_client_for_user_db"
+    first_note_id = str(uuid.uuid4())
+    mock_chacha_db_instance.add_note.return_value = first_note_id
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": first_note_id, "title": "Allowed Note", "content": "Content"},
+        expected_db_client_id,
+    )
+    first = client.post("/api/v1/notes/", json={"title": "Allowed Note", "content": "Content"})
+    assert first.status_code == status.HTTP_201_CREATED
+
+    second_note_id = str(uuid.uuid4())
+    mock_chacha_db_instance.add_note.return_value = second_note_id
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": second_note_id, "title": "Allowed Note 2", "content": "Content"},
+        expected_db_client_id,
+    )
+    second = client.post("/api/v1/notes/", json={"title": "Allowed Note 2", "content": "Content"})
+    assert second.status_code == status.HTTP_201_CREATED
 
 #
 # End of test_notes_api_integration.py

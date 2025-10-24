@@ -5,6 +5,7 @@ import asyncio
 import aiohttp
 import hashlib
 import time
+import atexit
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
@@ -250,6 +251,10 @@ class AsyncEmbeddingService:
         self.batcher = get_batcher()
         self.recovery_manager = get_recovery_manager()
         self.metrics = get_metrics()
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         
         # Initialize providers
         self.providers = {}
@@ -410,22 +415,21 @@ class AsyncEmbeddingService:
                     provider_instance = self.providers[fallback]
                     fallback_model = model
                     fallback_config = self.config.get_provider(fallback)
-                    if fallback_config:
-                        if fallback_config.fallback_model:
-                            fallback_model = fallback_config.fallback_model
-                        else:
-                            available_models = fallback_config.models or []
-                            if available_models:
-                                if model not in available_models:
-                                    fallback_model = available_models[0]
-                                    logger.debug(
-                                    f"Substituting fallback model '{fallback_model}' for provider '{fallback}' "
-                                    f"(original model '{model}' not available)."
-                                )
-                        else:
-                            fallback_model = None
-                    else:
+                    if fallback_config is None:
                         fallback_model = None
+                    elif fallback_config.fallback_model:
+                        fallback_model = fallback_config.fallback_model
+                    else:
+                        available_models = fallback_config.models or []
+                        if available_models and model not in available_models:
+                            fallback_model = available_models[0]
+                            logger.debug(
+                                "Substituting fallback model '{fallback_model}' for provider '{fallback}' "
+                                "(original model '{model}' not available).",
+                                fallback_model=fallback_model,
+                                fallback=fallback,
+                                model=model,
+                            )
                     call_kwargs = {"text": text, "user_id": user_id}
                     if fallback_model:
                         call_kwargs["model"] = fallback_model
@@ -497,21 +501,110 @@ class AsyncEmbeddingService:
         # Shutdown thread pools in local providers
         for provider in self.providers.values():
             if hasattr(provider, 'executor'):
-                provider.executor.shutdown(wait=True)
+                try:
+                    provider.executor.shutdown(wait=False)
+                except Exception:
+                    try:
+                        provider.executor.shutdown(wait=False)
+                    except Exception:
+                        pass
         
         logger.info("Async embedding service shutdown complete")
 
 
 # Global async service instance
 _async_service: Optional[AsyncEmbeddingService] = None
+_shutdown_registered = False
+_health_check_task: Optional[asyncio.Task] = None
+
+
+async def _cancel_health_check_task():
+    """Cancel and await the periodic health task if it exists."""
+    global _health_check_task
+    task = _health_check_task
+    if task is None:
+        return
+    try:
+        task_loop = task.get_loop()
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop and task_loop is current_loop:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        else:
+            # Different loop or no running loop; request cancellation and return
+            try:
+                if task_loop.is_running():
+                    task_loop.call_soon_threadsafe(task.cancel)
+                else:
+                    # Loop already stopped; best-effort cancel
+                    task.cancel()
+            except Exception:
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+    finally:
+        _health_check_task = None
+
+
+async def _shutdown_service(service: AsyncEmbeddingService):
+    """Shutdown helper that cancels background tasks then stops the service."""
+    await _cancel_health_check_task()
+    await service.shutdown()
 
 
 def get_async_embedding_service() -> AsyncEmbeddingService:
     """Get or create the global async embedding service."""
-    global _async_service
+    global _async_service, _shutdown_registered
     if _async_service is None:
         _async_service = AsyncEmbeddingService()
+        if not _shutdown_registered:
+            try:
+                atexit.register(_shutdown_async_embedding_service_sync)
+            except Exception as exc:
+                logger.warning(f"Failed to register async embedding service shutdown hook: {exc}")
+            else:
+                _shutdown_registered = True
     return _async_service
+
+
+def _shutdown_async_embedding_service_sync():
+    """Best-effort shutdown for the global async service at interpreter exit."""
+    global _async_service
+    service = _async_service
+    if service is None:
+        return
+
+    try:
+        loop = getattr(service, "_loop", None)
+        if loop and not loop.is_closed():
+            if loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(_shutdown_service(service), loop)
+                try:
+                    fut.result(timeout=15)
+                except Exception as exc:
+                    try:
+                        logger.warning(f"Async embedding service shutdown timed out: {exc}")
+                    except Exception:
+                        pass
+            else:
+                loop.run_until_complete(_shutdown_service(service))
+        else:
+            asyncio.run(_shutdown_service(service))
+    except Exception as exc:
+        try:
+            logger.warning(f"Failed during async embedding service shutdown: {exc}")
+        except Exception:
+            pass
+    finally:
+        _async_service = None
 
 
 # Convenience functions
@@ -568,13 +661,21 @@ async def startup_event():
     await service.warmup_providers()
     
     # Start periodic tasks
-    asyncio.create_task(periodic_health_check())
+    global _health_check_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop:
+        _health_check_task = loop.create_task(periodic_health_check())
+    else:
+        _health_check_task = asyncio.create_task(periodic_health_check())
 
 
 async def shutdown_event():
     """FastAPI shutdown event handler"""
     service = get_async_embedding_service()
-    await service.shutdown()
+    await _shutdown_service(service)
 
 
 async def periodic_health_check():

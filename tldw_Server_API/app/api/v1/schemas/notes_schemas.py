@@ -129,6 +129,29 @@ class NoteBulkCreateResponse(BaseModel):
     created_count: int = 0
     failed_count: int = 0
 
+
+# --- List/Export Response Schemas ---
+class NotesListResponse(BaseModel):
+    notes: List[NoteResponse]
+    items: List[NoteResponse]
+    results: List[NoteResponse]
+    count: int
+    limit: int
+    offset: int
+    total: Optional[int] = None
+
+
+class NotesExportResponse(BaseModel):
+    notes: List[NoteResponse]
+    data: List[NoteResponse]
+    items: List[NoteResponse]
+    results: List[NoteResponse]
+    count: int
+    total: Optional[int] = None
+    limit: Optional[int] = None
+    offset: Optional[int] = None
+    exported_at: str
+
 #
 # End of notes_schemas.py
 #######################################################################################################################

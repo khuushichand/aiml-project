@@ -44,21 +44,36 @@ class PromptConfig(BaseModel):
 
 class GenerateDocumentRequest(BaseModel):
     """Request schema for generating a document."""
-    conversation_id: int = Field(..., gt=0, description="ID of the conversation")
+    conversation_id: str = Field(..., min_length=1, description="ID of the conversation")
     document_type: DocumentType = Field(..., description="Type of document to generate")
     provider: str = Field(..., min_length=1, description="LLM provider name")
     model: str = Field(..., min_length=1, description="Model name")
-    api_key: str = Field(..., min_length=1, description="API key for the provider")
+    api_key: Optional[str] = Field(None, description="Explicit API key override for the provider")
     specific_message: Optional[str] = Field(None, max_length=10000, description="Specific message to focus on")
     custom_prompt: Optional[str] = Field(None, max_length=5000, description="Custom prompt override")
     stream: bool = Field(False, description="Whether to stream the response")
     async_generation: bool = Field(False, description="Whether to generate asynchronously")
 
+    @field_validator("conversation_id", mode="before")
+    @classmethod
+    def normalize_conversation_id(cls, value: Any) -> str:
+        """Accept UUID strings while continuing to tolerate historical integer IDs."""
+        if isinstance(value, (int, float)):
+            if int(value) <= 0:
+                raise ValueError("conversation_id must be positive.")
+            return str(int(value))
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                raise ValueError("conversation_id cannot be empty.")
+            return cleaned
+        raise ValueError("conversation_id must be a string or positive integer.")
+
 
 class GenerateDocumentResponse(BaseModel):
     """Response schema for synchronous document generation."""
     document_id: int = Field(..., description="ID of the generated document")
-    conversation_id: int = Field(..., description="Conversation ID")
+    conversation_id: str = Field(..., description="Conversation ID")
     document_type: DocumentType = Field(..., description="Type of document generated")
     title: str = Field(..., description="Document title")
     content: str = Field(..., description="Generated document content")
@@ -72,7 +87,7 @@ class AsyncGenerationResponse(BaseModel):
     """Response schema for async document generation."""
     job_id: str = Field(..., description="Job ID for tracking")
     status: GenerationStatus = Field(..., description="Current job status")
-    conversation_id: int = Field(..., description="Conversation ID")
+    conversation_id: str = Field(..., description="Conversation ID")
     document_type: DocumentType = Field(..., description="Type of document being generated")
     created_at: datetime = Field(..., description="Job creation timestamp")
     message: str = Field(..., description="Status message")
@@ -81,7 +96,7 @@ class AsyncGenerationResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     """Response schema for job status check."""
     job_id: str = Field(..., description="Job ID")
-    conversation_id: int = Field(..., description="Conversation ID")
+    conversation_id: str = Field(..., description="Conversation ID")
     document_type: DocumentType = Field(..., description="Type of document")
     status: GenerationStatus = Field(..., description="Current status")
     provider: str = Field(..., description="LLM provider")
@@ -97,7 +112,7 @@ class JobStatusResponse(BaseModel):
 class GeneratedDocument(BaseModel):
     """Schema for a generated document."""
     id: int = Field(..., description="Document ID")
-    conversation_id: int = Field(..., description="Conversation ID")
+    conversation_id: str = Field(..., description="Conversation ID")
     document_type: DocumentType = Field(..., description="Document type")
     title: str = Field(..., description="Document title")
     content: str = Field(..., description="Document content")
@@ -115,7 +130,7 @@ class DocumentListResponse(BaseModel):
     """Response schema for listing generated documents."""
     documents: List[GeneratedDocument] = Field(..., description="List of generated documents")
     total: int = Field(..., description="Total number of documents")
-    conversation_id: Optional[int] = Field(None, description="Conversation ID if filtered")
+    conversation_id: Optional[str] = Field(None, description="Conversation ID if filtered")
     document_type: Optional[DocumentType] = Field(None, description="Document type if filtered")
 
 
@@ -142,12 +157,33 @@ class PromptConfigResponse(BaseModel):
 
 class BulkGenerateRequest(BaseModel):
     """Request schema for bulk document generation."""
-    conversation_ids: List[int] = Field(..., min_length=1, max_length=50, description="List of conversation IDs")
+    conversation_ids: List[str] = Field(..., min_length=1, max_length=50, description="List of conversation IDs")
     document_types: List[DocumentType] = Field(..., min_length=1, description="Types of documents to generate")
     provider: str = Field(..., min_length=1, description="LLM provider name")
     model: str = Field(..., min_length=1, description="Model name")
     api_key: str = Field(..., min_length=1, description="API key for the provider")
     async_generation: bool = Field(True, description="Generate asynchronously (recommended)")
+
+    @field_validator("conversation_ids", mode="before")
+    @classmethod
+    def normalize_conversation_ids(cls, values: Any) -> List[str]:
+        """Normalize all conversation IDs to strings for downstream consistency."""
+        if not isinstance(values, (list, tuple)):
+            raise ValueError("conversation_ids must be a list of identifiers.")
+        normalized: List[str] = []
+        for item in values:
+            if isinstance(item, (int, float)):
+                if int(item) <= 0:
+                    raise ValueError("conversation_ids must contain positive identifiers.")
+                normalized.append(str(int(item)))
+            elif isinstance(item, str):
+                cleaned = item.strip()
+                if not cleaned:
+                    raise ValueError("conversation_ids cannot contain empty strings.")
+                normalized.append(cleaned)
+            else:
+                raise ValueError("conversation_ids must only contain strings or integers.")
+        return normalized
 
 
 class BulkGenerateResponse(BaseModel):

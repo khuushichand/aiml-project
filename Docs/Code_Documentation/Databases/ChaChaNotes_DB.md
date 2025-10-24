@@ -599,11 +599,20 @@ Soft-deletes a note with optimistic locking.
 *   **Raises:** `ConflictError`, `CharactersRAGDBError`.
 
 ```python
-    def search_notes(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]
+    def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]
 ```
-Searches notes by title and content using FTS5.
-*   **Parameters:** `search_term (str)`, `limit (int)`
+Searches notes by title and content using FTS (SQLite/PostgreSQL) with pagination support. For SQLite the returned
+rows include a `bm25_score` field; for PostgreSQL they include `rank`.
+*   **Parameters:** `search_term (str)`, `limit (int)`, `offset (int)`
 *   **Returns:** `List[Dict[str, Any]]`
+*   **Raises:** `CharactersRAGDBError`.
+
+```python
+    def count_notes_matching(self, search_term: str) -> int
+```
+Returns the number of active notes matching the full-text search query.
+*   **Parameters:** `search_term (str)`
+*   **Returns:** `int`
 *   **Raises:** `CharactersRAGDBError`.
 
 ### Linking Table Methods

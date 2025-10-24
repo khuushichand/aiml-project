@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, List
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 DEFAULT_BASE_TEAM_NAME = "Default-Base"
@@ -622,5 +623,12 @@ async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
                     removed = True
             return {"team_id": int(team_id), "user_id": int(user_id), "removed": bool(removed)}
         except Exception as e:
-            logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}")
+            try:
+                redact_logs = get_settings().PII_REDACT_LOGS
+            except Exception:
+                redact_logs = False
+            if redact_logs:
+                logger.error(f"Failed to remove team member (details redacted) from team_id={team_id}: {e}")
+            else:
+                logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}")
             return {"team_id": int(team_id), "user_id": int(user_id), "removed": False}

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Dict, Any, List, Optional, Tuple
 
+import os
 import re
 import io
 import zipfile
@@ -723,6 +724,7 @@ def process_pst_bytes(
 
     # Write bytes to a temp file for pypff
     tmp_path = None
+    pst = None
     try:
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp.write(file_bytes or b"")
@@ -1078,9 +1080,13 @@ def process_pst_bytes(
             "error": f"Invalid PST/OST file: {e}",
         }]
     finally:
+        if pst is not None:
+            try:
+                pst.close()
+            except Exception as close_err:
+                logging.warning(f"Failed to close PST/OST reader for '{pst_name}': {close_err}")
         try:
             if tmp_path:
-                import os
                 os.unlink(tmp_path)
-        except Exception:
-            pass
+        except Exception as cleanup_err:
+            logging.warning(f"Failed to remove temporary PST/OST file '{tmp_path}': {cleanup_err}")

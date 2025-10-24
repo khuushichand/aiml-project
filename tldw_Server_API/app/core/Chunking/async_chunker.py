@@ -5,6 +5,8 @@ Provides async/await interfaces for chunking operations.
 """
 
 import asyncio
+import copy
+import threading
 from typing import List, Dict, Any, Optional, AsyncGenerator, Union
 from pathlib import Path
 import aiofiles
@@ -12,6 +14,7 @@ from loguru import logger
 from concurrent.futures import ThreadPoolExecutor
 
 from .base import ChunkerConfig, ChunkResult
+from .exceptions import InvalidInputError
 from .chunker import Chunker
 from .templates import TemplateManager
 from .utils.metrics import get_metrics, MetricsContext
@@ -31,8 +34,8 @@ class AsyncChunker:
             config: Chunker configuration
         """
         self.config = config or ChunkerConfig()
-        self._chunker = Chunker(config)
         self._metrics = get_metrics()
+        self._thread_local = threading.local()
         
         # Thread pool for CPU-bound operations
         self._executor = ThreadPoolExecutor(
@@ -45,6 +48,15 @@ class AsyncChunker:
         )
         
         logger.info("AsyncChunker initialized")
+
+    def _get_chunker(self) -> Chunker:
+        """Return a thread-local Chunker instance to avoid shared mutable state."""
+        chunker = getattr(self._thread_local, "chunker", None)
+        if chunker is None:
+            cfg_copy = copy.deepcopy(self.config)
+            chunker = Chunker(config=cfg_copy)
+            self._thread_local.chunker = chunker
+        return chunker
     
     async def chunk_text(self,
                         text: str,
@@ -66,18 +78,19 @@ class AsyncChunker:
             List of text chunks
         """
         async with self._semaphore:
-            # Run CPU-bound chunking in thread pool, preserving keyword options
-            import functools
             loop = asyncio.get_event_loop()
-            func = functools.partial(
-                self._chunker.chunk_text,
-                text,
-                method,
-                max_size,
-                overlap,
-                **options,
-            )
-            return await loop.run_in_executor(self._executor, func)
+
+            def _run_chunking():
+                chunker = self._get_chunker()
+                return chunker.chunk_text(
+                    text,
+                    method,
+                    max_size,
+                    overlap,
+                    **options,
+                )
+
+            return await loop.run_in_executor(self._executor, _run_chunking)
     
     async def chunk_file(self,
                         file_path: Union[str, Path],
@@ -169,9 +182,19 @@ class AsyncChunker:
         """
         buffer = ""
         overlap_buffer = ""
-        overlap_size = overlap if overlap is not None else 0
-        method_name = method or (self._chunker.config.default_method.value if hasattr(self, "_chunker") else "words")
-        method_lower = str(method_name).lower()
+        overlap_default = getattr(self.config, 'default_overlap', 0)
+        overlap_raw = overlap if overlap is not None else overlap_default
+        try:
+            overlap_size = int(overlap_raw)
+        except Exception as exc:
+            raise InvalidInputError(f"Invalid overlap value: {overlap_raw}") from exc
+        if overlap_size < 0:
+            overlap_size = 0
+        overlap = overlap_size
+        base_method = method if method is not None else self.config.default_method.value
+        normalized_method = Chunker._normalize_method_argument(base_method)
+        method_name = normalized_method or str(base_method)
+        method_lower = method_name.lower()
         
         def _coerce_overlap_value(value: Any) -> str:
             """Ensure overlap carry-over stays textual even for structured chunks."""
@@ -266,17 +289,19 @@ class AsyncChunker:
             List of ChunkResult objects
         """
         async with self._semaphore:
-            import functools
             loop = asyncio.get_event_loop()
-            func = functools.partial(
-                self._chunker.chunk_text_with_metadata,
-                text,
-                method,
-                max_size,
-                overlap,
-                **options,
-            )
-            return await loop.run_in_executor(self._executor, func)
+
+            def _run_chunking():
+                chunker = self._get_chunker()
+                return chunker.chunk_text_with_metadata(
+                    text,
+                    method,
+                    max_size,
+                    overlap,
+                    **options,
+                )
+
+            return await loop.run_in_executor(self._executor, _run_chunking)
     
     async def chunk_url(self,
                        url: str,
@@ -308,7 +333,7 @@ class AsyncChunker:
     async def process_with_template(self,
                                    text: str,
                                    template_name: str,
-                                   **options) -> List[str]:
+                                   **options) -> List[Dict[str, Any]]:
         """
         Process text using a template asynchronously.
         
@@ -318,7 +343,7 @@ class AsyncChunker:
             **options: Additional options
             
         Returns:
-            List of processed chunks
+            List of processed chunks as dictionaries with 'text' and 'metadata'
         """
         # Get template manager
         if not hasattr(self, '_template_manager'):
@@ -334,6 +359,7 @@ class AsyncChunker:
     async def close(self):
         """Clean up resources."""
         self._executor.shutdown(wait=True)
+        self._thread_local = threading.local()
         logger.info("AsyncChunker closed")
     
     async def __aenter__(self):

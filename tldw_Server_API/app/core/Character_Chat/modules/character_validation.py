@@ -98,11 +98,17 @@ def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         # Required fields in the source V2 card (using original spec names for parsing)
         # This parsing function relies on these fields existing as per V2 spec.
-        required_spec_fields = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example']
+        required_spec_fields = ['name', 'description', 'personality', 'scenario', 'first_mes']
         for field in required_spec_fields:
             if field not in data_node or data_node[field] is None:
                 logger.error(f"Missing required field '{field}' in V2 card data node during parsing.")
                 return None
+        mes_example_value = data_node.get('mes_example')
+        if mes_example_value is None:
+            logger.warning("V2 card parsing: 'mes_example' missing; using empty string.")
+            mes_example_value = ""
+        elif not isinstance(mes_example_value, str):
+            mes_example_value = str(mes_example_value)
 
         # Map to DB schema names
         parsed_data = {
@@ -111,7 +117,7 @@ def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             'personality': data_node['personality'],
             'scenario': data_node['scenario'],
             'first_message': data_node['first_mes'],
-            'message_example': data_node['mes_example'],
+            'message_example': mes_example_value,
 
             'creator_notes': data_node.get('creator_notes', ''),
             'system_prompt': data_node.get('system_prompt', ''),
@@ -131,11 +137,14 @@ def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         # Log spec/version from top level if present, for info, but parsing proceeds based on data_node content.
         spec = card_data_json.get('spec')
-        spec_version = card_data_json.get('spec_version')
+        spec_version_raw = card_data_json.get('spec_version')
+        spec_version = str(spec_version_raw) if spec_version_raw is not None else None
         if spec and spec != 'chara_card_v2':
             logger.warning(f"Parsing V2-like card with unexpected 'spec': {spec}.")
-        if spec_version and spec_version != '2.0':
-            logger.warning(f"Parsing V2-like card with 'spec_version': {spec_version} (expected '2.0').")
+        if spec_version and not spec_version.startswith("2."):
+            logger.warning(
+                f"Parsing V2-like card with 'spec_version': {spec_version} (expected version starting with '2.')."
+            )
 
         return parsed_data
     except KeyError as e:
@@ -444,11 +453,15 @@ def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     elif card_data['spec'] != 'chara_card_v2':
         validation_messages.append(f"Invalid 'spec' value: '{card_data['spec']}'. Expected 'chara_card_v2'.")
 
-    if 'spec_version' not in card_data:
+    spec_version_raw = card_data.get('spec_version')
+    if spec_version_raw is None:
         validation_messages.append("Missing 'spec_version' field.")
-    elif card_data['spec_version'] != '2.0':
-        validation_messages.append(
-            f"Invalid 'spec_version' value: '{card_data['spec_version']}'. Expected '2.0'.")
+        spec_version_str = None
+    else:
+        spec_version_str = str(spec_version_raw)
+        if not spec_version_str.startswith("2."):
+            validation_messages.append(
+                f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
 
     # Check for 'data' node
     if 'data' not in card_data:
@@ -467,7 +480,6 @@ def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         'personality': str,
         'scenario': str,
         'first_mes': str,
-        'mes_example': str
     }
 
     for field, expected_type in required_fields.items():
@@ -493,6 +505,12 @@ def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         if field in data_node and not isinstance(data_node[field], expected_type):
             validation_messages.append(
                 f"Field '{field}' must be of type '{expected_type.__name__}'.")
+
+    mes_example_value = data_node.get('mes_example')
+    if mes_example_value is None:
+        logger.warning("V2 card validation: 'mes_example' field missing; proceeding with empty fallback.")
+    elif not isinstance(mes_example_value, str):
+        validation_messages.append("Field 'mes_example' must be of type 'str'.")
 
     # Validate character_book if present
     if 'character_book' in data_node:

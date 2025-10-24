@@ -29,6 +29,7 @@ from .chunker import (
     Chunker,
     create_chunker,
 )
+from .constants import FRONTMATTER_SENTINEL_KEY
 
 # Default chunking options for backward compatibility
 DEFAULT_CHUNK_OPTIONS = {
@@ -43,6 +44,8 @@ DEFAULT_CHUNK_OPTIONS = {
     'json_chunkable_data_key': 'data',
     'summarization_detail': 0.5,
     'tokenizer_name_or_path': 'gpt2',
+    'enable_frontmatter_parsing': True,
+    'frontmatter_sentinel_key': FRONTMATTER_SENTINEL_KEY,
     # Proposition-specific defaults
     'proposition_engine': 'heuristic',  # 'heuristic' | 'spacy' | 'llm' | 'auto'
     'proposition_aggressiveness': 1,
@@ -216,11 +219,10 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
 def flatten_hierarchical(tree: dict) -> list:
     """Flatten a hierarchical chunk tree to a list of {'text','metadata'}.
 
-    This helper bridges to the legacy Chunk_Lib. If unavailable, returns [].
+    Uses the v2 chunker implementation; failures return an empty list.
     """
     try:
-        from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker as _LegacyChunker  # type: ignore
-        return _LegacyChunker().flatten_hierarchical(tree)
+        return Chunker().flatten_hierarchical(tree)
     except Exception:
         return []
 

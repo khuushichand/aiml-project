@@ -9,7 +9,7 @@ pytestmark = pytest.mark.usefixtures("setup_dependencies")
 
 def _make_payload(**overrides):
     base = {
-        "conversation_id": 42,
+        "conversation_id": "chat-42",
         "document_type": "summary",
         "provider": "openai",
         "model": "gpt-4o-mini",
@@ -102,7 +102,7 @@ def test_document_generate_streams_as_sse(monkeypatch, authenticated_client, aut
     headers = get_auth_headers(auth_token, getattr(authenticated_client, "csrf_token", ""))
     list_response = authenticated_client.get(
         "/api/v1/chat/documents",
-        params={"conversation_id": 42},
+        params={"conversation_id": "chat-42"},
         headers=headers,
     )
     assert list_response.status_code == 200
@@ -120,7 +120,7 @@ def test_document_generate_bubbles_service_error(monkeypatch, authenticated_clie
             self._db = db
 
         def generate_document(self, *args, **kwargs):
-            return {"success": False, "error": "No messages found for conversation 42"}
+            return {"success": False, "error": "No messages found for conversation chat-42"}
 
         def get_generated_documents(self, *args, **kwargs):
             return []
@@ -138,6 +138,52 @@ def test_document_generate_bubbles_service_error(monkeypatch, authenticated_clie
     )
 
     assert response.status_code == 400, response.text
-    assert response.json() == {"detail": "No messages found for conversation 42"}
+    assert response.json() == {"detail": "No messages found for conversation chat-42"}
     response.close()
     assert FailingStubService.record_calls == 0
+
+
+def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_client):
+    captured = {}
+
+    class KeyCaptureService:
+        def __init__(self, db):
+            self._db = db
+
+        def generate_document(self, *, stream, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            captured["provider"] = kwargs.get("provider")
+            return "Generated content"
+
+        def get_generated_documents(self, conversation_id=None, document_type=None, limit=50):
+            return [
+                {
+                    "id": 101,
+                    "conversation_id": conversation_id,
+                    "document_type": document_type.value if hasattr(document_type, "value") else document_type,
+                    "title": "Doc",
+                    "content": "Generated content",
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "generation_time_ms": 123,
+                    "created_at": datetime.datetime.utcnow(),
+                }
+            ]
+
+    from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as chat_schemas
+
+    monkeypatch.setattr(chat_router, "DocumentGeneratorService", KeyCaptureService)
+    monkeypatch.setitem(chat_router.API_KEYS, "openai", "sk-configured")
+    monkeypatch.setitem(chat_schemas.API_KEYS, "openai", "sk-configured")
+
+    payload = _make_payload()
+    payload.pop("api_key", None)
+
+    response = authenticated_client.post(
+        "/api/v1/chat/documents/generate",
+        json=payload,
+    )
+
+    assert response.status_code == 200, response.text
+    assert captured["api_key"] == "sk-configured"
+    assert captured["provider"] == "openai"

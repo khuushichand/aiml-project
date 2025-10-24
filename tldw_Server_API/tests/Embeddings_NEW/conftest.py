@@ -6,6 +6,7 @@ vector generation, worker orchestration, and ChromaDB integration.
 """
 
 import os
+import copy
 import sys
 import tempfile
 import shutil
@@ -27,6 +28,11 @@ import chromadb
 
 # Import actual embeddings components for integration tests
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+    _model_cache_subdir_name,
+    HFModelCfg,
+)
+from tldw_Server_API.app.core.config import settings
 # Delay heavy/buggy imports to fixtures to avoid import-time errors
 try:
     from tldw_Server_API.app.core.Embeddings.queue_schemas import (
@@ -63,7 +69,7 @@ def pytest_configure(config):
 def test_env_vars():
     """Set up test environment variables."""
     original_env = os.environ.copy()
-    
+
     # Set test mode
     os.environ["TEST_MODE"] = "true"
     os.environ["DEFAULT_LLM_PROVIDER"] = "openai"
@@ -74,23 +80,136 @@ def test_env_vars():
     os.environ["EMBEDDING_BATCH_SIZE"] = "32"
     os.environ["MAX_WORKERS"] = "2"
     os.environ["CHROMADB_FORCE_STUB"] = "true"
+    os.environ.setdefault("CHROMADB_DEFAULT_TENANT", "default_tenant")
+    os.environ["TESTING"] = "true"
     
     # Isolate user DB base dir to a temporary location to avoid migrating/using repo DBs
     tmp_user_base = tempfile.mkdtemp(prefix="emb_user_db_base_")
     os.environ["USER_DB_BASE_DIR"] = tmp_user_base
     # Also isolate AuthNZ main DB to the same temp base (not strictly required here but safer)
     os.environ["DATABASE_URL"] = f"sqlite:///{os.path.join(tmp_user_base, 'users.db')}"
-    
-    yield
-    
-    # Restore original environment
-    os.environ.clear()
-    os.environ.update(original_env)
-    # Cleanup temporary base dir
+
+    # Ensure local embedding assets are available and wired into runtime config
+    download_root = Path(os.environ.get("TLDW_EMBEDDING_MODELS_DIR", Path.cwd() / "models" / "embeddings")).expanduser()
+    default_model = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    required_models = {
+        default_model,
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "sentence-transformers/all-mpnet-base-v2",
+        "BAAI/bge-small-en-v1.5",
+    }
+
+    local_model_dirs: Dict[str, Path] = {}
+    missing_models = []
+    for model_id in sorted(required_models):
+        candidate_dir = download_root / model_id.replace("/", "__")
+        if candidate_dir.exists():
+            local_model_dirs[model_id] = candidate_dir.resolve()
+        else:
+            missing_models.append((model_id, candidate_dir))
+
+    if missing_models:
+        missing_str = ", ".join(f"{mid} (expected at {path})" for mid, path in missing_models)
+        raise RuntimeError(
+            "Local embedding assets are required for embeddings tests. "
+            f"Missing models: {missing_str}. Run Helper_Scripts/download_embedding_models.py first."
+        )
+
+    cache_root = Path(tempfile.mkdtemp(prefix="embeddings_cache_")).resolve()
+    hf_cache_root = cache_root / "huggingface_cache"
+
+    for model_id, src_dir in local_model_dirs.items():
+        target_dir = hf_cache_root / _model_cache_subdir_name(model_id)
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        if target_dir.exists():
+            continue
+        try:
+            os.symlink(src_dir, target_dir, target_is_directory=True)
+        except (AttributeError, OSError, NotImplementedError):
+            shutil.copytree(src_dir, target_dir, dirs_exist_ok=True)
+
+    os.environ["EMBEDDINGS_MODEL_STORAGE_DIR"] = str(cache_root)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_cache_root)
+    os.environ.setdefault("HF_HOME", str(cache_root))
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+    embedding_config_present = "EMBEDDING_CONFIG" in settings
+    original_embedding_config = copy.deepcopy(settings.get("EMBEDDING_CONFIG", {})) if embedding_config_present else None
+    storage_dir_present = "EMBEDDINGS_MODEL_STORAGE_DIR" in settings
+    original_storage_dir_setting = settings.get("EMBEDDINGS_MODEL_STORAGE_DIR") if storage_dir_present else None
+
+    configured_models = sorted(local_model_dirs.keys())
+    hf_model_configs: Dict[str, HFModelCfg] = {}
+    def _hf_cfg(model_identifier: str) -> HFModelCfg:
+        return HFModelCfg(
+            provider="huggingface",
+            model_name_or_path=model_identifier,
+            trust_remote_code=False,
+            hf_cache_dir_subpath="huggingface_cache",
+        )
+
+    for model_id in configured_models:
+        hf_model_configs[model_id] = _hf_cfg(model_id)
+
+    # Provide aliases so OpenAI ids fall back to local HF models during tests
+    alias_targets = {
+        "text-embedding-3-small": "sentence-transformers/all-MiniLM-L6-v2",
+        "openai:text-embedding-3-small": "sentence-transformers/all-MiniLM-L6-v2",
+        "text-embedding-3-large": "sentence-transformers/all-mpnet-base-v2",
+        "openai:text-embedding-3-large": "sentence-transformers/all-mpnet-base-v2",
+        "openai:text-embedding-ada-002": "sentence-transformers/all-mpnet-base-v2",
+    }
+    for alias, target in alias_targets.items():
+        if target not in hf_model_configs:
+            hf_model_configs[target] = _hf_cfg(target)
+        hf_model_configs[alias] = _hf_cfg(hf_model_configs[target].model_name_or_path)
+
+    new_embedding_config = dict(original_embedding_config or {})
+    new_embedding_config.update({
+        "embedding_provider": "huggingface",
+        "embedding_model": default_model,
+        "default_model_id": default_model,
+        "available_models": configured_models,
+        "model_storage_base_dir": str(cache_root),
+        "default_provider": "huggingface",
+        "default_model": default_model,
+    })
+    existing_models = dict(new_embedding_config.get("models", {}) or {})
+    existing_models.update(hf_model_configs)
+    new_embedding_config["models"] = existing_models
+    settings["EMBEDDING_CONFIG"] = new_embedding_config
+    settings["EMBEDDINGS_MODEL_STORAGE_DIR"] = str(cache_root)
+
     try:
-        shutil.rmtree(tmp_user_base, ignore_errors=True)
-    except Exception:
-        pass
+        yield
+    finally:
+        if embedding_config_present:
+            settings["EMBEDDING_CONFIG"] = original_embedding_config
+        else:
+            try:
+                del settings["EMBEDDING_CONFIG"]
+            except AttributeError:
+                pass
+
+        if storage_dir_present:
+            settings["EMBEDDINGS_MODEL_STORAGE_DIR"] = original_storage_dir_setting
+        else:
+            try:
+                del settings["EMBEDDINGS_MODEL_STORAGE_DIR"]
+            except AttributeError:
+                pass
+
+        # Restore original environment
+        os.environ.clear()
+        os.environ.update(original_env)
+
+        # Cleanup temporary dirs
+        for path in (cache_root, tmp_user_base):
+            try:
+                shutil.rmtree(path, ignore_errors=True)
+            except Exception:
+                pass
 
 # =====================================================================
 # Autouse safety fixtures (mirrored from legacy embeddings tests)
@@ -294,6 +413,11 @@ def chroma_client():
     """Return the same per-user Chroma client the API uses."""
     from tldw_Server_API.app.core.config import settings as app_settings
 
+    prev_force_stub = os.environ.get("CHROMADB_FORCE_STUB")
+    os.environ["CHROMADB_FORCE_STUB"] = "1"
+    prev_default_tenant = os.environ.get("CHROMADB_DEFAULT_TENANT")
+    os.environ.setdefault("CHROMADB_DEFAULT_TENANT", "default_tenant")
+
     user_base = app_settings.get("USER_DB_BASE_DIR") or os.environ.get("USER_DB_BASE_DIR")
     if not user_base:
         user_base = tempfile.mkdtemp(prefix="api_chroma_base_")
@@ -309,6 +433,14 @@ def chroma_client():
     try:
         yield client
     finally:
+        if prev_force_stub is None:
+            os.environ.pop("CHROMADB_FORCE_STUB", None)
+        else:
+            os.environ["CHROMADB_FORCE_STUB"] = prev_force_stub
+        if prev_default_tenant is None:
+            os.environ.pop("CHROMADB_DEFAULT_TENANT", None)
+        else:
+            os.environ["CHROMADB_DEFAULT_TENANT"] = prev_default_tenant
         try:
             if hasattr(client, "close"):
                 client.close()  # type: ignore[attr-defined]
@@ -700,7 +832,7 @@ def auth_headers():
     }
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_embedding_backends():
     """Patch embedding generation calls to avoid external provider dependencies."""
 

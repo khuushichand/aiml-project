@@ -103,7 +103,6 @@ class TestMimeTypeDetection:
         assert result.detected_extension == ".mp4"
     
     @pytest.mark.unit
-    @pytest.mark.xfail(reason="Generic validation may accept unknown types without strict policy")
     def test_reject_executable_file(self, test_media_dir):
         """Test rejection of executable files."""
         exe_path = test_media_dir / "malicious.exe"
@@ -114,9 +113,43 @@ class TestMimeTypeDetection:
             f.write(b'\x00' * 100)
         
         result = validate_file_type(exe_path)
-        
         assert not result.is_valid
-        assert "not allowed" in str(result.issues).lower() or "executable" in str(result.issues).lower()
+        assert any("not allowed" in issue.lower() or "unsupported" in issue.lower() for issue in result.issues)
+
+    @pytest.mark.unit
+    def test_reject_unknown_extension(self, tmp_path):
+        """Unknown extensions should be rejected."""
+        unknown = tmp_path / "payload.unknown"
+        unknown.write_text("payload")
+
+        validator = FileValidator()
+        result = process_and_validate_file(unknown, validator)
+
+        assert not result.is_valid
+        message = " ".join(result.issues)
+        assert "unsupported" in message.lower() or "no validation rules" in message.lower()
+
+    @pytest.mark.unit
+    def test_mime_validation_without_magic_allows_plaintext(self, tmp_path, monkeypatch):
+        """Fallback MIME detection should succeed when puremagic is unavailable."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing import Upload_Sink as sink
+
+        monkeypatch.setattr(sink, "puremagic", None, raising=False)
+
+        text_path = tmp_path / "note.txt"
+        text_path.write_text("hello world", encoding="utf-8")
+
+        validator = sink.FileValidator(custom_media_configs={
+            "document": {
+                "allowed_extensions": {".txt"},
+                "allowed_mimetypes": {"text/plain"},
+                "max_size_mb": 5,
+            }
+        })
+
+        result = validator.validate_file(text_path, media_type_key="document")
+        assert result.is_valid
+        assert result.issues == []
 
 # ========================================================================
 # File Size Validation Tests

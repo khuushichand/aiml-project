@@ -17,6 +17,7 @@ import uuid as _uuid
 import asyncio
 import time
 import json as _json
+import os
 
 # Reuse existing helpers from chat_helpers and prompt templating
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -53,6 +54,48 @@ from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_
 from starlette.responses import StreamingResponse
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.core.config import load_comprehensive_config
+
+_config = load_comprehensive_config()
+_chat_config: Dict[str, str] = {}
+if _config and _config.has_section("Chat-Module"):
+    _chat_config = dict(_config.items("Chat-Module"))
+
+
+def _coerce_int(value: Optional[str], default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+_MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
+
+_default_history_limit = 20
+if "history_messages_limit" in _chat_config:
+    _default_history_limit = max(
+        1,
+        min(_MAX_HISTORY_MESSAGES, _coerce_int(_chat_config.get("history_messages_limit"), _default_history_limit)),
+    )
+_env_history_limit = os.getenv("CHAT_HISTORY_LIMIT")
+if _env_history_limit:
+    try:
+        _default_history_limit = max(1, min(_MAX_HISTORY_MESSAGES, int(_env_history_limit)))
+    except Exception:
+        pass
+DEFAULT_HISTORY_MESSAGE_LIMIT = _default_history_limit
+
+_default_history_order = _chat_config.get("history_messages_order", "desc").strip().lower()
+if _default_history_order not in {"asc", "desc"}:
+    _default_history_order = "desc"
+_env_history_order = os.getenv("CHAT_HISTORY_ORDER")
+if _env_history_order:
+    _env_history_order_val = _env_history_order.strip().lower()
+    if _env_history_order_val in {"asc", "desc"}:
+        _default_history_order = _env_history_order_val
+DEFAULT_HISTORY_MESSAGE_ORDER = _default_history_order
 
 
 def queue_is_active(queue: Any) -> bool:
@@ -143,13 +186,27 @@ def merge_api_keys_for_provider(
     original string (possibly empty) used to validate presence when a provider
     requires a key. The normalized value is None if empty-string-like.
     """
-    # Module-level keys (including patched values) override dynamic lookups
-    api_keys = {**dynamic_keys}
-    if module_keys:
-        api_keys.update(module_keys)
+    def _normalize(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
-    raw_val = api_keys.get(provider)
-    norm_val = raw_val if (raw_val is not None and str(raw_val) != "") else None
+    raw_dynamic = dynamic_keys.get(provider)
+    raw_module = module_keys.get(provider) if module_keys else None
+
+    # Prefer dynamic/runtime configuration when present; fall back to module-level
+    # overrides (used heavily in tests) when runtime data is absent or intentionally blank.
+    if _normalize(raw_dynamic) is not None:
+        raw_val = raw_dynamic
+    elif _normalize(raw_module) is not None:
+        raw_val = raw_module
+    else:
+        # Preserve whichever raw value was set (even empty) so upstream validation can react.
+        raw_val = raw_dynamic if raw_dynamic is not None else raw_module
+
+    norm_val = _normalize(raw_val)
 
     # No raise here — the caller enforces requirements using requires_key_map
     return raw_val, norm_val
@@ -416,10 +473,38 @@ async def build_context_and_messages(
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
-    # History loading (limit to 20 messages)
+    # History loading (configurable limit/order)
+    requested_history_limit = getattr(request_data, "history_message_limit", None)
+    if requested_history_limit is None:
+        history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
+    else:
+        try:
+            history_limit = int(requested_history_limit)
+        except Exception:
+            history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
+        history_limit = max(1, min(_MAX_HISTORY_MESSAGES, history_limit))
+
+    requested_history_order = getattr(request_data, "history_message_order", None)
+    if requested_history_order:
+        history_order = str(requested_history_order).strip().lower()
+        if history_order not in {"asc", "desc"}:
+            history_order = DEFAULT_HISTORY_MESSAGE_ORDER
+    else:
+        history_order = DEFAULT_HISTORY_MESSAGE_ORDER
+    db_order = "ASC" if history_order == "asc" else "DESC"
+
     historical_msgs: List[Dict[str, Any]] = []
-    if conv_id and (not conversation_created):
-        raw_hist = await loop.run_in_executor(None, chat_db.get_messages_for_conversation, conv_id, 20, 0, "ASC")
+    if conv_id and (not conversation_created) and history_limit > 0:
+        raw_hist = await loop.run_in_executor(
+            None,
+            chat_db.get_messages_for_conversation,
+            conv_id,
+            history_limit,
+            0,
+            db_order,
+        )
+        if db_order == "DESC":
+            raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             role = "user" if db_msg.get("sender", "").lower() == "user" else "assistant"
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
@@ -458,6 +543,28 @@ async def build_context_and_messages(
                     name = character_card.get("name", "").replace(" ", "_").replace("<", "").replace(">", "").replace("|", "").replace("\\", "").replace("/", "")
                     if name:
                         hist_entry["name"] = name
+
+                metadata = None
+                try:
+                    metadata = await loop.run_in_executor(None, chat_db.get_message_metadata, db_msg.get("id"))
+                except Exception as meta_err:
+                    logger.debug("Metadata lookup failed for message %s: %s", db_msg.get("id"), meta_err)
+
+                tool_calls_meta = None
+                function_call_meta = None
+                content_placeholder_reason = None
+                if metadata:
+                    tool_calls_meta = metadata.get("tool_calls")
+                    extra_meta = metadata.get("extra") or {}
+                    if isinstance(extra_meta, dict):
+                        function_call_meta = extra_meta.get("function_call")
+                        content_placeholder_reason = extra_meta.get("content_placeholder_reason")
+                if tool_calls_meta is not None:
+                    hist_entry["tool_calls"] = tool_calls_meta
+                if function_call_meta and not hist_entry.get("tool_calls"):
+                    hist_entry["function_call"] = function_call_meta
+                if content_placeholder_reason in {"tool_calls", "function_call"}:
+                    hist_entry["content"] = ""
                 historical_msgs.append(hist_entry)
         logger.info(f"Loaded {len(historical_msgs)} historical messages for conv_id '{conv_id}'.")
 
@@ -773,8 +880,14 @@ async def execute_streaming_call(
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
 
-    async def save_callback(full_reply: str):
-        if should_persist and full_reply and final_conversation_id:
+    async def save_callback(
+        full_reply: str,
+        tool_calls: Optional[List[Dict[str, Any]]],
+        function_call: Optional[Dict[str, Any]],
+    ):
+        if should_persist and final_conversation_id and (
+            full_reply or tool_calls or function_call
+        ):
             asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
             asst_name = (
                 asst_name.replace(" ", "_")
@@ -784,10 +897,20 @@ async def execute_streaming_call(
                 .replace("\\", "")
                 .replace("/", "")
             )
+            message_payload: Dict[str, Any] = {
+                "role": "assistant",
+                "name": asst_name,
+            }
+            if full_reply is not None:
+                message_payload["content"] = full_reply
+            if tool_calls:
+                message_payload["tool_calls"] = tool_calls
+            if function_call:
+                message_payload["function_call"] = function_call
             await save_message_fn(
                 chat_db,
                 final_conversation_id,
-                {"role": "assistant", "name": asst_name, "content": full_reply},
+                message_payload,
                 use_transaction=True,
             )
         # Usage logging (estimated) after stream completes
@@ -1200,10 +1323,16 @@ async def execute_non_stream_call(
             raise
 
     content_to_save: Optional[str] = None
+    tool_calls_to_save: Optional[Any] = None
+    function_call_to_save: Optional[Any] = None
     if llm_response and isinstance(llm_response, dict):
         choices = llm_response.get("choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
-            content_to_save = choices[0].get("message", {}).get("content")
+            message_block = choices[0].get("message") or {}
+            if isinstance(message_block, dict):
+                content_to_save = message_block.get("content")
+                tool_calls_to_save = message_block.get("tool_calls")
+                function_call_to_save = message_block.get("function_call")
         usage = llm_response.get("usage")
         if usage:
             try:
@@ -1377,7 +1506,12 @@ async def execute_non_stream_call(
     except Exception as e:
         logger.warning(f"Moderation output processing error: {e}")
 
-    if should_persist and content_to_save:
+    should_save_response = (
+        should_persist
+        and final_conversation_id
+        and (content_to_save or tool_calls_to_save or function_call_to_save)
+    )
+    if should_save_response:
         asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
         asst_name = (
             asst_name.replace(" ", "_")
@@ -1387,10 +1521,17 @@ async def execute_non_stream_call(
             .replace("\\", "")
             .replace("/", "")
         )
+        message_payload: Dict[str, Any] = {"role": "assistant", "name": asst_name}
+        if content_to_save is not None:
+            message_payload["content"] = content_to_save
+        if tool_calls_to_save is not None:
+            message_payload["tool_calls"] = tool_calls_to_save
+        if function_call_to_save is not None:
+            message_payload["function_call"] = function_call_to_save
         await save_message_fn(
             chat_db,
             final_conversation_id,
-            {"role": "assistant", "name": asst_name, "content": content_to_save},
+            message_payload,
             use_transaction=True,
         )
 

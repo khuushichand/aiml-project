@@ -6,9 +6,10 @@ the canonical implementation used by the FastAPI endpoints and the public
 facade.
 """
 
+import base64
 import time
 from collections import Counter
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from loguru import logger
 from PIL import Image
@@ -21,18 +22,59 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 
 from .character_db import load_character_and_image
-from .character_utils import replace_placeholders
+from .character_utils import (
+    replace_placeholders,
+    USER_SENDER_ALIASES as _LEGACY_USER_SENDER_ALIASES,
+    NON_CHARACTER_SENDER_ALIASES as _NON_CHARACTER_SENDER_ALIASES,
+)
+from tldw_Server_API.app.core.config import settings
 
 
-_NON_CHARACTER_SENDER_ALIASES = {
-    "system",
-    "narrator",
-    "commentary",
-    "tool",
-    "assistant_tool",
-    "function",
-    "metadata",
-}
+# Aliases are sourced from character_utils for consistency across modules.
+
+
+def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build a normalized attachment list for UI consumption."""
+
+    attachments: Dict[int, Dict[str, Any]] = {}
+
+    def _normalize_payload(position: int, data: Any, mime: Optional[str]) -> None:
+        if data is None:
+            return
+        payload = data.tobytes() if isinstance(data, memoryview) else data
+        if isinstance(payload, str):
+            payload_bytes = payload.encode("utf-8")
+        else:
+            payload_bytes = bytes(payload)
+        attachments[position] = {
+            "position": position,
+            "data": base64.b64encode(payload_bytes).decode("ascii"),
+            "encoding": "base64",
+            "size": len(payload_bytes),
+            "mime_type": mime,
+            "message_id": msg_data.get("id"),
+        }
+
+    primary_data = msg_data.get("image_data")
+    primary_mime = msg_data.get("image_mime_type")
+    if primary_data is not None:
+        _normalize_payload(0, primary_data, primary_mime)
+
+    for image_entry in msg_data.get("images") or []:
+        if not isinstance(image_entry, dict):
+            continue
+        position_raw = image_entry.get("position")
+        try:
+            position_int = int(position_raw) if position_raw is not None else len(attachments)
+        except (TypeError, ValueError):
+            position_int = len(attachments)
+        _normalize_payload(
+            position_int,
+            image_entry.get("image_data"),
+            image_entry.get("image_mime_type"),
+        )
+
+    return [attachments[idx] for idx in sorted(attachments.keys())]
 
 
 def _infer_character_sender_aliases(
@@ -82,13 +124,67 @@ def _compute_additional_char_aliases(
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str,
-) -> List[str]:
-    user_aliases = {"user"}
+) -> Tuple[List[str], List[str]]:
+    user_aliases = {alias.lower() for alias in _LEGACY_USER_SENDER_ALIASES}
     if actual_user_sender_id_in_db:
         user_aliases.add(actual_user_sender_id_in_db.lower())
     if user_name_for_placeholders:
         user_aliases.add(str(user_name_for_placeholders).strip().lower())
-    return _infer_character_sender_aliases(db_messages, user_aliases, char_name_from_card)
+
+    candidate_aliases = _infer_character_sender_aliases(db_messages, user_aliases, char_name_from_card)
+    if not candidate_aliases:
+        return [], []
+
+    inferred_user_aliases: List[str] = []
+    filtered_char_aliases: List[str] = []
+    normalized_alias_map = {alias.lower(): alias for alias in candidate_aliases}
+
+    # Pre-compute lowercase senders for efficient neighbour lookups
+    sender_sequence: List[Optional[str]] = []
+    for msg in db_messages:
+        sender = msg.get("sender")
+        sender_sequence.append(str(sender).strip().lower() if isinstance(sender, str) else None)
+
+    def _char_neighbor_set(current_alias: str) -> set[str]:
+        neighbors = {char_name_from_card.strip().lower()}
+        for other_alias in candidate_aliases:
+            normalized_other = other_alias.strip().lower()
+            if normalized_other and normalized_other != current_alias:
+                neighbors.add(normalized_other)
+        return neighbors
+
+    for alias_lower, alias_original in normalized_alias_map.items():
+        if not alias_lower:
+            continue
+
+        char_context = 0
+        user_context = 0
+        char_neighbors = _char_neighbor_set(alias_lower)
+
+        for idx, sender_lower in enumerate(sender_sequence):
+            if sender_lower != alias_lower:
+                continue
+            prev_lower = sender_sequence[idx - 1] if idx > 0 else None
+            next_lower = sender_sequence[idx + 1] if idx + 1 < len(sender_sequence) else None
+
+            if prev_lower and prev_lower in user_aliases:
+                user_context += 1
+            if next_lower and next_lower in user_aliases:
+                user_context += 1
+
+            if prev_lower and prev_lower in char_neighbors:
+                char_context += 1
+            if next_lower and next_lower in char_neighbors:
+                char_context += 1
+
+        if char_context > user_context and char_context > 0:
+            if alias_lower not in user_aliases:
+                inferred_user_aliases.append(alias_original)
+                user_aliases.add(alias_lower)
+        else:
+            filtered_char_aliases.append(alias_original)
+
+    return filtered_char_aliases, inferred_user_aliases
 
 
 def process_db_messages_to_ui_history(
@@ -98,23 +194,57 @@ def process_db_messages_to_ui_history(
     actual_user_sender_id_in_db: str = "User",
     actual_char_sender_id_in_db: Optional[str] = None,
     additional_char_sender_ids: Optional[Iterable[str]] = None,
+    additional_user_sender_ids: Optional[Iterable[str]] = None,
+    char_first_message: Optional[str] = None,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
     """Convert database messages to UI-friendly paired chat history format."""
 
+    rich_history = process_db_messages_to_rich_ui_history(
+        db_messages=db_messages,
+        char_name_from_card=char_name_from_card,
+        user_name_for_placeholders=user_name_for_placeholders,
+        actual_user_sender_id_in_db=actual_user_sender_id_in_db,
+        actual_char_sender_id_in_db=actual_char_sender_id_in_db,
+        additional_char_sender_ids=additional_char_sender_ids,
+        additional_user_sender_ids=additional_user_sender_ids,
+        char_first_message=char_first_message,
+    )
+
     processed_history: List[Tuple[Optional[str], Optional[str]]] = []
+    for turn in rich_history:
+        user_content = turn["user"]["content"] if turn["user"] else None
+        character_content = None
+        if turn["character"]:
+            character_content = turn["character"]["content"]
+        elif turn["non_character"]:
+            character_content = turn["non_character"]["content"]
+        processed_history.append((user_content, character_content))
+    return processed_history
+
+
+def process_db_messages_to_rich_ui_history(
+    db_messages: List[Dict[str, Any]],
+    char_name_from_card: str,
+    user_name_for_placeholders: Optional[str],
+    actual_user_sender_id_in_db: str = "User",
+    actual_char_sender_id_in_db: Optional[str] = None,
+    additional_char_sender_ids: Optional[Iterable[str]] = None,
+    additional_user_sender_ids: Optional[Iterable[str]] = None,
+    char_first_message: Optional[str] = None,
+) -> List[Dict[str, Optional[Dict[str, Any]]]]:
+    """Convert database messages to UI-friendly structures including metadata."""
+
     char_sender_identifier = (
         actual_char_sender_id_in_db if actual_char_sender_id_in_db else char_name_from_card
     )
-    user_identifiers = {
-        "user",
-    }
+    user_identifiers = {alias.lower() for alias in _LEGACY_USER_SENDER_ALIASES}
+    non_character_aliases = {alias.lower() for alias in _NON_CHARACTER_SENDER_ALIASES}
     char_identifiers = {
         char_name_from_card.lower(),
         "assistant",
         "bot",
         "ai",
         "character",
-        "system",
     }
 
     if actual_user_sender_id_in_db:
@@ -128,10 +258,68 @@ def process_db_messages_to_ui_history(
             alias_norm = str(alias).strip().lower()
             if alias_norm:
                 char_identifiers.add(alias_norm)
+    if additional_user_sender_ids:
+        for alias in additional_user_sender_ids:
+            if not alias:
+                continue
+            alias_norm = str(alias).strip().lower()
+            if alias_norm:
+                user_identifiers.add(alias_norm)
+    if user_name_for_placeholders:
+        placeholder_alias = str(user_name_for_placeholders).strip().lower()
+        if placeholder_alias:
+            user_identifiers.add(placeholder_alias)
 
-    user_msg_buffer: Optional[str] = None
+    user_msg_detail_buffer: Optional[Dict[str, Any]] = None
 
-    for msg_data in db_messages:
+    char_first_message_normalized = None
+    if isinstance(char_first_message, str):
+        char_first_message_normalized = char_first_message.strip()
+
+    def _resolve_ambiguous_sender(
+        message_index: int,
+        processed_text: str,
+        pending_user_buffer: bool,
+        character_messages_seen: int,
+        user_messages_seen: int,
+        next_sender_lower: Optional[str],
+    ) -> str:
+        if pending_user_buffer:
+            return "character"
+        processed_text_normalized = processed_text.strip()
+        if (
+            char_first_message_normalized
+            and processed_text_normalized
+            and processed_text_normalized == char_first_message_normalized
+            and character_messages_seen == 0
+        ):
+            return "character"
+        if user_messages_seen > character_messages_seen:
+            return "character"
+        if character_messages_seen > user_messages_seen:
+            return "user"
+        if next_sender_lower:
+            if (
+                next_sender_lower in user_identifiers
+                and next_sender_lower not in char_identifiers
+            ):
+                return "character"
+            if (
+                next_sender_lower in char_identifiers
+                and next_sender_lower not in user_identifiers
+            ):
+                return "user"
+        if message_index == 0 and char_first_message_normalized:
+            return "character"
+        return "user"
+
+    character_messages_seen = 0
+    user_messages_seen = 0
+    total_messages = len(db_messages)
+
+    rich_history: List[Dict[str, Optional[Dict[str, Any]]]] = []
+
+    for idx, msg_data in enumerate(db_messages):
         sender = msg_data.get("sender")
         content = msg_data.get("content", "")
 
@@ -140,30 +328,188 @@ def process_db_messages_to_ui_history(
         sender_normalized = str(sender).strip() if isinstance(sender, str) else ""
         sender_lower = sender_normalized.lower()
 
-        if sender_lower in char_identifiers:
-            if user_msg_buffer is not None:
-                processed_history.append((user_msg_buffer, processed_content))
-                user_msg_buffer = None
+        is_non_character_sender = False
+        if sender_lower:
+            if sender_lower in non_character_aliases:
+                is_non_character_sender = True
             else:
-                processed_history.append((None, processed_content))
+                for alias in non_character_aliases:
+                    if sender_lower.startswith(f"{alias}:"):
+                        is_non_character_sender = True
+                        break
+
+        if is_non_character_sender:
+            formatted_content = processed_content
+            if sender_normalized:
+                if formatted_content:
+                    formatted_content = f"[{sender_normalized}] {processed_content}"
+                else:
+                    formatted_content = f"[{sender_normalized}]"
+            detail = {
+                "id": msg_data.get("id"),
+                "sender": sender_normalized or sender,
+                "content": formatted_content,
+                "raw_sender": sender,
+                "attachments": _extract_message_attachments(msg_data),
+                "metadata": {
+                    "timestamp": msg_data.get("timestamp"),
+                    "ranking": msg_data.get("ranking"),
+                    "version": msg_data.get("version"),
+                },
+            }
+            if user_msg_detail_buffer is not None:
+                rich_history.append(
+                    {
+                        "user": user_msg_detail_buffer,
+                        "character": None,
+                        "non_character": detail,
+                    }
+                )
+                user_msg_detail_buffer = None
+            else:
+                rich_history.append(
+                    {
+                        "user": None,
+                        "character": None,
+                        "non_character": detail,
+                    }
+                )
+            continue
+
+        in_user_identifiers = sender_lower in user_identifiers if sender_lower else False
+        in_char_identifiers = sender_lower in char_identifiers if sender_lower else False
+
+        next_sender_lower: Optional[str] = None
+        if idx + 1 < total_messages:
+            next_sender_value = db_messages[idx + 1].get("sender")
+            if isinstance(next_sender_value, str):
+                next_sender_lower = next_sender_value.strip().lower()
+
+        sender_role: Optional[str]
+        if in_char_identifiers and not in_user_identifiers:
+            sender_role = "character"
+        elif in_user_identifiers and not in_char_identifiers:
+            sender_role = "user"
+        elif in_char_identifiers and in_user_identifiers:
+            sender_role = _resolve_ambiguous_sender(
+                message_index=idx,
+                processed_text=processed_content,
+                pending_user_buffer=user_msg_detail_buffer is not None,
+                character_messages_seen=character_messages_seen,
+                user_messages_seen=user_messages_seen,
+                next_sender_lower=next_sender_lower,
+            )
+        elif in_user_identifiers:
+            sender_role = "user"
+        elif in_char_identifiers:
+            sender_role = "character"
+        else:
+            sender_role = None
+
+        if sender_role == "character":
+            detail = {
+                "id": msg_data.get("id"),
+                "sender": sender_normalized or sender,
+                "content": processed_content,
+                "raw_sender": sender,
+                "attachments": _extract_message_attachments(msg_data),
+                "metadata": {
+                    "timestamp": msg_data.get("timestamp"),
+                    "ranking": msg_data.get("ranking"),
+                    "version": msg_data.get("version"),
+                },
+            }
+            if user_msg_detail_buffer is not None:
+                rich_history.append(
+                    {
+                        "user": user_msg_detail_buffer,
+                        "character": detail,
+                        "non_character": None,
+                    }
+                )
+                user_msg_detail_buffer = None
+            else:
+                rich_history.append(
+                    {
+                        "user": None,
+                        "character": detail,
+                        "non_character": None,
+                    }
+                )
             if sender_lower:
                 char_identifiers.add(sender_lower)
-        elif sender_lower in user_identifiers:
-            if user_msg_buffer is not None:
-                processed_history.append((user_msg_buffer, None))
-            user_msg_buffer = processed_content
+            character_messages_seen += 1
+            continue
+
+        if sender_role == "user":
+            detail = {
+                "id": msg_data.get("id"),
+                "sender": sender_normalized or sender,
+                "content": processed_content,
+                "raw_sender": sender,
+                "attachments": _extract_message_attachments(msg_data),
+                "metadata": {
+                    "timestamp": msg_data.get("timestamp"),
+                    "ranking": msg_data.get("ranking"),
+                    "version": msg_data.get("version"),
+                },
+            }
+            if user_msg_detail_buffer is not None:
+                rich_history.append(
+                    {
+                        "user": user_msg_detail_buffer,
+                        "character": None,
+                        "non_character": None,
+                    }
+                )
+            user_msg_detail_buffer = detail
+            user_messages_seen += 1
+            continue
+
+        # Unknown sender handling – preserve legacy behaviour by treating as character
+        logger.warning(f"Message from unknown sender '{sender}': {processed_content[:50]}...")
+        formatted_content = f"[{sender}] {processed_content}"
+        detail = {
+            "id": msg_data.get("id"),
+            "sender": sender_normalized or sender,
+            "content": formatted_content,
+            "raw_sender": sender,
+            "attachments": _extract_message_attachments(msg_data),
+            "metadata": {
+                "timestamp": msg_data.get("timestamp"),
+                "ranking": msg_data.get("ranking"),
+                "version": msg_data.get("version"),
+            },
+        }
+        if user_msg_detail_buffer is not None:
+            rich_history.append(
+                {
+                    "user": user_msg_detail_buffer,
+                    "character": detail,
+                    "non_character": None,
+                }
+            )
+            user_msg_detail_buffer = None
         else:
-            logger.warning(f"Message from unknown sender '{sender}': {processed_content[:50]}...")
-            if user_msg_buffer is not None:
-                processed_history.append((user_msg_buffer, f"[{sender}] {processed_content}"))
-                user_msg_buffer = None
-            else:
-                processed_history.append((None, f"[{sender}] {processed_content}"))
+            rich_history.append(
+                {
+                    "user": None,
+                    "character": detail,
+                    "non_character": None,
+                }
+            )
+        character_messages_seen += 1
 
-    if user_msg_buffer is not None:
-        processed_history.append((user_msg_buffer, None))
+    if user_msg_detail_buffer is not None:
+        rich_history.append(
+            {
+                "user": user_msg_detail_buffer,
+                "character": None,
+                "non_character": None,
+            }
+        )
 
-    return processed_history
+    return rich_history
 
 
 def load_chat_and_character(
@@ -201,7 +547,7 @@ def load_chat_and_character(
                 limit=messages_limit,
                 order_by_timestamp="ASC",
             )
-            additional_aliases = _compute_additional_char_aliases(
+            additional_aliases, extra_user_aliases = _compute_additional_char_aliases(
                 raw_db_messages,
                 "Unknown Character",
                 user_name,
@@ -214,6 +560,7 @@ def load_chat_and_character(
                 actual_user_sender_id_in_db="User",
                 actual_char_sender_id_in_db="Unknown Character",
                 additional_char_sender_ids=additional_aliases,
+                additional_user_sender_ids=extra_user_aliases,
             )
             return None, processed_ui_history, None
 
@@ -230,7 +577,7 @@ def load_chat_and_character(
                 limit=messages_limit,
                 order_by_timestamp="ASC",
             )
-            additional_aliases = _compute_additional_char_aliases(
+            additional_aliases, extra_user_aliases = _compute_additional_char_aliases(
                 raw_db_messages,
                 "Unknown Character",
                 user_name,
@@ -243,6 +590,7 @@ def load_chat_and_character(
                 actual_user_sender_id_in_db="User",
                 actual_char_sender_id_in_db="Unknown Character",
                 additional_char_sender_ids=additional_aliases,
+                additional_user_sender_ids=extra_user_aliases,
             )
             return None, processed_ui_history, img
 
@@ -252,7 +600,7 @@ def load_chat_and_character(
             limit=messages_limit,
             order_by_timestamp="ASC",
         )
-        additional_aliases = _compute_additional_char_aliases(
+        additional_aliases, extra_user_aliases = _compute_additional_char_aliases(
             raw_db_messages,
             char_name_from_card,
             user_name,
@@ -265,6 +613,8 @@ def load_chat_and_character(
             actual_user_sender_id_in_db="User",
             actual_char_sender_id_in_db=char_name_from_card,
             additional_char_sender_ids=additional_aliases,
+            additional_user_sender_ids=extra_user_aliases,
+            char_first_message=char_data.get("first_message"),
         )
 
         return char_data, processed_ui_history, img
@@ -407,11 +757,17 @@ def list_character_conversations(
     character_id: int,
     limit: int = 50,
     offset: int = 0,
+    client_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """List active conversations for a given character."""
 
     try:
-        return db.get_conversations_for_character(character_id, limit=limit, offset=offset)
+        return db.get_conversations_for_character(
+            character_id,
+            limit=limit,
+            offset=offset,
+            client_id=client_id,
+        )
     except CharactersRAGDBError as exc:
         logger.error(
             "Failed to list conversations for character ID %s: %s",
@@ -517,11 +873,17 @@ def search_conversations_by_title_query(
     title_query: str,
     character_id: Optional[int] = None,
     limit: int = 10,
+    client_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Search conversations by title."""
 
     try:
-        return db.search_conversations_by_title(title_query, character_id, limit)
+        return db.search_conversations_by_title(
+            title_query,
+            character_id,
+            limit,
+            client_id=client_id,
+        )
     except CharactersRAGDBError as exc:
         logger.error(
             "Failed to search conversations with query '%s': %s",
@@ -548,21 +910,35 @@ def post_message_to_conversation(
     ranking: Optional[int] = None,
     image_data: Optional[bytes] = None,
     image_mime_type: Optional[str] = None,
+    sender_override: Optional[str] = None,
 ) -> Optional[str]:
     """Post a new message to a specified conversation."""
 
     if not conversation_id:
         logger.error("Cannot post message: conversation_id is required.")
         raise InputError("conversation_id is required for posting a message.")
-    if not character_name and not is_user_message:
+    if not character_name and not is_user_message and not sender_override:
         logger.error("Cannot post character message: character_name is required.")
         raise InputError("character_name is required for character messages.")
 
-    sender_name = "User" if is_user_message else character_name
+    sender_name = sender_override or ("User" if is_user_message else character_name)
+    if not sender_name:
+        logger.error("Cannot post message: sender name could not be determined.")
+        raise InputError("sender name could not be determined for message.")
 
     if not message_content and not image_data:
         logger.error("Cannot post message: Message must have text content or image data.")
         raise InputError("Message must have text content or image data.")
+
+    # Optional preflight image size guard (mirrors DB constraints for clearer API errors)
+    if image_data is not None:
+        try:
+            max_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
+        except Exception:
+            max_bytes = 5 * 1024 * 1024
+        raw = image_data.tobytes() if isinstance(image_data, memoryview) else image_data
+        if isinstance(raw, (bytes, bytearray)) and len(raw) > max_bytes:
+            raise InputError(f"Image attachment exceeds maximum size of {max_bytes} bytes")
 
     msg_payload = {
         "conversation_id": conversation_id,
@@ -674,8 +1050,12 @@ def retrieve_conversation_messages_for_ui(
     limit: int = 2000,
     offset: int = 0,
     order: str = "ASC",
-) -> List[Tuple[Optional[str], Optional[str]]]:
-    """Retrieve and process conversation messages for UI display."""
+    rich_output: bool = False,
+) -> Union[List[Tuple[Optional[str], Optional[str]]], List[Dict[str, Optional[Dict[str, Any]]]]]:
+    """Retrieve and process conversation messages for UI display.
+
+    When ``rich_output`` is True the response contains message metadata and attachments.
+    """
 
     order_upper = order.upper()
     if order_upper not in ["ASC", "DESC"]:
@@ -690,21 +1070,57 @@ def retrieve_conversation_messages_for_ui(
             order_by_timestamp=order_upper,
         )
 
-        additional_aliases = _compute_additional_char_aliases(
+        additional_aliases, extra_user_aliases = _compute_additional_char_aliases(
             raw_db_messages,
             character_name,
             user_name,
             actual_user_sender_id_in_db="User",
         )
 
-        processed_ui_history = process_db_messages_to_ui_history(
-            raw_db_messages,
+        messages_for_processing = (
+            list(reversed(raw_db_messages)) if order_upper == "DESC" else raw_db_messages
+        )
+
+        char_first_message_processed: Optional[str] = None
+        try:
+            char_card = db.get_character_card_by_name(character_name)
+            if char_card and isinstance(char_card.get("first_message"), str):
+                char_first_message_processed = replace_placeholders(
+                    char_card["first_message"],
+                    character_name,
+                    user_name,
+                ).strip()
+        except CharactersRAGDBError:
+            char_first_message_processed = None
+        except Exception:
+            char_first_message_processed = None
+
+        rich_history = process_db_messages_to_rich_ui_history(
+            messages_for_processing,
             char_name_from_card=character_name,
             user_name_for_placeholders=user_name,
             actual_user_sender_id_in_db="User",
             actual_char_sender_id_in_db=character_name,
             additional_char_sender_ids=additional_aliases,
+            additional_user_sender_ids=extra_user_aliases,
+            char_first_message=char_first_message_processed,
         )
+
+        if order_upper == "DESC":
+            rich_history = list(reversed(rich_history))
+
+        if rich_output:
+            return rich_history
+
+        processed_ui_history = []
+        for turn in rich_history:
+            user_content = turn["user"]["content"] if turn["user"] else None
+            character_content = None
+            if turn["character"]:
+                character_content = turn["character"]["content"]
+            elif turn["non_character"]:
+                character_content = turn["non_character"]["content"]
+            processed_ui_history.append((user_content, character_content))
         return processed_ui_history
 
     except CharactersRAGDBError as exc:

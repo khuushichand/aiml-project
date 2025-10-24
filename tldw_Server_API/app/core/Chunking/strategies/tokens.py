@@ -335,13 +335,13 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             # Decode tokens back to text
             try:
                 chunk_text = self.tokenizer.decode(chunk_tokens)
-                
-                # Clean up chunk
-                chunk_text = chunk_text.strip()
-                
+
+                # Trim trailing newline artifacts without disturbing leading indentation
+                chunk_text = chunk_text.rstrip("\r\n")
+
                 if chunk_text:
                     chunks.append(chunk_text)
-                    
+
             except Exception as e:
                 logger.warning(f"Failed to decode chunk at position {i}: {e}")
                 continue
@@ -376,8 +376,12 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             ratio = 1.3
         
         # Calculate word counts
-        max_words = int(max_size / ratio)
-        overlap_words = int(overlap / ratio)
+        max_words = max(1, int(max_size / ratio))
+        raw_overlap_words = int(overlap / ratio)
+        if max_words == 1:
+            overlap_words = 0
+        else:
+            overlap_words = max(0, min(max_words - 1, raw_overlap_words))
         
         logger.debug(f"Using fallback: {max_size} tokens ≈ {max_words} words")
         

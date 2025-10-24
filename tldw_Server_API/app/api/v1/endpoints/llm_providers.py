@@ -605,6 +605,20 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'type': 'commercial',
                 'section': 'API'
             },
+            'moonshot': {
+                'display_name': 'Moonshot',
+                'api_key_field': 'moonshot_api_key',
+                'model_field': 'moonshot_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'zai': {
+                'display_name': 'Z.AI',
+                'api_key_field': 'zai_api_key',
+                'model_field': 'zai_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
             # Local APIs (from Local-API section)
             'llama': {
                 'display_name': 'Llama.cpp',

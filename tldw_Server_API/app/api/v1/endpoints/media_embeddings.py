@@ -39,7 +39,7 @@ from tldw_Server_API.app.core.Embeddings.media_embedding_jobs_db import (
 router = APIRouter(prefix="/media", tags=["media-embeddings"])
 
 # Default embedding settings
-DEFAULT_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-4B-GGUF"
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBEDDING_PROVIDER = "huggingface"
 FALLBACK_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 

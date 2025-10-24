@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextlib import suppress
 from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
@@ -10,6 +11,7 @@ from tldw_Server_API.app.core.Embeddings.request_batching import (
     RequestBatcher,
     create_embeddings_batch_async,
 )
+from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import HFModelCfg
 from tldw_Server_API.app.core.Embeddings.simplified_config import (
     BatchingConfig,
     EmbeddingsConfig,
@@ -74,6 +76,110 @@ async def test_batched_requests_include_provider_credentials(monkeypatch):
     model_entry = user_app_config["embedding_config"]["models"]["openai:text-embedding-3-small"]
     assert model_entry["api_key"] == "sk-test"
     assert model_entry["model_name_or_path"] == "text-embedding-3-small"
+
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_override_config_passthrough(monkeypatch, tmp_path):
+    """Override configs supplied at submit time should reach the embedder."""
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="huggingface",
+                models=["sentence-transformers/all-MiniLM-L6-v2"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="huggingface",
+        default_model="sentence-transformers/all-MiniLM-L6-v2",
+    )
+    batcher = RequestBatcher(config=config)
+
+    override_config = {
+        "embedding_config": {
+            "default_model_id": "huggingface:sentence-transformers/all-MiniLM-L6-v2",
+            "model_storage_base_dir": str(tmp_path),
+            "models": {
+                "huggingface:sentence-transformers/all-MiniLM-L6-v2": HFModelCfg(
+                    provider="huggingface",
+                    model_name_or_path="sentence-transformers/all-MiniLM-L6-v2",
+                    trust_remote_code=True,
+                    hf_cache_dir_subpath="custom_cache",
+                ),
+            },
+        }
+    }
+
+    captured = {}
+
+    async def fake_create_embeddings_batch_async(texts, user_app_config, model_id_override=None):
+        captured["config"] = user_app_config
+        return [[0.42] for _ in texts]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch_async",
+        fake_create_embeddings_batch_async,
+        raising=True,
+    )
+
+    request = BatchRequest(
+        request_id="req-override",
+        text="hello override",
+        model="sentence-transformers/all-MiniLM-L6-v2",
+        provider="huggingface",
+        metadata={},
+        config_override=override_config,
+        future=asyncio.get_running_loop().create_future(),
+        timestamp=time.time(),
+    )
+
+    await batcher._process_batch([request], "huggingface", "sentence-transformers/all-MiniLM-L6-v2")
+
+    assert request.future.done()
+    assert request.future.result() == [0.42]
+    assert captured["config"] is override_config
+    model_cfg = captured["config"]["embedding_config"]["models"]["huggingface:sentence-transformers/all-MiniLM-L6-v2"]
+    assert isinstance(model_cfg, HFModelCfg)
+    assert model_cfg.trust_remote_code is True
+
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_local_alias_provider_resolution():
+    """Local provider aliases (local -> local_api) should resolve correctly."""
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="local",
+                api_url="http://localhost:8080/v1/embeddings",
+                models=["my-local-model"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="local",
+        default_model="my-local-model",
+    )
+    batcher = RequestBatcher(config=config)
+
+    user_config = batcher._build_user_app_config("local_api", "my-local-model")
+
+    model_entry = user_config["embedding_config"]["models"]["local_api:my-local-model"]
+    assert model_entry["provider"] == "local_api"
+    assert user_config["local_api"]["api_url"] == "http://localhost:8080/v1/embeddings"
 
     await batcher.shutdown()
 
@@ -183,7 +289,7 @@ async def test_submit_request_respects_rate_limit_when_batching_disabled(monkeyp
         log_rate_limit_hit=Mock(),
     )
 
-    async def fake_process_single(self, text, model, provider, metadata=None):
+    async def fake_process_single(self, text, model, provider, metadata=None, config_override=None):
         return [0.5]
 
     batcher._process_single = MethodType(fake_process_single, batcher)
@@ -217,8 +323,9 @@ async def test_global_batch_helper_passes_metadata(monkeypatch):
     class StubBatcher:
         enabled = True
 
-        async def submit_request(self, text, model, provider, metadata=None):
+        async def submit_request(self, text, model, provider, metadata=None, config_override=None):
             captured["metadata"] = metadata
+            captured["config_override"] = config_override
             return [0.42]
 
     monkeypatch.setattr(
@@ -236,6 +343,136 @@ async def test_global_batch_helper_passes_metadata(monkeypatch):
 
     assert result == [[0.42]]
     assert captured["metadata"] == {"user_id": "user-xyz"}
+    assert captured["config_override"] == {}
+
+
+@pytest.mark.asyncio
+async def test_config_override_creates_distinct_queues(monkeypatch):
+    async def fake_create_embeddings_batch_async(texts, user_app_config, model_id_override=None):
+        return [[float(len(text))] for text in texts]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch_async",
+        fake_create_embeddings_batch_async,
+        raising=True,
+    )
+
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                models=["text-embedding-3-small"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+
+    batcher = RequestBatcher(config=config)
+    batcher.metrics = SimpleNamespace(
+        log_batch_size=lambda *args, **kwargs: None,
+        log_error=lambda *args, **kwargs: None,
+    )
+
+    stop_event = asyncio.Event()
+    original_process_batch = batcher._process_batch
+
+    async def stub_process_queue(self, queue_key):
+        await stop_event.wait()
+        queue = self.queues[queue_key]
+        batch = list(queue)
+        queue.clear()
+        await original_process_batch(batch, queue_key[0], queue_key[1])
+
+    batcher._process_queue = MethodType(stub_process_queue, batcher)
+
+    override1 = {"embedding_config": {"default_model_id": "openai:text-embedding-3-small"}}
+    override2 = {"embedding_config": {"default_model_id": "openai:text-embedding-3-small", "variant": "alt"}}
+
+    task1 = asyncio.create_task(
+        batcher.submit_request(
+            text="alpha",
+            model="text-embedding-3-small",
+            provider="openai",
+            config_override=override1,
+        )
+    )
+    task2 = asyncio.create_task(
+        batcher.submit_request(
+            text="bravo",
+            model="text-embedding-3-small",
+            provider="openai",
+            config_override=override2,
+        )
+    )
+
+    await asyncio.sleep(0.05)
+
+    assert len(batcher.queues) == 2
+    queue_labels = {batcher._queue_label(key) for key in batcher.queues.keys()}
+    assert len(queue_labels) == 2
+
+    stop_event.set()
+    await asyncio.gather(task1, task2)
+    await batcher.shutdown()
+
+
+def test_identical_override_configs_share_queue(tmp_path):
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="huggingface",
+                models=["sentence-transformers/all-MiniLM-L6-v2"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="huggingface",
+        default_model="sentence-transformers/all-MiniLM-L6-v2",
+    )
+
+    batcher = RequestBatcher(config=config)
+
+    def _make_override():
+        return {
+            "embedding_config": {
+                "default_model_id": "huggingface:sentence-transformers/all-MiniLM-L6-v2",
+                "model_storage_base_dir": str(tmp_path),
+                "models": {
+                    "huggingface:sentence-transformers/all-MiniLM-L6-v2": HFModelCfg(
+                        provider="huggingface",
+                        model_name_or_path="sentence-transformers/all-MiniLM-L6-v2",
+                        trust_remote_code=False,
+                        hf_cache_dir_subpath="hf_cache",
+                    )
+                },
+            }
+        }
+
+    override_one = _make_override()
+    override_two = _make_override()
+
+    key_one = batcher._queue_key(
+        "huggingface", "sentence-transformers/all-MiniLM-L6-v2", override_one
+    )
+    key_two = batcher._queue_key(
+        "huggingface", "sentence-transformers/all-MiniLM-L6-v2", override_two
+    )
+
+    assert key_one == key_two
 
 
 @pytest.mark.asyncio
@@ -280,6 +517,75 @@ async def test_shutdown_cancels_processing_tasks(monkeypatch):
 
     await asyncio.wait_for(batcher.shutdown(), timeout=1.0)
     assert all(task.cancelled() or task.done() for task in batcher.processing_tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_submit_request_restarts_cancelled_processing_task(monkeypatch):
+    call_counter = {"count": 0}
+
+    async def fake_create_embeddings_batch_async(texts, user_app_config, model_id_override=None):
+        call_counter["count"] += 1
+        await asyncio.sleep(0)
+        return [[float(call_counter["count"])] for _ in texts]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch_async",
+        fake_create_embeddings_batch_async,
+        raising=True,
+    )
+
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                models=["text-embedding-3-small"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+
+    batcher = RequestBatcher(config=config)
+
+    result_one = await asyncio.wait_for(
+        batcher.submit_request(
+            text="first",
+            model="text-embedding-3-small",
+            provider="openai",
+        ),
+        timeout=1.0,
+    )
+    assert result_one == [1.0]
+
+    queue_key = batcher._queue_key("openai", "text-embedding-3-small", None)
+    task = batcher.processing_tasks.get(queue_key)
+    assert task is not None
+
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
+
+    assert queue_key not in batcher.processing_tasks
+
+    result_two = await asyncio.wait_for(
+        batcher.submit_request(
+            text="second",
+            model="text-embedding-3-small",
+            provider="openai",
+        ),
+        timeout=1.0,
+    )
+    assert result_two == [2.0]
+
+    await asyncio.wait_for(batcher.shutdown(), timeout=1.0)
 
 
 def test_build_user_app_config_normalizes_local_provider():

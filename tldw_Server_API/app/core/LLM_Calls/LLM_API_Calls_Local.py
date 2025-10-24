@@ -13,6 +13,13 @@ import httpx
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatBadRequestError, ChatConfigurationError
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_settings
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_data,
+)
+from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import _sanitize_payload_for_logging
 
 
 ####################
@@ -53,6 +60,30 @@ def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]]
             f"This provider/function currently only processes text. Image content will be ignored."
         )
     return "\n".join(text_parts).strip()
+
+
+def _raise_chat_error_from_httpx(provider_name: str, error: httpx.HTTPStatusError) -> None:
+    """Raise the appropriate Chat*Error derived from an httpx HTTPStatusError."""
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+
+    detail: str = ""
+    if response is not None:
+        try:
+            detail = response.text or str(error)
+        except Exception:
+            detail = str(error)
+    else:
+        detail = str(error)
+
+    if status_code is not None and 400 <= status_code < 500:
+        raise ChatBadRequestError(provider=provider_name, message=detail, status_code=status_code)
+
+    raise ChatProviderError(
+        provider=provider_name,
+        message=detail,
+        status_code=status_code if status_code is not None else 500,
+    )
 
 # Most local LLMs with OpenAI-compatible endpoints (like LM Studio, Jan.ai, many Ollama setups)
 # can use a generic handler.
@@ -139,27 +170,45 @@ def _chat_with_openai_compatible_local_server(
 
     # Construct full API URL for chat completions
     chat_completions_path = "v1/chat/completions" # Standard OpenAI path
-    full_api_url = api_base_url.rstrip('/') + "/" + chat_completions_path.lstrip('/')
+    normalized_base = (api_base_url or "").strip()
+    if not normalized_base:
+        raise ChatConfigurationError(provider=provider_name, message=f"{provider_name} API base URL is required.")
+    normalized_base = normalized_base.rstrip("/")
+    lower_base = normalized_base.lower()
+
+    if "chat/completions" in lower_base or lower_base.endswith("/completion"):
+        full_api_url = normalized_base
+    elif lower_base.endswith("/v1"):
+        full_api_url = normalized_base + "/chat/completions"
+    else:
+        full_api_url = normalized_base + "/" + chat_completions_path
 
     logging.debug(f"{provider_name}: Posting to {full_api_url}. Payload keys: {list(payload.keys())}")
-    logging.debug(f"{provider_name} Payload details (excluding messages): {{k: v for k, v in payload.items() if k != 'messages'}}")
+    payload_metadata = _sanitize_payload_for_logging(payload)
+    logging.debug(f"{provider_name}: Payload metadata: {payload_metadata}")
 
 
     def _post_with_retries(client: httpx.Client):
         attempts = 0
         while True:
+            resp: Optional[httpx.Response] = None
             try:
                 resp = client.post(full_api_url, headers=headers, json=payload, timeout=timeout)
                 if resp.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
                     attempts += 1
                     import time
                     time.sleep(api_retry_delay * attempts)
+                    resp.close()
                     continue
                 resp.raise_for_status()
                 return resp
-            except httpx.HTTPStatusError:
-                raise
+            except httpx.HTTPStatusError as http_error:
+                if resp is not None:
+                    resp.close()
+                _raise_chat_error_from_httpx(provider_name, http_error)
             except httpx.RequestError as e_req:
+                if resp is not None:
+                    resp.close()
                 if attempts < api_retries:
                     attempts += 1
                     import time
@@ -168,48 +217,95 @@ def _chat_with_openai_compatible_local_server(
                 logging.error(f"{provider_name}: Request Exception: {e_req}", exc_info=True)
                 raise ChatProviderError(provider=provider_name, message=f"Network error making request to {provider_name}: {e_req}", status_code=503)
 
+    client = httpx.Client()
     try:
-        with httpx.Client() as client:
-            if streaming:
-                with client.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
-                    response.raise_for_status()
-                    logging.debug(f"{provider_name}: Streaming response received.")
+        if streaming:
+            logging.debug(f"{provider_name}: Opening streaming connection to {full_api_url}")
 
-                    def stream_generator():
-                        try:
-                            # Prefer iter_lines if available
-                            if hasattr(response, "iter_lines"):
-                                iterator = response.iter_lines()
-                            else:
-                                iterator = (line for line in response.iter_text())
-                            for line in iterator:
-                                if line and str(line).strip():
-                                    yield (str(line).rstrip("\n") + "\n\n")
-                        except GeneratorExit:
-                            raise
-                        except Exception as e_stream:
-                            logging.error(f"{provider_name}: Error during stream iteration: {e_stream}", exc_info=True)
-                            error_content = {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}}
-                            yield f"data: {json.dumps(error_content)}\n\n"
-                    return stream_generator()
-            else:
-                response = _post_with_retries(client)
+            def stream_generator():
+                done_sent = False
+                response_obj: Optional[httpx.Response] = None
+                try:
+                    try:
+                        with client.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
+                            response_obj = response
+                            response.raise_for_status()
+                            logging.debug(f"{provider_name}: Streaming response received.")
+
+                            iterator = response.iter_lines() if hasattr(response, "iter_lines") else (line for line in response.iter_text())
+                            try:
+                                for line in iterator:
+                                    if not line:
+                                        continue
+                                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else str(line)
+                                    if is_done_line(decoded):
+                                        done_sent = True
+                                    normalized = normalize_provider_line(decoded)
+                                    if normalized is None:
+                                        continue
+                                    yield normalized
+                            except GeneratorExit:
+                                raise
+                            except httpx.HTTPError as e_stream:
+                                logging.error(f"{provider_name}: HTTP error during stream iteration: {e_stream}", exc_info=True)
+                                yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
+                            except Exception as e_stream:
+                                logging.error(f"{provider_name}: Unexpected error during stream iteration: {e_stream}", exc_info=True)
+                                yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
+                            finally:
+                                for tail in finalize_stream(response, done_already=done_sent):
+                                    yield tail
+                    except httpx.HTTPStatusError as e_http:
+                        logging.error(f"{provider_name}: HTTP Error during stream setup: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+                        _raise_chat_error_from_httpx(provider_name, e_http)
+                    except httpx.RequestError as e_req:
+                        logging.error(f"{provider_name}: Request error during stream setup: {e_req}", exc_info=True)
+                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_req)}", "type": "stream_error", "code": "connection_error"}})
+                        for tail in finalize_stream(response_obj, done_already=done_sent):
+                            yield tail
+                    except Exception as e_stream_outer:
+                        logging.error(f"{provider_name}: Unexpected error during streaming: {e_stream_outer}", exc_info=True)
+                        yield sse_data({"error": {"message": f"Unexpected stream error: {str(e_stream_outer)}", "type": "stream_error", "code": "unexpected_error"}})
+                        for tail in finalize_stream(response_obj, done_already=done_sent):
+                            yield tail
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+            return stream_generator()
+        else:
+            response = _post_with_retries(client)
+            try:
                 data = response.json()
                 logging.debug(f"{provider_name}: Non-streaming request successful.")
                 return data
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
     except httpx.HTTPStatusError as e_http:
         logging.error(f"{provider_name}: HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
-        raise
+        _raise_chat_error_from_httpx(provider_name, e_http)
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
         raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
+    finally:
+        if not streaming:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def chat_with_local_llm(
         input_data: List[Dict[str, Any]],
         temp: Optional[float] = None,
+        temperature: Optional[float] = None,
         system_message: Optional[str] = None,
-        streaming: Optional[bool] = False,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
         model: Optional[str] = None,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -233,6 +329,15 @@ def chat_with_local_llm(
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
 ):
+    if temperature is not None:
+        if temp is not None and temp != temperature:
+            logging.warning("local_llm: Received both 'temp' and 'temperature'; using 'temp'")
+        else:
+            temp = temperature
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("local_llm: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg_section = 'local_llm' # Generic section for "local-llm" type
@@ -309,8 +414,10 @@ def chat_with_llama(
         api_key: Optional[str] = None, # from map
         custom_prompt: Optional[str] = None,  # from map, Mapped from 'prompt'
         temp: Optional[float] = None, # from map, generic name is 'temperature'
+        temperature: Optional[float] = None,
         system_prompt: Optional[str] = None,  # from map, Mapped from 'system_message'
-        streaming: Optional[bool] = False, # from map
+        streaming: Optional[bool] = None, # from map
+        stream: Optional[bool] = None, # alias from provider map
         model: Optional[str] = None, # from map
         top_k: Optional[int] = None, # from map
         top_p: Optional[float] = None, # from map
@@ -328,6 +435,15 @@ def chat_with_llama(
         # or loaded from config if not passed. Let's assume it's primarily from config for now.
         api_url: Optional[str] = None # This is specific to this function's call from API_CALL_HANDLERS if special handling exists
 ):
+    if temperature is not None:
+        if temp is not None and temp != temperature:
+            logging.warning("Llama.cpp: Received both 'temp' and 'temperature'; using 'temp' value")
+        else:
+            temp = temperature
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("Llama.cpp: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg = loaded_config_data.get('llama_api', {})
@@ -490,8 +606,15 @@ def chat_with_kobold(
     if cfg.get('rep_pen') is not None: payload['rep_pen'] = float(cfg['rep_pen'])
     # Other kobold params: typical_p, tfs, top_a, etc. could be added from cfg
 
-    logging.debug(f"KoboldAI (Native): Posting to {api_url}. Prompt (first 200 chars): '{final_prompt_string[:200]}...'")
-    logging.debug(f"KoboldAI (Native) Payload details: {payload}")
+    logging.debug(
+        f"KoboldAI (Native): Posting to {api_url}. prompt_length={len(final_prompt_string)} chars"
+    )
+    payload_metadata = _sanitize_payload_for_logging(
+        payload,
+        message_keys=(),
+        text_keys=("prompt",),
+    )
+    logging.debug(f"KoboldAI (Native) payload metadata: {payload_metadata}")
 
 
     try:
@@ -538,8 +661,10 @@ def chat_with_oobabooga(
     api_key: Optional[str] = None, # from map
     custom_prompt: Optional[str] = None,  # from map, Mapped from 'prompt'
     temp: Optional[float] = None, # from map, generic name 'temperature'
+    temperature: Optional[float] = None,
     system_prompt: Optional[str] = None,  # from map, Mapped from 'system_message'
-    streaming: Optional[bool] = False, # from map
+    streaming: Optional[bool] = None, # from map
+    stream: Optional[bool] = None,
     model: Optional[str] = None, # from map
     top_k: Optional[int] = None, # from map
     top_p: Optional[float] = None, # from map (ooba might use 'top_p')
@@ -555,6 +680,15 @@ def chat_with_oobabooga(
     frequency_penalty: Optional[float] = None, # from map
     api_url: Optional[str] = None # Specific, not from generic map unless handled
 ):
+    if temperature is not None:
+        if temp is not None and temp != temperature:
+            logging.warning("Oobabooga: Received both 'temp' and 'temperature'; using 'temp' value")
+        else:
+            temp = temperature
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("Oobabooga: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg = loaded_config_data.get('ooba_api', {})
@@ -625,8 +759,10 @@ def chat_with_tabbyapi(
     api_key: Optional[str] = None, # from map
     custom_prompt_input: Optional[str] = None, # from map ('prompt')
     temp: Optional[float] = None, # from map (mapped to 'temperature' in generic)
+    temperature: Optional[float] = None,
     system_message: Optional[str] = None, # from map
-    streaming: Optional[bool] = False, # from map
+    streaming: Optional[bool] = None, # from map
+    stream: Optional[bool] = None,
     model: Optional[str] = None, # from map
     top_k: Optional[int] = None, # from map
     top_p: Optional[float] = None, # from map
@@ -639,6 +775,15 @@ def chat_with_tabbyapi(
     # logprobs, top_logprobs, tools, tool_choice.
     # Add them to signature if TabbyAPI (OpenAI compatible) supports them.
 ):
+    if temperature is not None:
+        if temp is not None and temp != temperature:
+            logging.warning("TabbyAPI: Received both 'temp' and 'temperature'; using 'temp' value")
+        else:
+            temp = temperature
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("TabbyAPI: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg = loaded_config_data.get('tabby_api', {})
@@ -705,11 +850,13 @@ def chat_with_vllm(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None, # from map
     custom_prompt_input: Optional[str] = None, # from map ('prompt')
+    temp: Optional[float] = None,
     # vLLM's map has 'temp':'temperature', 'system_prompt':'system_message' etc.
     # These are the provider-specific names this function receives.
     temperature: Optional[float] = None, # from map (mapped from generic 'temp')
     system_prompt: Optional[str] = None,   # from map (mapped from generic 'system_message')
-    streaming: Optional[bool] = False,   # from map
+    streaming: Optional[bool] = None,   # from map
+    stream: Optional[bool] = None,
     model: Optional[str] = None,         # from map
     top_k: Optional[int] = None,         # from map
     top_p: Optional[float] = None,         # from map (mapped from generic 'topp')
@@ -727,6 +874,14 @@ def chat_with_vllm(
     vllm_api_url: Optional[str] = None # Specific config, not from generic map typically
                                        # Could be loaded from cfg or passed if chat_api_call handles it
 ):
+    if temp is not None:
+        if temperature is not None and temperature != temp:
+            logging.warning("vLLM: Received both 'temp' and 'temperature'; using 'temp' value")
+        temperature = temp
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("vLLM: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg = loaded_config_data.get('vllm_api', {})
@@ -805,9 +960,11 @@ def chat_with_aphrodite(
     api_key: Optional[str] = None, # from map
     custom_prompt: Optional[str] = None,  # from map ('prompt')
     # Aphrodite's map uses 'temp':'temperature', etc.
+    temp: Optional[float] = None,
     temperature: Optional[float] = None, # from map (mapped from generic 'temp')
     system_message: Optional[str] = None, # from map
-    streaming: Optional[bool] = False,   # from map
+    streaming: Optional[bool] = None,   # from map
+    stream: Optional[bool] = None,
     model: Optional[str] = None,         # from map
     top_k: Optional[int] = None,         # from map
     top_p: Optional[float] = None,         # from map (mapped from generic 'topp')
@@ -824,6 +981,14 @@ def chat_with_aphrodite(
     user_identifier: Optional[str] = None # from map
     # top_logprobs, tools, tool_choice not in Aphrodite's map currently
 ):
+    if temp is not None:
+        if temperature is not None and temperature != temp:
+            logging.warning("Aphrodite: Received both 'temp' and 'temperature'; using 'temp' value")
+        temperature = temp
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("Aphrodite: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg = loaded_config_data.get('aphrodite_api', {})
@@ -902,10 +1067,12 @@ def chat_with_ollama(
     api_key: Optional[str] = None, # from map, Ollama doesn't use key but map has it
     custom_prompt: Optional[str] = None,  # from map ('prompt')
     # Ollama map: 'temp':'temperature', 'system_message':'system_message', 'topp':'top_p', etc.
+    temp: Optional[float] = None,
     temperature: Optional[float] = None,  # from map (mapped from generic 'temp')
     system_message: Optional[str] = None, # from map
     model: Optional[str] = None,          # from map
-    streaming: Optional[bool] = False,    # from map
+    streaming: Optional[bool] = None,    # from map
+    stream: Optional[bool] = None,
     top_p: Optional[float] = None,          # from map (mapped from generic 'topp')
     top_k: Optional[int] = None,          # from map
     # Ollama specific params from map, ensure they are OpenAI compatible if passed to generic func
@@ -922,6 +1089,14 @@ def chat_with_ollama(
     # logit_bias, n (num_choices), user_identifier, logprobs, top_logprobs, tools, tool_choice, min_p
     # Add to signature and pass if Ollama supports them.
 ):
+    if temp is not None:
+        if temperature is not None and temperature != temp:
+            logging.warning("Ollama: Received both 'temp' and 'temperature'; using 'temp' value")
+        temperature = temp
+    if stream is not None:
+        if streaming is not None and streaming != stream:
+            logging.warning("Ollama: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
+        streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = load_settings()
     cfg = loaded_config_data.get('ollama_api', {})
@@ -1011,6 +1186,7 @@ def chat_with_custom_openai(
     model: Optional[str] = None,
     # PROVIDER_PARAM_MAP for custom-openai-api specific names:
     maxp: Optional[float] = None,             # Mapped from 'maxp' (likely top_p)
+    topp: Optional[float] = None,             # Mapped from 'topp'
     minp: Optional[float] = None,             # Mapped from 'minp'
     topk: Optional[int] = None,               # Mapped from 'topk'
     max_tokens: Optional[int] = None,
@@ -1046,7 +1222,14 @@ def chat_with_custom_openai(
 
     current_temp = temp if temp is not None else float(cfg.get('temperature', cfg.get('temp', 0.7))) # Mapped param is 'temp'
     current_streaming = streaming if streaming is not None else cfg.get('streaming', False)
-    current_top_p = maxp if maxp is not None else cfg.get('top_p', cfg.get('maxp')) # Mapped param is 'maxp'
+    explicit_top_p = None
+    if topp is not None:
+        explicit_top_p = topp
+    if maxp is not None:
+        if explicit_top_p is not None and explicit_top_p != maxp:
+            logging.warning(f"{cfg_section}: Received both 'topp' and 'maxp'; preferring 'maxp'.")
+        explicit_top_p = maxp
+    current_top_p = explicit_top_p if explicit_top_p is not None else cfg.get('top_p', cfg.get('maxp'))
     current_top_k = topk if topk is not None else cfg.get('top_k', cfg.get('topk')) # Mapped param is 'topk'
     current_min_p = minp if minp is not None else cfg.get('min_p', cfg.get('minp')) # Mapped param is 'minp'
     current_max_tokens = max_tokens if max_tokens is not None else int(cfg.get('max_tokens', 4096))
@@ -1113,6 +1296,7 @@ def chat_with_custom_openai_2(
     streaming: Optional[bool] = False,
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    topp: Optional[float] = None,
     seed: Optional[int] = None,
     stop: Optional[Union[str, List[str]]] = None,
     response_format: Optional[Dict[str, str]] = None,
@@ -1164,7 +1348,8 @@ def chat_with_custom_openai_2(
     # Parameters from custom-openai-api-1 that are NOT in custom-openai-api-2's map:
     # maxp (top_p), minp, topk. These will be None if not in map and passed to generic server.
     # Check config for these too, in case they are set there for this specific custom API.
-    current_top_p = cfg.get('top_p', cfg.get('maxp'))
+    config_top_p = cfg.get('top_p', cfg.get('maxp'))
+    current_top_p = topp if topp is not None else config_top_p
     current_top_k = cfg.get('top_k', cfg.get('topk'))
     current_min_p = cfg.get('min_p', cfg.get('minp'))
 

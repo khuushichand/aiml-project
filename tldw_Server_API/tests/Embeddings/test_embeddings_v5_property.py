@@ -36,7 +36,7 @@ def setup(test_client, regular_user, auth_headers):
     
     app.dependency_overrides[get_request_user] = override_user
     
-    async def fake_embeddings(texts, provider, model_id, config):
+    async def fake_embeddings(texts, provider, model_id, config, metadata=None):
         batch = texts if isinstance(texts, list) else [texts]
         return [[float(len(text)), 0.0, 0.0] for text in batch]
 

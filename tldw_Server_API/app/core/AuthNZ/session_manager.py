@@ -8,9 +8,11 @@ import hashlib
 import secrets
 import base64
 import os
+import stat
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 import asyncio
+from pathlib import Path
 #
 # 3rd-party imports
 from redis import asyncio as redis_async
@@ -27,7 +29,10 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
+    derive_hmac_key,
+    derive_hmac_key_candidates,
+)
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     SessionError,
@@ -36,6 +41,11 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError
 )
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+
+try:
+    from tldw_Server_API.app.core.config import settings as core_settings
+except Exception:  # pragma: no cover - defensive fallback
+    core_settings = {}
 
 #######################################################################################################################
 #
@@ -51,12 +61,15 @@ class SessionManager:
     ):
         """Initialize session manager"""
         self.settings = settings or get_settings()
+        self._provided_settings = settings
         self.db_pool = db_pool
         self._external_db_pool = db_pool is not None
         self.redis_client: Optional[redis_async.Redis] = None
         self.scheduler = AsyncIOScheduler()
         self._initialized = False
         self.cipher_suite: Optional[Fernet] = None
+        self._fernet_candidates: List[Fernet] = []
+        self._persisted_key_path: Optional[Path] = None
         self._init_encryption()
         
     async def initialize(self):
@@ -154,60 +167,241 @@ class SessionManager:
     
     def _init_encryption(self):
         """Initialize encryption for session tokens"""
-        # Get or generate encryption key
-        encryption_key = self._get_or_create_encryption_key()
-        self.cipher_suite = Fernet(encryption_key)
+        key_materials = self._get_or_create_encryption_key()
+        if not key_materials:
+            raise ValueError("Session encryption key derivation failed")
+        self._fernet_candidates = [Fernet(key) for key in key_materials]
+        self.cipher_suite = self._fernet_candidates[0]
         logger.debug("Session token encryption initialized")
     
-    def _get_or_create_encryption_key(self) -> bytes:
-        """Get or create encryption key for session tokens"""
-        # Try to get key from settings/environment
-        if hasattr(self.settings, 'SESSION_ENCRYPTION_KEY') and self.settings.SESSION_ENCRYPTION_KEY:
-            # Decode from base64 if provided as string
-            if isinstance(self.settings.SESSION_ENCRYPTION_KEY, str):
-                return base64.urlsafe_b64decode(self.settings.SESSION_ENCRYPTION_KEY)
-            return self.settings.SESSION_ENCRYPTION_KEY
-        
-        # Derive key from dedicated credentials (pepper/JWT material) for deterministic encryption.
-        candidate_secrets: List[Optional[str]] = [
-            getattr(self.settings, "API_KEY_PEPPER", None),
-            getattr(self.settings, "JWT_SECRET_KEY", None),
-            getattr(self.settings, "JWT_PRIVATE_KEY", None),
-        ]
-        if getattr(self.settings, "AUTH_MODE", "single_user") == "single_user":
-            # Allow the configured API key to seed deterministic encryption when no pepper/JWT secret exists.
-            candidate_secrets.insert(1, getattr(self.settings, "SINGLE_USER_API_KEY", None))
+    def _get_or_create_encryption_key(self) -> List[bytes]:
+        """Resolve ordered list of candidate encryption keys (primary first)."""
+        key_bytes: List[bytes] = []
+        seen: set[bytes] = set()
 
-        for secret in candidate_secrets:
-            if secret:
-                if isinstance(secret, bytes):
-                    raw = secret
+        def _append(candidate: Optional[bytes]) -> None:
+            if not candidate:
+                return
+            if candidate not in seen:
+                seen.add(candidate)
+                key_bytes.append(candidate)
+
+        # Explicit configuration wins
+        explicit_key = getattr(self.settings, "SESSION_ENCRYPTION_KEY", None)
+        if explicit_key:
+            if isinstance(explicit_key, str):
+                raw = explicit_key.strip().encode("utf-8")
+            elif isinstance(explicit_key, bytes):
+                raw = explicit_key
+            else:
+                raise ValueError("SESSION_ENCRYPTION_KEY must be str or bytes containing a Fernet key")
+            try:
+                decoded = base64.urlsafe_b64decode(raw)
+            except Exception as exc:  # pragma: no cover - defensive
+                raise ValueError("SESSION_ENCRYPTION_KEY must be urlsafe base64-encoded") from exc
+            if len(decoded) != 32:
+                raise ValueError("SESSION_ENCRYPTION_KEY must decode to 32 bytes for Fernet compatibility")
+            _append(raw)
+        else:
+            persisted_key = self._load_persisted_session_key()
+            if persisted_key:
+                _append(persisted_key)
+            else:
+                generated = Fernet.generate_key()
+                if self._persist_session_key(generated):
+                    _append(generated)
                 else:
-                    raw = str(secret).encode("utf-8")
-                kdf = PBKDF2HMAC(
-                    algorithm=hashes.SHA256(),
-                    length=32,
-                    salt=b"session_encryption_salt_v1",
-                    iterations=100000,
+                    logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
+
+        # Always include derived secrets for backward compatibility / fallback (includes secondary secrets)
+        for derived in self._derive_secret_key_candidates():
+            _append(derived)
+
+        if not key_bytes:
+            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
+            if test_mode or pytest_active:
+                logger.warning("Generating temporary session encryption key for test context.")
+                _append(Fernet.generate_key())
+            else:
+                raise ValueError(
+                    "Session encryption key is not configured. "
+                    "Set SESSION_ENCRYPTION_KEY or ensure Config_Files/session_encryption.key is writable."
                 )
-                key_material = kdf.derive(raw)
-                return base64.urlsafe_b64encode(key_material)
-        
-        # No deterministic secret available – allow random key only for explicit tests.
-        test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
-        if not (test_mode or pytest_active):
-            raise ValueError(
-                "Session encryption key is not configured. "
-                "Set SESSION_ENCRYPTION_KEY or provide API_KEY_PEPPER / JWT secrets."
+        return key_bytes
+
+    def _derive_secret_key_candidates(self) -> List[bytes]:
+        """Derive deterministic Fernet keys from configured secret material."""
+        secrets_order: List[Optional[str | bytes]] = []
+
+        def _add_secret(value: Optional[str | bytes]) -> None:
+            if value:
+                secrets_order.append(value)
+
+        if getattr(self.settings, "AUTH_MODE", "single_user") == "single_user":
+            _add_secret(getattr(self.settings, "SINGLE_USER_API_KEY", None))
+
+        _add_secret(getattr(self.settings, "API_KEY_PEPPER", None))
+        _add_secret(getattr(self.settings, "JWT_SECRET_KEY", None))
+        _add_secret(getattr(self.settings, "JWT_PRIVATE_KEY", None))
+        _add_secret(getattr(self.settings, "JWT_PUBLIC_KEY", None))
+        _add_secret(getattr(self.settings, "JWT_SECONDARY_SECRET", None))
+        _add_secret(getattr(self.settings, "JWT_SECONDARY_PRIVATE_KEY", None))
+        _add_secret(getattr(self.settings, "JWT_SECONDARY_PUBLIC_KEY", None))
+
+        derived_keys: List[bytes] = []
+        seen: set[bytes] = set()
+
+        for secret in secrets_order:
+            if not secret:
+                continue
+            raw = secret if isinstance(secret, bytes) else str(secret).encode("utf-8")
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=b"session_encryption_salt_v1",
+                iterations=100000,
             )
-        logger.warning("Generating temporary session encryption key for test context.")
-        return Fernet.generate_key()
+            key_material = base64.urlsafe_b64encode(kdf.derive(raw))
+            if key_material not in seen:
+                seen.add(key_material)
+                derived_keys.append(key_material)
+        return derived_keys
+
+    def _persist_session_key(self, key: bytes) -> bool:
+        """Persist generated session key to disk for reuse across restarts."""
+        path = self._persisted_key_path or self._resolve_persisted_key_path()
+        if not path:
+            return False
+        try:
+            # Ensure parent directory exists with restricted permissions (best-effort 0o700)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                parent_stat = os.stat(path.parent, follow_symlinks=False)
+                if not stat.S_ISDIR(parent_stat.st_mode):
+                    raise RuntimeError(f"Session key directory {path.parent} is not a directory")
+            except FileNotFoundError as exc:
+                raise RuntimeError(f"Failed to prepare session key directory {path.parent}: {exc}") from exc
+            try:
+                os.chmod(path.parent, 0o700)
+            except Exception:
+                # Ignore if chmod not supported (e.g., on Windows)
+                pass
+
+            try:
+                if path.exists() and path.is_symlink():
+                    raise RuntimeError(
+                        f"Refusing to overwrite session encryption key symlink at {path}"
+                    )
+            except OSError as exc:
+                raise RuntimeError(f"Unable to inspect existing session key at {path}: {exc}") from exc
+
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            # Write the key with 0o600 permissions so only the owner can read it
+            try:
+                fd = os.open(str(path), flags, 0o600)
+            except OSError as exc:
+                raise RuntimeError(f"Failed to open session encryption key file {path}: {exc}") from exc
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(key.decode("utf-8"))
+            except Exception:
+                os.close(fd)
+                raise
+
+            try:
+                os.chmod(path, 0o600)
+            except Exception:
+                # Best-effort chmod; on some filesystems (e.g., Windows) this may be a no-op
+                pass
+            try:
+                st = os.stat(path, follow_symlinks=False)
+                if not stat.S_ISREG(st.st_mode):
+                    raise RuntimeError(f"Session encryption key {path} is not a regular file")
+                if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                    raise RuntimeError(f"Session encryption key {path} is not owned by the current user")
+            except Exception as exc:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise RuntimeError(f"Persisted session encryption key failed validation: {exc}") from exc
+            self._persisted_key_path = path
+            return True
+        except Exception as exc:
+            logger.warning(f"Unable to persist session encryption key to {path}: {exc}")
+            return False
+
+    def _load_persisted_session_key(self) -> Optional[bytes]:
+        """Load persisted session encryption key if available."""
+        path = self._persisted_key_path or self._resolve_persisted_key_path()
+        if not path or not path.exists():
+            return None
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+            if not content:
+                return None
+            decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
+            if len(decoded) != 32:
+                logger.warning(f"Persisted session encryption key at {path} is invalid; ignoring.")
+                return None
+            self._persisted_key_path = path
+            return content.encode("utf-8")
+        except Exception as exc:
+            logger.warning(f"Failed to read persisted session encryption key from {path}: {exc}")
+            return None
+
+    def _resolve_persisted_key_path(self) -> Optional[Path]:
+        """Determine filesystem location for persisted session key."""
+        try:
+            base = None
+            if core_settings:
+                base = core_settings.get("PROJECT_ROOT")
+            if base:
+                project_root = Path(base)
+            else:
+                project_root = Path.cwd()
+            return (project_root / "Config_Files" / "session_encryption.key").resolve()
+        except Exception:
+            return None
     
+    def _token_hash_candidates(self, token: str) -> List[str]:
+        """Return ordered hash candidates for a token across active/legacy secrets."""
+        hashes: List[str] = []
+        candidate_keys: List[bytes] = []
+
+        def _extend_from_settings(s: Optional[Settings]) -> None:
+            if not s:
+                return
+            try:
+                keys = derive_hmac_key_candidates(s)
+            except Exception:
+                keys = [derive_hmac_key(s)]
+            for key in keys:
+                if key not in candidate_keys:
+                    candidate_keys.append(key)
+
+        if self._provided_settings is not None:
+            _extend_from_settings(self._provided_settings)
+        _extend_from_settings(self.settings)
+        pool_settings = getattr(self.db_pool, "settings", None)
+        if pool_settings is not None:
+            _extend_from_settings(pool_settings)
+
+        for key in candidate_keys:
+            digest = hmac.new(key, token.encode("utf-8"), hashlib.sha256).hexdigest()
+            if digest not in hashes:
+                hashes.append(digest)
+        return hashes
+
     def hash_token(self, token: str) -> str:
         """Create HMAC-SHA256 of token for lookup/indexing (aligned with AuthNZ)."""
-        key = derive_hmac_key(self.settings)
-        return hmac.new(key, token.encode('utf-8'), hashlib.sha256).hexdigest()
+        candidates = self._token_hash_candidates(token)
+        if not candidates:
+            raise ValueError("Unable to derive token hash candidates")
+        return candidates[0]
     
     def encrypt_token(self, token: str) -> str:
         """Encrypt a token for secure storage"""
@@ -219,16 +413,27 @@ class SessionManager:
     
     def decrypt_token(self, encrypted_token: str) -> str:
         """Decrypt a stored token"""
-        if not self.cipher_suite:
+        if not self.cipher_suite or not self._fernet_candidates:
             self._init_encryption()
         
         try:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode('utf-8'))
-            decrypted = self.cipher_suite.decrypt(encrypted_bytes)
-            return decrypted.decode('utf-8')
         except Exception as e:
-            logger.error(f"Failed to decrypt token: {e}")
-            raise InvalidSessionError("Failed to decrypt session token")
+            logger.error(f"Failed to decode stored session token: {e}")
+            raise InvalidSessionError("Failed to decrypt session token") from e
+
+        last_error: Optional[Exception] = None
+        for idx, cipher in enumerate(self._fernet_candidates or []):
+            try:
+                decrypted = cipher.decrypt(encrypted_bytes)
+                return decrypted.decode('utf-8')
+            except Exception as exc:
+                last_error = exc
+                logger.debug(f"Session token decryption failed with candidate {idx}: {exc}")
+                continue
+
+        logger.error(f"Failed to decrypt token after examining {len(self._fernet_candidates or [])} key candidates: {last_error}")
+        raise InvalidSessionError("Failed to decrypt session token") from last_error
 
     @staticmethod
     def _extract_token_metadata(token: Optional[str]) -> Tuple[Optional[str], Optional[datetime]]:
@@ -388,10 +593,19 @@ class SessionManager:
         if not self._initialized:
             await self.initialize()
         
-        token_hash = self.hash_token(access_token)
+        token_hash_candidates = self._token_hash_candidates(access_token)
+        if not token_hash_candidates:
+            logger.debug("validate_session received token with no hash candidates; treating as invalid")
+            return None
+        token_hash_primary = token_hash_candidates[0]
+        matched_hash: Optional[str] = None
+        cache_normalize_required = False
         cached: Optional[Dict[str, Any]] = None
         if self.redis_client:
-            cached = await self._get_cached_session(token_hash)
+            for candidate_hash in token_hash_candidates:
+                cached = await self._get_cached_session(candidate_hash)
+                if cached:
+                    break
         
         try:
             db_pool = await self._ensure_db_pool()
@@ -405,18 +619,27 @@ class SessionManager:
                         conn,
                         session_id=int(cached["session_id"]),
                     )
+                    if session_data:
+                        matched_hash = session_data.get("token_hash")
                     if not session_data and cached.get("session_id") is not None:
                         # Cache is stale; purge it.
                         await self._clear_session_cache(int(cached["session_id"]))
 
                 if not session_data:
-                    session_data = await self._fetch_session_record(
-                        conn,
-                        token_hash=token_hash,
-                    )
+                    for candidate_hash in token_hash_candidates:
+                        session_data = await self._fetch_session_record(
+                            conn,
+                            token_hash=candidate_hash,
+                        )
+                        if session_data:
+                            matched_hash = session_data.get("token_hash") or candidate_hash
+                            break
 
                 if not session_data:
                     return None
+
+                if matched_hash is None:
+                    matched_hash = session_data.get("token_hash")
 
                 user_active = bool(session_data.get("user_active"))
                 revoked_flag = bool(session_data.get("revoked_at"))
@@ -434,6 +657,29 @@ class SessionManager:
                         logger.warning(f"Session {session_data['id']} was revoked")
                     raise SessionRevokedException()
 
+                if matched_hash and matched_hash != token_hash_primary:
+                    try:
+                        if hasattr(conn, "fetchrow"):
+                            await conn.execute(
+                                "UPDATE sessions SET token_hash = $1 WHERE id = $2",
+                                token_hash_primary,
+                                session_data["id"],
+                            )
+                        else:
+                            await conn.execute(
+                                "UPDATE sessions SET token_hash = ? WHERE id = ?",
+                                (token_hash_primary, session_data["id"]),
+                            )
+                            await conn.commit()
+                        session_data["token_hash"] = token_hash_primary
+                        cache_normalize_required = True
+                    except Exception as normalize_exc:
+                        logger.warning(
+                            "Failed to normalize session token hash for session %s: %s",
+                            session_data.get("id"),
+                            normalize_exc,
+                        )
+
                 await self._update_last_activity(session_data['id'], conn)
 
             # Outside of the DB context – refresh cache with validation status
@@ -444,8 +690,10 @@ class SessionManager:
                 expires_at_dt = expires_at
 
             if self.redis_client and expires_at_dt:
+                if cache_normalize_required:
+                    await self._clear_session_cache(session_data['id'])
                 await self._cache_session(
-                    token_hash,
+                    token_hash_primary,
                     session_data['user_id'],
                     session_data['id'],
                     expires_at_dt,
@@ -471,9 +719,21 @@ class SessionManager:
         if not self._initialized:
             await self.initialize()
         
+        session_details: Optional[Dict[str, Any]] = None
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
+                if hasattr(conn, 'fetchrow'):
+                    session_row = await conn.fetchrow(
+                        """
+                        SELECT id, user_id, access_jti, refresh_jti, expires_at, refresh_expires_at
+                        FROM sessions
+                        WHERE id = $1
+                        """,
+                        session_id
+                    )
+                    if session_row:
+                        session_details = dict(session_row)
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute(
@@ -490,6 +750,24 @@ class SessionManager:
                     )
                 else:
                     # SQLite
+                    cursor = await conn.execute(
+                        """
+                        SELECT id, user_id, access_jti, refresh_jti, expires_at, refresh_expires_at
+                        FROM sessions
+                        WHERE id = ?
+                        """,
+                        (session_id,)
+                    )
+                    row = await cursor.fetchone()
+                    if row:
+                        session_details = {
+                            "id": row[0],
+                            "user_id": row[1],
+                            "access_jti": row[2],
+                            "refresh_jti": row[3],
+                            "expires_at": row[4],
+                            "refresh_expires_at": row[5],
+                        }
                     await conn.execute(
                         """
                         UPDATE sessions
@@ -516,6 +794,13 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Failed to revoke session: {e}")
             raise SessionError(f"Failed to revoke session: {e}")
+        else:
+            if session_details:
+                await self._blacklist_session_tokens(
+                    [session_details],
+                    reason=reason,
+                    revoked_by=revoked_by,
+                )
     
     async def revoke_all_user_sessions(
         self,
@@ -597,7 +882,10 @@ class SessionManager:
             blacklist = get_token_blacklist()
             await blacklist.revoke_all_user_tokens(user_id)
         except Exception as bl_error:
-            logger.warning(f"Failed to blacklist tokens for user {user_id}: {bl_error}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.warning(f"Failed to blacklist tokens for authenticated user (details redacted): {bl_error}")
+            else:
+                logger.warning(f"Failed to blacklist tokens for user {user_id}: {bl_error}")
     
     async def refresh_session(
         self,
@@ -609,11 +897,12 @@ class SessionManager:
         if not self._initialized:
             await self.initialize()
         
-        old_refresh_hash = self.hash_token(refresh_token)
+        refresh_hash_candidates = self._token_hash_candidates(refresh_token)
+        if not refresh_hash_candidates:
+            raise InvalidSessionError()
+        primary_refresh_hash = refresh_hash_candidates[0]
         new_access_hash = self.hash_token(new_access_token)
-        new_refresh_hash = self.hash_token(new_refresh_token) if new_refresh_token else None
         encrypted_access_token = self.encrypt_token(new_access_token)
-        encrypted_refresh_token = self.encrypt_token(new_refresh_token) if new_refresh_token else None
         access_jti, access_exp = self._extract_token_metadata(new_access_token)
         refresh_jti, refresh_exp = self._extract_token_metadata(new_refresh_token) if new_refresh_token else (None, None)
         expires_at = access_exp or (datetime.utcnow() + timedelta(
@@ -628,67 +917,78 @@ class SessionManager:
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
-                    # Find session by refresh token
-                    if hasattr(conn, 'fetchrow'):
-                        # PostgreSQL
-                        session = await conn.fetchrow(
+                matched_refresh_hash: Optional[str] = None
+                session_data: Optional[Dict[str, Any]] = None
+
+                # Locate session using any legacy hash candidate
+                if hasattr(conn, "fetchrow"):
+                    for candidate_hash in refresh_hash_candidates:
+                        session_row = await conn.fetchrow(
                             """
                             SELECT id, user_id FROM sessions
                             WHERE refresh_token_hash = $1
                             AND is_active = TRUE
                             """,
-                            old_refresh_hash
+                            candidate_hash,
                         )
-
-                        if not session:
-                            raise InvalidSessionError()
-
-                        # Update session with new tokens
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET token_hash = $2,
-                                access_jti = COALESCE($3, access_jti),
-                                expires_at = $4,
-                                encrypted_token = $5,
-                                refresh_token_hash = COALESCE($6, refresh_token_hash),
-                                refresh_jti = COALESCE($7, refresh_jti),
-                                refresh_expires_at = COALESCE($8, refresh_expires_at),
-                                encrypted_refresh = COALESCE($9, encrypted_refresh),
-                                last_activity = CURRENT_TIMESTAMP
-                            WHERE id = $1
-                            """,
-                            session['id'],
-                            new_access_hash,
-                            access_jti,
-                            expires_at,
-                            encrypted_access_token,
-                            new_refresh_hash,
-                            refresh_jti,
-                            refresh_expires_at,
-                            encrypted_refresh_token,
-                        )
-
-                        session_data = dict(session)
-
-                    else:
-                        # SQLite
+                        if session_row:
+                            session_data = dict(session_row)
+                            matched_refresh_hash = candidate_hash
+                            break
+                else:
+                    for candidate_hash in refresh_hash_candidates:
                         cursor = await conn.execute(
                             """
                             SELECT id, user_id FROM sessions
                             WHERE refresh_token_hash = ?
                             AND is_active = 1
                             """,
-                            (old_refresh_hash,)
+                            (candidate_hash,),
                         )
                         row = await cursor.fetchone()
+                        if row:
+                            session_data = {"id": row[0], "user_id": row[1]}
+                            matched_refresh_hash = candidate_hash
+                            break
 
-                        if not row:
-                            raise InvalidSessionError()
+                if not session_data or matched_refresh_hash is None:
+                    raise InvalidSessionError()
 
-                        session_data = {"id": row[0], "user_id": row[1]}
+                if new_refresh_token:
+                    refresh_hash_update = self.hash_token(new_refresh_token)
+                    encrypted_refresh_token = self.encrypt_token(new_refresh_token)
+                else:
+                    refresh_hash_update = primary_refresh_hash
+                    encrypted_refresh_token = self.encrypt_token(refresh_token)
 
-                        # Update session
+                # Update session with new tokens
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET token_hash = $2,
+                            access_jti = COALESCE($3, access_jti),
+                            expires_at = $4,
+                            encrypted_token = $5,
+                            refresh_token_hash = COALESCE($6, refresh_token_hash),
+                            refresh_jti = COALESCE($7, refresh_jti),
+                            refresh_expires_at = COALESCE($8, refresh_expires_at),
+                            encrypted_refresh = COALESCE($9, encrypted_refresh),
+                            last_activity = CURRENT_TIMESTAMP
+                        WHERE id = $1
+                        """,
+                        session_data["id"],
+                        new_access_hash,
+                        access_jti,
+                        expires_at,
+                        encrypted_access_token,
+                        refresh_hash_update,
+                        refresh_jti,
+                        refresh_expires_at,
+                        encrypted_refresh_token,
+                    )
+                else:
+                    try:
                         await conn.execute(
                             """
                             UPDATE sessions
@@ -708,37 +1008,67 @@ class SessionManager:
                                 access_jti,
                                 expires_at.isoformat(),
                                 encrypted_access_token,
-                                new_refresh_hash,
+                                refresh_hash_update,
                                 refresh_jti,
                                 refresh_expires_at.isoformat() if refresh_expires_at else None,
                                 encrypted_refresh_token,
-                                session_data['id'],
+                                session_data["id"],
+                            ),
+                        )
+                    except Exception as exc:
+                        msg = str(exc).lower()
+                        if "no such column" in msg and "last_activity" in msg:
+                            await conn.execute(
+                                """
+                                UPDATE sessions
+                                SET token_hash = ?,
+                                    access_jti = COALESCE(?, access_jti),
+                                    expires_at = ?,
+                                    encrypted_token = ?,
+                                    refresh_token_hash = COALESCE(?, refresh_token_hash),
+                                    refresh_jti = COALESCE(?, refresh_jti),
+                                    refresh_expires_at = COALESCE(?, refresh_expires_at),
+                                    encrypted_refresh = COALESCE(?, encrypted_refresh)
+                                WHERE id = ?
+                                """,
+                                (
+                                    new_access_hash,
+                                    access_jti,
+                                    expires_at.isoformat(),
+                                    encrypted_access_token,
+                                    refresh_hash_update,
+                                    refresh_jti,
+                                    refresh_expires_at.isoformat() if refresh_expires_at else None,
+                                    encrypted_refresh_token,
+                                    session_data["id"],
+                                ),
                             )
-                        )
-                        await conn.commit()
+                        else:
+                            raise
+                    await conn.commit()
 
-                    # Update cache
-                    if self.redis_client:
-                        await self._clear_session_cache(session_data['id'])
-                        await self._cache_session(
-                            new_access_hash,
-                            session_data['user_id'],
-                            session_data['id'],
-                            expires_at,
-                            user_active=True,
-                            revoked=False,
-                        )
+                # Update cache
+                if self.redis_client:
+                    await self._clear_session_cache(session_data['id'])
+                    await self._cache_session(
+                        new_access_hash,
+                        session_data['user_id'],
+                        session_data['id'],
+                        expires_at,
+                        user_active=True,
+                        revoked=False,
+                    )
 
-                    if self.settings.PII_REDACT_LOGS:
-                        logger.info("Refreshed session [redacted]")
-                    else:
-                        logger.info(f"Refreshed session {session_data['id']}")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.info("Refreshed session [redacted]")
+                else:
+                    logger.info(f"Refreshed session {session_data['id']}")
 
-                    return {
-                        "session_id": session_data['id'],
-                        "user_id": session_data['user_id'],
-                        "expires_at": expires_at.isoformat()
-                    }
+                return {
+                    "session_id": session_data['id'],
+                    "user_id": session_data['user_id'],
+                    "expires_at": expires_at.isoformat()
+                }
 
         except InvalidSessionError:
             raise
@@ -766,58 +1096,100 @@ class SessionManager:
             encrypted_refresh_token = self.encrypt_token(refresh_token)
             
             db_pool = await self._ensure_db_pool()
-            if getattr(db_pool, "pool", None):
-                # PostgreSQL
-                await db_pool.execute(
-                    """
-                    UPDATE sessions
-                    SET token_hash = $1,
-                        refresh_token_hash = $2,
-                        access_jti = COALESCE($3, access_jti),
-                        refresh_jti = COALESCE($4, refresh_jti),
-                        expires_at = COALESCE($5, expires_at),
-                        refresh_expires_at = COALESCE($6, refresh_expires_at),
-                        encrypted_token = $7,
-                        encrypted_refresh = $8
-                    WHERE id = $9
-                    """,
-                    access_token_hash,
-                    refresh_token_hash,
-                    access_jti,
-                    refresh_jti,
-                    access_exp,
-                    refresh_exp,
-                    encrypted_access_token,
-                    encrypted_refresh_token,
-                    session_id
-                )
-            else:
-                # SQLite
-                await db_pool.execute(
-                    """
-                    UPDATE sessions
-                    SET token_hash = ?,
-                        refresh_token_hash = ?,
-                        access_jti = COALESCE(?, access_jti),
-                        refresh_jti = COALESCE(?, refresh_jti),
-                        expires_at = COALESCE(?, expires_at),
-                        refresh_expires_at = COALESCE(?, refresh_expires_at),
-                        encrypted_token = ?,
-                        encrypted_refresh = ?
-                    WHERE id = ?
-                    """,
-                    (
+            async with db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET token_hash = $2,
+                            refresh_token_hash = $3,
+                            access_jti = COALESCE($4, access_jti),
+                            refresh_jti = COALESCE($5, refresh_jti),
+                            expires_at = COALESCE($6, expires_at),
+                            refresh_expires_at = COALESCE($7, refresh_expires_at),
+                            encrypted_token = $8,
+                            encrypted_refresh = $9
+                        WHERE id = $1
+                        """,
+                        session_id,
                         access_token_hash,
                         refresh_token_hash,
                         access_jti,
                         refresh_jti,
-                        access_exp.isoformat() if access_exp else None,
-                        refresh_exp.isoformat() if refresh_exp else None,
+                        access_exp,
+                        refresh_exp,
                         encrypted_access_token,
                         encrypted_refresh_token,
+                    )
+                    session_row = await conn.fetchrow(
+                        "SELECT user_id FROM sessions WHERE id = $1",
                         session_id,
                     )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET token_hash = ?,
+                            refresh_token_hash = ?,
+                            access_jti = COALESCE(?, access_jti),
+                            refresh_jti = COALESCE(?, refresh_jti),
+                            expires_at = COALESCE(?, expires_at),
+                            refresh_expires_at = COALESCE(?, refresh_expires_at),
+                            encrypted_token = ?,
+                            encrypted_refresh = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            access_token_hash,
+                            refresh_token_hash,
+                            access_jti,
+                            refresh_jti,
+                            access_exp.isoformat() if access_exp else None,
+                            refresh_exp.isoformat() if refresh_exp else None,
+                            encrypted_access_token,
+                            encrypted_refresh_token,
+                            session_id,
+                        ),
+                    )
+                    cursor = await conn.execute(
+                        "SELECT user_id FROM sessions WHERE id = ?",
+                        (session_id,),
+                    )
+                    session_row = await cursor.fetchone()
+
+            user_id = None
+            if session_row:
+                if isinstance(session_row, dict):
+                    user_id = session_row.get("user_id")
+                elif hasattr(session_row, "get"):
+                    user_id = session_row.get("user_id")
+                else:
+                    user_id = session_row[0]
+
+            expires_at_dt = access_exp
+            if isinstance(expires_at_dt, str):
+                try:
+                    expires_at_dt = datetime.fromisoformat(expires_at_dt)
+                except ValueError:
+                    expires_at_dt = None
+            if not expires_at_dt:
+                expires_at_dt = datetime.utcnow() + timedelta(
+                    minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
                 )
+
+            if self.redis_client and user_id is not None:
+                try:
+                    await self._clear_session_cache(session_id)
+                    await self._cache_session(
+                        access_token_hash,
+                        int(user_id),
+                        session_id,
+                        expires_at_dt,
+                        user_active=True,
+                        revoked=False,
+                    )
+                except RedisError:
+                    pass
             
             logger.debug(f"Updated session {session_id} with token hashes")
             
@@ -869,14 +1241,13 @@ class SessionManager:
                 logger.error(f"Token blacklist check failed; treating token as revoked: {exc}")
                 return True
 
-            # Hash the token for storage/comparison
-            token_hash = self.hash_token(token)
+            token_hashes = self._token_hash_candidates(token)
             
-            # Check Redis cache first if available
+            # Check Redis cache first if available (JTI-aligned with TokenBlacklist)
             if self.redis_client:
                 try:
-                    blacklisted = await self.redis_client.get(f"blacklist:{token_hash}")
-                    if blacklisted:
+                    redis_key = f"blacklist:{jti_value}"
+                    if await self.redis_client.exists(redis_key):
                         return True
                 except RedisError:
                     pass  # Fall back to database
@@ -885,26 +1256,61 @@ class SessionManager:
             db_pool = await self._ensure_db_pool()
             if getattr(db_pool, "pool", None):
                 # PostgreSQL
-                result = await db_pool.fetchval(
-                    """
-                    SELECT COUNT(*) 
-                    FROM sessions 
+                primary_query = """
+                    SELECT COUNT(*)
+                    FROM sessions
+                    WHERE is_revoked = true
+                      AND (token_hash = $1 OR refresh_token_hash = $1)
+                """
+                legacy_query = """
+                    SELECT COUNT(*)
+                    FROM sessions
                     WHERE token_hash = $1 AND is_revoked = true
-                    """,
-                    token_hash
-                )
+                """
+                try:
+                    for candidate_hash in token_hashes:
+                        result = await db_pool.fetchval(primary_query, candidate_hash)
+                        if result:
+                            return True
+                except Exception as exc:
+                    logger.debug(
+                        "Session blacklist fallback using legacy token_hash-only query: {}", exc
+                    )
+                    for candidate_hash in token_hashes:
+                        result = await db_pool.fetchval(legacy_query, candidate_hash)
+                        if result:
+                            return True
+                return False
             else:
                 # SQLite
-                result = await db_pool.fetchval(
-                    """
-                    SELECT COUNT(*) 
-                    FROM sessions 
+                primary_query = """
+                    SELECT COUNT(*)
+                    FROM sessions
+                    WHERE is_revoked = 1
+                      AND (token_hash = ? OR refresh_token_hash = ?)
+                """
+                legacy_query = """
+                    SELECT COUNT(*)
+                    FROM sessions
                     WHERE token_hash = ? AND is_revoked = 1
-                    """,
-                    token_hash
-                )
-            
-            return result > 0
+                """
+                try:
+                    for candidate_hash in token_hashes:
+                        result = await db_pool.fetchval(
+                            primary_query, candidate_hash, candidate_hash
+                        )
+                        if result:
+                            return True
+                except Exception as exc:
+                    logger.debug(
+                        "Session blacklist fallback using legacy token_hash-only query (SQLite): {}", exc
+                    )
+                    for candidate_hash in token_hashes:
+                        result = await db_pool.fetchval(legacy_query, candidate_hash)
+                        if result:
+                            return True
+
+            return False
             
         except Exception as e:
             logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
@@ -1053,7 +1459,7 @@ class SessionManager:
             if session_id is not None:
                 row = await conn.fetchrow(
                     """
-                    SELECT s.id, s.user_id, s.expires_at, s.is_active,
+                    SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
                            s.revoked_at, u.username, u.role, u.is_active as user_active
                     FROM sessions s
                     JOIN users u ON s.user_id = u.id
@@ -1066,7 +1472,7 @@ class SessionManager:
             else:
                 row = await conn.fetchrow(
                     """
-                    SELECT s.id, s.user_id, s.expires_at, s.is_active,
+                    SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
                            s.revoked_at, u.username, u.role, u.is_active as user_active
                     FROM sessions s
                     JOIN users u ON s.user_id = u.id
@@ -1082,7 +1488,7 @@ class SessionManager:
         if session_id is not None:
             cursor = await conn.execute(
                 """
-                SELECT s.id, s.user_id, s.expires_at, s.is_active,
+                SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
                        s.revoked_at, u.username, u.role, u.is_active as user_active
                 FROM sessions s
                 JOIN users u ON s.user_id = u.id
@@ -1095,7 +1501,7 @@ class SessionManager:
         else:
             cursor = await conn.execute(
                 """
-                SELECT s.id, s.user_id, s.expires_at, s.is_active,
+                SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
                        s.revoked_at, u.username, u.role, u.is_active as user_active
                 FROM sessions s
                 JOIN users u ON s.user_id = u.id
@@ -1110,13 +1516,14 @@ class SessionManager:
             return None
         return {
             "id": row[0],
-            "user_id": row[1],
-            "expires_at": row[2],
-            "is_active": row[3],
-            "revoked_at": row[4],
-            "username": row[5],
-            "role": row[6],
-            "user_active": row[7],
+            "token_hash": row[1],
+            "user_id": row[2],
+            "expires_at": row[3],
+            "is_active": row[4],
+            "revoked_at": row[5],
+            "username": row[6],
+            "role": row[7],
+            "user_active": row[8],
         }
 
     async def _cache_session(
@@ -1256,6 +1663,78 @@ class SessionManager:
         except Exception:
             # Don't fail on activity update
             pass
+
+    @staticmethod
+    def _coerce_datetime(value: Optional[Any]) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                try:
+                    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    return None
+        return None
+
+    async def _blacklist_session_tokens(
+        self,
+        sessions: List[Dict[str, Any]],
+        *,
+        reason: Optional[str],
+        revoked_by: Optional[int],
+    ) -> None:
+        if not sessions:
+            return
+        try:
+            blacklist = get_token_blacklist()
+        except Exception as exc:
+            logger.debug(f"AuthNZ blacklist unavailable for session revocation: {exc}")
+            return
+
+        for entry in sessions:
+            user_id = entry.get("user_id")
+            access_jti = entry.get("access_jti")
+            refresh_jti = entry.get("refresh_jti")
+            access_exp = self._coerce_datetime(entry.get("expires_at"))
+            refresh_exp = self._coerce_datetime(entry.get("refresh_expires_at"))
+
+            if access_jti and access_exp:
+                try:
+                    blacklist.hint_blacklisted(access_jti, access_exp)
+                except Exception:
+                    pass
+                try:
+                    await blacklist.revoke_token(
+                        jti=access_jti,
+                        expires_at=access_exp,
+                        user_id=user_id,
+                        token_type="access",
+                        reason=reason,
+                        revoked_by=revoked_by,
+                        ip_address=None,
+                    )
+                except Exception as exc:
+                    logger.debug(f"Failed to persist access-token blacklist entry {access_jti}: {exc}")
+
+            if refresh_jti and refresh_exp:
+                try:
+                    blacklist.hint_blacklisted(refresh_jti, refresh_exp)
+                except Exception:
+                    pass
+                try:
+                    await blacklist.revoke_token(
+                        jti=refresh_jti,
+                        expires_at=refresh_exp,
+                        user_id=user_id,
+                        token_type="refresh",
+                        reason=reason,
+                        revoked_by=revoked_by,
+                        ip_address=None,
+                    )
+                except Exception as exc:
+                    logger.debug(f"Failed to persist refresh-token blacklist entry {refresh_jti}: {exc}")
     
     async def shutdown(self):
         """Shutdown session manager and cleanup"""

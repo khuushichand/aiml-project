@@ -23,6 +23,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
     ConflictError,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Utils.Utils import get_project_root
 #
 #######################################################################################################################
 
@@ -30,6 +32,27 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 # --- Configuration ---
 _HAS_CACHETOOLS = True
 DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs" # This will be a sub-directory within the user's main DB directory
+
+
+def _normalise_user_base_path(raw_path: Path) -> Path:
+    """
+    Normalise a configured user database base path.
+
+    Matches the behaviour used by DatabasePaths helpers: expand user home,
+    resolve relative paths against the project root, and return an absolute Path.
+    """
+    try:
+        candidate = raw_path.expanduser()
+    except Exception:
+        candidate = raw_path
+
+    if not candidate.is_absolute():
+        project_root = Path(get_project_root())
+        candidate = (project_root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate
+
 
 def _resolve_main_user_base_dir() -> Path:
     """Resolve the per-user databases base directory dynamically.
@@ -42,20 +65,25 @@ def _resolve_main_user_base_dir() -> Path:
     env_base = os.environ.get("USER_DB_BASE_DIR")
     if env_base:
         try:
-            return Path(env_base).resolve()
+            return _normalise_user_base_path(Path(env_base))
         except Exception:
             pass
     base = settings.get("USER_DB_BASE_DIR")
     if base:
         try:
-            return Path(base).resolve()
+            return _normalise_user_base_path(Path(base))
         except Exception:
             pass
     logger.critical("CRITICAL: USER_DB_BASE_DIR is not configured in settings or environment. Using fallback.")
-    return Path("./app_data/user_databases_fallback").resolve()
+    return _normalise_user_base_path(Path("./app_data/user_databases_fallback"))
 
 # USER_CHACHA_DB_BASE_DIR will now be defined *per user* inside _get_chacha_db_path_for_user
 # We only need the main base directory here at the module level.
+
+
+def resolve_chacha_user_base_dir() -> Path:
+    """Public helper to expose the resolved user database base directory."""
+    return _resolve_main_user_base_dir()
 
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
 if not SERVER_CLIENT_ID:
@@ -98,22 +126,16 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
     - This per-user layout is intentional to isolate data and simplify backups.
     - A fallback path is used only when USER_DB_BASE_DIR is misconfigured; logs at CRITICAL/ERROR.
     """
-    user_dir_name = str(user_id)
-    # Resolve base dir dynamically to honor per-test overrides
-    base_dir = _resolve_main_user_base_dir()
-    # Path: <USER_DB_BASE_DIR>/<user_id>
-    user_specific_chacha_base_dir = base_dir / user_dir_name
-    db_file = user_specific_chacha_base_dir / "ChaChaNotes.db"
-
+    db_file: Optional[Path] = None
     try:
-        user_specific_chacha_base_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {user_specific_chacha_base_dir}")
+        db_file = DatabasePaths.get_chacha_db_path(user_id)
+        logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {db_file.parent}")
+        return db_file
     except OSError as e:
         logger.error(
-            f"Could not create ChaChaNotes DB directory for user_id {user_id} at {user_specific_chacha_base_dir}: {e}",
+            f"Could not create ChaChaNotes DB directory for user_id {user_id} at {db_file}: {e}",
             exc_info=True)
         raise IOError(f"Could not initialize ChaChaNotes storage directory for user {user_id}.") from e
-    return db_file
 
 def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
     """

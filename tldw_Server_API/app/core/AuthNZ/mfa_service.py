@@ -5,6 +5,9 @@
 import base64
 import secrets
 import json
+import hashlib
+import hmac
+import string
 from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, Dict, Any
@@ -12,6 +15,7 @@ from typing import Optional, List, Tuple, Dict, Any
 # 3rd-party imports
 import pyotp
 from loguru import logger
+from cryptography.fernet import Fernet
 
 try:
     import qrcode
@@ -25,6 +29,10 @@ else:
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
+    derive_hmac_key,
+    derive_hmac_key_candidates,
+)
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     AuthenticationError,
@@ -57,6 +65,9 @@ class MFAService:
         self.settings = settings or get_settings()
         self.db_pool = db_pool
         self._initialized = False
+        self._cipher: Optional[Fernet] = None
+        self._cipher_candidates: List[Fernet] = []
+        self._cipher_key_material: Tuple[bytes, ...] = tuple()
         
         # TOTP configuration
         self.issuer_name = self.settings.APP_NAME if hasattr(self.settings, 'APP_NAME') else "TLDW Server"
@@ -78,6 +89,69 @@ class MFAService:
         
         self._initialized = True
         logger.info("MFAService initialized")
+
+    def _ensure_cipher_candidates(self) -> List[Fernet]:
+        """Return Fernet instances for all active/legacy key materials."""
+        key_candidates = tuple(derive_hmac_key_candidates(self.settings))
+        if not key_candidates:
+            raise ValueError("No HMAC key material available for MFA encryption")
+        if self._cipher_key_material != key_candidates:
+            cipher_list: List[Fernet] = []
+            for material in key_candidates:
+                cipher_list.append(Fernet(base64.urlsafe_b64encode(material)))
+            self._cipher_candidates = cipher_list
+            self._cipher_key_material = key_candidates
+            self._cipher = cipher_list[0]
+        return self._cipher_candidates
+
+    def _get_cipher(self) -> Fernet:
+        """Return the primary Fernet cipher (current key material)."""
+        self._ensure_cipher_candidates()
+        if self._cipher is None:
+            raise ValueError("Primary cipher failed to initialize")
+        return self._cipher
+
+    def _encrypt_secret(self, secret: str) -> str:
+        """Encrypt a TOTP secret for storage."""
+        cipher = self._get_cipher()
+        return cipher.encrypt(secret.encode("utf-8")).decode("utf-8")
+
+    def _decrypt_secret(self, encrypted_secret: Optional[str]) -> Optional[str]:
+        """Decrypt a stored TOTP secret."""
+        if not encrypted_secret:
+            return None
+        last_exc: Optional[Exception] = None
+        for idx, cipher in enumerate(self._ensure_cipher_candidates()):
+            try:
+                decrypted = cipher.decrypt(encrypted_secret.encode("utf-8"))
+                return decrypted.decode("utf-8")
+            except Exception as exc:
+                last_exc = exc
+                logger.debug(f"Failed to decrypt MFA secret with cipher index {idx}: {exc}")
+        logger.error("Failed to decrypt MFA secret with available key material")
+        raise DatabaseError("Failed to decrypt MFA secret") from last_exc
+
+    def _normalize_backup_code(self, code: str) -> str:
+        """Normalize backup codes for hashing/comparison."""
+        return code.replace("-", "").replace(" ", "").strip().upper()
+
+    def _hash_backup_code(self, user_id: int, code: str) -> str:
+        """Hash backup codes using per-installation secret material."""
+        candidates = self._hash_backup_code_candidates(user_id, code)
+        if not candidates:
+            raise ValueError("No HMAC key material available for backup codes")
+        return candidates[0]
+
+    def _hash_backup_code_candidates(self, user_id: int, code: str) -> List[str]:
+        """Return hash candidates for a backup code across current/legacy keys."""
+        digests: List[str] = []
+        normalized = self._normalize_backup_code(code)
+        message = f"{user_id}:{normalized}".encode("utf-8")
+        for key in derive_hmac_key_candidates(self.settings):
+            digest = hmac.new(key, message, hashlib.sha256).hexdigest()
+            if digest not in digests:
+                digests.append(digest)
+        return digests
     
     def generate_secret(self) -> str:
         """
@@ -231,9 +305,9 @@ class MFAService:
             await self.initialize()
         
         try:
-            # Store encrypted secret and backup codes
-            # In production, encrypt these values
-            backup_codes_json = json.dumps(backup_codes)
+            encrypted_secret = self._encrypt_secret(secret)
+            hashed_codes = [self._hash_backup_code(user_id, code) for code in backup_codes]
+            backup_codes_json = json.dumps(hashed_codes)
             
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
@@ -245,7 +319,7 @@ class MFAService:
                             backup_codes = $2,
                             updated_at = $3
                         WHERE id = $4
-                    """, secret, backup_codes_json, datetime.utcnow(), user_id)
+                    """, encrypted_secret, backup_codes_json, datetime.utcnow(), user_id)
                 else:
                     # SQLite
                     await conn.execute("""
@@ -255,7 +329,7 @@ class MFAService:
                             backup_codes = ?,
                             updated_at = ?
                         WHERE id = ?
-                    """, (secret, backup_codes_json, datetime.utcnow().isoformat(), user_id))
+                    """, (encrypted_secret, backup_codes_json, datetime.utcnow().isoformat(), user_id))
                     await conn.commit()
             
             logger.info(f"MFA enabled for user {user_id}")
@@ -308,6 +382,32 @@ class MFAService:
         except Exception as e:
             logger.error(f"Failed to disable MFA: {e}")
             return False
+
+    async def get_user_totp_secret(self, user_id: int) -> Optional[str]:
+        """Return decrypted TOTP secret for a user if configured."""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            async with self.db_pool.acquire() as conn:
+                if hasattr(conn, "fetchval"):
+                    encrypted = await conn.fetchval(
+                        "SELECT totp_secret FROM users WHERE id = $1",
+                        user_id,
+                    )
+                else:
+                    cursor = await conn.execute(
+                        "SELECT totp_secret FROM users WHERE id = ?",
+                        (user_id,),
+                    )
+                    result = await cursor.fetchone()
+                    encrypted = result[0] if result else None
+            return self._decrypt_secret(encrypted)
+        except DatabaseError:
+            raise
+        except Exception as exc:
+            logger.error(f"Failed to load MFA secret for user {user_id}: {exc}")
+            raise DatabaseError("Failed to load MFA secret") from exc
     
     async def get_user_mfa_status(self, user_id: int) -> Dict[str, Any]:
         """
@@ -377,9 +477,6 @@ class MFAService:
         if not self._initialized:
             await self.initialize()
         
-        # Normalize code format
-        code = code.strip().upper()
-        
         try:
             async with self.db_pool.transaction() as conn:
                 # Get backup codes
@@ -402,14 +499,37 @@ class MFAService:
                     return False
                 
                 backup_codes = json.loads(backup_codes_json)
-                
-                # Check if code exists
-                if code not in backup_codes:
+                hash_candidates = self._hash_backup_code_candidates(user_id, code)
+                normalized_input = self._normalize_backup_code(code)
+
+                matched = False
+                for digest in hash_candidates:
+                    if digest in backup_codes:
+                        backup_codes.remove(digest)
+                        matched = True
+                        break
+                if not matched:
+                    for candidate in list(backup_codes):
+                        if not isinstance(candidate, str):
+                            continue
+                        if self._normalize_backup_code(candidate) == normalized_input:
+                            backup_codes.remove(candidate)
+                            matched = True
+                            break
+                if not matched:
                     return False
-                
-                # Remove used code
-                backup_codes.remove(code)
-                updated_codes_json = json.dumps(backup_codes)
+
+                # Ensure remaining codes are stored as hashed values
+                normalized_codes: List[str] = []
+                for candidate in backup_codes:
+                    if not isinstance(candidate, str):
+                        continue
+                    if len(candidate) == 64 and all(ch in string.hexdigits for ch in candidate):
+                        normalized_codes.append(candidate.lower())
+                    else:
+                        normalized_codes.append(self._hash_backup_code(user_id, candidate))
+
+                updated_codes_json = json.dumps(normalized_codes)
                 
                 # Update database
                 if hasattr(conn, 'fetchrow'):
@@ -452,7 +572,8 @@ class MFAService:
         try:
             # Generate new codes
             new_codes = self.generate_backup_codes()
-            backup_codes_json = json.dumps(new_codes)
+            hashed_codes = [self._hash_backup_code(user_id, code) for code in new_codes]
+            backup_codes_json = json.dumps(hashed_codes)
             
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):

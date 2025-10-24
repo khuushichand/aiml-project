@@ -50,8 +50,11 @@ def parse_v3_card(card_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "tags": data.get("tags", []),
             "creator": data.get("creator", ""),
             "character_version": data.get("character_version", ""),
-            "extensions": data.get("extensions", {}),
+            "extensions": data.get("extensions", {}) or {},
         }
+        image_value = data.get("char_image") or data.get("image")
+        if image_value is not None:
+            parsed["image_base64"] = image_value
         if not parsed["name"]:
             return None
         return parsed
@@ -61,4 +64,3 @@ def parse_v3_card(card_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 __all__ = ["validate_v3_card", "parse_v3_card"]
-

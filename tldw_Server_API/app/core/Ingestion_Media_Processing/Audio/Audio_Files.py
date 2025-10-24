@@ -222,9 +222,16 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         response = requests.get(url, headers=headers, stream=True, timeout=120)
         response.raise_for_status()
 
-        file_size = int(response.headers.get('content-length', 0))
-        if file_size > MAX_FILE_SIZE:
-            raise ValueError(f"File size ({file_size / (1024*1024):.2f} MB) exceeds the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit for URL {url}.")
+        file_size_header = response.headers.get('content-length', 0)
+        try:
+            file_size = int(file_size_header)
+        except (TypeError, ValueError):
+            file_size = 0
+
+        if MAX_FILE_SIZE and file_size and file_size > MAX_FILE_SIZE:
+            raise AudioFileSizeError(
+                f"File size ({file_size / (1024*1024):.2f} MB) exceeds the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit for URL {url}."
+            )
 
         content_disposition = response.headers.get('content-disposition')
         original_filename = None
@@ -259,6 +266,7 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         log_interval = 5 * 1024 * 1024  # Log every 5MB
         next_log_thresh = log_interval
         logging.info(f"Downloading {url} to: {save_path}")
+        file_too_large = False
         with open(save_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 # Filter out keep-alive new chunks.
@@ -268,10 +276,31 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
                     if file_size > 0 and downloaded_bytes >= next_log_thresh:
                         logging.info(f"Download progress for {url}: {downloaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB")
                         next_log_thresh += log_interval
+                    if MAX_FILE_SIZE and downloaded_bytes > MAX_FILE_SIZE:
+                        file_too_large = True
+                        break
+
+        if file_too_large:
+            try:
+                Path(save_path).unlink(missing_ok=True)
+            except Exception as cleanup_err:
+                logging.warning(f"Failed to remove oversized audio file '{save_path}': {cleanup_err}")
+            raise AudioFileSizeError(
+                f"Downloaded content for {url} exceeded the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit."
+            )
 
         logging.info(f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)")
         return str(save_path)
 
+    except AudioFileSizeError:
+        logging.error(f"Audio download aborted: file exceeded configured limit for {url}")
+        # Ensure partial file is removed if present
+        try:
+            if 'save_path' in locals():
+                Path(save_path).unlink(missing_ok=True)
+        except Exception as cleanup_err:
+            logging.warning(f"Failed to clean up partial audio file '{save_path}': {cleanup_err}")
+        raise
     except requests.exceptions.Timeout:
          logging.error(f"Timeout occurred while downloading audio file: {url}")
          raise requests.RequestException(f"Download timed out for {url}")
@@ -280,11 +309,9 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         # Optionally include response details if available
         err_msg = f"Error downloading audio: {e.response.status_code}" if e.response else str(e)
         raise requests.RequestException(f"Download failed for {url}. Reason: {err_msg}") from e
-    except ValueError as e: # Handles file size and cookie format issues
+    except ValueError as e: # Handles cookie format issues and other value errors
         logging.error(f"Value error during download from {url}: {e}")
-        if "exceeds the maximum allowed size" in str(e):
-            raise AudioFileSizeError(f"Audio file from {url} exceeds maximum size limit") from e
-        elif "cookies" in str(e).lower():
+        if "cookies" in str(e).lower():
             raise AudioCookieError(f"Invalid cookie format for {url}: {e}") from e
         raise AudioDownloadError(f"Value error during download from {url}: {e}") from e
     except TypeError as e: # Handles cookie type issues
@@ -948,6 +975,34 @@ def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_ti
         return "\n".join([segment.get('Text', '').strip() for segment in segments])
 
 
+HTTPONLY_PREFIX = '#HttpOnly_'
+_HTTPONLY_PREFIX_LOWER = HTTPONLY_PREFIX.lower()
+
+
+def _parse_netscape_cookie_export(text: str) -> List[str]:
+    """Return cookie name=value pairs from a Netscape/Mozilla cookie export blob."""
+    pairs: List[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower_line = line.lower()
+        if lower_line.startswith(_HTTPONLY_PREFIX_LOWER):
+            line = line[len(HTTPONLY_PREFIX):]
+        elif line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if len(fields) < 7:
+            fields = [segment for segment in line.split(' ') if segment]
+        if len(fields) < 7:
+            continue
+        name, value = fields[5], fields[6]
+        if not name:
+            continue
+        pairs.append(f"{name}={value}")
+    return pairs
+
+
 def _cookies_to_header_value(cookies) -> Optional[str]:
     try:
         if cookies is None:
@@ -957,7 +1012,8 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
             try:
                 cookies = _json.loads(cookies)
             except _json.JSONDecodeError:
-                return None
+                pairs = _parse_netscape_cookie_export(cookies)
+                return "; ".join(pairs) if pairs else None
         if isinstance(cookies, dict):
             parts = []
             for k, v in cookies.items():

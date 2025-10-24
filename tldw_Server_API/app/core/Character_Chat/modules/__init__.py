@@ -7,7 +7,8 @@ from .character_utils import (
     replace_placeholders,
     replace_user_placeholder,
     extract_character_id_from_ui_choice,
-    get_character_list_for_ui
+    get_character_list_for_ui,
+    map_sender_to_role,
 )
 
 from .character_io import (
@@ -43,6 +44,7 @@ from .character_db import (
 
 from .character_chat import (
     process_db_messages_to_ui_history,
+    process_db_messages_to_rich_ui_history,
     load_chat_and_character,
     start_new_chat_session,
     list_character_conversations,
@@ -72,6 +74,7 @@ __all__ = [
     'replace_user_placeholder',
     'extract_character_id_from_ui_choice',
     'get_character_list_for_ui',
+    'map_sender_to_role',
     
     # I/O
     'extract_json_from_image_file',
@@ -117,6 +120,7 @@ __all__ = [
     'set_message_ranking',
     'remove_message_from_conversation',
     'find_messages_in_conversation',
+    'process_db_messages_to_rich_ui_history',
     
     # Templates
     'CHARACTER_TEMPLATES',

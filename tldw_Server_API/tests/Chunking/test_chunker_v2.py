@@ -4,6 +4,8 @@ Direct unit tests for V2 chunking implementation.
 Tests the new modular chunker and strategy pattern.
 """
 
+import asyncio
+import re
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from typing import List
@@ -67,6 +69,116 @@ class TestV2Chunker:
         assert all(isinstance(chunk, ChunkResult) for chunk in chunks)
         assert all(isinstance(chunk.metadata, ChunkMetadata) for chunk in chunks)
         assert len(chunks) > 0
+
+    def test_chunk_text_with_metadata_preserves_original_whitespace(self):
+        """Returned chunk text should match the original span exactly."""
+        chunker = Chunker()
+        text = "Hello  world\nThis   is   a test."
+
+        chunks = chunker.chunk_text_with_metadata(text, method='words', max_size=3, overlap=1)
+        assert chunks  # sanity
+
+        for chunk in chunks:
+            md = chunk.metadata
+            assert isinstance(md.start_char, int) and isinstance(md.end_char, int)
+            original_slice = text[md.start_char:md.end_char]
+            assert chunk.text == original_slice
+
+    def test_process_text_multi_level_maps_whitespace_offsets(self):
+        """multi_level path should emit text/offsets aligned with the source."""
+        chunker = Chunker()
+        text = "Hello  world\nThis   is   a test.\n\nAnother   paragraph here."
+        options = {'method': 'words', 'max_size': 3, 'overlap': 1, 'multi_level': True}
+
+        rows = chunker.process_text(text, options=options)
+        assert rows
+
+        for row in rows:
+            md = row.get('metadata', {})
+            start = md.get('start_offset')
+            end = md.get('end_offset')
+            assert isinstance(start, int) and isinstance(end, int), md
+            assert 0 <= start <= end <= len(text)
+            assert row.get('text') == text[start:end]
+
+    def test_process_text_multi_level_includes_headers(self):
+        """multi_level chunking should retain header spans in the output."""
+        chunker = Chunker()
+        text = "# Heading\n\nFirst paragraph sentence one.\nSecond sentence.\n\nAnother block."
+        rows = chunker.process_text(
+            text,
+            options={
+                'method': 'words',
+                'max_size': 20,
+                'multi_level': True,
+            },
+        )
+        assert rows
+        headers = [row for row in rows if row['metadata'].get('paragraph_kind') == 'header_atx']
+        assert headers, "Expected header chunk to be present"
+        assert headers[0]['text'].strip().startswith("# Heading")
+
+    def test_hierarchical_respects_method_options(self):
+        """Hierarchical chunking should propagate strategy options."""
+        chunker = Chunker()
+        text = "# Heading\n\none two three four five six seven\n"
+        chunks = chunker.chunk_text_hierarchical_flat(
+            text,
+            method='words',
+            max_size=3,
+            method_options={'min_chunk_size': 5},
+        )
+        paragraph_chunks = [
+            c for c in chunks if c['metadata'].get('paragraph_kind') == 'paragraph'
+        ]
+        assert paragraph_chunks
+        counts = [len(c['text'].split()) for c in paragraph_chunks]
+        assert max(counts) >= 5
+    
+    def test_code_mode_ast_forces_ast_strategy_even_without_language_hint(self):
+        """Explicit code_mode='ast' should route to the AST strategy regardless of language hints."""
+        chunker = Chunker()
+        code_sample = "def foo():\n    return 42\n"
+        with patch.object(chunker, "get_strategy", wraps=chunker.get_strategy) as spy:
+            chunker.chunk_text(
+                code_sample,
+                method='code',
+                language='en',
+                code_mode='ast',
+                max_size=128,
+            )
+        assert any(call.args and call.args[0] == 'code_ast' for call in spy.call_args_list)
+
+    def test_hierarchical_code_mode_ast_routes_child_chunks(self):
+        """Hierarchical mode must preserve code_mode routing for nested chunking."""
+        chunker = Chunker()
+        code_sample = "# Heading\n\ndef foo():\n    return 1\n"
+        with patch.object(chunker, "get_strategy", wraps=chunker.get_strategy) as spy:
+            chunker.chunk_text_hierarchical_flat(
+                code_sample,
+                method='code',
+                language='en',
+                method_options={'code_mode': 'ast'},
+            )
+        assert any(call.args and call.args[0] == 'code_ast' for call in spy.call_args_list)
+
+    def test_process_text_tokenizer_override(self):
+        """tokenizer_name_or_path parameter should update the token strategy."""
+        chunker = Chunker()
+        text = "one two three four five six seven eight nine ten"
+        chunker.process_text(
+            text,
+            options={'method': 'tokens', 'max_size': 5},
+            tokenizer_name_or_path='test-tokenizer',
+        )
+        token_strategy = chunker.get_strategy('tokens')
+        assert getattr(token_strategy, "tokenizer_name", None) == 'test-tokenizer'
+
+    def test_chunk_text_with_metadata_ignores_whitespace_only_input(self):
+        """Whitespace-only payloads should return an empty list just like chunk_text."""
+        chunker = Chunker()
+        result = chunker.chunk_text_with_metadata(" \n\t\r ", method='words', max_size=10)
+        assert result == []
     
     def test_invalid_method_raises_error(self):
         """Test that invalid chunking method raises error."""
@@ -116,6 +228,302 @@ class TestV2Chunker:
         assert result and isinstance(result, list)
         with pytest.raises(InvalidInputError):
             chunker.process_text(frontmatter + body_ok + "b" * (len(frontmatter) + 2))
+
+    def test_chunk_cache_includes_llm_signature(self):
+        """Cache should miss when LLM hook/config changes and hit when restored."""
+        config = ChunkerConfig(default_method=ChunkingMethod.WORDS, enable_cache=True, cache_size=4)
+        chunker = Chunker(config=config)
+        text = "llm cache sanity text"
+
+        class StubStrategy:
+            def __init__(self, parent):
+                self.parent = parent
+                self.language = 'en'
+                self.calls = 0
+
+            def chunk(self, text, max_size, overlap, **options):
+                self.calls += 1
+                fn = getattr(self.parent, "llm_call_func", None)
+                cfg = getattr(self.parent, "llm_config", {}) or {}
+                marker = fn(cfg) if callable(fn) else "no-fn"
+                return [f"{marker}|{cfg.get('variant')}"]
+
+        stub = StubStrategy(chunker)
+        chunker._strategies['words'] = stub
+        chunker._strategy_factories['words'] = lambda: stub
+
+        def llm_stub(cfg=None):
+            cfg = cfg or {}
+            return f"run-{cfg.get('variant')}"
+
+        chunker.llm_call_func = llm_stub
+        chunker.llm_config = {'variant': 1}
+
+        first = chunker.chunk_text(text, method='words', max_size=10, overlap=0)
+        assert first == ["run-1|1"]
+        assert stub.calls == 1
+
+        chunker.llm_config = {'variant': 2}
+        second = chunker.chunk_text(text, method='words', max_size=10, overlap=0)
+        assert second == ["run-2|2"]
+        assert stub.calls == 2  # cache miss due to new config
+
+        chunker.llm_config = {'variant': 1}
+        third = chunker.chunk_text(text, method='words', max_size=10, overlap=0)
+        assert third == first
+        assert stub.calls == 2  # cache hit reuses previous computation
+
+    def test_process_text_keeps_leading_json_without_frontmatter_option(self):
+        """Leading JSON documents must remain intact unless frontmatter parsing is enabled."""
+        chunker = Chunker()
+        payload = '{"first": 1}\n{"second": 2}\n'
+
+        rows = chunker.process_text(payload)
+        assert rows
+
+        combined_text = " ".join(row.get('text', '') for row in rows)
+        assert '"first": 1' in combined_text
+        assert '"second": 2' in combined_text
+        for row in rows:
+            metadata = row.get('metadata', {})
+            assert 'initial_document_json_metadata' not in metadata
+
+    def test_process_text_extracts_frontmatter_with_sentinel(self):
+        """Frontmatter extraction should activate only with the sentinel and option."""
+        chunker = Chunker()
+        payload = '{"meta": "x", "__tldw_frontmatter__": true}\n{"second": 2}\n'
+
+        rows = chunker.process_text(payload)
+        assert rows
+        primary = rows[0]
+        assert primary['text'].strip() == '{"second": 2}'
+        assert primary['metadata']['initial_document_json_metadata'] == {'meta': 'x'}
+
+    def test_process_text_custom_frontmatter_sentinel(self):
+        """Custom frontmatter sentinel keys must be honored when provided."""
+        chunker = Chunker()
+        payload = '{"meta": "y", "__custom_frontmatter__": true}\n{"third": 3}\n'
+        options = {'frontmatter_sentinel_key': '__custom_frontmatter__'}
+
+        rows = chunker.process_text(payload, options=options)
+        assert rows
+        primary = rows[0]
+        assert primary['text'].strip() == '{"third": 3}'
+        assert primary['metadata']['initial_document_json_metadata'] == {'meta': 'y'}
+
+    def test_process_text_parses_multiline_frontmatter(self):
+        """Frontmatter parsing should handle nested, pretty-printed JSON blocks."""
+        chunker = Chunker()
+        frontmatter = (
+            "{\n"
+            '  "__tldw_frontmatter__": true,\n'
+            '  "meta": {"nested": 1},\n'
+            '  "tags": ["a", "b"]\n'
+            "}\n"
+        )
+        body = "# Heading\n\nBody text continues here."
+        rows = chunker.process_text(frontmatter + body)
+        assert rows
+        meta = rows[0]['metadata']
+        assert meta.get('initial_document_json_metadata') == {"meta": {"nested": 1}, "tags": ["a", "b"]}
+
+    def test_process_text_can_disable_frontmatter_parsing(self):
+        """Frontmatter parsing can be explicitly disabled even when sentinel is present."""
+        chunker = Chunker()
+        payload = '{"meta": "z", "__tldw_frontmatter__": true}\n{"fourth": 4}\n'
+
+        rows = chunker.process_text(payload, options={'enable_frontmatter_parsing': False})
+        assert rows
+        combined_text = " ".join(row.get('text', '') for row in rows)
+        assert '"meta": "z"' in combined_text
+        assert '"fourth": 4' in combined_text
+        for row in rows:
+            assert 'initial_document_json_metadata' not in row.get('metadata', {})
+
+    def test_process_text_forwards_method_options(self):
+        """process_text should pass user strategy options to chunking strategies."""
+        chunker = Chunker()
+        text = "one two three four five six seven"
+        rows = chunker.process_text(
+            text,
+            options={
+                'method': 'words',
+                'max_size': 3,
+                'min_chunk_size': 5,
+            },
+        )
+        assert rows
+        max_words = max(len(row['text'].split()) for row in rows)
+        assert max_words >= 5
+
+    def test_chunk_file_stream_respects_encoding(self, tmp_path):
+        """chunk_file_stream should honor the caller-provided encoding."""
+        chunker = Chunker()
+        content = "café monde\nligne suivante"
+        file_path = tmp_path / "latin1.txt"
+        file_path.write_bytes(content.encode("cp1252"))
+
+        with pytest.raises(InvalidInputError):
+            list(chunker.chunk_file_stream(file_path, method='words', max_size=10))
+
+        chunks = list(
+            chunker.chunk_file_stream(file_path, method='words', max_size=10, encoding='cp1252')
+        )
+        assert chunks
+        reconstructed = " ".join(chunks)
+        assert "café" in reconstructed
+
+    def test_cache_put_metrics_include_reason(self, monkeypatch):
+        """chunker_cache_put_total metrics must carry the required reason label."""
+        config = ChunkerConfig(
+            enable_cache=True,
+            cache_size=4,
+            min_text_length_to_cache=0,
+            max_text_length_to_cache=1_000,
+        )
+        chunker = Chunker(config=config)
+
+        calls = []
+
+        def fake_increment_counter(name, labels=None):
+            calls.append((name, labels or {}))
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Chunking.chunker.increment_counter",
+            fake_increment_counter,
+        )
+
+        chunker.chunk_text("one two three four five", method='words', max_size=2, overlap=0)
+
+        stored = [
+            labels for name, labels in calls
+            if name == "chunker_cache_put_total" and labels.get("result") == "stored"
+        ]
+        assert stored, f"Expected stored metric call, saw {calls}"
+        assert all("reason" in lbl for lbl in stored)
+
+    def test_process_text_reports_effective_method(self):
+        """process_text metadata should reflect the actual strategy used."""
+        chunker = Chunker()
+        code_snippet = "def foo():\n    return 42\n"
+        rows = chunker.process_text(
+            code_snippet,
+            options={'method': 'code', 'language': 'python'}
+        )
+        assert rows
+        methods = {row['metadata'].get('chunk_method') for row in rows}
+        assert methods == {'code_ast'}
+
+    def test_chunk_file_stream_avoids_partial_tokens(self, tmp_path):
+        """Streaming chunking should not emit truncated word fragments."""
+        text = " ".join(f"word{i}" for i in range(1, 21))
+        file_path = tmp_path / "stream_source.txt"
+        file_path.write_text(text, encoding='utf-8')
+
+        chunker = Chunker()
+        streamed = list(
+            chunker.chunk_file_stream(
+                file_path,
+                method='words',
+                max_size=5,
+                overlap=2,
+                buffer_size=20,  # keep buffers small to force multiple passes
+            )
+        )
+
+        original_tokens = set(text.split())
+        assert streamed  # sanity: got output
+        for chunk in streamed:
+            for token in chunk.split():
+                assert token in original_tokens, f"Unexpected token fragment {token!r} in chunk {chunk!r}"
+
+    def test_chunk_file_stream_preserves_word_boundaries(self, tmp_path):
+        """Streaming word chunks must not fuse adjacent tokens without whitespace."""
+        text = " ".join(f"word{i}" for i in range(1, 16))
+        file_path = tmp_path / "stream_boundaries_source.txt"
+        file_path.write_text(text, encoding='utf-8')
+
+        chunker = Chunker()
+        streamed = list(
+            chunker.chunk_file_stream(
+                file_path,
+                method='words',
+                max_size=3,
+                overlap=1,
+                buffer_size=12,
+            )
+        )
+        assert streamed, "Expected streamed output"
+
+        combined = " ".join(streamed)
+        # If boundary handling regresses, patterns like word2word3 will appear.
+        assert re.search(r"word\\d+word\\d+", combined) is None
+
+    def test_chunk_file_stream_respects_word_sized_chunks(self, tmp_path):
+        """Streaming chunking should accumulate enough characters for word-sized chunks."""
+        chunker = Chunker()
+        words = [f"word{i}" for i in range(200)]
+        text = " ".join(words)
+        file_path = tmp_path / "stream_words_source.txt"
+        file_path.write_text(text, encoding='utf-8')
+
+        chunks = list(
+            chunker.chunk_file_stream(
+                file_path,
+                method='words',
+                max_size=50,
+                overlap=0,
+                buffer_size=64,
+            )
+        )
+        assert chunks
+        first_chunk_words = len(chunks[0].split())
+        assert first_chunk_words >= 40
+
+    def test_process_text_honors_zero_overlap_and_rejects_zero_max_size(self):
+        """process_text should keep explicit zero overlap and reject zero max_size."""
+        chunker = Chunker()
+        text = " ".join(f"word{i}" for i in range(1, 25))
+
+        chunks = chunker.process_text(
+            text,
+            options={
+                'method': 'words',
+                'max_size': 8,
+                'overlap': 0,
+            },
+        )
+
+        assert chunks, "Expected chunks with zero overlap configuration"
+        for chunk in chunks:
+            metadata = chunk.get('metadata') or {}
+            assert metadata.get('overlap') == 0
+            assert metadata.get('max_size') == 8
+
+        with pytest.raises(InvalidInputError):
+            chunker.process_text(
+                text,
+                options={
+                    'method': 'words',
+                    'max_size': 0,
+                },
+            )
+    
+    def test_chunk_text_enforces_byte_sized_limit(self):
+        """Multibyte characters should count against max_text_size in bytes."""
+        config = ChunkerConfig(max_text_size=5)
+        chunker = Chunker(config=config)
+        payload = "aa😀"  # len(text)==3 but UTF-8 bytes == 6
+        with pytest.raises(InvalidInputError):
+            chunker.chunk_text(payload, method='words', max_size=10, overlap=0)
+
+    def test_chunk_text_accepts_enum_method(self):
+        """chunk_text should accept ChunkingMethod enum inputs."""
+        chunker = Chunker()
+        text = "This is a short test sentence."
+        chunks = chunker.chunk_text(text, method=ChunkingMethod.WORDS, max_size=5, overlap=0)
+        assert chunks
+        assert all(isinstance(chunk, str) for chunk in chunks)
 
 
 class TestWordsStrategy:
@@ -309,6 +717,43 @@ class TestTokensStrategy:
             # Skip if transformers not available
             pytest.skip("transformers library not available")
 
+    def test_tokens_fallback_clamps_minimum_chunk_size(self):
+        """Fallback tokenization should still emit chunks for very small max_size."""
+        from tldw_Server_API.app.core.Chunking.strategies.tokens import TokenChunkingStrategy, FallbackTokenizer
+
+        strategy = TokenChunkingStrategy()
+        # Force fallback mode regardless of available libraries
+        strategy._tokenizer = FallbackTokenizer(strategy.tokenizer_name)
+        text = "one two three four"
+
+        chunks = strategy.chunk(text, max_size=1, overlap=0)
+
+        assert chunks, "Fallback tokenization should return at least one chunk"
+        assert all(chunk.strip() for chunk in chunks)
+
+    def test_tokens_preserve_leading_indentation_when_chunking_mid_block(self):
+        """Token chunks must retain leading whitespace to keep code formatting intact."""
+        from tldw_Server_API.app.core.Chunking.strategies.tokens import TokenChunkingStrategy
+
+        strategy = TokenChunkingStrategy()
+        text = "\n".join(
+            [
+                "def foo():",
+                "    x = 1",
+                "    y = 2",
+                "    z = 3",
+                "    w = 4",
+                "    return x + y + z + w",
+            ]
+        )
+
+        chunks = strategy.chunk(text, max_size=20, overlap=0)
+
+        assert len(chunks) >= 2
+        second_chunk = chunks[1]
+        assert second_chunk.lstrip().startswith("z = 3")
+        assert second_chunk != second_chunk.lstrip()
+
 
 class TestEbookChaptersStrategy:
     """Test the ebook chapters chunking strategy."""
@@ -332,7 +777,39 @@ class TestEbookChaptersStrategy:
         assert len(chunks) == 3
         assert "Chapter 1" in chunks[0]
         assert "Chapter 2" in chunks[1]
-        assert "Chapter 3" in chunks[2]
+
+
+class TestChunkerMetrics:
+    """Ensure chunker-specific metrics are registered and populated."""
+
+    def test_chunker_cache_metrics_registered_and_incremented(self):
+        """Chunker cache metrics should exist and capture miss/hit/store events."""
+        from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
+        from tldw_Server_API.app.core.Chunking.chunker import Chunker
+        from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+        registry = get_metrics_registry()
+
+        assert "chunker_cache_get_total" in registry.metrics
+        assert "chunker_cache_put_total" in registry.metrics
+
+        registry.values["chunker_cache_get_total"].clear()
+        registry.values["chunker_cache_put_total"].clear()
+
+        cfg = ChunkerConfig(enable_cache=True, cache_size=2)
+        chunker = Chunker(config=cfg)
+        text = " ".join(f"word{i}" for i in range(50))
+
+        first_chunks = chunker.chunk_text(text, method="words", max_size=10, overlap=2)
+        second_chunks = chunker.chunk_text(text, method="words", max_size=10, overlap=2)
+
+        get_events = list(registry.values["chunker_cache_get_total"])
+        put_events = list(registry.values["chunker_cache_put_total"])
+
+        assert any(e.labels.get("result") == "miss" for e in get_events)
+        assert any(e.labels.get("result") == "hit" for e in get_events)
+        assert any(e.labels.get("result") == "stored" for e in put_events)
+        assert first_chunks == second_chunks
     
     def test_ebook_no_chapters(self):
         """Test handling of text without chapter markers."""
@@ -559,6 +1036,18 @@ class TestErrorHandling:
             chunker.chunk_text("test text", method='nonexistent')
         
         assert "unknown" in str(exc_info.value).lower()
+
+    def test_method_name_case_insensitivity(self):
+        """Chunker should accept method names regardless of casing."""
+        chunker = Chunker()
+        text = "First sentence. Second sentence. Third sentence."
+
+        sentence_chunks = chunker.chunk_text(text, method='Sentences', max_size=1)
+        assert sentence_chunks, "Expected chunks when using mixed-case 'Sentences' method"
+
+        word_chunks_with_meta = chunker.chunk_text_with_metadata(text, method='WORDS', max_size=3)
+        assert word_chunks_with_meta, "Expected metadata chunks when using upper-case 'WORDS' method"
+        assert word_chunks_with_meta[0].metadata.method == 'words'
     
     def test_invalid_parameters(self):
         """Test that invalid parameters are handled appropriately."""
@@ -609,6 +1098,42 @@ class TestPerformance:
         chunks2 = chunker.chunk_text(text, method='words', max_size=5)
         
         assert chunks1 == chunks2
+
+
+class TestAsyncChunkerConcurrency:
+    """Ensure AsyncChunker maintains per-task language selection."""
+
+    @pytest.mark.asyncio
+    async def test_async_chunker_preserves_language_per_task(self):
+        from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+        english_text = "alpha beta gamma delta epsilon zeta eta"
+        japanese_text = "猫は可愛いです犬も可愛いです"
+
+        async with AsyncChunker() as chunker:
+            for _ in range(3):
+                english_chunks, japanese_chunks = await asyncio.gather(
+                    chunker.chunk_text(
+                        english_text,
+                        method='words',
+                        max_size=3,
+                        overlap=0,
+                        language='en',
+                    ),
+                    chunker.chunk_text(
+                        japanese_text,
+                        method='words',
+                        max_size=3,
+                        overlap=0,
+                        language='ja',
+                    ),
+                )
+
+                assert english_chunks, "Expected English chunks from async chunker"
+                assert any(' ' in chunk for chunk in english_chunks), "English chunks lost whitespace separation"
+
+                assert japanese_chunks, "Expected Japanese chunks from async chunker"
+                assert ' ' not in ''.join(japanese_chunks), "Japanese chunks should not contain inserted spaces"
 
 
 if __name__ == "__main__":

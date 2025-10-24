@@ -307,35 +307,37 @@ class EvaluationManager:
         offset: int = 0
     ) -> Dict[str, Any]:
         """Retrieve evaluation history with filtering"""
-        query = "SELECT * FROM internal_evaluations WHERE 1=1"
-        params = []
-        
+        base_query = "FROM internal_evaluations WHERE 1=1"
+        filter_params: list[Any] = []
+
+        query_clauses = base_query
+
         if evaluation_type and evaluation_type != "all":
-            query += " AND evaluation_type = ?"
-            params.append(evaluation_type)
-        
+            query_clauses += " AND evaluation_type = ?"
+            filter_params.append(evaluation_type)
+
         if start_date:
-            query += " AND created_at >= ?"
-            params.append(start_date)
-        
+            query_clauses += " AND created_at >= ?"
+            filter_params.append(start_date)
+
         if end_date:
-            query += " AND created_at <= ?"
-            params.append(end_date)
-        
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        
+            query_clauses += " AND created_at <= ?"
+            filter_params.append(end_date)
+
+        query = f"SELECT * {query_clauses} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params = [*filter_params, limit, offset]
+
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            
+
             # Get total count
-            count_query = query.replace("SELECT *", "SELECT COUNT(*)").split("LIMIT")[0]
-            total_count = conn.execute(count_query, params[:-2]).fetchone()[0]
-            
+            count_query = f"SELECT COUNT(*) {query_clauses}"
+            total_count = conn.execute(count_query, filter_params).fetchone()[0]
+
             # Get records
             cursor = conn.execute(query, params)
             items = []
-            
+
             for row in cursor:
                 item = dict(row)
                 item["input_data"] = json.loads(item["input_data"])
@@ -350,15 +352,27 @@ class EvaluationManager:
                 WHERE evaluation_id IN (
                     SELECT evaluation_id FROM internal_evaluations WHERE 1=1
             """
-            
+
             if evaluation_type and evaluation_type != "all":
                 avg_query += " AND evaluation_type = ?"
-            
+            if start_date:
+                avg_query += " AND created_at >= ?"
+            if end_date:
+                avg_query += " AND created_at <= ?"
+
             avg_query += ") GROUP BY metric_name"
-            
-            avg_cursor = conn.execute(avg_query, params[:1] if evaluation_type and evaluation_type != "all" else [])
+
+            avg_params = []
+            if evaluation_type and evaluation_type != "all":
+                avg_params.append(evaluation_type)
+            if start_date:
+                avg_params.append(start_date)
+            if end_date:
+                avg_params.append(end_date)
+
+            avg_cursor = conn.execute(avg_query, avg_params)
             average_scores = {row[0]: row[1] for row in avg_cursor}
-        
+
         # Calculate trends if we have enough data
         trends = None
         if len(items) > 10:

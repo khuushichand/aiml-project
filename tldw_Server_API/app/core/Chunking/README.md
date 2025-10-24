@@ -147,6 +147,7 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - JSON/XML: method-specific knobs (see strategies files).
 - Media: `timecode_map` → list of `{start_offset,end_offset,start_time,end_time}` to project times onto chunks.
 - LLM: `tokenizer_name_or_path`, `llm_call_func`, `llm_config` (for strategies like `rolling_summarize`/`propositions`).
+- Frontmatter: `enable_frontmatter_parsing` (defaults to `True`) and `frontmatter_sentinel_key` (defaults to `__tldw_frontmatter__`). JSON metadata is only stripped when the sentinel key is present with a truthy value; disable parsing to preserve all leading JSON.
 
 ## Return Shape and Metadata
 - Each item: `{ "text": str, "metadata": { ... } }`
@@ -154,9 +155,9 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Optional: `start_time`, `end_time` when `timecode_map` is provided; `initial_document_json_metadata` and `initial_document_header_text` when detected.
 
 ## Testing
-- API tests: `tldw_Server_API/tests/Chunking/test_chunking_templates.py`
-- Template apply/validate endpoints
-- Strategy-level tests under `tests/Chunking_NEW/`
+- V2 unit suite: `tldw_Server_API/tests/Chunking/test_chunker_v2.py`
+- Endpoint coverage: `tldw_Server_API/tests/Chunking/test_chunking_endpoint.py`
+- Additional integration fixtures live alongside embeddings and ingestion tests
 
 ## Gotchas & Best Practices
 - Do not exceed boundary/regex limits; prefer a few robust patterns over many fragile ones.
@@ -261,4 +262,4 @@ Example:
   - Keep cache-friendly behavior (stable options, deterministic output).
   
 ## Backwards Compatibility
-- `Chunk_Lib.improved_chunking_process(...)` shims to `Chunker.process_text(...)`. Prefer direct `Chunker` usage and migrate call sites over time.
+- `Chunking.improved_chunking_process(...)` shims to `Chunker.process_text(...)`. Prefer direct `Chunker` usage and migrate call sites over time.

@@ -91,7 +91,12 @@ async def list_evaluations(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        evaluations, has_more = await svc.list_evaluations(limit=limit, after=after, eval_type=eval_type)
+        evaluations, has_more = await svc.list_evaluations(
+            limit=limit,
+            after=after,
+            eval_type=eval_type,
+            created_by=current_user.id,
+        )
         first_id = evaluations[0]["id"] if evaluations else None
         last_id = evaluations[-1]["id"] if evaluations else None
         return EvaluationListResponse(

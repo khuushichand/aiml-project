@@ -273,9 +273,11 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
             # Try to use a tokenizer if available
             try:
                 from transformers import AutoTokenizer
+                # Note: from_pretrained can raise for missing local cache or offline envs.
+                # Treat any failure as a signal to fall back to approximation.
                 tokenizer = AutoTokenizer.from_pretrained('gpt2')
                 return len(tokenizer.encode(text))
-            except ImportError:
+            except Exception:
                 # Fallback to word count * 1.3 (approximate)
                 return int(len(text.split()) * 1.3)
         else:

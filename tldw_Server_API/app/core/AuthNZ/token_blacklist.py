@@ -2,7 +2,7 @@
 # Description: Token blacklist service for JWT revocation and invalidation
 #
 # Imports
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from collections import deque
 import json
@@ -60,17 +60,29 @@ class TokenBlacklist:
 
     @staticmethod
     def _normalize_expiry(expires_at: Optional[Any]) -> Optional[datetime]:
-        """Normalize stored expiry into a datetime (UTC) if possible."""
+        """Normalize stored expiry into a naive UTC datetime when possible."""
         if expires_at is None:
             return None
         if isinstance(expires_at, datetime):
+            if expires_at.tzinfo is not None:
+                return expires_at.astimezone(timezone.utc).replace(tzinfo=None)
             return expires_at
         if isinstance(expires_at, str):
             try:
-                return datetime.fromisoformat(expires_at)
+                parsed = datetime.fromisoformat(expires_at)
             except ValueError:
                 return None
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
         return None
+
+    def _normalize_expiry_for_storage(self, expires_at: Any) -> datetime:
+        """Prepare expiry timestamp for persistence (UTC naive)."""
+        normalized = self._normalize_expiry(expires_at)
+        if normalized is None:
+            raise ValueError("expires_at must be a valid datetime or ISO formatted string")
+        return normalized
 
     def _cache_add(self, jti: str, expires_at: Optional[Any]) -> None:
         """Add a JTI to local LRU cache, respecting expiry."""
@@ -117,7 +129,8 @@ class TokenBlacklist:
         This gives synchronous helpers a fast fail path while asynchronous
         persistence (database, Redis) catches up.
         """
-        self._cache_add(jti, expires_at)
+        normalized_expiry = self._normalize_expiry_for_storage(expires_at)
+        self._cache_add(jti, normalized_expiry)
         
     async def initialize(self):
         """Initialize blacklist service and create tables if needed"""
@@ -324,14 +337,16 @@ class TokenBlacklist:
         if not self._initialized:
             await self.initialize()
         
+        normalized_expiry = self._normalize_expiry_for_storage(expires_at)
+
         # Add to local cache (LRU) with expiry
-        self._cache_add(jti, expires_at)
+        self._cache_add(jti, normalized_expiry)
         
         # Add to Redis if available
         if self.redis_client:
             try:
                 key = f"blacklist:{jti}"
-                ttl = int((expires_at - datetime.utcnow()).total_seconds())
+                ttl = int((normalized_expiry - datetime.utcnow()).total_seconds())
                 
                 if ttl > 0:
                     await self.redis_client.setex(
@@ -344,7 +359,10 @@ class TokenBlacklist:
                             "revoked_at": datetime.utcnow().isoformat()
                         })
                     )
-                    logger.debug(f"Token {jti} added to Redis blacklist")
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.debug("Token added to Redis blacklist (details redacted)")
+                    else:
+                        logger.debug(f"Token {jti} added to Redis blacklist")
                     
             except (RedisError, Exception) as e:
                 logger.warning(f"Failed to add token to Redis blacklist: {e}")
@@ -361,17 +379,20 @@ class TokenBlacklist:
                         (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
                         ON CONFLICT (jti) DO NOTHING
-                    """, jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
+                    """, jti, user_id, token_type, normalized_expiry, reason, revoked_by, ip_address)
                 else:
                     # SQLite
                     await conn.execute("""
                         INSERT OR IGNORE INTO token_blacklist 
                         (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (jti, user_id, token_type, expires_at.isoformat(), reason, revoked_by, ip_address))
+                    """, (jti, user_id, token_type, normalized_expiry.isoformat(), reason, revoked_by, ip_address))
                     await conn.commit()
             
-            logger.info(f"Token {jti} blacklisted for user {user_id} - Reason: {reason}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info(f"Token blacklisted for authenticated user (details redacted) - Reason: {reason}")
+            else:
+                logger.info(f"Token {jti} blacklisted for user {user_id} - Reason: {reason}")
             return True
             
         except Exception as e:
@@ -601,7 +622,10 @@ class TokenBlacklist:
                         ip_address=ip_address,
                     )
 
-            logger.info(f"Revoked {len(sessions)} tokens for user {user_id}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info(f"Revoked {len(sessions)} tokens for authenticated user (details redacted)")
+            else:
+                logger.info(f"Revoked {len(sessions)} tokens for user {user_id}")
             return len(sessions)
             
         except Exception as e:

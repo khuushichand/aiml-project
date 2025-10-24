@@ -336,6 +336,38 @@ class TestPromptImprover:
             assert result.improved_prompt == "Improved prompt from LLM"
             assert mock_llm.generate.called
 
+    def test_improve_text_parses_openai_response(self, improver, monkeypatch):
+        """Ensure _improve_text handles OpenAI-format responses."""
+        payload = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Improved prompt content"
+                    }
+                }
+            ]
+        }
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_improver.chat_with_openai",
+            lambda **kwargs: payload,
+        )
+
+        improved = improver._improve_text(
+            text="Original prompt",
+            strategies=["clarity"],
+            text_type="prompt",
+            model_name="gpt-4o-mini",
+        )
+
+        assert improved == "Improved prompt content"
+
 ########################################################################################################################
 # Test Improvement Strategies
 

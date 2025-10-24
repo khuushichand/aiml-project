@@ -486,7 +486,8 @@ def load_settings():
     redis_db_raw = os.getenv("REDIS_DB") or _redis_section_get('redis_db', '0') or '0'
     cache_ttl_raw = os.getenv("CACHE_TTL") or _redis_section_get('cache_ttl', '300') or '300'
     redis_enabled_env = os.getenv("REDIS_ENABLED")
-    redis_enabled = _to_bool(redis_enabled_env, _to_bool(_redis_section_get('redis_enabled', 'false'), False))
+    # Enable Redis by default on localhost so integration tests attempt connection
+    redis_enabled = _to_bool(redis_enabled_env, _to_bool(_redis_section_get('redis_enabled', 'true'), True))
 
     try:
         redis_port = int(str(redis_port_raw))
@@ -896,6 +897,100 @@ def load_settings():
             _cp.getboolean('persona.rbac', 'allow_delete', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
         ))(load_comprehensive_config()),
     }
+
+    # Surface provider-specific configuration blocks for orchestrator callers.
+    provider_keys = [
+        "llama_api",
+        "ooba_api",
+        "kobold_api",
+        "tabby_api",
+        "vllm_api",
+        "ollama_api",
+        "aphrodite_api",
+        "custom_openai_api",
+        "custom_openai_api_2",
+    ]
+    for provider_key in provider_keys:
+        provider_cfg = comprehensive_config.get(provider_key)
+        if isinstance(provider_cfg, dict):
+            config_dict[provider_key] = provider_cfg
+
+    # Ensure a generic local-LLM configuration is exposed.
+    existing_local_llm_cfg = comprehensive_config.get("local_llm")
+    if isinstance(existing_local_llm_cfg, dict):
+        config_dict["local_llm"] = existing_local_llm_cfg
+    else:
+        def _parse_float(value: Optional[str], default: Optional[float] = None) -> Optional[float]:
+            if value is None or str(value).strip() == "":
+                return default
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _parse_int(value: Optional[str], default: Optional[int] = None) -> Optional[int]:
+            if value is None or str(value).strip() == "":
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _parse_bool(value: Optional[str], default: bool) -> bool:
+            if value is None:
+                return default
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+        def _parse_json(value: Optional[str]):
+            if value is None or str(value).strip() == "":
+                return None
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+
+        llm_defaults = comprehensive_config.get("llm_api_settings", {}) or {}
+        config_dict["local_llm"] = {
+            "api_ip": (
+                os.getenv("LOCAL_LLM_API_URL")
+                or os.getenv("LOCAL_LLM_API_BASE")
+                or os.getenv("LOCAL_LLM_API_IP")
+                or os.getenv("LOCAL_LLM_BASE_URL")
+                or "http://127.0.0.1:8080/v1/chat/completions"
+            ),
+            "api_key": os.getenv("LOCAL_LLM_API_KEY"),
+            "model": os.getenv("LOCAL_LLM_MODEL"),
+            "temperature": _parse_float(os.getenv("LOCAL_LLM_TEMPERATURE"), 0.7),
+            "streaming": _parse_bool(os.getenv("LOCAL_LLM_STREAMING"), False),
+            "top_p": _parse_float(os.getenv("LOCAL_LLM_TOP_P")),
+            "top_k": _parse_int(os.getenv("LOCAL_LLM_TOP_K")),
+            "min_p": _parse_float(os.getenv("LOCAL_LLM_MIN_P")),
+            "max_tokens": _parse_int(os.getenv("LOCAL_LLM_MAX_TOKENS"), 4096),
+            "seed": os.getenv("LOCAL_LLM_SEED"),
+            "stop": _parse_json(os.getenv("LOCAL_LLM_STOP")),
+            "response_format": _parse_json(os.getenv("LOCAL_LLM_RESPONSE_FORMAT")),
+            "n": _parse_int(os.getenv("LOCAL_LLM_N")),
+            "logit_bias": _parse_json(os.getenv("LOCAL_LLM_LOGIT_BIAS")),
+            "presence_penalty": _parse_float(os.getenv("LOCAL_LLM_PRESENCE_PENALTY")),
+            "frequency_penalty": _parse_float(os.getenv("LOCAL_LLM_FREQUENCY_PENALTY")),
+            "logprobs": _parse_bool(os.getenv("LOCAL_LLM_LOGPROBS"), False),
+            "top_logprobs": _parse_int(os.getenv("LOCAL_LLM_TOP_LOGPROBS")),
+            "tools": _parse_json(os.getenv("LOCAL_LLM_TOOLS")),
+            "tool_choice": _parse_json(os.getenv("LOCAL_LLM_TOOL_CHOICE")),
+            "user_identifier": os.getenv("LOCAL_LLM_USER"),
+            "api_timeout": _parse_int(
+                os.getenv("LOCAL_LLM_API_TIMEOUT"),
+                _parse_int(llm_defaults.get("local_api_timeout"), 120) or 120,
+            ),
+            "api_retries": _parse_int(
+                os.getenv("LOCAL_LLM_API_RETRIES"),
+                _parse_int(llm_defaults.get("local_api_retries"), 1) or 1,
+            ),
+            "api_retry_delay": _parse_int(
+                os.getenv("LOCAL_LLM_API_RETRY_DELAY"),
+                _parse_int(llm_defaults.get("local_api_retry_delay"), 1) or 1,
+            ),
+        }
 
     # --- Warnings ---
     if config_dict["SINGLE_USER_MODE"]:
@@ -1708,6 +1803,7 @@ def load_and_log_configs():
         max_video_file_size_mb = int(config_parser_object.get('Media-Processing', 'max_video_file_size_mb', fallback='1000'))
         max_epub_file_size_mb = int(config_parser_object.get('Media-Processing', 'max_epub_file_size_mb', fallback='100'))
         max_document_file_size_mb = int(config_parser_object.get('Media-Processing', 'max_document_file_size_mb', fallback='50'))
+        max_code_file_size_mb = int(config_parser_object.get('Media-Processing', 'max_code_file_size_mb', fallback=str(max_document_file_size_mb)))
         # Processing timeouts
         pdf_conversion_timeout_seconds = int(config_parser_object.get('Media-Processing', 'pdf_conversion_timeout_seconds', fallback='300'))
         audio_processing_timeout_seconds = int(config_parser_object.get('Media-Processing', 'audio_processing_timeout_seconds', fallback='600'))
@@ -1715,10 +1811,15 @@ def load_and_log_configs():
         # Archive processing limits
         max_archive_internal_files = int(config_parser_object.get('Media-Processing', 'max_archive_internal_files', fallback='100'))
         max_archive_uncompressed_size_mb = int(config_parser_object.get('Media-Processing', 'max_archive_uncompressed_size_mb', fallback='200'))
+        max_archive_nesting_depth = int(config_parser_object.get('Media-Processing', 'max_archive_nesting_depth', fallback='2'))
         # Transcription settings
         audio_transcription_buffer_size_mb = int(config_parser_object.get('Media-Processing', 'audio_transcription_buffer_size_mb', fallback='10'))
         # General settings
         uuid_generation_length = int(config_parser_object.get('Media-Processing', 'uuid_generation_length', fallback='8'))
+        # Kept video storage limits
+        kept_video_max_files = int(config_parser_object.get('Media-Processing', 'kept_video_max_files', fallback='5'))
+        kept_video_max_storage_mb = int(config_parser_object.get('Media-Processing', 'kept_video_max_storage_mb', fallback='500'))
+        kept_video_retention_hours = int(config_parser_object.get('Media-Processing', 'kept_video_retention_hours', fallback='2'))
 
         # Local API Timeout
         local_api_timeout = config_parser_object.get('Local-API', 'local_api_timeout', fallback='90')
@@ -2129,13 +2230,18 @@ def load_and_log_configs():
                 'max_video_file_size_mb': max_video_file_size_mb,
                 'max_epub_file_size_mb': max_epub_file_size_mb,
                 'max_document_file_size_mb': max_document_file_size_mb,
+                'max_code_file_size_mb': max_code_file_size_mb,
                 'pdf_conversion_timeout_seconds': pdf_conversion_timeout_seconds,
                 'audio_processing_timeout_seconds': audio_processing_timeout_seconds,
                 'video_processing_timeout_seconds': video_processing_timeout_seconds,
                 'max_archive_internal_files': max_archive_internal_files,
                 'max_archive_uncompressed_size_mb': max_archive_uncompressed_size_mb,
+                'max_archive_nesting_depth': max_archive_nesting_depth,
                 'audio_transcription_buffer_size_mb': audio_transcription_buffer_size_mb,
-                'uuid_generation_length': uuid_generation_length
+                'uuid_generation_length': uuid_generation_length,
+                'kept_video_max_files': kept_video_max_files,
+                'kept_video_max_storage_mb': kept_video_max_storage_mb,
+                'kept_video_retention_hours': kept_video_retention_hours,
             },
             'chat_dictionaries': {
                 'enable_chat_dictionaries': enable_chat_dictionaries,

@@ -258,26 +258,64 @@ async def reset_password(
             )
         
         user_id = int(payload["sub"])
-        token_hash = jwt_service.hash_token(data.token)
+        if hasattr(jwt_service, "hash_token_candidates"):
+            hash_candidates = jwt_service.hash_token_candidates(data.token)
+        else:
+            # Backwards compatibility for older JWT service stubs
+            hashed = jwt_service.hash_token(data.token)
+            hash_candidates = [hashed] if hashed else []
+        if not hash_candidates:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired reset token"
+            )
         
         # Check if token was already used
         is_pg = await is_postgres_backend()
+        token_record_id: Optional[int] = None
+        token_used_at: Optional[Any] = None
         if is_pg:
             # PostgreSQL
-            was_used = await db.fetchval(
-                "SELECT used_at FROM password_reset_tokens WHERE token_hash = $1 AND user_id = $2",
-                token_hash, user_id
+            record = await db.fetchrow(
+                """
+                SELECT id, used_at
+                FROM password_reset_tokens
+                WHERE user_id = $1 AND token_hash = ANY($2::text[])
+                ORDER BY expires_at DESC
+                LIMIT 1
+                """,
+                user_id,
+                hash_candidates,
             )
+            if record:
+                token_record_id = record["id"]
+                token_used_at = record["used_at"]
         else:
             # SQLite
+            placeholders = ",".join("?" for _ in hash_candidates)
+            params = [user_id, *hash_candidates]
             cursor = await db.execute(
-                "SELECT used_at FROM password_reset_tokens WHERE token_hash = ? AND user_id = ?",
-                (token_hash, user_id)
+                f"""
+                SELECT id, used_at
+                FROM password_reset_tokens
+                WHERE user_id = ? AND token_hash IN ({placeholders})
+                ORDER BY expires_at DESC
+                LIMIT 1
+                """,
+                tuple(params),
             )
-            result = await cursor.fetchone()
-            was_used = result[0] if result else None
-        
-        if was_used:
+            row = await cursor.fetchone()
+            if row:
+                token_record_id = row[0]
+                token_used_at = row[1]
+
+        if not token_record_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired reset token"
+            )
+
+        if token_used_at:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This reset token has already been used"
@@ -304,8 +342,8 @@ async def reset_password(
             )
             # Mark token as used
             await db.execute(
-                "UPDATE password_reset_tokens SET used_at = $1 WHERE token_hash = $2",
-                datetime.utcnow(), token_hash
+                "UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2",
+                datetime.utcnow(), token_record_id
             )
         else:
             # SQLite
@@ -314,8 +352,8 @@ async def reset_password(
                 (new_password_hash, datetime.utcnow().isoformat(), user_id)
             )
             await db.execute(
-                "UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?",
-                (datetime.utcnow().isoformat(), token_hash)
+                "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), token_record_id)
             )
             await db.commit()
         
@@ -323,7 +361,10 @@ async def reset_password(
         blacklist = get_token_blacklist()
         await blacklist.revoke_all_user_tokens(user_id, "Password reset")
         
-        logger.info(f"Password reset completed for user {user_id}")
+        if get_settings().PII_REDACT_LOGS:
+            logger.info("Password reset completed for authenticated user (details redacted)")
+        else:
+            logger.info(f"Password reset completed for user {user_id}")
         return {"message": "Password has been reset successfully"}
         
     except HTTPException:
@@ -380,7 +421,10 @@ async def verify_email(
             )
             await db.commit()
         
-        logger.info(f"Email verified for user {user_id}")
+        if get_settings().PII_REDACT_LOGS:
+            logger.info("Email verified for authenticated user (details redacted)")
+        else:
+            logger.info(f"Email verified for user {user_id}")
         return {"message": "Email verified successfully"}
         
     except HTTPException:

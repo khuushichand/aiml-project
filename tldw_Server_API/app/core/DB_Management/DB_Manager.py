@@ -167,7 +167,11 @@ def validate_postgres_content_backend() -> None:
                 "SELECT version FROM schema_version LIMIT 1",
                 connection=conn,
             )
-            current_version_raw = version_result.scalar if version_result else None
+            current_version_row = version_result.first if version_result else None
+            if isinstance(current_version_row, dict):
+                current_version_raw = current_version_row.get("version")
+            else:
+                current_version_raw = current_version_row
             try:
                 current_version = int(current_version_raw or 0)
             except (TypeError, ValueError):
@@ -317,6 +321,8 @@ def default_db_config():
 
 def ensure_directory_exists(file_path):
     directory = os.path.dirname(file_path)
+    if not directory:
+        return
     if not os.path.exists(directory):
         os.makedirs(directory)
         print(f"Created directory: {directory}")
@@ -774,14 +780,13 @@ def add_keyword(*args, **kwargs):
         raise NotImplementedError("Postgres version of add_keyword not yet implemented")
 
 def fetch_keywords_for_media(*args, **kwargs):
-    if db_type == 'sqlite':
+    if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_fetch_keywords_for_media(*args, **kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
 
 #
 # End of Keywords-related Functions
@@ -1101,14 +1106,13 @@ def fetch_keywords_for_media(*args, **kwargs):
 ############################################################################################################
 #
 def empty_trash(*args, **kwargs):
-    if db_type == 'sqlite':
+    if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_empty_trash(*args, **kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
-    elif db_type == 'postgres':
-        # Implement Postgres version
-        raise NotImplementedError("Postgres version of add_media_with_keywords not yet implemented")
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
 
 
 def fetch_item_details(*args, **kwargs) -> Tuple[str, str, str]:
@@ -1172,7 +1176,7 @@ def create_automated_backup(*args, **kwargs):
 # Document Versioning Functions
 
 def create_document_version(*args, **kwargs):
-    if db_type == 'sqlite':
+    if db_type in SQL_CONTENT_BACKENDS:
         db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
         if not isinstance(db_instance, MediaDatabase):
             raise ValueError("create_document_version requires 'db_instance' (MediaDatabase)")
@@ -1180,13 +1184,17 @@ def create_document_version(*args, **kwargs):
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of create_document_version not yet implemented")
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
 
 def get_document_version(*args, **kwargs):
-    if db_type == 'sqlite':
+    if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_document_version(*args, **kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of get_document_version not yet implemented")
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
 
 #
 # End of Document Versioning Functions

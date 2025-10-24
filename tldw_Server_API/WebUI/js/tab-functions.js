@@ -537,7 +537,11 @@ async function embeddingsRequeueDLQAllFiltered() {
 
 async function embeddingsRefreshDLQBadges() {
     try {
-        const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+        const client = window.apiClient;
+        if (!client || !client.token) {
+            return;
+        }
+        const res = await client.get('/api/v1/embeddings/dlq/stats');
         const dlq = (res && res.dlq) || {};
         const map = {
             embedding: dlq['embeddings:embedding:dlq'] || 0,
@@ -571,8 +575,12 @@ async function embeddingsRefreshDLQBadges() {
 async function embeddingsRefreshHydeStatus() {
     const badge = document.getElementById('hyde-status-badge');
     if (!badge) return;
+    const client = window.apiClient;
+    if (!client || !client.token) {
+        return;
+    }
     try {
-        const res = await apiClient.get('/api/v1/embeddings/health');
+        const res = await client.get('/api/v1/embeddings/health');
         const hyde = (res && res.hyde) || {};
         const enabled = !!hyde.enabled;
         const infoParts = [];

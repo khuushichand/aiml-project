@@ -165,23 +165,17 @@ INSTRUCTIONS:
 """
             
             # Generate with LLM
-            messages = [
-                {"role": "system", "content": "You are an expert prompt engineer."},
-                {"role": "user", "content": generation_prompt}
-            ]
-            
             response = chat_with_openai(
-                api_key="",  # Will use config
-                prompt="",
+                input_data=[{"role": "user", "content": generation_prompt}],
                 system_message="You are an expert prompt engineer.",
-                input_data=generation_prompt,
                 model=model_name,
                 temp=0.7,
-                api_endpoint=""
             )
-            
+
+            generation_text = self._extract_llm_content(response)
+
             # Parse response
-            system_prompt, user_prompt, instructions = self._parse_generation_response(response)
+            system_prompt, user_prompt, instructions = self._parse_generation_response(generation_text)
             
             record = self.db.create_prompt(
                 project_id=project_id,
@@ -277,14 +271,11 @@ Include:
 3. Self-verification steps
 """
         
-        response = chat_with_openai(
-            api_key="",
-            prompt="",
+        chat_with_openai(
+            input_data=[{"role": "user", "content": cot_prompt}],
             system_message="You are an expert in Chain-of-Thought prompting.",
-            input_data=cot_prompt,
             model=model_name,
             temp=0.7,
-            api_endpoint=""
         )
         
         return self.generate_prompt(
@@ -320,14 +311,11 @@ Available tools:
 Include the Thought-Action-Observation loop structure.
 """
         
-        response = chat_with_openai(
-            api_key="",
-            prompt="",
+        chat_with_openai(
+            input_data=[{"role": "user", "content": react_prompt}],
             system_message="You are an expert in ReAct framework prompting.",
-            input_data=react_prompt,
             model=model_name,
             temp=0.7,
-            api_endpoint=""
         )
         
         return self.generate_prompt(
@@ -340,6 +328,37 @@ Include the Thought-Action-Observation loop structure.
     ####################################################################################################################
     # Helper Methods
     
+    def _extract_llm_content(self, response: Any) -> str:
+        """
+        Normalize an OpenAI-style chat completion response to raw text content.
+        """
+        if isinstance(response, str):
+            return response
+
+        if isinstance(response, dict):
+            choices = response.get("choices") or []
+            for choice in choices:
+                message = choice.get("message")
+                if message:
+                    content = message.get("content")
+                    if isinstance(content, str):
+                        return content
+                    if isinstance(content, list):
+                        parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+                        if parts:
+                            return "".join(parts)
+                delta = choice.get("delta")
+                if delta:
+                    delta_content = delta.get("content")
+                    if isinstance(delta_content, str):
+                        return delta_content
+                    if isinstance(delta_content, list):
+                        parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                        if parts:
+                            return "".join(parts)
+
+        raise ValueError("LLM response did not contain any assistant content.")
+
     def _parse_generation_response(self, response: str) -> tuple:
         """
         Parse the LLM generation response.

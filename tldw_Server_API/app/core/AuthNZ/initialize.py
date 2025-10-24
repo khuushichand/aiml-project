@@ -161,6 +161,24 @@ async def setup_database():
             async with pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS audit_logs (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            action VARCHAR(255) NOT NULL,
+                            resource_type VARCHAR(128),
+                            resource_id INTEGER,
+                            ip_address VARCHAR(45),
+                            user_agent TEXT,
+                            status VARCHAR(32),
+                            details TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)")
+
+                    await conn.execute("""
                         CREATE TABLE IF NOT EXISTS sessions (
                             id SERIAL PRIMARY KEY,
                             user_id INTEGER NOT NULL,

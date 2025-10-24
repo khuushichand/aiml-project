@@ -5,6 +5,7 @@ Supports both Redis (for distributed deployments) and in-memory (for single-inst
 """
 
 import time
+import uuid
 from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 
@@ -92,22 +93,33 @@ class CharacterRateLimiter:
         key = f"rate_limit:character:{user_id}"
         
         if self.redis:
+            member_token: Optional[str] = None
             try:
                 # Use Redis for distributed rate limiting
                 pipe = self.redis.pipeline()
                 now = time.time()
                 window_start = now - self.window_seconds
+                member_token = f"{now:.9f}:{uuid.uuid4().hex}"
                 
                 # Remove old entries and count current
                 pipe.zremrangebyscore(key, 0, window_start)
                 pipe.zcard(key)
-                pipe.zadd(key, {str(now): now})
+                pipe.zadd(key, {member_token: now})
                 pipe.expire(key, self.window_seconds)
                 
                 results = pipe.execute()
                 current_count = results[1]
                 
                 if current_count >= self.max_operations:
+                    if member_token:
+                        try:
+                            self.redis.zrem(key, member_token)
+                        except Exception as cleanup_err:  # pragma: no cover - defensive
+                            logger.debug(
+                                "Failed to remove rate-limit token %s during rejection: %s",
+                                member_token,
+                                cleanup_err,
+                            )
                     logger.warning(
                         f"Rate limit exceeded for user {user_id}: "
                         f"{current_count}/{self.max_operations} operations"
@@ -117,7 +129,7 @@ class CharacterRateLimiter:
                         detail=f"Rate limit exceeded. Max {self.max_operations} character operations per hour."
                     )
                 
-                remaining = max(self.max_operations - current_count - 1, 0)
+                remaining = max(self.max_operations - (current_count + 1), 0)
                 logger.debug(f"Rate limit check for user {user_id}: {remaining} operations remaining (redis)")
                 return True, remaining
                 
@@ -220,14 +232,32 @@ class CharacterRateLimiter:
         
         if self.redis:
             try:
-                # Count operations in current window
-                count = self.redis.zcount(key, window_start, now)
+                try:
+                    self.redis.zremrangebyscore(key, 0, window_start)
+                except Exception:
+                    logger.debug("Rate limiter stats: unable to prune Redis window for key %s", key)
+                count = self.redis.zcount(key, window_start, "+inf")
+                count_int = int(count)
+                earliest_entry_score: Optional[float] = None
+                if count_int:
+                    try:
+                        earliest_entry = self.redis.zrange(key, 0, 0, withscores=True)
+                    except Exception:
+                        earliest_entry = []
+                    if earliest_entry:
+                        # redis-py returns list of (member, score)
+                        earliest_entry_score = float(earliest_entry[0][1])
+                reset_time_val = (
+                    earliest_entry_score + self.window_seconds
+                    if earliest_entry_score is not None
+                    else now
+                )
                 return {
-                    "operations_used": count,
+                    "operations_used": count_int,
                     "operations_limit": self.max_operations,
-                    "operations_remaining": max(0, self.max_operations - count),
+                    "operations_remaining": max(0, self.max_operations - count_int),
                     "window_seconds": self.window_seconds,
-                    "reset_time": now + self.window_seconds
+                    "reset_time": reset_time_val,
                 }
             except Exception:
                 pass
@@ -237,14 +267,19 @@ class CharacterRateLimiter:
             t for t in self.memory_store[user_id]
             if t > window_start
         ]
-        count = len(self.memory_store[user_id])
+        current_window_events = self.memory_store[user_id]
+        count = len(current_window_events)
+        earliest_timestamp = min(current_window_events) if current_window_events else None
+        reset_time_val = (
+            earliest_timestamp + self.window_seconds if earliest_timestamp is not None else now
+        )
         
         return {
             "operations_used": count,
             "operations_limit": self.max_operations,
             "operations_remaining": max(0, self.max_operations - count),
             "window_seconds": self.window_seconds,
-            "reset_time": now + self.window_seconds
+            "reset_time": reset_time_val
         }
     
     # ========== Chat-specific rate limiting methods ==========
@@ -288,7 +323,7 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If message limit exceeded
         """
-        if current_message_count >= self.max_messages_per_chat:
+        if current_message_count > self.max_messages_per_chat:
             logger.warning(
                 f"Message limit exceeded for chat {chat_id}: "
                 f"{current_message_count}/{self.max_messages_per_chat} messages"
@@ -364,21 +399,32 @@ class CharacterRateLimiter:
         key = f"rate_limit:{operation_type}:{user_id}"
         
         if self.redis:
+            member_token: Optional[str] = None
             try:
                 pipe = self.redis.pipeline()
                 now = time.time()
                 window_start = now - window
+                member_token = f"{operation_type}:{now:.9f}:{uuid.uuid4().hex}"
                 
                 # Remove old entries and count current
                 pipe.zremrangebyscore(key, 0, window_start)
                 pipe.zcard(key)
-                pipe.zadd(key, {str(now): now})
+                pipe.zadd(key, {member_token: now})
                 pipe.expire(key, window)
                 
                 results = pipe.execute()
                 current_count = results[1]
                 
                 if current_count >= max_count:
+                    if member_token:
+                        try:
+                            self.redis.zrem(key, member_token)
+                        except Exception as cleanup_err:  # pragma: no cover - defensive
+                            logger.debug(
+                                "Failed to remove rate-limit token %s during rejection: %s",
+                                member_token,
+                                cleanup_err,
+                            )
                     logger.warning(
                         f"Rate limit exceeded for {operation_type} by user {user_id}: "
                         f"{current_count}/{max_count} operations"
@@ -388,7 +434,7 @@ class CharacterRateLimiter:
                         detail=f"Rate limit exceeded. Max {max_count} {operation_type} operations per {window} seconds."
                     )
                 
-                remaining = max(max_count - current_count - 1, 0)
+                remaining = max(max_count - (current_count + 1), 0)
                 return True, remaining
                 
             except HTTPException:

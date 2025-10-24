@@ -13,6 +13,7 @@ Based on ADR-002: Alembic-style migrations within SQLite constraints.
 """
 
 import os
+import re
 import sqlite3
 import json
 import shutil
@@ -37,7 +38,7 @@ class Migration:
         version: int,
         name: str,
         up_sql: str,
-        down_sql: str,
+        down_sql: Optional[str] = None,
         description: str = ""
     ):
         self.version = version
@@ -50,7 +51,7 @@ class Migration:
     def _calculate_checksum(self) -> str:
         """Calculate checksum for migration integrity"""
         import hashlib
-        content = f"{self.version}:{self.name}:{self.up_sql}:{self.down_sql}"
+        content = f"{self.version}:{self.name}:{self.up_sql}:{self.down_sql or ''}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     def to_dict(self) -> Dict[str, Any]:
@@ -74,7 +75,7 @@ class Migration:
             version=data["version"],
             name=data["name"],
             up_sql=data["up_sql"],
-            down_sql=data["down_sql"],
+            down_sql=data.get("down_sql"),
             description=data.get("description", "")
         )
 
@@ -84,12 +85,19 @@ class DatabaseMigrator:
     
     def __init__(self, db_path: str, migrations_dir: str = None):
         self.db_path = db_path
-        self.migrations_dir = migrations_dir or os.path.join(
-            os.path.dirname(db_path), "migrations"
-        )
-        
-        # Ensure migrations directory exists
-        os.makedirs(self.migrations_dir, exist_ok=True)
+
+        package_migrations_dir = Path(__file__).resolve().parent / "migrations"
+        if migrations_dir is not None:
+            chosen_dir = Path(migrations_dir)
+            chosen_dir.mkdir(parents=True, exist_ok=True)
+        elif package_migrations_dir.exists():
+            chosen_dir = package_migrations_dir
+        else:
+            fallback_dir = Path(db_path).resolve().parent / "migrations"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            chosen_dir = fallback_dir
+
+        self.migrations_dir = str(chosen_dir)
         
         # Backup directory
         self.backup_dir = os.path.join(
@@ -175,19 +183,108 @@ class DatabaseMigrator:
         if not os.path.exists(self.migrations_dir):
             logger.warning(f"Migrations directory does not exist: {self.migrations_dir}")
             return migrations
-        
-        # Load from JSON files
-        for filepath in Path(self.migrations_dir).glob("*.json"):
+
+        seen_versions: Dict[int, Path] = {}
+
+        for filepath in sorted(Path(self.migrations_dir).glob("*")):
+            suffix = filepath.suffix.lower()
             try:
-                migration = Migration.from_file(filepath)
-                migrations.append(migration)
-                logger.debug(f"Loaded migration: {migration.name} (v{migration.version})")
+                if suffix == ".json":
+                    migration = Migration.from_file(filepath)
+                elif suffix == ".sql":
+                    migration = self._load_sql_migration(filepath)
+                else:
+                    continue
             except Exception as e:
                 logger.error(f"Failed to load migration from {filepath}: {e}")
-        
-        # Sort by version
+                continue
+
+            if not migration:
+                continue
+
+            previous = seen_versions.get(migration.version)
+            if previous:
+                logger.warning(
+                    "Skipping migration {} from {}; version {} already provided by {}",
+                    migration.name,
+                    filepath.name,
+                    migration.version,
+                    previous.name,
+                )
+                continue
+
+            migrations.append(migration)
+            seen_versions[migration.version] = filepath
+            logger.debug(f"Loaded migration: {migration.name} (v{migration.version})")
+
+        # Sort by version to ensure deterministic execution order
         migrations.sort(key=lambda m: m.version)
         return migrations
+    
+    @staticmethod
+    def _strip_sql_comments(sql: str) -> str:
+        lines = []
+        for line in sql.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("--"):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+    
+    @staticmethod
+    def _extract_version_from_sql(filepath: Path, sql: str) -> int:
+        match = re.match(r"(\d+)", filepath.stem)
+        if match:
+            return int(match.group(1))
+        
+        for line in sql.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("-- version:"):
+                try:
+                    return int(stripped.split(":", 1)[1].strip())
+                except ValueError:
+                    break
+        
+        raise ValueError(f"Unable to determine migration version for {filepath.name}")
+    
+    @staticmethod
+    def _extract_name_from_sql(filepath: Path) -> str:
+        match = re.match(r"\d+_(.+)", filepath.stem)
+        if match:
+            return match.group(1)
+        return filepath.stem
+    
+    @staticmethod
+    def _extract_description_from_sql(sql: str) -> str:
+        for line in sql.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("-- description:"):
+                return stripped.split(":", 1)[1].strip()
+        return ""
+    
+    def _load_sql_migration(self, filepath: Path) -> Optional[Migration]:
+        try:
+            sql_text = filepath.read_text()
+        except OSError as exc:
+            logger.error(f"Unable to read migration file {filepath}: {exc}")
+            return None
+        
+        executable_sql = self._strip_sql_comments(sql_text)
+        if not executable_sql:
+            logger.debug(f"Skipping SQL migration with no executable statements: {filepath.name}")
+            return None
+        
+        version = self._extract_version_from_sql(filepath, sql_text)
+        name = self._extract_name_from_sql(filepath)
+        description = self._extract_description_from_sql(sql_text)
+        
+        return Migration(
+            version=version,
+            name=name,
+            up_sql=sql_text,
+            down_sql=None,
+            description=description,
+        )
     
     def create_backup(self, description: str = "") -> str:
         """Create a backup of the database before migration"""
@@ -233,6 +330,12 @@ class DatabaseMigrator:
     def execute_migration(self, migration: Migration, direction: str = "up") -> float:
         """Execute a single migration"""
         sql = migration.up_sql if direction == "up" else migration.down_sql
+        if direction == "down":
+            if sql is None or not str(sql).strip():
+                raise MigrationError(
+                    f"Migration {migration.name} (v{migration.version}) does not define down_sql; downgrade is not supported."
+                )
+        assert sql is not None  # For type checkers
         start_time = datetime.now(timezone.utc)
         
         with self._get_connection() as conn:
@@ -419,6 +522,15 @@ class DatabaseMigrator:
         try:
             # Replace current database with backup
             shutil.copy2(backup_path, self.db_path)
+            for suffix in ("-wal", "-shm"):
+                backup_sidecar = f"{backup_path}{suffix}"
+                target_sidecar = f"{self.db_path}{suffix}"
+                if os.path.exists(backup_sidecar):
+                    shutil.copy2(backup_sidecar, target_sidecar)
+                    logger.info(f"Restored journal file: {target_sidecar}")
+                elif os.path.exists(target_sidecar):
+                    os.remove(target_sidecar)
+                    logger.info(f"Removed stale journal file: {target_sidecar}")
             logger.info(f"Rolled back to backup: {backup_path}")
             
             return {

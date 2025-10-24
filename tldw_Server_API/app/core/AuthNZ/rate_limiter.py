@@ -23,6 +23,21 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
 #
 # Rate Limiter Class
 
+
+def _compute_window_start(now: datetime, window_minutes: int) -> datetime:
+    """Return the start of the current time bucket for the requested window size."""
+    window_minutes = max(1, int(window_minutes))
+    window_seconds = window_minutes * 60
+    seconds_since_hour = now.minute * 60 + now.second
+    offset = seconds_since_hour % window_seconds
+    window_start = now - timedelta(seconds=offset, microseconds=now.microsecond)
+    return window_start.replace(microsecond=0)
+
+
+def _window_key(timestamp: datetime) -> str:
+    """Stable Redis key suffix for a bucketed timestamp."""
+    return timestamp.strftime("%Y%m%d%H%M%S")
+
 class RateLimiter:
     """
     Token bucket rate limiter with database backend and optional Redis caching
@@ -278,7 +293,11 @@ class RateLimiter:
                     VALUES ($1, $2, 1, $3)
                     ON CONFLICT (identifier, attempt_type)
                     DO UPDATE SET 
-                        attempt_count = failed_attempts.attempt_count + 1,
+                        attempt_count = CASE
+                            WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
+                            THEN 1
+                            ELSE failed_attempts.attempt_count + 1
+                        END,
                         window_start = CASE
                             WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
                             THEN $3
@@ -302,15 +321,27 @@ class RateLimiter:
                     VALUES (?, ?, 1, ?)
                     ON CONFLICT (identifier, attempt_type)
                     DO UPDATE SET 
-                        attempt_count = attempt_count + 1,
+                        attempt_count = CASE
+                            WHEN datetime(window_start, '+' || ? || ' minutes') < ?
+                            THEN 1
+                            ELSE attempt_count + 1
+                        END,
                         window_start = CASE
                             WHEN datetime(window_start, '+' || ? || ' minutes') < ?
                             THEN ?
                             ELSE window_start
                         END
                     """,
-                    (identifier, attempt_type, now.isoformat(), lockout_duration_minutes, 
-                     now.isoformat(), now.isoformat())
+                    (
+                        identifier,
+                        attempt_type,
+                        now.isoformat(),
+                        lockout_duration_minutes,
+                        now.isoformat(),
+                        lockout_duration_minutes,
+                        now.isoformat(),
+                        now.isoformat(),
+                    )
                 )
                 
                 # Get the updated count
@@ -407,6 +438,11 @@ class RateLimiter:
                 )
                 if row:
                     return True, row['locked_until']
+                await conn.execute(
+                    "DELETE FROM account_lockouts WHERE identifier = $1 AND locked_until <= $2",
+                    identifier,
+                    now,
+                )
             else:
                 # SQLite
                 cursor = await conn.execute(
@@ -416,6 +452,14 @@ class RateLimiter:
                 row = await cursor.fetchone()
                 if row:
                     return True, datetime.fromisoformat(row[0])
+                await conn.execute(
+                    "DELETE FROM account_lockouts WHERE identifier = ? AND locked_until <= ?",
+                    (identifier, now.isoformat()),
+                )
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
         
         return False, None
     
@@ -492,9 +536,21 @@ class RateLimiter:
         if not self._initialized:
             await self.initialize()
         
-        # Use provided limits or defaults
-        limit = limit or self.default_limit
-        burst = burst or self.default_burst
+        # Use provided limits or defaults; treat zero values as intentional
+        if limit is None:
+            limit = self.default_limit
+        if burst is None:
+            burst = self.default_burst
+
+        if limit <= 0:
+            return True, {
+                "limit": 0,
+                "remaining": None,
+                "reset_time": None,
+                "retry_after": None,
+                "rate_limit_enabled": True,
+                "unbounded": True,
+            }
         
         # Create unique key for rate limiting
         key = self._create_key(identifier, endpoint)
@@ -526,42 +582,43 @@ class RateLimiter:
         try:
             # Use Redis pipeline for atomic operations
             pipe = self.redis_client.pipeline()
-            
+
             now = datetime.utcnow()
-            window_start = now - timedelta(minutes=window_minutes)
-            window_key = f"rate:{key}:{window_start.strftime('%Y%m%d%H%M')}"
-            
+            window_start = _compute_window_start(now, window_minutes)
+            window_key = f"rate:{key}:{_window_key(window_start)}"
+
             # Increment counter
             pipe.incr(window_key)
             pipe.expire(window_key, window_minutes * 60 + 10)  # Extra 10 seconds buffer
-            
+
             results = await pipe.execute()
             current_count = results[0]
-            
+
             # Check burst by looking at previous window
             if current_count > limit - burst:
                 prev_window_start = window_start - timedelta(minutes=window_minutes)
-                prev_window_key = f"rate:{key}:{prev_window_start.strftime('%Y%m%d%H%M')}"
+                prev_window_key = f"rate:{key}:{_window_key(prev_window_start)}"
                 prev_count = await self.redis_client.get(prev_window_key)
                 prev_count = int(prev_count) if prev_count else 0
-                
+
                 if prev_count + current_count > limit + burst:
                     # Rate limit exceeded
-                    reset_time = window_start + timedelta(minutes=window_minutes * 2)
+                    reset_time = window_start + timedelta(minutes=window_minutes)
+                    retry_after = max(0, int((reset_time - now).total_seconds()))
                     return False, {
                         "limit": limit,
-                        "remaining": max(0, limit - current_count),
+                        "remaining": 0,
                         "reset_time": reset_time.isoformat(),
-                        "retry_after": int((reset_time - now).total_seconds())
+                        "retry_after": retry_after,
                     }
-            
+
             # Request allowed
             return True, {
                 "limit": limit,
                 "remaining": max(0, limit - current_count),
-                "reset_time": (window_start + timedelta(minutes=window_minutes)).isoformat()
+                "reset_time": (window_start + timedelta(minutes=window_minutes)).isoformat(),
             }
-            
+
         except RedisError as e:
             logger.warning(f"Redis rate limit check failed: {e}")
             return None
@@ -576,7 +633,7 @@ class RateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """Check rate limit using database"""
         now = datetime.utcnow()
-        window_start = now.replace(second=0, microsecond=0)
+        window_start = _compute_window_start(now, window_minutes)
         
         try:
             async with self.db_pool.transaction() as conn:
@@ -609,11 +666,12 @@ class RateLimiter:
                         if prev_count + current_count > limit + burst:
                             # Rate limit exceeded
                             reset_time = window_start + timedelta(minutes=window_minutes)
+                            retry_after = max(0, int((reset_time - now).total_seconds()))
                             return False, {
                                 "limit": limit,
                                 "remaining": 0,
                                 "reset_time": reset_time.isoformat(),
-                                "retry_after": int((reset_time - now).total_seconds())
+                                "retry_after": retry_after,
                             }
                     
                 else:
@@ -664,11 +722,12 @@ class RateLimiter:
                             # Rate limit exceeded
                             reset_time = window_start + timedelta(minutes=window_minutes)
                             await conn.commit()
+                            retry_after = max(0, int((reset_time - now).total_seconds()))
                             return False, {
                                 "limit": limit,
                                 "remaining": 0,
                                 "reset_time": reset_time.isoformat(),
-                                "retry_after": int((reset_time - now).total_seconds())
+                                "retry_after": retry_after,
                             }
                     
                     await conn.commit()
@@ -677,7 +736,7 @@ class RateLimiter:
                 return True, {
                     "limit": limit,
                     "remaining": max(0, limit - current_count),
-                    "reset_time": (window_start + timedelta(minutes=window_minutes)).isoformat()
+                    "reset_time": (window_start + timedelta(minutes=window_minutes)).isoformat(),
                 }
                 
         except Exception as e:

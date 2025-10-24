@@ -1,9 +1,10 @@
 import os
 import pytest
+import asyncio
+import inspect
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.tests.Embeddings.fakes import FakeAsyncRedisSummary
 from fastapi.testclient import TestClient
 
 
@@ -26,16 +27,104 @@ def admin_user():
         app.dependency_overrides.pop(get_request_user, None)
 
 
+class _RedisHarness:
+    def __init__(self, loop: asyncio.AbstractEventLoop, async_client, sync_client, url: str):
+        self.loop = loop
+        self.client = async_client
+        self._sync_client = sync_client
+        self.url = url
+
+    def run(self, awaitable):
+        """Execute coroutine using the dedicated loop."""
+        return self.loop.run_until_complete(awaitable)
+
+    def flush(self):
+        """Flush database via synchronous client."""
+        return self._sync_client.flushdb()
+
+    def close_sync(self):
+        try:
+            self._sync_client.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, item):
+        return getattr(self.client, item)
+
+
 @pytest.fixture
-def fake_redis(monkeypatch):
-    import redis.asyncio as aioredis
-    fake = FakeAsyncRedisSummary()
+def redis_client():
+    """Provide a real Redis client when available; skip otherwise."""
+    try:
+        import redis  # type: ignore
+        import redis.asyncio as aioredis  # type: ignore
+    except Exception as exc:  # pragma: no cover - dependency missing
+        pytest.skip(f"redis library not available: {exc}")
 
-    async def fake_from_url(url, decode_responses=True):
-        return fake
+    url = (
+        os.getenv("TEST_REDIS_URL")
+        or os.getenv("EMBEDDINGS_REDIS_URL")
+        or os.getenv("REDIS_URL")
+        or "redis://localhost:6379/0"
+    )
 
-    monkeypatch.setattr(aioredis, "from_url", fake_from_url)
-    return fake
+    sync_client = redis.Redis.from_url(url, decode_responses=True)
+    try:
+        sync_client.ping()
+    except Exception as exc:
+        sync_client.close()
+        pytest.skip(f"Redis not reachable at {url}: {exc}")
+
+    # Clean slate before tests
+    try:
+        sync_client.flushdb()
+    except Exception:
+        pass
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        async_client = aioredis.from_url(url, decode_responses=True)
+        if inspect.isawaitable(async_client):
+            async_client = loop.run_until_complete(async_client)
+        loop.run_until_complete(async_client.ping())
+    except Exception as exc:
+        loop.close()
+        sync_client.close()
+        pytest.skip(f"Failed to initialize async Redis client at {url}: {exc}")
+    finally:
+        asyncio.set_event_loop(None)
+
+    previous_url = os.environ.get("EMBEDDINGS_REDIS_URL")
+    os.environ["EMBEDDINGS_REDIS_URL"] = url
+
+    harness = _RedisHarness(loop, async_client, sync_client, url)
+
+    try:
+        yield harness
+    finally:
+        if previous_url is None:
+            os.environ.pop("EMBEDDINGS_REDIS_URL", None)
+        else:
+            os.environ["EMBEDDINGS_REDIS_URL"] = previous_url
+
+        try:
+            harness.flush()
+        except Exception:
+            pass
+        try:
+            harness.run(harness.client.close())
+        except Exception:
+            pass
+        try:
+            harness.loop.run_until_complete(harness.loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            harness.loop.close()
+        except Exception:
+            pass
+        harness.close_sync()
 
 
 # Lightweight app client + auth fixtures for property/unit tests in this package
@@ -45,16 +134,15 @@ def test_client(disable_heavy_startup):
 
     Scope: function — keeps isolation across property-based runs.
     """
-    # Build client
-    client = TestClient(app, raise_server_exceptions=False)
-    # Double-submit CSRF: cookie + header
-    csrf = "test-csrf"
-    client.cookies.set("csrf_token", csrf)
-    client.headers["X-CSRF-Token"] = csrf
-    # Accept Authorization in single-user mode
-    client.headers["Authorization"] = "Bearer test-api-key"
     try:
-        yield client
+        csrf = "test-csrf"
+        with TestClient(app) as client:
+            # Double-submit CSRF: cookie + header
+            client.cookies.set("csrf_token", csrf)
+            client.headers["X-CSRF-Token"] = csrf
+            # Accept Authorization in single-user mode
+            client.headers["Authorization"] = "Bearer test-api-key"
+            yield client
     finally:
         # Ensure dependency overrides do not leak across tests
         try:

@@ -6,6 +6,7 @@ This module provides the database layer for tracking embedding jobs,
 user quotas, and job history.
 """
 
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -17,6 +18,12 @@ from loguru import logger
 
 class EmbeddingsJobsDatabase:
     """Database manager for embedding jobs and quotas"""
+    
+    _TIER_LIMITS: Dict[str, Dict[str, int]] = {
+        'free': {'daily_chunks': 1000, 'concurrent_jobs': 2},
+        'premium': {'daily_chunks': 10000, 'concurrent_jobs': 5},
+        'enterprise': {'daily_chunks': 100000, 'concurrent_jobs': 20},
+    }
     
     def __init__(self, db_path: str = "./Databases/embeddings_jobs.db"):
         """Initialize the database connection and create tables if needed"""
@@ -63,16 +70,14 @@ class EmbeddingsJobsDatabase:
                     
                     -- Resource tracking
                     processing_time_ms INTEGER,
-                    gpu_time_ms INTEGER,
-                    
-                    -- Indexes for common queries
-                    INDEX idx_user_id (user_id),
-                    INDEX idx_media_id (media_id),
-                    INDEX idx_status (status),
-                    INDEX idx_created_at (created_at),
-                    INDEX idx_user_status (user_id, status)
+                    gpu_time_ms INTEGER
                 )
             """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_embedding_jobs_user_id ON embedding_jobs (user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_embedding_jobs_media_id ON embedding_jobs (media_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status ON embedding_jobs (status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_embedding_jobs_created_at ON embedding_jobs (created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_embedding_jobs_user_status ON embedding_jobs (user_id, status)")
             
             # User quotas table
             cursor.execute("""
@@ -114,12 +119,11 @@ class EmbeddingsJobsDatabase:
                     media_id INTEGER NOT NULL,
                     event_type TEXT NOT NULL,  -- created, started, progress, completed, failed, cancelled
                     event_data TEXT,  -- JSON
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    
-                    INDEX idx_job_id (job_id),
-                    INDEX idx_timestamp (timestamp)
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_job_history_job_id ON job_history (job_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_job_history_timestamp ON job_history (timestamp)")
             
             # Queue metrics table (for monitoring)
             cursor.execute("""
@@ -130,11 +134,10 @@ class EmbeddingsJobsDatabase:
                     processing_rate REAL,
                     error_rate REAL,
                     avg_processing_time_ms INTEGER,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    
-                    INDEX idx_queue_timestamp (queue_name, timestamp)
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_queue_metrics_queue_timestamp ON queue_metrics (queue_name, timestamp)")
             
             conn.commit()
             logger.info("Embeddings jobs database initialized")
@@ -149,53 +152,112 @@ class EmbeddingsJobsDatabase:
         finally:
             conn.close()
     
+    def _resolve_tier_limits(self, user_tier: str) -> Dict[str, int]:
+        """Return quota limits for a given tier"""
+        return self._TIER_LIMITS.get(user_tier, self._TIER_LIMITS['free']).copy()
+    
+    def _next_reset_time(self) -> datetime:
+        """Compute the next daily reset timestamp (UTC midnight)."""
+        return (datetime.utcnow() + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    @staticmethod
+    def _serialise_json(value: Any) -> Optional[str]:
+        """Return a JSON string for mappings/sequences; leave strings/None untouched."""
+        if value is None or isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value)
+        except TypeError:
+            logger.warning(f"Failed to serialise value {value!r} to JSON, storing str()")
+            return str(value)
+    
     # Job Management Methods
     
     def create_job(self, job_data: Dict[str, Any]) -> bool:
         """Create a new embedding job"""
+        user_id = job_data['user_id']
+        user_tier = job_data.get('user_tier', 'free')
+        quota = self.get_or_create_user_quota(user_id, user_tier)
+        
+        if not quota:
+            logger.error("Unable to fetch quota for user {}", user_id)
+            return False
+        
+        try:
+            active_jobs = int(quota.get('concurrent_jobs_active', 0))
+            concurrent_limit = quota.get('concurrent_jobs_limit')
+            limit_value = None if concurrent_limit is None else int(concurrent_limit)
+        except (TypeError, ValueError):
+            logger.error("Quota record for user {} contains invalid concurrency data", user_id)
+            return False
+        
+        if limit_value is not None and active_jobs >= limit_value:
+            logger.warning(
+                "Concurrency limit reached for user {} (active: {}, limit: {})",
+                user_id,
+                active_jobs,
+                limit_value,
+            )
+            return False
+        
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
-                # Insert job
-                cursor.execute("""
-                    INSERT INTO embedding_jobs (
-                        job_id, user_id, media_id, status, priority, user_tier,
-                        model_name, chunking_config, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    job_data['job_id'],
-                    job_data['user_id'],
-                    job_data['media_id'],
-                    job_data.get('status', 'pending'),
-                    job_data.get('priority', 50),
-                    job_data.get('user_tier', 'free'),
-                    job_data.get('model_name'),
-                    job_data.get('chunking_config'),
-                    job_data.get('metadata')
-                ))
-                
-                # Record in history
-                cursor.execute("""
-                    INSERT INTO job_history (job_id, user_id, media_id, event_type, event_data)
-                    VALUES (?, ?, ?, 'created', ?)
-                """, (
-                    job_data['job_id'],
-                    job_data['user_id'],
-                    job_data['media_id'],
-                    job_data.get('metadata')
-                ))
-                
-                # Update user's concurrent job count
-                cursor.execute("""
-                    UPDATE user_quotas 
-                    SET concurrent_jobs_active = concurrent_jobs_active + 1,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = ?
-                """, (job_data['user_id'],))
-                
-                conn.commit()
-                return True
+                try:
+                    cursor.execute("""
+                        UPDATE user_quotas 
+                        SET concurrent_jobs_active = concurrent_jobs_active + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = ?
+                          AND (concurrent_jobs_limit IS NULL OR concurrent_jobs_active < concurrent_jobs_limit)
+                    """, (user_id,))
+                    
+                    if cursor.rowcount == 0:
+                        logger.warning(
+                            "Concurrency limit reached while creating job for user {}",
+                            user_id,
+                        )
+                        return False
+                    
+                    # Insert job
+                    chunking_config = self._serialise_json(job_data.get('chunking_config'))
+                    metadata = self._serialise_json(job_data.get('metadata'))
+
+                    cursor.execute("""
+                        INSERT INTO embedding_jobs (
+                            job_id, user_id, media_id, status, priority, user_tier,
+                            model_name, chunking_config, metadata
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        job_data['job_id'],
+                        job_data['user_id'],
+                        job_data['media_id'],
+                        job_data.get('status', 'pending'),
+                        job_data.get('priority', 50),
+                        job_data.get('user_tier', 'free'),
+                        job_data.get('model_name'),
+                        chunking_config,
+                        metadata
+                    ))
+                    
+                    # Record in history
+                    cursor.execute("""
+                        INSERT INTO job_history (job_id, user_id, media_id, event_type, event_data)
+                        VALUES (?, ?, ?, 'created', ?)
+                    """, (
+                        job_data['job_id'],
+                        job_data['user_id'],
+                        job_data['media_id'],
+                        metadata
+                    ))
+                    
+                    conn.commit()
+                    return True
+                except Exception:
+                    conn.rollback()
+                    raise
                 
         except Exception as e:
             logger.error(f"Failed to create job: {e}")
@@ -241,6 +303,14 @@ class EmbeddingsJobsDatabase:
                 
                 query = f"UPDATE embedding_jobs SET {', '.join(updates)} WHERE job_id = ?"
                 cursor.execute(query, params)
+                if cursor.rowcount == 0:
+                    logger.warning("No embedding job found with id %s; skipping status update.", job_id)
+                    try:
+                        if getattr(conn, "in_transaction", False):
+                            conn.rollback()
+                    except sqlite3.Error:
+                        pass
+                    return False
                 
                 # Update concurrent jobs if completed
                 if status in ['completed', 'failed', 'cancelled']:
@@ -307,34 +377,57 @@ class EmbeddingsJobsDatabase:
                 row = cursor.fetchone()
                 
                 if row:
-                    return dict(row)
+                    quota = dict(row)
+                    # If caller supplies a different tier, realign limits to new tier defaults.
+                    if user_tier and quota.get("user_tier") != user_tier:
+                        limits = self._resolve_tier_limits(user_tier)
+                        cursor.execute(
+                            """
+                            UPDATE user_quotas
+                            SET user_tier = ?,
+                                daily_chunks_limit = ?,
+                                concurrent_jobs_limit = ?,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE user_id = ?
+                            """,
+                            (user_tier, limits['daily_chunks'], limits['concurrent_jobs'], user_id),
+                        )
+                        conn.commit()
+                        cursor.execute("SELECT * FROM user_quotas WHERE user_id = ?", (user_id,))
+                        refreshed = cursor.fetchone()
+                        if refreshed:
+                            quota = dict(refreshed)
+                    return quota
                 
                 # Create new quota record
-                tier_limits = {
-                    'free': {'daily_chunks': 1000, 'concurrent_jobs': 2},
-                    'premium': {'daily_chunks': 10000, 'concurrent_jobs': 5},
-                    'enterprise': {'daily_chunks': 100000, 'concurrent_jobs': 20}
-                }
+                limits = self._resolve_tier_limits(user_tier)
                 
-                limits = tier_limits.get(user_tier, tier_limits['free'])
-                
-                cursor.execute("""
-                    INSERT INTO user_quotas (
-                        user_id, user_tier, daily_chunks_limit, concurrent_jobs_limit,
-                        daily_reset_time
-                    ) VALUES (?, ?, ?, ?, ?)
-                """, (
-                    user_id,
-                    user_tier,
-                    limits['daily_chunks'],
-                    limits['concurrent_jobs'],
-                    (datetime.utcnow() + timedelta(days=1)).replace(hour=0, minute=0, second=0)
-                ))
-                
-                conn.commit()
-                
+                try:
+                    cursor.execute("""
+                        INSERT INTO user_quotas (
+                            user_id, user_tier, daily_chunks_limit, concurrent_jobs_limit,
+                            daily_reset_time
+                        ) VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        user_id,
+                        user_tier,
+                        limits['daily_chunks'],
+                        limits['concurrent_jobs'],
+                        self._next_reset_time()
+                    ))
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    # Another writer inserted the row first; roll back and continue to fetch it.
+                    try:
+                        conn.rollback()
+                    except sqlite3.Error:
+                        pass
                 cursor.execute("SELECT * FROM user_quotas WHERE user_id = ?", (user_id,))
-                return dict(cursor.fetchone())
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                logger.error("Quota row missing after attempted insert/reload for user {}", user_id)
+                return {}
                 
         except Exception as e:
             logger.error(f"Failed to get/create user quota: {e}")
@@ -348,36 +441,69 @@ class EmbeddingsJobsDatabase:
                 
                 # Get current quota
                 quota = self.get_or_create_user_quota(user_id)
-                
-                # Check if daily reset is needed
-                if datetime.fromisoformat(quota['daily_reset_time']) < datetime.utcnow():
+                if not quota:
+                    logger.error("Unable to fetch quota for user {}", user_id)
+                    return False
+
+                reset_value = quota.get('daily_reset_time')
+                needs_reset = False
+                reset_timestamp: Optional[datetime] = None
+
+                if reset_value:
+                    if isinstance(reset_value, datetime):
+                        reset_timestamp = reset_value
+                    else:
+                        try:
+                            reset_timestamp = datetime.fromisoformat(str(reset_value))
+                        except (TypeError, ValueError):
+                            reset_timestamp = None
+                    if reset_timestamp is not None and reset_timestamp < datetime.utcnow():
+                        needs_reset = True
+                    elif reset_timestamp is None:
+                        needs_reset = True
+                else:
+                    needs_reset = True
+
+                if needs_reset:
+                    next_reset = self._next_reset_time()
                     cursor.execute("""
                         UPDATE user_quotas 
                         SET daily_chunks_used = 0,
                             daily_reset_time = ?,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE user_id = ?
-                    """, (
-                        (datetime.utcnow() + timedelta(days=1)).replace(hour=0, minute=0, second=0),
-                        user_id
-                    ))
+                    """, (next_reset, user_id))
                     quota['daily_chunks_used'] = 0
-                
-                # Check if quota available
-                if quota['daily_chunks_used'] + chunks_requested > quota['daily_chunks_limit']:
-                    return False
-                
-                # Update quota
-                cursor.execute("""
-                    UPDATE user_quotas 
-                    SET daily_chunks_used = daily_chunks_used + ?,
-                        total_chunks_processed = total_chunks_processed + ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = ?
-                """, (chunks_requested, chunks_requested, user_id))
+
+                try:
+                    used_chunks = int(quota.get('daily_chunks_used', 0))
+                except (TypeError, ValueError):
+                    used_chunks = 0
+
+                limit_raw = quota.get('daily_chunks_limit')
+                try:
+                    daily_limit = None if limit_raw is None else int(limit_raw)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invalid daily_chunks_limit for user {}; treating as unlimited",
+                        user_id,
+                    )
+                    daily_limit = None
+
+                within_limit = True
+                if daily_limit is not None and used_chunks + chunks_requested > daily_limit:
+                    within_limit = False
+                else:
+                    cursor.execute("""
+                        UPDATE user_quotas 
+                        SET daily_chunks_used = daily_chunks_used + ?,
+                            total_chunks_processed = total_chunks_processed + ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = ?
+                    """, (chunks_requested, chunks_requested, user_id))
                 
                 conn.commit()
-                return True
+                return within_limit
                 
         except Exception as e:
             logger.error(f"Failed to check/update quota: {e}")

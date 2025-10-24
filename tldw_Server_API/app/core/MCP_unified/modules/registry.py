@@ -72,7 +72,12 @@ class ModuleRegistry:
     
     async def start_health_monitoring(self):
         """Start background health monitoring task"""
+        # Allow restarting after shutdown/cancel
+        if self._health_check_task and self._health_check_task.done():
+            self._health_check_task = None
+
         if self._health_check_task is None:
+            self._shutdown = False
             self._health_check_task = asyncio.create_task(self._health_monitor_loop())
             logger.info("Health monitoring started")
     
@@ -86,6 +91,7 @@ class ModuleRegistry:
             except asyncio.CancelledError:
                 pass
             logger.info("Health monitoring stopped")
+        self._health_check_task = None
     
     async def _health_monitor_loop(self):
         """Background task to monitor module health"""

@@ -4,6 +4,7 @@ Character templates module.
 This module contains functions for managing character templates.
 """
 
+import copy
 from typing import Dict, List, Optional, Any
 
 from loguru import logger
@@ -68,7 +69,7 @@ def get_character_template(template_name: str) -> Optional[Dict[str, Any]]:
     template = CHARACTER_TEMPLATES.get(template_name)
     if template:
         logger.info(f"Retrieved character template: {template_name}")
-        return template.copy()  # Return a copy to prevent modification
+        return copy.deepcopy(template)  # Return a deep copy to prevent modification
     else:
         logger.warning(f"Character template not found: {template_name}")
         return None

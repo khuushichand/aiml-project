@@ -16,7 +16,10 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
+    derive_hmac_key,
+    derive_hmac_key_candidates,
+)
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidTokenError,
     TokenExpiredError,
@@ -123,7 +126,10 @@ class JWTService:
         # Encode the token
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
-            logger.debug(f"Created access token for user {username} (ID: {user_id})")
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Created access token for authenticated user (details redacted)")
+            else:
+                logger.debug(f"Created access token for user {username} (ID: {user_id})")
             return token
             
         except Exception as e:
@@ -171,7 +177,10 @@ class JWTService:
         # Encode the token
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
-            logger.debug(f"Created refresh token for user {username} (ID: {user_id})")
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Created refresh token for authenticated user (details redacted)")
+            else:
+                logger.debug(f"Created refresh token for user {username} (ID: {user_id})")
             return token
             
         except Exception as e:
@@ -226,7 +235,10 @@ class JWTService:
             if token_type and payload.get("type") != token_type:
                 raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {payload.get('type')}")
             
-            logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Token verified successfully for authenticated user (details redacted)")
+            else:
+                logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
             return payload
             
         except ExpiredSignatureError:
@@ -286,7 +298,10 @@ class JWTService:
 
             # Note: blacklist enforcement is only supported in verify_token_async()
 
-            logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Token verified successfully for authenticated user (details redacted)")
+            else:
+                logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
             return payload
             
         except ExpiredSignatureError:
@@ -396,6 +411,19 @@ class JWTService:
             logger.error(f"Failed to create virtual access token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
     
+    def hash_token_candidates(self, token: str) -> list[str]:
+        """Return ordered HMAC-SHA256 hashes derived from current and legacy secrets."""
+        hashes: list[str] = []
+        try:
+            key_candidates = derive_hmac_key_candidates(self.settings)
+        except Exception:
+            key_candidates = [derive_hmac_key(self.settings)]
+        for key in key_candidates:
+            digest = hmac.new(key, token.encode("utf-8"), hashlib.sha256).hexdigest()
+            if digest not in hashes:
+                hashes.append(digest)
+        return hashes
+
     def hash_token(self, token: str) -> str:
         """
         Create a secure hash of a token for storage using HMAC-SHA256.
@@ -414,8 +442,10 @@ class JWTService:
         Returns:
             HMAC-SHA256 hash of the token
         """
-        key = derive_hmac_key(self.settings)
-        return hmac.new(key, token.encode("utf-8"), hashlib.sha256).hexdigest()
+        candidates = self.hash_token_candidates(token)
+        if not candidates:
+            raise ValueError("Unable to derive HMAC hash for token")
+        return candidates[0]
     
     def extract_jti(self, token: str) -> Optional[str]:
         """
@@ -468,7 +498,10 @@ class JWTService:
         
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
-            logger.info(f"Created password reset token for user {user_id}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Created password reset token for authenticated user (details redacted)")
+            else:
+                logger.info(f"Created password reset token for user {user_id}")
             return token
             
         except Exception as e:
@@ -509,7 +542,10 @@ class JWTService:
         
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
-            logger.info(f"Created email verification token for user {user_id}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Created email verification token for authenticated user (details redacted)")
+            else:
+                logger.info(f"Created email verification token for user {user_id}")
             return token
             
         except Exception as e:
@@ -557,7 +593,7 @@ class JWTService:
         except Exception as e:
             logger.error(f"Failed to create service account token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
-    
+
     def refresh_access_token(self, refresh_token: str) -> tuple[str, str]:
         """
         Create a new access token from a refresh token (helper).
@@ -598,7 +634,9 @@ class JWTService:
                         raise InvalidTokenError("Token has been revoked")
                 else:
                     # In running event loops, avoid blocking; log a hint to prefer /auth/refresh path
-                    logger.debug("refresh_access_token called in running loop; blacklist may not be enforced here. Prefer /auth/refresh endpoint.")
+                    logger.debug(
+                        "refresh_access_token called in running loop; blacklist may not be enforced here. Prefer /auth/refresh endpoint."
+                    )
         except InvalidTokenError:
             raise
         except Exception as _guard_e:
@@ -662,15 +700,17 @@ class JWTService:
                                     bl.hint_blacklisted(old_jti, exp_dt)
                                 except Exception as _hint_e:
                                     logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
-                                loop.create_task(bl.revoke_token(
-                                    jti=old_jti,
-                                    expires_at=exp_dt,
-                                    user_id=user_id,
-                                    token_type="refresh",
-                                    reason="refresh-rotated",
-                                    revoked_by=None,
-                                    ip_address=None
-                                ))
+                                loop.create_task(
+                                    bl.revoke_token(
+                                        jti=old_jti,
+                                        expires_at=exp_dt,
+                                        user_id=user_id,
+                                        token_type="refresh",
+                                        reason="refresh-rotated",
+                                        revoked_by=None,
+                                        ip_address=None,
+                                    )
+                                )
                             except Exception as _sched_e:
                                 logger.debug(f"Refresh rotation: failed to schedule blacklist task: {_sched_e}")
                         else:
@@ -680,21 +720,26 @@ class JWTService:
                             except Exception as _hint_e:
                                 logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                             # Run async revoke in a temporary loop
-                            _asyncio.run(bl.revoke_token(
-                                jti=old_jti,
-                                expires_at=exp_dt,
-                                user_id=user_id,
-                                token_type="refresh",
-                                reason="refresh-rotated",
-                                revoked_by=None,
-                                ip_address=None
-                            ))
+                            _asyncio.run(
+                                bl.revoke_token(
+                                    jti=old_jti,
+                                    expires_at=exp_dt,
+                                    user_id=user_id,
+                                    token_type="refresh",
+                                    reason="refresh-rotated",
+                                    revoked_by=None,
+                                    ip_address=None,
+                                )
+                            )
                 except Exception as _e:
                     logger.debug(f"Refresh rotation: best-effort blacklist failed: {_e}")
         except Exception as _rot_err:
             logger.debug(f"Refresh rotation not applied: {_rot_err}")
 
-        logger.info(f"Refreshed access token for user {username}")
+        if self.settings.PII_REDACT_LOGS:
+            logger.info("Refreshed access token for authenticated user (details redacted)")
+        else:
+            logger.info(f"Refreshed access token for user {username}")
         return new_access_token, refresh_out
     
     def get_token_remaining_time(self, token: str) -> Optional[int]:
@@ -759,6 +804,11 @@ def verify_token(token: str, token_type: Optional[str] = None) -> Dict[str, Any]
 def hash_token(token: str) -> str:
     """Convenience function to hash a token"""
     return get_jwt_service().hash_token(token)
+
+
+def hash_token_candidates(token: str) -> list[str]:
+    """Convenience function to retrieve hash candidates for a token."""
+    return get_jwt_service().hash_token_candidates(token)
 
 
 #

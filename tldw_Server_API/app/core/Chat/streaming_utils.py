@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple
+from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple, List
 from loguru import logger
 
 #######################################################################################################################
@@ -149,6 +149,10 @@ class StreamingResponseHandler:
         self.text_transform = text_transform
         # Track whether a terminal [DONE] was already sent (directly or via transform-combined payload)
         self.done_sent = False
+        # Accumulate tool/function call deltas for persistence once the stream completes
+        self.tool_call_accumulator: Dict[int, Dict[str, Any]] = {}
+        self.tool_call_order: List[int] = []
+        self.function_call_accumulator: Optional[Dict[str, Any]] = None
         
     def update_activity(self):
         """Update the last activity timestamp."""
@@ -162,7 +166,91 @@ class StreamingResponseHandler:
         """Mark the stream as cancelled."""
         self.is_cancelled = True
         logger.info(f"Stream cancelled for conversation {self.conversation_id}")
-    
+
+    def _accumulate_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
+        """Merge incremental tool call deltas into a final structure."""
+        if not isinstance(tool_calls, list):
+            return
+        for idx, entry in enumerate(tool_calls):
+            if not isinstance(entry, dict):
+                continue
+            call_index = entry.get("index")
+            if call_index is None:
+                call_index = idx
+            try:
+                call_index = int(call_index)
+            except Exception:
+                call_index = idx
+            if call_index not in self.tool_call_accumulator:
+                self.tool_call_accumulator[call_index] = {
+                    "id": None,
+                    "type": None,
+                    "function": {"name": None, "arguments": ""},
+                }
+                self.tool_call_order.append(call_index)
+            accumulator = self.tool_call_accumulator[call_index]
+            if entry.get("id"):
+                accumulator["id"] = entry["id"]
+            if entry.get("type"):
+                accumulator["type"] = entry["type"]
+            function_delta = entry.get("function") or {}
+            if function_delta.get("name"):
+                accumulator["function"]["name"] = function_delta["name"]
+            if function_delta.get("arguments"):
+                accumulator["function"]["arguments"] += function_delta["arguments"]
+
+    def _accumulate_function_call(self, function_delta: Dict[str, Any]) -> None:
+        """Merge incremental function call deltas into a final structure."""
+        if not isinstance(function_delta, dict):
+            return
+        if self.function_call_accumulator is None:
+            self.function_call_accumulator = {"name": None, "arguments": ""}
+        if function_delta.get("name"):
+            self.function_call_accumulator["name"] = function_delta["name"]
+        if function_delta.get("arguments"):
+            self.function_call_accumulator["arguments"] += function_delta["arguments"]
+
+    def get_accumulated_tool_calls(self) -> Optional[List[Dict[str, Any]]]:
+        """Return the finalized list of tool calls, if any were streamed."""
+        if not self.tool_call_accumulator:
+            return None
+        ordered_indices = sorted(set(self.tool_call_order))
+        results: List[Dict[str, Any]] = []
+        for index in ordered_indices:
+            data = self.tool_call_accumulator.get(index)
+            if not data:
+                continue
+            function_block = data.get("function") or {}
+            results.append(
+                {
+                    "id": data.get("id"),
+                    "type": data.get("type"),
+                    "function": {
+                        "name": function_block.get("name"),
+                        "arguments": function_block.get("arguments", ""),
+                    },
+                }
+            )
+        return results or None
+
+    def get_accumulated_function_call(self) -> Optional[Dict[str, Any]]:
+        """Return the finalized function call payload, if one was streamed."""
+        if not self.function_call_accumulator:
+            return None
+        name = self.function_call_accumulator.get("name")
+        arguments = self.function_call_accumulator.get("arguments", "")
+        if not name and not arguments:
+            return None
+        return {"name": name, "arguments": arguments}
+
+    def has_accumulated_output(self) -> bool:
+        """Return True when any text, tool calls, or function calls were gathered."""
+        return bool(
+            self.full_response
+            or self.tool_call_accumulator
+            or self.function_call_accumulator
+        )
+
     async def heartbeat_generator(self) -> AsyncIterator[str]:
         """
         Generate heartbeat messages to keep the connection alive.
@@ -186,11 +274,11 @@ class StreamingResponseHandler:
     ) -> AsyncIterator[str]:
         """
         Safely generate streaming responses with error handling and cleanup.
-        
+
         Args:
             stream: The stream to process (sync or async iterator)
             save_callback: Optional callback to save the full response
-            
+
         Yields:
             SSE formatted messages
         """
@@ -198,7 +286,128 @@ class StreamingResponseHandler:
             # Send initial metadata
             yield f"event: stream_start\ndata: {json.dumps({'conversation_id': self.conversation_id, 'model': self.model_name, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
             self.update_activity()
-            
+
+            def iter_logical_lines(raw_chunk: str) -> List[str]:
+                return raw_chunk.splitlines() if ("\n" in raw_chunk or raw_chunk.count("data:") > 1) else [raw_chunk]
+
+            def append_content(text_piece: str) -> bool:
+                if not text_piece:
+                    return True
+                chunk_size = len(text_piece.encode("utf-8"))
+                if self.response_size + chunk_size > self.max_response_size:
+                    return False
+                self.full_response.append(text_piece)
+                self.response_size += chunk_size
+                return True
+
+            def process_line(raw_line: str) -> Tuple[List[str], bool]:
+                outputs: List[str] = []
+                stripped_leading = raw_line.lstrip("\ufeff\u200b\u200c\u200d\u2060")
+                candidate = stripped_leading.strip()
+                if not candidate:
+                    return outputs, False
+                if candidate.startswith(":") or candidate.startswith("event:"):
+                    return outputs, False
+                if candidate.startswith("data:"):
+                    payload_str = candidate[len("data:"):].strip()
+                    if payload_str == "[DONE]":
+                        outputs.append("data: [DONE]\n\n")
+                        self.update_activity()
+                        return outputs, True
+                    try:
+                        data = json.loads(payload_str)
+                    except Exception:
+                        outputs.append(f"data: {payload_str}\n\n")
+                        self.update_activity()
+                        return outputs, False
+                    if isinstance(data, dict) and "error" in data:
+                        try:
+                            outputs.append(f"data: {json.dumps({'error': data.get('error')})}\n\n")
+                        except Exception:
+                            outputs.append(f"data: {json.dumps({'error': {'message': 'Upstream error'}})}\n\n")
+                        self.error_occurred = True
+                        return outputs, True
+                    if isinstance(data, dict):
+                        choices = data.get("choices")
+                        if isinstance(choices, list) and choices:
+                            for choice in choices:
+                                delta = choice.get("delta") or {}
+                                tool_calls_delta = delta.get("tool_calls")
+                                if tool_calls_delta:
+                                    self._accumulate_tool_calls(tool_calls_delta)
+                                function_call_delta = delta.get("function_call")
+                                if function_call_delta:
+                                    self._accumulate_function_call(function_call_delta)
+                                if "content" in delta and delta["content"] is not None:
+                                    text_piece = str(delta["content"])
+                                    try:
+                                        if self.text_transform:
+                                            text_piece = self.text_transform(text_piece)
+                                    except StopStreamWithError as stopper:
+                                        err_payload = {
+                                            "error": {
+                                                "message": str(stopper) or "Stream blocked by policy",
+                                                "type": stopper.error_type,
+                                            }
+                                        }
+                                        outputs.append(f"data: {json.dumps(err_payload)}\n\n")
+                                        outputs.append("data: [DONE]\n\n")
+                                        self.done_sent = True
+                                        self.error_occurred = True
+                                        return outputs, True
+                                    except StopIteration:
+                                        return outputs, True
+                                    except Exception as transform_err:
+                                        logger.debug(f"text_transform error ignored: {transform_err}")
+                                    if text_piece and not append_content(text_piece):
+                                        outputs.append(
+                                            f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n"
+                                        )
+                                        self.error_occurred = True
+                                        return outputs, True
+                                    delta["content"] = text_piece
+                            outputs.append(f"data: {json.dumps(data)}\n\n")
+                            self.update_activity()
+                            return outputs, False
+                    outputs.append(f"data: {json.dumps(data)}\n\n")
+                    self.update_activity()
+                    return outputs, False
+                # Non-SSE chunk
+                text_piece = candidate
+                try:
+                    text_piece = str(text_piece)
+                except Exception:
+                    pass
+                try:
+                    if self.text_transform:
+                        text_piece = self.text_transform(text_piece)
+                except StopStreamWithError as stopper:
+                    err_payload = {
+                        "error": {
+                            "message": str(stopper) or "Stream blocked by policy",
+                            "type": stopper.error_type,
+                        }
+                    }
+                    outputs.append(f"data: {json.dumps(err_payload)}\n\n")
+                    outputs.append("data: [DONE]\n\n")
+                    self.done_sent = True
+                    self.error_occurred = True
+                    return outputs, True
+                except StopIteration:
+                    return outputs, True
+                except Exception as transform_err:
+                    logger.debug(f"text_transform error ignored: {transform_err}")
+                if text_piece and not append_content(text_piece):
+                    outputs.append(f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n")
+                    self.error_occurred = True
+                    return outputs, True
+                if text_piece:
+                    outputs.append(
+                        f"data: {json.dumps({'choices': [{'delta': {'content': text_piece}}]})}\n\n"
+                    )
+                    self.update_activity()
+                return outputs, False
+
             # Process the stream
             if hasattr(stream, '__aiter__'):
                 # Async iterator
@@ -206,78 +415,31 @@ class StreamingResponseHandler:
                     if self.is_cancelled:
                         logger.info(f"Stream processing cancelled for {self.conversation_id}")
                         break
-                    
+
                     if self.is_timed_out():
                         logger.warning(f"Stream timeout during processing for {self.conversation_id}")
                         yield f"data: {json.dumps({'error': {'message': 'Stream timeout'}})}\n\n"
                         break
-                    
+
                     try:
-                        # Normalize provider chunk (raw text or SSE frames) to one or more text deltas
                         raw_str = chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else str(chunk)
-
-                        def prepare_outputs_for_line(line: str):
-                            """Return (outputs: list[str], should_stop: bool) for a single logical line."""
-                            outputs = []
-                            text_content, error_payload, is_done = _extract_text_from_upstream_sse(line)
-                            if is_done:
-                                return outputs, True
-                            if error_payload is not None:
-                                self.error_occurred = True
-                                outputs.append(f"data: {json.dumps(error_payload)}\n\n")
-                                return outputs, True
-                            if text_content:
-                                # Optional text transform
-                                if self.text_transform:
-                                    try:
-                                        text_content = self.text_transform(text_content)
-                                    except StopIteration:
-                                        # Reserved for internal stream signalling — treat as stop
-                                        return outputs, True
-                                    except Exception as _tf_e:
-                                        # If transform wishes to abort the stream gracefully with an SSE error, it can
-                                        # raise a StopStreamWithError; other exceptions are logged and ignored
-                                        if isinstance(_tf_e, StopStreamWithError):
-                                            self.error_occurred = True
-                                            err_payload = {"error": {"message": str(_tf_e) or "Stream blocked by policy", "type": _tf_e.error_type}}
-                                            combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]" + "\n\n"
-                                            outputs.append(combined)
-                                            self.done_sent = True
-                                            return outputs, True
-                                        logger.debug(f"text_transform error ignored: {_tf_e}")
-                                # Enforce size limit
-                                chunk_size = len(text_content.encode('utf-8'))
-                                if self.response_size + chunk_size > self.max_response_size:
-                                    logger.warning(f"Stream response size limit exceeded for {self.conversation_id}")
-                                    outputs.append(f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n")
-                                    return outputs, True
-                                self.full_response.append(text_content)
-                                self.response_size += chunk_size
-                                self.update_activity()
-                                outputs.append(f"data: {json.dumps({'choices': [{'delta': {'content': text_content}}]})}\n\n")
-                            return outputs, False
-
-                        # If the chunk contains multiple logical lines, process each; otherwise single
-                        lines = raw_str.splitlines() if ("\n" in raw_str or raw_str.count("data:") > 1) else [raw_str]
-                        for ls in lines:
-                            should_stop = False
-                            outputs, should_stop = prepare_outputs_for_line(ls)
+                        stop_stream = False
+                        for logical_line in iter_logical_lines(raw_str):
+                            outputs, should_stop = process_line(logical_line)
                             for out in outputs:
                                 yield out
                             if should_stop:
+                                stop_stream = True
                                 break
-                        if should_stop:
+                        if stop_stream:
                             break
-
                     except Exception as e:
                         logger.error(f"Error processing stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
                         yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
                         break
             else:
-                # Sync iterator - run in executor
-                loop = asyncio.get_running_loop()
-                
+                # Sync iterator
                 def sync_iterator():
                     try:
                         for chunk in stream:
@@ -286,70 +448,34 @@ class StreamingResponseHandler:
                             yield chunk
                     except StopIteration:
                         pass
-                
+
                 for chunk in sync_iterator():
                     if self.is_cancelled:
                         break
-                    
+
                     if self.is_timed_out():
                         logger.warning(f"Stream timeout during sync processing for {self.conversation_id}")
                         yield f"data: {json.dumps({'error': {'message': 'Stream timeout'}})}\n\n"
                         break
-                    
+
                     try:
                         raw_str = chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else str(chunk)
-
-                        def prepare_outputs_for_line_sync(line: str):
-                            outputs = []
-                            text_content, error_payload, is_done = _extract_text_from_upstream_sse(line)
-                            if is_done:
-                                return outputs, True
-                            if error_payload is not None:
-                                self.error_occurred = True
-                                outputs.append(f"data: {json.dumps(error_payload)}\n\n")
-                                return outputs, True
-                            if text_content:
-                                if self.text_transform:
-                                    try:
-                                        text_content = self.text_transform(text_content)
-                                    except StopIteration:
-                                        return outputs, True
-                                    except Exception as _tf_e:
-                                        if isinstance(_tf_e, StopStreamWithError):
-                                            self.error_occurred = True
-                                            err_payload = {"error": {"message": str(_tf_e) or "Stream blocked by policy", "type": _tf_e.error_type}}
-                                            combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]" + "\n\n"
-                                            outputs.append(combined)
-                                            self.done_sent = True
-                                            return outputs, True
-                                        logger.debug(f"text_transform error ignored: {_tf_e}")
-                                chunk_size = len(text_content.encode('utf-8'))
-                                if self.response_size + chunk_size > self.max_response_size:
-                                    logger.warning(f"Stream response size limit exceeded for {self.conversation_id}")
-                                    outputs.append(f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n")
-                                    return outputs, True
-                                self.full_response.append(text_content)
-                                self.response_size += chunk_size
-                                self.update_activity()
-                                outputs.append(f"data: {json.dumps({'choices': [{'delta': {'content': text_content}}]})}\n\n")
-                            return outputs, False
-
-                        lines = raw_str.splitlines() if ("\n" in raw_str or raw_str.count("data:") > 1) else [raw_str]
-                        for ls in lines:
-                            should_stop = False
-                            outputs, should_stop = prepare_outputs_for_line_sync(ls)
+                        stop_stream = False
+                        for logical_line in iter_logical_lines(raw_str):
+                            outputs, should_stop = process_line(logical_line)
                             for out in outputs:
                                 yield out
                             if should_stop:
+                                stop_stream = True
                                 break
-                        if should_stop:
+                        if stop_stream:
                             break
                     except Exception as e:
                         logger.error(f"Error processing sync stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
                         yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
                         break
-            
+
         except asyncio.CancelledError:
             # Client disconnected
             logger.info(f"Client disconnected from stream for {self.conversation_id}")
@@ -401,17 +527,30 @@ class StreamingResponseHandler:
                     yield "data: [DONE]\n\n"
                     self.done_sent = True
                 
-                # Save the full response if callback provided (only when not cancelled)
+                # Save the full response/tool calls if callback provided (only when not cancelled)
+                has_output = self.has_accumulated_output()
                 if (
                     not self.is_cancelled
                     and save_callback
-                    and self.full_response
                     and not self.error_occurred
+                    and has_output
                 ):
                     full_text = "".join(self.full_response)
+                    aggregated_tool_calls = self.get_accumulated_tool_calls()
+                    aggregated_function_call = self.get_accumulated_function_call()
                     try:
-                        await save_callback(full_text)
-                        logger.info(f"Saved streaming response for {self.conversation_id} (length: {len(full_text)})")
+                        await save_callback(
+                            full_text,
+                            aggregated_tool_calls,
+                            aggregated_function_call,
+                        )
+                        logger.info(
+                            "Saved streaming response for %s (text_len=%d, tool_calls=%d, function_call=%s)",
+                            self.conversation_id,
+                            len(full_text),
+                            len(aggregated_tool_calls or []),
+                            "yes" if aggregated_function_call else "no",
+                        )
                     except Exception as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
                 

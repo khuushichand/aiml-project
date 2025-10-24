@@ -4,6 +4,7 @@
 import hashlib
 import json as _json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -27,6 +28,20 @@ from ..queue_schemas import (
 from .base_worker import BaseWorker, WorkerConfig
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from ..messages import normalize_message
+from tldw_Server_API.app.core.Chunking.constants import (
+    ensure_frontmatter_metadata,
+    prepend_frontmatter,
+)
+
+
+class _ChunkString(str):
+    """String subclass that carries boundary whitespace preservation hints."""
+
+    def __new__(cls, value: str, leading_preserve: bool = False, trailing_preserve: bool = False):
+        obj = str.__new__(cls, value)
+        obj._chunk_leading_preserve = leading_preserve
+        obj._chunk_trailing_preserve = trailing_preserve
+        return obj
 
 
 class ChunkingWorker(BaseWorker):
@@ -68,13 +83,17 @@ class ChunkingWorker(BaseWorker):
             f"Processing chunking job {message.job_id} for media {message.media_id}"
         )
         
+        source_metadata: Dict[str, Any] = {}
+        if isinstance(message.source_metadata, dict):
+            source_metadata = ensure_frontmatter_metadata(message.source_metadata)
+
         try:
             # Update job status
             await self._update_job_status(message.job_id, JobStatus.CHUNKING)
             
             # Perform chunking
             chunks = self._chunk_text(
-                message.content,
+                prepend_frontmatter(message.content, source_metadata),
                 message.chunking_config,
             )
             
@@ -90,7 +109,7 @@ class ChunkingWorker(BaseWorker):
                     chunk_id=chunk_id,
                     content=chunk_text,
                     metadata={
-                        **message.source_metadata,
+                        **source_metadata,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
                         "content_type": message.content_type,
@@ -269,7 +288,57 @@ class ChunkingWorker(BaseWorker):
                     if r.text and 0 <= start_idx <= end_idx <= len(text):
                         out2.append((r.text, start_idx, end_idx))
                 if out2:
-                    return out2
+                    adjusted: List[tuple[str, int, int]] = []
+                    last_end = 0
+                    for idx, (chunk_text, start_idx, end_idx) in enumerate(out2):
+                        adj_start = start_idx
+                        adj_end = end_idx
+                        if adj_start < last_end:
+                            adj_start = last_end
+                        if adj_start >= adj_end:
+                            continue
+                        if idx < len(out2) - 1:
+                            next_start = out2[idx + 1][1]
+                            if next_start > adj_end:
+                                adj_end = next_start
+                        if adj_start > last_end:
+                            back = adj_start
+                            while back > last_end and text[back - 1].isspace():
+                                back -= 1
+                            if back < adj_start:
+                                adj_start = back
+                        chunk_slice = text[adj_start:adj_end]
+                        if not chunk_slice:
+                            continue
+                        trimmed_leading = False
+                        if adj_start == 0 and chunk_slice:
+                            offset = len(chunk_slice) - len(chunk_slice.lstrip())
+                            if offset:
+                                chunk_slice = chunk_slice[offset:]
+                                adj_start += offset
+                                trimmed_leading = True
+                        leading_flag = adj_start > 0 and text[adj_start - 1].isspace()
+                        if trimmed_leading:
+                            leading_flag = False
+                        trimmed_trailing = False
+                        if adj_end >= len(text) and chunk_slice:
+                            rstripped = chunk_slice.rstrip()
+                            if len(rstripped) != len(chunk_slice):
+                                trimmed_trailing = True
+                            adj_end = adj_start + len(rstripped)
+                            chunk_slice = rstripped
+                        if not chunk_slice:
+                            continue
+                        trailing_flag = False
+                        if adj_end < len(text) and text[adj_end].isspace():
+                            remainder = text[adj_end:]
+                            trailing_flag = any(not ch.isspace() for ch in remainder)
+                        if trimmed_trailing:
+                            trailing_flag = False
+                        adjusted.append((_ChunkString(chunk_slice, leading_flag, trailing_flag), adj_start, adj_end))
+                        last_end = adj_end
+                if adjusted:
+                    return adjusted
             except Exception as e:
                 logger.warning(f"v2 chunker failed; falling back to simple chunking. Error: {e}")
 
@@ -281,19 +350,45 @@ class ChunkingWorker(BaseWorker):
         chunks: List[tuple[str, int, int]] = []
         if not text:
             return chunks
-        start = 0
+        cursor = 0
         text_length = len(text)
-        while start < text_length:
-            end = min(start + max(1, chunk_size), text_length)
-            if end < text_length and separator:
-                search_start = max(start, end - int(max(1, chunk_size) * 0.2))
-                last_separator = text.rfind(separator, search_start, end)
+        while cursor < text_length:
+            chunk_start = cursor
+            chunk_end = min(cursor + max(1, chunk_size), text_length)
+            if chunk_end < text_length and separator:
+                search_start = max(chunk_start, chunk_end - int(max(1, chunk_size) * 0.2))
+                last_separator = text.rfind(separator, search_start, chunk_end)
                 if last_separator != -1:
-                    end = last_separator + len(separator)
-            chunk = text[start:end].strip()
+                    chunk_end = last_separator + len(separator)
+            chunk = text[chunk_start:chunk_end]
+            adj_start = chunk_start
+            adj_end = chunk_end
+            trimmed_leading = False
+            if adj_start == 0 and chunk:
+                offset = len(chunk) - len(chunk.lstrip())
+                if offset:
+                    chunk = chunk[offset:]
+                    adj_start += offset
+                    trimmed_leading = True
+            trimmed_trailing = False
+            if adj_end >= text_length and chunk:
+                trimmed = chunk.rstrip()
+                if len(trimmed) != len(chunk):
+                    trimmed_trailing = True
+                adj_end = adj_start + len(trimmed)
+                chunk = trimmed
             if chunk:
-                chunks.append((chunk, start, end))
-            start = end - max(0, overlap) if end < text_length else text_length
+                leading_flag = adj_start > 0 and text[adj_start - 1].isspace()
+                if trimmed_leading:
+                    leading_flag = False
+                trailing_flag = False
+                if adj_end < text_length and text[adj_end].isspace():
+                    remainder = text[adj_end:]
+                    trailing_flag = any(not ch.isspace() for ch in remainder)
+                if trimmed_trailing:
+                    trailing_flag = False
+                chunks.append((_ChunkString(chunk, leading_flag, trailing_flag), adj_start, adj_end))
+            cursor = adj_end - max(0, overlap) if adj_end < text_length else text_length
         return chunks
     
     def _generate_chunk_id(self, job_id: str, chunk_index: int) -> str:
@@ -301,7 +396,7 @@ class ChunkingWorker(BaseWorker):
         data = f"{job_id}:{chunk_index}"
         return hashlib.sha256(data.encode()).hexdigest()[:16]
 
-    def _normalize_for_hash(self, text: str) -> str:
+    def _normalize_for_hash(self, text: str, *, preserve_boundary_whitespace: bool = False) -> str:
         """Normalize text for stable hashing across ingests.
 
         - Unicode NFC normalization
@@ -309,12 +404,26 @@ class ChunkingWorker(BaseWorker):
         - Collapse internal whitespace to a single space
         - Lowercase
         """
+        leading_hint = getattr(text, "_chunk_leading_preserve", False)
+        trailing_hint = getattr(text, "_chunk_trailing_preserve", False)
         if not isinstance(text, str):
             text = str(text or "")
-        t = unicodedata.normalize('NFC', text)
-        t = t.strip()
-        t = " ".join(t.split())
+        original = text
+        t = unicodedata.normalize('NFC', original)
+        has_leading_ws = bool(t) and t[0].isspace()
+        has_trailing_ws = bool(t) and t[-1].isspace()
+        t = re.sub(r"\s+", " ", t)
+        if not preserve_boundary_whitespace and not leading_hint and not trailing_hint:
+            t = t.strip()
         t = t.lower()
+        apply_leading = leading_hint or (preserve_boundary_whitespace and has_leading_ws)
+        apply_trailing = trailing_hint or (preserve_boundary_whitespace and has_trailing_ws)
+        if apply_leading and t and not t.startswith(" "):
+            t = " " + t
+        if apply_trailing and t and not t.endswith(" "):
+            t = t + " "
+        if not preserve_boundary_whitespace and not leading_hint and not trailing_hint:
+            t = t.strip()
         return t
     
     async def _update_job_progress(self, job_id: str, percentage: float, total_chunks: int):

@@ -104,10 +104,6 @@ class _StubPersonalizationDB:
         return _noop
 
 
-# Mark all tests in this package as integration tests (require PostgreSQL)
-pytestmark = pytest.mark.integration
-
-
 async def _can_connect_postgres(host: str, port: int, user: str, password: str, database: str = "postgres") -> bool:
     try:
         conn = await asyncpg.connect(host=host, port=port, user=user, password=password, database=database)

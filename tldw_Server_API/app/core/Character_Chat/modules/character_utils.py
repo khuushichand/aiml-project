@@ -34,8 +34,8 @@ def replace_placeholders(text: Optional[str], char_name: Optional[str], user_nam
     """
     if not text:
         return ""
-    char_name_actual = char_name if char_name is not None else "Character"
-    user_name_actual = user_name if user_name is not None else "User"
+    char_name_actual = str(char_name) if char_name is not None else "Character"
+    user_name_actual = str(user_name) if user_name is not None else "User"
     replacements = {
         '{{char}}': char_name_actual,
         '{{user}}': user_name_actual,
@@ -126,3 +126,55 @@ def get_character_list_for_ui(db: CharactersRAGDB, limit: int = 1000) -> List[Di
     except Exception as e:
         logger.error(f"Unexpected error fetching character list for UI: {e}", exc_info=True)
         return []
+
+
+# --- Sender to Role Normalization ---
+
+# --- Sender alias constants (centralized for reuse) ---
+# Expose canonical alias sets for consistent sender-role handling across modules.
+USER_SENDER_ALIASES = {
+    "user", "you", "human", "player", "speaker", "speaker1", "speaker 1", "speaker-1"
+}
+CHAR_SENDER_ALIASES = {"assistant", "bot", "ai", "character"}
+SYSTEM_ALIASES = {"system", "narrator", "commentary", "metadata"}
+TOOL_ALIASES = {"tool", "assistant_tool", "function"}
+NON_CHARACTER_SENDER_ALIASES = set().union(SYSTEM_ALIASES, TOOL_ALIASES)
+
+def map_sender_to_role(sender: Optional[str], character_name: Optional[str]) -> str:
+    """Map stored DB sender strings to OpenAI-compatible roles.
+
+    Args:
+        sender: Raw sender as stored in DB (may be character name or alias)
+        character_name: Character name for this conversation (used as assistant alias)
+
+    Returns:
+        One of: "user", "assistant", "system", "tool"
+    """
+    s = (sender or "").strip().lower()
+    char_lower = (character_name or "").strip().lower()
+    if not s:
+        return "assistant"
+    if s in USER_SENDER_ALIASES:
+        return "user"
+    if s in TOOL_ALIASES:
+        return "tool"
+    if s in SYSTEM_ALIASES or any(s.startswith(f"{p}:") for p in SYSTEM_ALIASES):
+        return "system"
+    if s in CHAR_SENDER_ALIASES or (char_lower and s == char_lower):
+        return "assistant"
+    return "assistant"
+
+# Optional explicit exports for constants
+__all__ = [
+    "replace_placeholders",
+    "replace_user_placeholder",
+    "extract_character_id_from_ui_choice",
+    "get_character_list_for_ui",
+    "map_sender_to_role",
+    # constants
+    "USER_SENDER_ALIASES",
+    "CHAR_SENDER_ALIASES",
+    "SYSTEM_ALIASES",
+    "TOOL_ALIASES",
+    "NON_CHARACTER_SENDER_ALIASES",
+]

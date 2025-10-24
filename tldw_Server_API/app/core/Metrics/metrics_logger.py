@@ -17,15 +17,18 @@ from tldw_Server_API.app.core.Utils.Utils import logger
 #
 # Functions:
 
+def _utc_timestamp() -> str:
+    """Return an ISO-8601 UTC timestamp with a single Z suffix."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def log_counter(metric_name, labels=None, value=1):
     log_entry = {
         "event": metric_name,
         "type": "counter",
         "value": value,
         "labels": labels or {},
-        # datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
-        # FIXME
-        "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
+        "timestamp": _utc_timestamp(),
     }
     logger.info("metric", extra=log_entry)
 
@@ -36,9 +39,7 @@ def log_histogram(metric_name, value, labels=None):
         "type": "histogram",
         "value": value,
         "labels": labels or {},
-        # datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
-        # FIXME
-        "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
+        "timestamp": _utc_timestamp(),
     }
     logger.info("metric", extra=log_entry)
 
@@ -56,7 +57,7 @@ def log_gauge(metric_name, value, labels=None):
         "type": "gauge",
         "value": value,
         "labels": labels or {},
-        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+        "timestamp": _utc_timestamp(),
     }
     logger.info("metric", extra=log_entry)
 

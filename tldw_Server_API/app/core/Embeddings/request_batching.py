@@ -3,12 +3,15 @@
 
 import asyncio
 import time
+import json
+import hashlib
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass
 from collections import deque
 import uuid
 
 from loguru import logger
+from pydantic import BaseModel
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config, ProviderConfig
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
@@ -24,6 +27,7 @@ class BatchRequest:
     metadata: Dict[str, Any]
     future: asyncio.Future
     timestamp: float
+    config_override: Optional[Dict[str, Any]] = None
 
 
 class RequestBatcher:
@@ -50,8 +54,8 @@ class RequestBatcher:
         self.adaptive_batching = self.config.batching.adaptive_batching
         
         # Request queues per model
-        self.queues: Dict[str, deque] = {}
-        self.processing_tasks: Dict[str, asyncio.Task] = {}
+        self.queues: Dict[Tuple[str, str, str], deque] = {}
+        self.processing_tasks: Dict[Tuple[str, str, str], asyncio.Task] = {}
         
         # Statistics
         self.stats = {
@@ -80,7 +84,8 @@ class RequestBatcher:
         text: str,
         model: str,
         provider: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        config_override: Optional[Dict[str, Any]] = None
     ) -> Any:
         """
         Submit a request for batching.
@@ -118,7 +123,13 @@ class RequestBatcher:
 
         if not self.enabled:
             # Batching disabled, process immediately
-            return await self._process_single(text, model, provider, metadata)
+            return await self._process_single(
+                text,
+                model,
+                provider,
+                metadata,
+                config_override=config_override,
+            )
         
         # Create request
         loop = asyncio.get_running_loop()
@@ -128,18 +139,33 @@ class RequestBatcher:
             model=model,
             provider=provider,
             metadata=metadata,
+            config_override=config_override,
             future=loop.create_future(),
             timestamp=time.time()
         )
         
-        # Get or create queue for this model
-        queue_key = f"{provider}:{model}"
+        # Get or create queue for this model/config
+        queue_key = self._queue_key(provider, model, config_override)
         if queue_key not in self.queues:
             self.queues[queue_key] = deque()
-            # Start processing task for this queue
-            self.processing_tasks[queue_key] = asyncio.create_task(
-                self._process_queue(queue_key)
-            )
+
+        task = self.processing_tasks.get(queue_key)
+        if task is None or task.done():
+            if task is not None and task.done():
+                try:
+                    reason = "cancelled" if task.cancelled() else f"finished (error={task.exception()})"
+                except Exception:
+                    reason = "finished"
+                logger.debug(f"Restarting processing task for queue {self._queue_label(queue_key)}: previous task {reason}.")
+
+            new_task = asyncio.create_task(self._process_queue(queue_key))
+            self.processing_tasks[queue_key] = new_task
+
+            def _remove_task(completed: asyncio.Task, key: str = queue_key) -> None:
+                if self.processing_tasks.get(key) is completed:
+                    self.processing_tasks.pop(key, None)
+
+            new_task.add_done_callback(_remove_task)
         
         # Add to queue
         self.queues[queue_key].append(request)
@@ -155,7 +181,7 @@ class RequestBatcher:
             queue_key: Queue identifier (provider:model)
         """
         queue = self.queues[queue_key]
-        provider, model = queue_key.split(":", 1)
+        provider, model, _ = queue_key
         
         while True:
             try:
@@ -251,6 +277,10 @@ class RequestBatcher:
         try:
             # Extract texts
             texts = [req.text for req in batch]
+            override_config = next(
+                (req.config_override for req in batch if req.config_override is not None),
+                None,
+            )
             
             # Log batch metrics
             self.metrics.log_batch_size(provider, len(texts))
@@ -262,7 +292,7 @@ class RequestBatcher:
             )
             
             # Create config for batch
-            batch_config = self._build_user_app_config(provider, model)
+            batch_config = override_config or self._build_user_app_config(provider, model)
             
             # Get embeddings
             embeddings = await embeddings_create_embeddings_batch_async(
@@ -317,7 +347,8 @@ class RequestBatcher:
         text: str,
         model: str,
         provider: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        config_override: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
         Process a single request without batching.
@@ -331,20 +362,94 @@ class RequestBatcher:
         Returns:
             Embedding result
         """
-        # Import here to avoid circular dependency
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding
-        
-        config = self._build_user_app_config(provider, model)
-        
-        return create_embedding(
-            text,
-            config,
-            model_id_override=f"{provider}:{model}"
-        )
+        metadata = metadata or {}
+
+        # If a config override is present we need to honour it by delegating
+        # to the synchronous embedding loader, but we still do the work in an
+        # executor so the event loop remains responsive.
+        if config_override:
+            loop = asyncio.get_running_loop()
+
+            def _invoke_sync():
+                from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding
+
+                return create_embedding(
+                    text,
+                    config_override,
+                    model_id_override=f"{provider}:{model}",
+                )
+
+            return await loop.run_in_executor(None, _invoke_sync)
+
+        # Try the async embedding service first so we avoid blocking.
+        from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
+        service = get_async_embedding_service()
+        user_id = metadata.get("user_id")
+
+        provider_candidates = []
+        for candidate in (
+            provider,
+            self._normalize_provider_name(provider),
+            self._alias_provider_name(provider),
+        ):
+            if candidate and candidate not in provider_candidates:
+                provider_candidates.append(candidate)
+
+        last_provider_error: Optional[ValueError] = None
+        for candidate in provider_candidates:
+            try:
+                return await service.create_embedding(
+                    text=text,
+                    model=model,
+                    provider=candidate,
+                    user_id=user_id,
+                    use_batching=False,
+                )
+            except ValueError as exc:
+                last_provider_error = exc
+                continue
+
+        # Fall back to executor-based call if the async service cannot satisfy
+        # the request (for example when the provider/model pair is not registered
+        # in the async embedding config). This mirrors the legacy behaviour
+        # without tying up the event loop.
+        loop = asyncio.get_running_loop()
+
+        def _invoke_sync_default():
+            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding
+
+            config = self._build_user_app_config(provider, model)
+            return create_embedding(
+                text,
+                config,
+                model_id_override=f"{provider}:{model}",
+            )
+
+        if last_provider_error:
+            logger.debug(
+                "Async provider resolution failed for provider '{provider}' (model '{model}'): {error}; falling back to executor path.",
+                provider=provider,
+                model=model,
+                error=last_provider_error,
+            )
+
+        return await loop.run_in_executor(None, _invoke_sync_default)
     
     def _build_user_app_config(self, provider: str, model: str) -> Dict[str, Any]:
         """Construct full user app config for embeddings executor."""
-        provider_config = self.config.get_provider(provider)
+        provider_config = None
+        candidates = {
+            provider,
+            self._normalize_provider_name(provider),
+        }
+        alias = self._alias_provider_name(provider)
+        if alias:
+            candidates.add(alias)
+
+        for candidate in candidates:
+            provider_config = self.config.get_provider(candidate)
+            if provider_config is not None:
+                break
         if provider_config is None:
             raise ValueError(f"Provider '{provider}' is not configured for embeddings batching.")
         
@@ -383,6 +488,60 @@ class RequestBatcher:
             "local": "local_api"
         }
         return mapping.get(provider.lower(), provider)
+    
+    @staticmethod
+    def _alias_provider_name(provider: str) -> Optional[str]:
+        """Return alternate configuration key for provider names."""
+        mapping = {
+            "local_api": "local",
+            "local": "local_api",
+        }
+        return mapping.get(provider.lower())
+
+    @staticmethod
+    def _fingerprint_config(config: Optional[Dict[str, Any]]) -> str:
+        """Return a stable fingerprint for a config override."""
+        if config is None:
+            return "__default__"
+
+        def _normalize(value: Any) -> Any:
+            if isinstance(value, BaseModel):
+                return _normalize(value.model_dump())
+            if isinstance(value, dict):
+                return {key: _normalize(value[key]) for key in sorted(value.keys())}
+            if isinstance(value, (list, tuple)):
+                return [_normalize(v) for v in value]
+            if isinstance(value, set):
+                return sorted(_normalize(v) for v in value)
+            if callable(value):
+                return getattr(value, "__qualname__", repr(value))
+            return value
+
+        try:
+            normalized = _normalize(config)
+            payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
+            return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        except Exception as exc:
+            try:
+                logger.debug(f"Falling back to identity fingerprint for config override due to: {exc}")
+            except Exception:
+                pass
+            return f"cfg_fallback:{id(config)}"
+
+    def _queue_key(
+        self,
+        provider: str,
+        model: str,
+        config_override: Optional[Dict[str, Any]],
+    ) -> Tuple[str, str, str]:
+        """Build queue key incorporating provider, model, and config override."""
+        return (provider, model, self._fingerprint_config(config_override))
+    
+    @staticmethod
+    def _queue_label(queue_key: Tuple[str, str, str]) -> str:
+        """Readable label for queue keys (for logging/tests)."""
+        provider, model, fingerprint = queue_key
+        return f"{provider}:{model}:{fingerprint}"
     
     @staticmethod
     def _build_provider_section(provider_config: ProviderConfig) -> Optional[Dict[str, Any]]:
@@ -460,7 +619,7 @@ class RequestBatcher:
     def get_statistics(self) -> Dict[str, Any]:
         """Get batching statistics"""
         queue_sizes = {
-            key: len(queue) for key, queue in self.queues.items()
+            self._queue_label(key): len(queue) for key, queue in self.queues.items()
         }
         
         return {
@@ -477,7 +636,7 @@ class RequestBatcher:
         """Force process all pending requests in queues"""
         for queue_key, queue in self.queues.items():
             if queue:
-                provider, model = queue_key.split(":", 1)
+                provider, model, _ = queue_key
                 batch = list(queue)
                 queue.clear()
                 await self._process_batch(batch, provider, model)
@@ -488,11 +647,25 @@ class RequestBatcher:
         await self.flush_all_queues()
         
         # Cancel processing tasks
-        for task in self.processing_tasks.values():
-            task.cancel()
+        current_loop = asyncio.get_running_loop()
+        tasks_to_await: List[asyncio.Task] = []
+        for task in list(self.processing_tasks.values()):
+            task_loop = task.get_loop()
+            if task_loop is current_loop:
+                task.cancel()
+                tasks_to_await.append(task)
+            else:
+                try:
+                    if not task.done():
+                        task_loop.call_soon_threadsafe(task.cancel)
+                except Exception:
+                    # Loop may already be closed; best effort cancellation
+                    pass
         
         # Wait for tasks to complete
-        await asyncio.gather(*self.processing_tasks.values(), return_exceptions=True)
+        if tasks_to_await:
+            await asyncio.gather(*tasks_to_await, return_exceptions=True)
+        self.processing_tasks.clear()
         
         logger.info("Request batcher shutdown complete")
 
@@ -540,7 +713,13 @@ async def create_embeddings_batch_async(
     # Submit requests
     tasks = []
     for text in texts:
-        task = batcher.submit_request(text, model, provider, metadata=metadata)
+        task = batcher.submit_request(
+            text,
+            model,
+            provider,
+            metadata=metadata,
+            config_override=config,
+        )
         tasks.append(task)
     
     # Wait for all results

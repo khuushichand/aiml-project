@@ -36,6 +36,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import (
     UserTier,
     ChunkingConfig
 )
+from tldw_Server_API.app.core.Chunking.constants import FRONTMATTER_SENTINEL_KEY
 
 
 @pytest.fixture
@@ -364,6 +365,8 @@ class TestChunkingWorker:
 
         assert isinstance(result, EmbeddingMessage)
         assert len(result.chunks) > 0
+        first_metadata = result.chunks[0].metadata
+        assert first_metadata.get(FRONTMATTER_SENTINEL_KEY) is True
         mock_status.assert_awaited()
         mock_progress.assert_awaited()
 

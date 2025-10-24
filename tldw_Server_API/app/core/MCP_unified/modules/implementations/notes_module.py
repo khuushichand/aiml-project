@@ -5,9 +5,9 @@ FTS-only search and retrieval for user Notes stored in ChaChaNotes DB.
 Returns normalized result schema with 0–1 scores and 300-char snippets by default.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+import asyncio
+from typing import Dict, Any, List, Optional
 from loguru import logger
-from datetime import datetime
 
 from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -166,50 +166,16 @@ class NotesModule(BaseModule):
                     snippet_len = int(sc.get("snippet_length", snippet_len))
         except Exception:
             pass
+        snippet_len = max(50, min(2000, snippet_len))
 
-        db = self._open_db(context)
-        # CharactersRAGDB.search_notes only supports limit; emulate offset by over-fetching then slicing
-        raw = db.search_notes(query, limit=limit + offset)
-        rows = raw[offset: offset + limit]
-        # Normalize scores (no explicit rank available → positional fallback)
-        scores = _normalize_scores(rows, score_key=None)
-
-        results = []
-        for i, r in enumerate(rows):
-            note_id = r.get("id")
-            title = r.get("title")
-            content = r.get("content") or ""
-            created_at = r.get("created_at")
-            last_modified = r.get("last_modified") or r.get("updated_at")
-            # Approximate offset of query within content
-            approx_offset = None
-            try:
-                idx = content.lower().find(query.lower()) if query else -1
-                if idx >= 0:
-                    approx_offset = idx
-            except Exception:
-                approx_offset = None
-            results.append({
-                "id": note_id,
-                "source": "notes",
-                "title": title,
-                "snippet": _make_snippet(content, query, snippet_len),
-                "uri": f"notes://{note_id}",
-                "score": float(scores[i] if i < len(scores) else 0.0),
-                "score_type": "fts",
-                "created_at": created_at,
-                "last_modified": last_modified,
-                "version": r.get("version"),
-                "tags": None,
-                "loc": ({"approx_offset": approx_offset} if approx_offset is not None else None),
-            })
-
-        return {
-            "results": results,
-            "has_more": len(raw) > (offset + len(rows)),
-            "next_offset": (offset + len(rows)) if len(raw) > (offset + len(rows)) else None,
-            "total_estimated": len(raw),
-        }
+        return await asyncio.to_thread(
+            self._search_notes_sync,
+            context,
+            query,
+            limit,
+            offset,
+            snippet_len,
+        )
 
     def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
         if tool_name == "notes.search":
@@ -232,6 +198,9 @@ class NotesModule(BaseModule):
             retrieval = arguments.get("retrieval") or {}
             if not isinstance(retrieval, dict):
                 raise ValueError("retrieval must be an object")
+            mode = retrieval.get("mode", "snippet")
+            if mode not in {"snippet", "full"}:
+                raise ValueError("retrieval.mode must be 'snippet' or 'full'")
             snip = int(retrieval.get("snippet_length", 300))
             if snip < 50 or snip > 2000:
                 raise ValueError("retrieval.snippet_length must be 50..2000")
@@ -249,34 +218,129 @@ class NotesModule(BaseModule):
                     snippet_len = int(sc.get("snippet_length", snippet_len))
         except Exception:
             pass
+        snippet_len = max(50, min(2000, snippet_len))
 
+        return await asyncio.to_thread(
+            self._get_note_sync,
+            context,
+            note_id,
+            mode,
+            snippet_len,
+        )
+
+    def _search_notes_sync(
+        self,
+        context: Any | None,
+        query: str,
+        limit: int,
+        offset: int,
+        snippet_len: int,
+    ) -> Dict[str, Any]:
         db = self._open_db(context)
-        row = db.get_note_by_id(note_id)
-        if not row:
-            raise ValueError(f"Note not found: {note_id}")
-        content = row.get("content") or ""
-        meta = {
-            "id": row.get("id"),
-            "source": "notes",
-            "title": row.get("title"),
-            "snippet": _make_snippet(content, None, snippet_len),
-            "uri": f"notes://{row.get('id')}",
-            "score": 1.0,
-            "score_type": "fts",
-            "created_at": row.get("created_at"),
-            "last_modified": row.get("last_modified") or row.get("updated_at"),
-            "version": row.get("version"),
-            "tags": None,
-            "loc": None,
-        }
+        try:
+            fetch_limit = limit + 1  # fetch one extra row to detect additional pages
+            raw = db.search_notes(query, limit=fetch_limit, offset=offset)
+            rows = raw[:limit]
+            # Detect score key if backend provided it
+            score_key = None
+            if rows:
+                first = rows[0]
+                if isinstance(first.get("rank"), (int, float)):
+                    score_key = "rank"
+                elif isinstance(first.get("bm25_score"), (int, float)):
+                    score_key = "bm25_score"
+            scores = _normalize_scores(rows, score_key=score_key)
 
-        if mode == "full":
-            body = content
-        else:
-            body = _make_snippet(content, None, snippet_len)
+            has_more = len(raw) > limit
+            next_offset = (offset + len(rows)) if has_more else None
 
-        return {
-            "meta": meta,
-            "content": body,
-            "attachments": None,
-        }
+            results = []
+            for i, r in enumerate(rows):
+                note_id = r.get("id")
+                title = r.get("title")
+                content = r.get("content") or ""
+                created_at = r.get("created_at")
+                last_modified = r.get("last_modified") or r.get("updated_at")
+                # Approximate offset of query within content
+                approx_offset = None
+                try:
+                    idx = content.lower().find(query.lower()) if query else -1
+                    if idx >= 0:
+                        approx_offset = idx
+                except Exception:
+                    approx_offset = None
+                results.append({
+                    "id": note_id,
+                    "source": "notes",
+                    "title": title,
+                    "snippet": _make_snippet(content, query, snippet_len),
+                    "uri": f"notes://{note_id}",
+                    "score": float(scores[i] if i < len(scores) else 0.0),
+                    "score_type": "fts",
+                    "created_at": created_at,
+                    "last_modified": last_modified,
+                    "version": r.get("version"),
+                    "tags": None,
+                    "loc": ({"approx_offset": approx_offset} if approx_offset is not None else None),
+                })
+
+            try:
+                total_estimated = db.count_notes_matching(query)
+            except Exception:
+                total_estimated = offset + len(rows) + (1 if has_more else 0)
+
+            return {
+                "results": results,
+                "has_more": has_more,
+                "next_offset": next_offset,
+                "total_estimated": total_estimated,
+            }
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after search: {}", exc)
+
+    def _get_note_sync(
+        self,
+        context: Any | None,
+        note_id: str,
+        mode: str,
+        snippet_len: int,
+    ) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            row = db.get_note_by_id(note_id)
+            if not row:
+                raise ValueError(f"Note not found: {note_id}")
+            content = row.get("content") or ""
+            meta = {
+                "id": row.get("id"),
+                "source": "notes",
+                "title": row.get("title"),
+                "snippet": _make_snippet(content, None, snippet_len),
+                "uri": f"notes://{row.get('id')}",
+                "score": 1.0,
+                "score_type": "fts",
+                "created_at": row.get("created_at"),
+                "last_modified": row.get("last_modified") or row.get("updated_at"),
+                "version": row.get("version"),
+                "tags": None,
+                "loc": None,
+            }
+
+            if mode == "full":
+                body = content
+            else:
+                body = _make_snippet(content, None, snippet_len)
+
+            return {
+                "meta": meta,
+                "content": body,
+                "attachments": None,
+            }
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after note fetch: {}", exc)

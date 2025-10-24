@@ -52,7 +52,8 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     start_new_chat_session,
     post_message_to_conversation,
     retrieve_conversation_messages_for_ui,
-    load_chat_and_character
+    load_chat_and_character,
+    map_sender_to_role,
 )
 
 # Chat helpers and utilities
@@ -119,6 +120,34 @@ class CharacterChatCompletionResponse(BaseModel):
     assistant_message_id: Optional[str] = None
     assistant_content: str
 
+
+def _extract_sse_data_lines(chunk: Any) -> List[str]:
+    """Normalize raw provider chunks into SSE `data:` lines."""
+    if chunk is None:
+        return []
+
+    if isinstance(chunk, bytes):
+        text = chunk.decode("utf-8", errors="ignore")
+    else:
+        text = str(chunk)
+
+    if not text:
+        return []
+
+    lines: List[str] = []
+    for raw_line in text.replace("\r\n", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith(":") or lowered.startswith("event:") or lowered.startswith("retry:"):
+            continue
+        if not lowered.startswith("data:"):
+            line = f"data: {line}"
+            lowered = line.lower()
+        lines.append(line)
+    return lines
+
 router = APIRouter()
 
 # Simple per-chat throttle used for legacy /complete endpoint in tests (TEST_MODE only)
@@ -154,6 +183,8 @@ def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse
         has_image=bool(msg_data.get('image_data')),
         version=msg_data.get('version', 1)
     )
+
+"""Role mapping provided by Character_Chat utility: map_sender_to_role"""
 
 # ========================================================================
 # Chat Session Endpoints
@@ -327,12 +358,12 @@ async def get_chat_context(
         char_name = character.get('name', 'Unknown')
 
         messages = db.get_messages_for_conversation(chat_id, limit=1000) or []
-        # Map DB messages to chat-completions messages
+        # Map DB messages to chat-completions messages with normalized roles
         formatted = []
         for m in messages:
             if m.get('deleted'):
                 continue
-            role = m.get('sender') or 'user'
+            role = map_sender_to_role(m.get('sender'), character.get('name'))
             content = m.get('content') or ''
             formatted.append({"role": role, "content": content})
 
@@ -431,10 +462,10 @@ async def prepare_chat_completion(
         limit = int(body.limit)
         offset = int(body.offset)
 
-        messages = db.get_messages_for_conversation(chat_id, limit=limit + offset) or []
+        messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         # Filter deleted
         messages = [m for m in messages if not m.get('deleted')]
-        paginated = messages[offset:offset + limit]
+        paginated = messages
 
         formatted: List[Dict[str, Any]] = []
         if include_ctx and character:
@@ -451,7 +482,7 @@ async def prepare_chat_completion(
 
         for msg in paginated:
             formatted.append({
-                "role": msg.get('sender', 'user'),
+                "role": map_sender_to_role(msg.get('sender'), character.get('name')),
                 "content": msg.get('content', '')
             })
 
@@ -509,9 +540,9 @@ async def character_chat_completion(
         limit = int(body.limit)
         offset = int(body.offset)
 
-        messages = db.get_messages_for_conversation(chat_id, limit=limit + offset) or []
+        messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         messages = [m for m in messages if not m.get('deleted')]
-        paginated = messages[offset:offset + limit]
+        paginated = messages
 
         formatted: List[Dict[str, Any]] = []
         if include_ctx and character:
@@ -528,7 +559,7 @@ async def character_chat_completion(
 
         for msg in paginated:
             formatted.append({
-                "role": msg.get('sender', 'user'),
+                "role": map_sender_to_role(msg.get('sender'), character.get('name')),
                 "content": msg.get('content', '')
             })
 
@@ -630,13 +661,16 @@ async def character_chat_completion(
                         done_sent = False
                         try:
                             async for chunk in llm_resp:  # type: ignore
-                                text = str(chunk).rstrip("\n")
-                                line = text if text.startswith("data:") else f"data: {text}"
-                                if line.strip() == "data: [DONE]":
-                                    done_sent = True
-                                yield line + "\n\n"
+                                for line in _extract_sse_data_lines(chunk):
+                                    normalized = line.strip().lower()
+                                    if normalized == "data: [done]":
+                                        done_sent = True
+                                    yield f"{line}\n\n"
                         except Exception as e:
-                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                            if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
+                                logger.debug("Ignoring streaming session close error: %s", e)
+                            else:
+                                yield f"data: {json.dumps({'error': str(e)})}\n\n"
                         finally:
                             if not done_sent:
                                 yield "data: [DONE]\n\n"
@@ -647,11 +681,11 @@ async def character_chat_completion(
                         done_sent = False
                         try:
                             for chunk in llm_resp:  # type: ignore
-                                text = str(chunk).rstrip("\n")
-                                line = text if text.startswith("data:") else f"data: {text}"
-                                if line.strip() == "data: [DONE]":
-                                    done_sent = True
-                                yield line + "\n\n"
+                                for line in _extract_sse_data_lines(chunk):
+                                    normalized = line.strip().lower()
+                                    if normalized == "data: [done]":
+                                        done_sent = True
+                                    yield f"{line}\n\n"
                         except Exception as e:
                             yield f"data: {json.dumps({'error': str(e)})}\n\n"
                         finally:

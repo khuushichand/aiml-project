@@ -681,6 +681,85 @@ class MCPProtocol:
         """Handle ping request"""
         return {"pong": True, "timestamp": datetime.now(timezone.utc).isoformat()}
     
+    async def _resolve_catalog_tool_names(
+        self,
+        params: Dict[str, Any],
+        context: RequestContext
+    ) -> Optional[set[str]]:
+        """Resolve catalog parameter into a set of tool names for filtering."""
+        catalog_name = None
+        catalog_id = None
+        if isinstance(params, dict):
+            catalog_name = params.get("catalog")
+            catalog_id = params.get("catalog_id")
+        if catalog_name is None and catalog_id is None:
+            return None
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+            pool = await get_db_pool()
+        except Exception as exc:
+            context.logger.debug(f"Catalog lookup unavailable: {exc}")
+            return None
+
+        resolved_id: Optional[int] = None
+        if catalog_id is not None:
+            try:
+                resolved_id = int(catalog_id)
+            except Exception:
+                resolved_id = None
+
+        if resolved_id is None and isinstance(catalog_name, str) and catalog_name.strip():
+            name = catalog_name.strip()
+            meta = getattr(context, "metadata", {}) or {}
+            team_id = meta.get("team_id")
+            org_id = meta.get("org_id")
+
+            row = None
+            try:
+                if team_id is not None:
+                    row = await pool.fetchone(
+                        "SELECT id FROM tool_catalogs WHERE name = ? AND team_id = ?",
+                        name,
+                        team_id,
+                    )
+                if row is None and org_id is not None:
+                    row = await pool.fetchone(
+                        "SELECT id FROM tool_catalogs WHERE name = ? AND org_id = ? AND team_id IS NULL",
+                        name,
+                        org_id,
+                    )
+                if row is None:
+                    row = await pool.fetchone(
+                        "SELECT id FROM tool_catalogs WHERE name = ? AND org_id IS NULL AND team_id IS NULL",
+                        name,
+                    )
+                if row and row.get("id") is not None:
+                    resolved_id = int(row.get("id"))
+            except Exception as exc:
+                context.logger.debug(f"Catalog lookup failed: {exc}")
+
+        if resolved_id is None:
+            return None
+
+        try:
+            rows = await pool.fetchall(
+                "SELECT tool_name FROM tool_catalog_entries WHERE catalog_id = ?",
+                resolved_id,
+            )
+        except Exception as exc:
+            context.logger.debug(f"Catalog entries lookup failed: {exc}")
+            return None
+
+        names: set[str] = set()
+        for r in rows:
+            try:
+                val = r["tool_name"] if isinstance(r, dict) else r[0]
+            except Exception:
+                val = None
+            if isinstance(val, str):
+                names.add(val)
+        return names if names else None
+    
     async def _handle_tools_list(
         self,
         params: Dict[str, Any],
@@ -688,78 +767,7 @@ class MCPProtocol:
     ) -> Dict[str, Any]:
         """List available tools"""
         tools = []
-        # Optional catalog filter: by id or name (scoped lookup)
-        catalog_filter: Optional[set[str]] = None
-        try:
-            catalog_name = None
-            catalog_id = None
-            if isinstance(params, dict):
-                catalog_name = params.get("catalog")
-                catalog_id = params.get("catalog_id")
-            if catalog_name is not None or catalog_id is not None:
-                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-                pool = await get_db_pool()
-                # Resolve catalog id, honoring team/org scoping from context (when available)
-                resolved_id = None
-                if catalog_id is not None:
-                    try:
-                        resolved_id = int(catalog_id)
-                    except Exception:
-                        resolved_id = None
-                if resolved_id is None and isinstance(catalog_name, str) and catalog_name.strip():
-                    name = catalog_name.strip()
-                    # Prefer team, then org, then global
-                    team_id = None
-                    org_id = None
-                    try:
-                        meta = getattr(context, "metadata", {}) or {}
-                        team_id = meta.get("team_id")
-                        org_id = meta.get("org_id")
-                    except Exception:
-                        team_id = None
-                        org_id = None
-                    row = None
-                    # Team-scoped
-                    if team_id is not None:
-                        row = await pool.fetchone(
-                            "SELECT id FROM tool_catalogs WHERE name = ? AND team_id = ?",
-                            name, team_id,
-                        )
-                    # Org-scoped
-                    if row is None and org_id is not None:
-                        row = await pool.fetchone(
-                            "SELECT id FROM tool_catalogs WHERE name = ? AND org_id = ? AND team_id IS NULL",
-                            name, org_id,
-                        )
-                    # Global
-                    if row is None:
-                        row = await pool.fetchone(
-                            "SELECT id FROM tool_catalogs WHERE name = ? AND org_id IS NULL AND team_id IS NULL",
-                            name,
-                        )
-                    if row and row.get("id") is not None:
-                        resolved_id = int(row.get("id"))
-                if resolved_id is not None:
-                    rows = await pool.fetchall(
-                        "SELECT tool_name FROM tool_catalog_entries WHERE catalog_id = ?",
-                        resolved_id,
-                    )
-                    names: set[str] = set()
-                    for r in rows:
-                        try:
-                            # rows may be dict or sqlite Row
-                            val = r["tool_name"] if isinstance(r, dict) else (r[0] if isinstance(r, tuple) else r[1])
-                        except Exception:
-                            try:
-                                val = r[0]
-                            except Exception:
-                                val = None
-                        if isinstance(val, str):
-                            names.add(val)
-                    catalog_filter = names
-        except Exception as _e:
-            # Fail-open for listing on catalog lookup errors (does not bypass RBAC)
-            context.logger.debug(f"tools/list catalog filter skipped: {_e}")
+        catalog_filter = await self._resolve_catalog_tool_names(params, context)
         modules = await self.module_registry.get_all_modules()
         
         for module_id, module in modules.items():
@@ -802,16 +810,16 @@ class MCPProtocol:
         idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
         
         if not tool_name:
-            raise ValueError("Tool name is required")
+            raise InvalidParamsException("Tool name is required")
         
         # Strictly validate tool name
         if not self._tool_name_re.match(tool_name):
-            raise ValueError("Invalid tool name")
+            raise InvalidParamsException("Invalid tool name")
         
         # Find module for tool
         module = await self.module_registry.find_module_for_tool(tool_name)
         if not module:
-            raise ValueError(f"Tool not found: {tool_name}")
+            raise InvalidParamsException(f"Tool not found: {tool_name}")
 
         module_id = self.module_registry.get_module_id_for_tool(tool_name) or getattr(module, "name", None)
 
@@ -1166,6 +1174,8 @@ class MCPProtocol:
         """List available resources"""
         resources = []
         modules = await self.module_registry.get_all_modules()
+        catalog_filter = await self._resolve_catalog_tool_names(params, context)
+        module_tool_names: Dict[str, set[str]] = {}
         
         for module_id, module in modules.items():
             try:
@@ -1173,6 +1183,21 @@ class MCPProtocol:
                     context.logger.info(f"Catalog filter applied: {sorted(catalog_filter)}")
                 if not await self._has_module_permission(context, module_id):
                     continue
+                if catalog_filter is not None:
+                    cached_names = module_tool_names.get(module_id)
+                    if cached_names is None:
+                        try:
+                            module_tools = await module.get_tools()
+                            cached_names = {
+                                str(tool.get("name"))
+                                for tool in module_tools
+                                if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+                            }
+                        except Exception:
+                            cached_names = set()
+                        module_tool_names[module_id] = cached_names
+                    if not cached_names.intersection(catalog_filter):
+                        continue
                 module_resources = await module.get_resources()
                 
                 for resource in module_resources:
@@ -1197,12 +1222,12 @@ class MCPProtocol:
         """Read a resource"""
         uri = params.get("uri")
         if not uri:
-            raise ValueError("Resource URI is required")
+            raise InvalidParamsException("Resource URI is required")
         
         # Find module for resource
         module = await self.module_registry.find_module_for_resource(uri)
         if not module:
-            raise ValueError(f"Resource not found: {uri}")
+            raise InvalidParamsException(f"Resource not found: {uri}")
         module_id = self.module_registry.get_module_id_for_resource(uri) or getattr(module, "name", None)
 
         if not await self._has_resource_permission(context, uri, module_id):
@@ -1250,14 +1275,14 @@ class MCPProtocol:
         """Get a specific prompt"""
         name = params.get("name")
         if not name:
-            raise ValueError("Prompt name is required")
+            raise InvalidParamsException("Prompt name is required")
         
         arguments = params.get("arguments", {})
         
         # Find module for prompt
         module = await self.module_registry.find_module_for_prompt(name)
         if not module:
-            raise ValueError(f"Prompt not found: {name}")
+            raise InvalidParamsException(f"Prompt not found: {name}")
         module_id = self.module_registry.get_module_id_for_prompt(name) or getattr(module, "name", None)
 
         if not await self._has_prompt_permission(context, name, module_id):

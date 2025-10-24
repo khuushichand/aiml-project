@@ -104,10 +104,6 @@ class InputValidator:
         if re.search(r'[._-]{2,}', username):
             return False, "Username cannot contain consecutive special characters"
         
-        # Check for confusing characters (e.g., l vs 1, O vs 0)
-        if self._has_confusing_characters(username):
-            return False, "Username contains potentially confusing characters"
-        
         return True, None
     
     def validate_email(self, email: str) -> Tuple[bool, Optional[str]]:

@@ -950,6 +950,29 @@ class TestConversationCRUD:
         results_gamma = db.search_conversations_by_title("Gamma")
         assert len(results_gamma) == 0
 
+    def test_conversation_queries_scope_to_client(self, file_db: CharactersRAGDB):
+        base_char_id = file_db.add_character_card(sample_card_data(name="Scoped Base Character"))
+        file_db.add_conversation(sample_conversation_data(character_id=base_char_id, title="Alpha Chat"))
+
+        alt_db = CharactersRAGDB(file_db.db_path, client_id=TEST_CLIENT_ID_ALT)
+        alt_char_id: Optional[int] = None
+        try:
+            alt_char_id = alt_db.add_character_card(sample_card_data(name="Scoped Alt Character"))
+            alt_db.add_conversation(sample_conversation_data(character_id=alt_char_id, title="Alpha Chat"))
+        finally:
+            alt_db.close_connection()
+
+        own_conversations = file_db.get_conversations_for_character(base_char_id)
+        assert len(own_conversations) == 1
+        assert all(conv["client_id"] == file_db.client_id for conv in own_conversations)
+
+        assert alt_char_id is not None
+        assert file_db.get_conversations_for_character(alt_char_id) == []
+
+        title_results = file_db.search_conversations_by_title("Alpha")
+        assert len(title_results) == 1
+        assert title_results[0]["client_id"] == file_db.client_id
+
 
 @pytest.fixture
 def conv_id_for_msg(db: CharactersRAGDB, char_id_for_conv: int) -> str:

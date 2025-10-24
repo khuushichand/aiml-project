@@ -52,7 +52,14 @@ def check_permission(user: User, permission: str) -> bool:
         user_db = get_user_database()
         return user_db.has_permission(user.id, permission)
     except Exception as e:
-        logger.error(f"Error checking permission {permission} for user {user.id}: {e}")
+        try:
+            redact = get_settings().PII_REDACT_LOGS
+        except Exception:
+            redact = False
+        if redact:
+            logger.error(f"Error checking permission {permission} for authenticated user (details redacted): {e}")
+        else:
+            logger.error(f"Error checking permission {permission} for user {user.id}: {e}")
         return False
 
 def check_role(user: User, role: str) -> bool:
@@ -74,7 +81,14 @@ def check_role(user: User, role: str) -> bool:
         user_db = get_user_database()
         return user_db.has_role(user.id, role)
     except Exception as e:
-        logger.error(f"Error checking role {role} for user {user.id}: {e}")
+        try:
+            redact = get_settings().PII_REDACT_LOGS
+        except Exception:
+            redact = False
+        if redact:
+            logger.error(f"Error checking role {role} for authenticated user (details redacted): {e}")
+        else:
+            logger.error(f"Error checking role {role} for user {user.id}: {e}")
         return False
 
 def check_any_permission(user: User, permissions: List[str]) -> bool:
@@ -153,17 +167,31 @@ class PermissionChecker:
         Raises:
             HTTPException: If user lacks required permission
         """
+        redact_logs = False
+        try:
+            current_settings = get_settings()
+            redact_logs = current_settings.PII_REDACT_LOGS
+        except Exception:
+            current_settings = None
         if not check_permission(user, self.permission):
             # Soft-enforce option: log and allow if enabled
             try:
-                if get_settings().RBAC_SOFT_ENFORCE:
-                    logger.warning(
-                        f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' — allowing (soft mode)"
-                    )
+                if current_settings and current_settings.RBAC_SOFT_ENFORCE:
+                    if redact_logs:
+                        logger.warning(
+                            f"[RBAC soft-enforce] Authenticated user lacks '{self.permission}' — allowing (soft mode)"
+                        )
+                    else:
+                        logger.warning(
+                            f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' — allowing (soft mode)"
+                        )
                     return user
             except Exception:
                 pass
-            logger.warning(f"User {user.username} denied access - lacks permission: {self.permission}")
+            if redact_logs:
+                logger.warning(f"Authenticated user denied access - lacks permission: {self.permission}")
+            else:
+                logger.warning(f"User {user.username} denied access - lacks permission: {self.permission}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission denied. Required: {self.permission}"
@@ -202,8 +230,16 @@ class RoleChecker:
         Raises:
             HTTPException: If user lacks required role
         """
+        redact_logs = False
+        try:
+            redact_logs = get_settings().PII_REDACT_LOGS
+        except Exception:
+            pass
         if not check_role(user, self.role):
-            logger.warning(f"User {user.username} denied access - lacks role: {self.role}")
+            if redact_logs:
+                logger.warning(f"Authenticated user denied access - lacks role: {self.role}")
+            else:
+                logger.warning(f"User {user.username} denied access - lacks role: {self.role}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required role: {self.role}"
@@ -242,8 +278,16 @@ class AnyPermissionChecker:
         Raises:
             HTTPException: If user lacks all required permissions
         """
+        redact_logs = False
+        try:
+            redact_logs = get_settings().PII_REDACT_LOGS
+        except Exception:
+            pass
         if not check_any_permission(user, self.permissions):
-            logger.warning(f"User {user.username} denied access - lacks any of: {self.permissions}")
+            if redact_logs:
+                logger.warning(f"Authenticated user denied access - lacks any of: {self.permissions}")
+            else:
+                logger.warning(f"User {user.username} denied access - lacks any of: {self.permissions}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission denied. Requires one of: {', '.join(self.permissions)}"
@@ -282,8 +326,16 @@ class AllPermissionsChecker:
         Raises:
             HTTPException: If user lacks any required permission
         """
+        redact_logs = False
+        try:
+            redact_logs = get_settings().PII_REDACT_LOGS
+        except Exception:
+            pass
         if not check_all_permissions(user, self.permissions):
-            logger.warning(f"User {user.username} denied access - lacks all of: {self.permissions}")
+            if redact_logs:
+                logger.warning(f"Authenticated user denied access - lacks all of: {self.permissions}")
+            else:
+                logger.warning(f"User {user.username} denied access - lacks all of: {self.permissions}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission denied. Requires all: {', '.join(self.permissions)}"

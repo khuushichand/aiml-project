@@ -2,6 +2,7 @@
 # Description: Handles user authentication and identification based on application mode.
 #
 # Imports
+import hmac
 from typing import Optional, List, Dict, Any, Union
 #
 # 3rd-Party Libraries
@@ -58,25 +59,40 @@ class User(BaseModel):
 
 # --- Single User "Dummy" Object ---
 # Created when in single-user mode using values from the settings
-_single_user_instance = User(id=1, username="single_user", is_active=True)
+_single_user_instance: Optional[User] = None
 
 def get_single_user_instance() -> User:
     """Get or create the single user instance"""
     global _single_user_instance
-    if _single_user_instance is None:
-        settings = get_settings()
+    settings = get_settings()
+    desired_id = settings.SINGLE_USER_FIXED_ID
+
+    if (
+        _single_user_instance is None
+        or getattr(_single_user_instance, "id", None) != desired_id
+    ):
         _single_user_instance = User(
-            id=settings.SINGLE_USER_FIXED_ID,
+            id=desired_id,
             username="single_user",
             is_active=True
         )
     return _single_user_instance
 
+# Eagerly initialize for environments/tests that mutate the module-level reference directly.
+try:
+    _single_user_instance = get_single_user_instance()
+except Exception:
+    _single_user_instance = None
+
 #######################################################################################################################
 
 # --- Mode-Specific Verification Dependencies ---
 
-async def verify_single_user_api_key(api_key: str = Header(..., alias="X-API-KEY")):
+async def verify_single_user_api_key(
+    _request: Request,
+    api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
     """
     Dependency to verify the fixed API key in single-user mode.
     Uses the unified settings system.
@@ -88,8 +104,26 @@ async def verify_single_user_api_key(api_key: str = Header(..., alias="X-API-KEY
 
     # Compare with the API key from settings
     settings = get_settings()
-    if api_key != settings.SINGLE_USER_API_KEY:
-        logger.warning(f"Invalid API Key received in single-user mode: '{api_key[:5]}...'")
+    expected_key = settings.SINGLE_USER_API_KEY or ""
+
+    provided = api_key or ""
+    if not provided and authorization:
+        try:
+            scheme, _, credential = authorization.partition(" ")
+            if scheme.lower() == "bearer":
+                provided = credential.strip()
+        except Exception:
+            provided = ""
+    try:
+        matches = hmac.compare_digest(provided, expected_key)
+    except Exception:
+        matches = False
+    if not matches:
+        if settings.PII_REDACT_LOGS:
+            logger.warning("Invalid API Key received in single-user mode")
+        else:
+            preview = f"{provided[:5]}..." if provided else "<missing>"
+            logger.warning(f"Invalid API Key received in single-user mode: '{preview}'")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API Key"
@@ -129,6 +163,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    pii_redact_logs = get_settings().PII_REDACT_LOGS
 
     # Use new JWT service to decode token
     jwt_service = get_jwt_service()
@@ -157,7 +192,10 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         logger.error(f"Unexpected error decoding token: {e}")
         raise credentials_exception
     
-    logger.debug(f"Token decoded successfully for subject: {raw_subject}")
+    if pii_redact_logs:
+        logger.debug("Token decoded successfully for authenticated subject (redacted)")
+    else:
+        logger.debug(f"Token decoded successfully for subject: {raw_subject}")
 
     # Enforce blacklist revocation (fail-closed)
     try:
@@ -185,23 +223,36 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
                 user_data = await get_user_by_username(str(payload["username"]))
 
         if not user_data:
-            logger.warning(f"User record for subject '{subject_identifier}' not found.")
+            if pii_redact_logs:
+                logger.warning("User record for authenticated subject not found.")
+            else:
+                logger.warning(f"User record for subject '{subject_identifier}' not found.")
             raise credentials_exception
 
         if not isinstance(user_data, dict):
-            logger.error(f"Data retrieved for subject {subject_identifier} is not a dictionary (type: {type(user_data)}).")
+            data_type = type(user_data)
+            if pii_redact_logs:
+                logger.error(f"Data retrieved for authenticated subject is not a dictionary (type: {data_type}).")
+            else:
+                logger.error(f"Data retrieved for subject {subject_identifier} is not a dictionary (type: {data_type}).")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal error retrieving user data format."
             )
 
     except UserNotFoundError:
-        logger.warning(f"User with ID {subject_identifier} from token not found in Users_DB (UserNotFoundError).")
+        if pii_redact_logs:
+            logger.warning("User referenced by token not found in Users_DB (UserNotFoundError).")
+        else:
+            logger.warning(f"User with ID {subject_identifier} from token not found in Users_DB (UserNotFoundError).")
         raise credentials_exception
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching user {subject_identifier} from Users_DB: {e}", exc_info=True)
+        if pii_redact_logs:
+            logger.error("Error fetching user (details redacted) from Users_DB", exc_info=True)
+        else:
+            logger.error(f"Error fetching user {subject_identifier} from Users_DB: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving user information."
@@ -278,19 +329,28 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         if is_admin:
             perms = sorted(set(perms) | {"system.configure"})
     except Exception as e:
-        logger.debug(f"RBAC enrichment failed for user {subject_identifier}: {e}")
+        if pii_redact_logs:
+            logger.debug(f"RBAC enrichment failed for authenticated user (redacted): {e}")
+        else:
+            logger.debug(f"RBAC enrichment failed for user {subject_identifier}: {e}")
 
     # --- Create and validate the User Pydantic model ---
     try:
         user = User(**{**user_data, "roles": roles, "permissions": perms, "is_admin": is_admin})
     except ValidationError as e:  # Catch Pydantic validation errors specifically
-        logger.error(f"Failed to validate user data for user {subject_identifier} into User model: {e}", exc_info=True)
+        if pii_redact_logs:
+            logger.error("Failed to validate user data for authenticated user into User model (details redacted)", exc_info=True)
+        else:
+            logger.error(f"Failed to validate user data for user {subject_identifier} into User model: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing user data: Invalid format - {e}"
         )
     except Exception as e:  # Catch other potential errors during model creation
-        logger.error(f"Unexpected error creating User model for user {subject_identifier}: {e}", exc_info=True)
+        if pii_redact_logs:
+            logger.error("Unexpected error creating User model for authenticated user (details redacted)", exc_info=True)
+        else:
+            logger.error(f"Unexpected error creating User model for user {subject_identifier}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal error processing user data."
@@ -298,7 +358,10 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
     # --- Final User Status Check ---
     if not user.is_active:
-        logger.warning(f"Authentication attempt by inactive user: {user.username} (ID: {user.id})")
+        if pii_redact_logs:
+            logger.warning("Authentication attempt by inactive user (details redacted)")
+        else:
+            logger.warning(f"Authentication attempt by inactive user: {user.username} (ID: {user.id})")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
 
     # Attach user id for downstream context (usage logging, RBAC rate limits)
@@ -336,9 +399,15 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             is_admin=bool(user.is_admin),
         )
     except Exception as scope_exc:
-        logger.debug(f"Failed to set scope context for user {user.id}: {scope_exc}")
+        if pii_redact_logs:
+            logger.debug(f"Failed to set scope context for authenticated user (redacted): {scope_exc}")
+        else:
+            logger.debug(f"Failed to set scope context for user {user.id}: {scope_exc}")
 
-    logger.info(f"Authenticated active user: {user.username} (ID: {user.id})")
+    if pii_redact_logs:
+        logger.info("Authenticated active user (details redacted)")
+    else:
+        logger.info(f"Authenticated active user: {user.username} (ID: {user.id})")
     return user
 
 
@@ -435,9 +504,12 @@ async def get_request_user(
                 if env_key and api_key == env_key:
                     logger.debug("API key matched environment fallback; accepting.")
                 else:
-                    logger.warning(
-                        f"Single-User Mode: Invalid X-API-KEY. Got: '{api_key[:10]}...'"
-                    )
+                    if settings.PII_REDACT_LOGS:
+                        logger.warning("Single-User Mode: Invalid X-API-KEY provided")
+                    else:
+                        logger.warning(
+                            f"Single-User Mode: Invalid X-API-KEY. Got: '{api_key[:10]}...'"
+                        )
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid API key"
@@ -479,7 +551,10 @@ async def get_request_user(
         # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
         logger.debug("get_request_user: In MULTI_USER_MODE.")
         if token:
-            logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
+            if settings.PII_REDACT_LOGS:
+                logger.debug("Multi-User Mode: Attempting to verify bearer token (redacted)")
+            else:
+                logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
             return await verify_jwt_and_fetch_user(request, token)
 
         # If no Bearer token but an API key is provided, validate via API key manager
@@ -506,6 +581,18 @@ async def get_request_user(
                 user_data = await _get_user(user_id)
                 if not user_data:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+                # Normalize active flag
+                is_active_value = user_data.get("is_active", True)
+                is_active_normalized = bool(is_active_value)
+                user_data["is_active"] = is_active_normalized
+                if not is_active_normalized:
+                    if settings.PII_REDACT_LOGS:
+                        logger.warning("Authentication attempt by inactive user (API key)")
+                    else:
+                        logger.warning(f"Authentication attempt by inactive user (API key): {user_data.get('username', user_id)}")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+                if user_data.get("is_superuser"):
+                    user_data.setdefault("is_admin", True)
                 # Attach context for downstream
                 try:
                     request.state.user_id = user_id

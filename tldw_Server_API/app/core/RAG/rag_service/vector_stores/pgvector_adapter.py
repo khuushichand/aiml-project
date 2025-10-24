@@ -168,21 +168,21 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("pgvector._exec: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(sql, params or ())
                     conn.commit()
-                except Exception:
+                except Exception as e:
                     try:
                         conn.rollback()
-                    except Exception:
-                        pass
+                    except Exception as rb_e:
+                        logger.debug("pgvector._exec: rollback failed", exc_info=rb_e)
                     raise
                 finally:
                     try:
                         cur.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("pgvector._exec: cursor close failed", exc_info=e)
         await asyncio.get_event_loop().run_in_executor(
             None,
             _run,
@@ -199,22 +199,22 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("pgvector._query: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(sql, params or ())
                     rows = cur.fetchall()
                     return rows
-                except Exception:
+                except Exception as e:
                     try:
                         conn.rollback()
-                    except Exception:
-                        pass
+                    except Exception as rb_e:
+                        logger.debug("pgvector._query: rollback failed", exc_info=rb_e)
                     raise
                 finally:
                     try:
                         cur.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("pgvector._query: cursor close failed", exc_info=e)
         return await asyncio.get_event_loop().run_in_executor(
             None,
             _run,
@@ -291,8 +291,8 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("pgvector.upsert: SET hnsw.ef_search failed", exc_info=e)
                     args = [(_id, doc, JsonDumper.dumps(meta), vec) for _id, doc, meta, vec in values]
                     cur.executemany(
                         f"INSERT INTO {tbl}(id, content, metadata, embedding) VALUES (%s, %s, %s, %s) "
@@ -301,15 +301,17 @@ class PGVectorAdapter(VectorStoreAdapter):
                     )
                     conn.commit()
                 finally:
-                    try: cur.close()
-                    except Exception: pass
+                    try:
+                        cur.close()
+                    except Exception as e:
+                        logger.debug("pgvector.upsert: cursor close failed", exc_info=e)
         # Observe rows + latency
         with self._H_UPSERT_LAT.labels(collection=tbl).time():
             await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_UPSERTED.labels(collection=tbl).inc(len(values))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("pgvector.upsert: metrics increment failed", exc_info=e)
 
     async def delete_vectors(self, collection_name: str, ids: List[str]) -> None:
         tbl = self._sanitize_collection(collection_name)
@@ -323,14 +325,16 @@ class PGVectorAdapter(VectorStoreAdapter):
                     rc = getattr(cur, 'rowcount', 0)
                     return int(rc) if rc is not None else 0
                 finally:
-                    try: cur.close()
-                    except Exception: pass
+                    try:
+                        cur.close()
+                    except Exception as e:
+                        logger.debug("pgvector.delete_vectors: cursor close failed", exc_info=e)
         with self._H_DELETE_LAT.labels(collection=tbl).time():
             rc = await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("pgvector.delete_vectors: metrics increment failed", exc_info=e)
 
     async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
         """Delete rows matching a JSONB metadata filter; returns affected row count."""
@@ -347,21 +351,23 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("pgvector.delete_by_filter: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))
                     rc = getattr(cur, 'rowcount', 0)
                     conn.commit()
                     return int(rc) if rc is not None else 0
                 finally:
-                    try: cur.close()
-                    except Exception: pass
+                    try:
+                        cur.close()
+                    except Exception as e:
+                        logger.debug("pgvector.delete_by_filter: cursor close failed", exc_info=e)
         with self._H_DELETE_LAT.labels(collection=tbl).time():
             rc = await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc or 0))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("pgvector.delete_by_filter: metrics increment failed", exc_info=e)
         try:
             return int(rc)
         except Exception:

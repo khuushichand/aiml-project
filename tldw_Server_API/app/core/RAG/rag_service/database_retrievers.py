@@ -1172,6 +1172,8 @@ class NotesDBRetriever(BaseRetriever):
         ranks = []
         for r in results:
             rv = r.get('rank')
+            if rv is None:
+                rv = r.get('bm25_score')
             try:
                 ranks.append(float(rv) if rv is not None else None)
             except Exception:

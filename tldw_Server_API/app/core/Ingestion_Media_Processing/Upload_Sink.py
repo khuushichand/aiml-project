@@ -3,6 +3,7 @@
 #              validate their safety and integrity, and perform sanitization.
 #
 import copy
+import mimetypes
 import os
 import shutil
 import stat
@@ -68,12 +69,29 @@ class ValidationResult:
 # Get configuration values or use defaults
 media_config = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
 
+# Additional extension sets for specialized categories
+CODE_FILE_EXTENSIONS: Set[str] = {
+    '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
+    '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
+    '.rb', '.php', '.pl', '.lua', '.sql', '.json', '.yaml',
+    '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js',
+}
+CODE_MIME_TYPES: Set[str] = {
+    'text/plain', 'text/x-python', 'application/x-python-code', 'text/x-c', 'text/x-c++src',
+    'text/javascript', 'application/javascript', 'application/x-javascript',
+    'application/ecmascript', 'text/ecmascript',
+    'application/json', 'text/x-java-source',
+    'text/x-kotlin', 'text/x-rust', 'text/x-go', 'text/x-ruby', 'text/x-php',
+    'text/x-perl', 'text/x-sql', 'text/yaml', 'application/x-yaml',
+    'application/x-toml', 'text/markdown', 'text/x-typescript',
+}
+
 # Default configurations for common media types
 # These can be overridden or extended via FileValidator's constructor
 DEFAULT_MEDIA_TYPE_CONFIG = {
     "audio": {
         "allowed_extensions": {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'},
-        "allowed_mimetypes": {'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/flac', 'audio/aac', 'audio/ogg',
+        "allowed_mimetypes": {'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/flac', 'audio/aac', 'audio/ogg',
                               'audio/mp4', 'audio/x-m4a'},
         "max_size_mb": media_config.get('max_audio_file_size_mb', 500),
     },
@@ -113,9 +131,12 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "max_size_mb": media_config.get('max_pdf_file_size_mb', 50),
     },
     "email": {
-        "allowed_extensions": {'.eml'},
+        "allowed_extensions": {'.eml', '.mbox', '.pst', '.ost'},
         # Note: some EML files may be detected as text/plain by magic; allow both
-        "allowed_mimetypes": {'message/rfc822', 'text/plain'},
+        "allowed_mimetypes": {
+            'message/rfc822', 'text/plain', 'application/mbox',
+            'application/vnd.ms-outlook', 'application/vnd.ms-office',
+        },
         "max_size_mb": media_config.get('max_document_file_size_mb', 50),
     },
     "html": {
@@ -141,6 +162,12 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "scan_contents": True,  # Flag to indicate archive contents should be scanned
         "max_internal_files": media_config.get('max_archive_internal_files', 100),
         "max_internal_uncompressed_size_mb": media_config.get('max_archive_uncompressed_size_mb', 200),
+        "max_depth": media_config.get('max_archive_nesting_depth', 2),
+    },
+    "code": {
+        "allowed_extensions": CODE_FILE_EXTENSIONS,
+        "allowed_mimetypes": CODE_MIME_TYPES,
+        "max_size_mb": media_config.get('max_code_file_size_mb', media_config.get('max_document_file_size_mb', 50)),
     },
 }
 
@@ -160,7 +187,12 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.xml': 'xml', '.opml': 'xml',
     '.zip': 'archive', '.tar': 'archive', '.tgz': 'archive', '.tbz2': 'archive', '.txz': 'archive',
     '.tar.gz': 'archive', '.tar.bz2': 'archive', '.tar.xz': 'archive',
-    '.eml': 'email',
+    '.eml': 'email', '.mbox': 'email', '.pst': 'email', '.ost': 'email',
+    '.py': 'code', '.c': 'code', '.h': 'code', '.cpp': 'code', '.hpp': 'code', '.cc': 'code',
+    '.cxx': 'code', '.cs': 'code', '.java': 'code', '.kt': 'code', '.kts': 'code', '.swift': 'code',
+    '.rs': 'code', '.go': 'code', '.rb': 'code', '.php': 'code', '.pl': 'code', '.lua': 'code',
+    '.sql': 'code', '.json': 'code', '.yaml': 'code', '.yml': 'code', '.toml': 'code', '.ini': 'code',
+    '.cfg': 'code', '.conf': 'code', '.ts': 'code', '.tsx': 'code', '.jsx': 'code',
 }
 
 def _extension_candidates(filename: Union[str, Path]) -> List[str]:
@@ -183,7 +215,6 @@ def _resolve_media_type_key(filename: Union[str, Path]) -> Optional[str]:
             return media_key
     return None
 
-
 class FileValidator:
     def __init__(self, yara_rules_path: Optional[str] = None, custom_media_configs: Optional[Dict] = None):
         self.magic_available = bool(puremagic)
@@ -202,13 +233,11 @@ class FileValidator:
                 "Install with: pip install puremagic"
             )
 
-        self.media_configs = copy.deepcopy(DEFAULT_MEDIA_TYPE_CONFIG)
+        self._custom_media_configs: Dict[str, Dict] = {}
         if custom_media_configs:
             for media_type, config_val in custom_media_configs.items():
-                if media_type in self.media_configs:
-                    self.media_configs[media_type].update(config_val)
-                else:
-                    self.media_configs[media_type] = config_val
+                key = media_type.lower()
+                self._custom_media_configs[key] = copy.deepcopy(config_val)
 
     def _compile_yara_rules(self, rules_path: str):
         if not self.yara_available: return None
@@ -246,8 +275,17 @@ class FileValidator:
             return False, [f"Unexpected Yara scanning error: {e}"]
 
     def get_media_config(self, media_type_key: Optional[str]) -> Optional[Dict]:
-        if not media_type_key: return None
-        return self.media_configs.get(media_type_key.lower())
+        if not media_type_key:
+            return None
+        key = media_type_key.lower()
+        merged: Dict = {}
+        base_cfg = DEFAULT_MEDIA_TYPE_CONFIG.get(key)
+        if base_cfg:
+            merged.update(base_cfg)
+        custom_cfg = self._custom_media_configs.get(key)
+        if custom_cfg:
+            merged.update(custom_cfg)
+        return merged or None
 
     def validate_file(
             self,
@@ -280,10 +318,23 @@ class FileValidator:
         cfg_allowed_mimetypes = config.get("allowed_mimetypes") if config else None
         cfg_max_size_mb = config.get("max_size_mb") if config else None
 
-        final_allowed_extensions = allowed_extensions_override if allowed_extensions_override is not None else cfg_allowed_extensions
-        final_allowed_mimetypes = allowed_mimetypes_override if allowed_mimetypes_override is not None else cfg_allowed_mimetypes
+        final_allowed_extensions = (
+            allowed_extensions_override if allowed_extensions_override is not None else cfg_allowed_extensions
+        )
+        final_allowed_mimetypes = (
+            allowed_mimetypes_override if allowed_mimetypes_override is not None else cfg_allowed_mimetypes
+        )
         final_max_size_mb = max_size_mb_override if max_size_mb_override is not None else cfg_max_size_mb
         final_max_size_bytes = (final_max_size_mb * 1024 * 1024) if final_max_size_mb is not None else None
+
+        if (
+            final_allowed_extensions is None
+            and final_allowed_mimetypes is None
+            and final_max_size_bytes is None
+        ):
+            descriptor = f"media type '{media_type_key}'" if media_type_key else "this file type"
+            issues.append(f"No validation rules configured for {descriptor}. Unsupported file type.")
+            return ValidationResult(False, issues, current_file_path, detected_extension=disk_file_ext)
 
         # 2. Check size
         try:
@@ -321,23 +372,58 @@ class FileValidator:
 
         # 4. Validate MIME type
         detected_mime_type: Optional[str] = None
+        mime_detection_source: str = "unavailable"
+        normalized_allowed_mimetypes = (
+            {mt.lower() for mt in final_allowed_mimetypes} if final_allowed_mimetypes else None
+        )
+        fallback_mime_type, _ = mimetypes.guess_type(_original_filename)
+        if not fallback_mime_type:
+            fallback_mime_type, _ = mimetypes.guess_type(str(current_file_path))
         if self.magic_available:
             try:
                 detected_mime_type = puremagic.from_file(str(current_file_path), mime=True)
-                if final_allowed_mimetypes:
-                    if detected_mime_type not in final_allowed_mimetypes:
+                if detected_mime_type:
+                    detected_mime_type = detected_mime_type.strip()
+                    mime_detection_source = "magic"
+            except Exception as e:  # Catch other errors during MIME detection
+                logging.warning(
+                    "MIME magic detection failed for '%s': %s. Falling back to extension guesses.",
+                    _original_filename,
+                    e,
+                )
+                detected_mime_type = None
+                mime_detection_source = "fallback"
+
+        if not detected_mime_type and fallback_mime_type:
+            detected_mime_type = fallback_mime_type
+            if mime_detection_source == "unavailable":
+                mime_detection_source = "fallback"
+
+        if normalized_allowed_mimetypes:
+            fallback_lower = None
+            if fallback_mime_type:
+                fallback_lower = fallback_mime_type.lower()
+            if detected_mime_type:
+                detected_lower = detected_mime_type.lower()
+                if detected_lower not in normalized_allowed_mimetypes:
+                    if fallback_lower and fallback_lower in normalized_allowed_mimetypes:
+                        logging.warning(
+                            "Detected MIME '%s' for '%s' not in allowed list; falling back to extension-based MIME '%s'.",
+                            detected_mime_type,
+                            _original_filename,
+                            fallback_mime_type,
+                        )
+                        detected_mime_type = fallback_mime_type
+                    else:
                         issues.append(
                             f"Detected MIME type '{detected_mime_type}' for file '{_original_filename}' is not allowed. "
-                            f"Allowed: {final_allowed_mimetypes}")
-                # TODO: Add more sophisticated MIME vs. Extension consistency check here if needed
-                # For example, if claimed_ext is '.jpg', ensure detected_mime_type is 'image/jpeg'.
-                # This requires a mapping. For now, relying on allowed_extensions and allowed_mimetypes.
-            except Exception as e:  # Catch other errors during MIME detection
-                issues.append(f"Unexpected error during MIME type detection for {_original_filename}: {e}")
-
-        elif final_allowed_mimetypes:  # MIME types are restricted, but magic is unavailable
-            issues.append(
-                "MIME type validation skipped: puremagic not available, but specific MIME types are required.")
+                            f"Allowed: {final_allowed_mimetypes}"
+                        )
+            else:
+                logging.warning(
+                    "Unable to determine MIME type for '%s'; proceeding with extension-based validation only.",
+                    _original_filename,
+                )
 
         # 5. Malware Scan (Yara)
         is_safe_yara, yara_match_details = self._scan_file_with_yara(current_file_path)
@@ -356,7 +442,12 @@ class FileValidator:
         return ValidationResult(True, file_path=current_file_path,
                                 detected_mime_type=detected_mime_type, detected_extension=disk_file_ext)
 
-    def validate_archive_contents(self, archive_path: Union[str, Path]) -> ValidationResult:
+    def validate_archive_contents(
+        self,
+        archive_path: Union[str, Path],
+        *,
+        _current_depth: int = 0,
+    ) -> ValidationResult:
         """Validates an archive file and its contents."""
         archive_path_obj = Path(archive_path)
         issues: List[str] = []
@@ -365,6 +456,13 @@ class FileValidator:
         archive_config = self.get_media_config("archive")
         if not archive_config:
             issues.append("No configuration found for 'archive' type. Cannot validate archive contents.")
+            return ValidationResult(False, issues, archive_path_obj)
+
+        max_depth = max(0, int(archive_config.get("max_depth", 2)))
+        if _current_depth > max_depth:
+            issues.append(
+                f"Archive nesting depth {_current_depth} exceeds maximum allowed depth {max_depth}."
+            )
             return ValidationResult(False, issues, archive_path_obj)
 
         # Step 1: Validate the archive file itself
@@ -454,7 +552,9 @@ class FileValidator:
                                     logging.warning(f"Skipping symbolic link inside archive: {member_filename}")
                                     issues.append(f"Archive contains unsupported symbolic link: {member_filename}")
                                     continue
-                                if not stat.S_ISREG(external_type):
+                                # Treat entries lacking file-type bits (common on Windows zips) as regular files.
+                                file_type_bits = external_type & 0xF000
+                                if file_type_bits and not stat.S_ISREG(external_type):
                                     logging.warning(
                                         f"Skipping non-regular file inside archive: {member_filename} (mode={oct(external_type)})")
                                     issues.append(
@@ -476,6 +576,12 @@ class FileValidator:
                                 # Determine media_type_key for internal file based on its extension
                                 internal_media_type_key = _resolve_media_type_key(internal_file_path)
 
+                                if not internal_media_type_key:
+                                    issues.append(
+                                        f"Archive contains file with unsupported type: {member.filename}"
+                                    )
+                                    continue
+
                                 logging.debug(
                                     f"Validating internal file: {member.filename} (as {internal_media_type_key or 'generic'})")
                                 internal_validation_result = self.validate_file(
@@ -488,6 +594,19 @@ class FileValidator:
                                         f"Invalid file in archive '{archive_path_obj.name}': '{member.filename}'")
                                     issues.extend([f"    - {issue}" for issue in internal_validation_result.issues])
                                     # Option: break on first internal error or collect all
+                                elif (
+                                    internal_media_type_key == "archive"
+                                    and archive_config.get("scan_contents")
+                                ):
+                                    nested_validation = self.validate_archive_contents(
+                                        internal_file_path,
+                                        _current_depth=_current_depth + 1,
+                                    )
+                                    if not nested_validation:
+                                        issues.append(
+                                            f"Invalid nested archive in '{archive_path_obj.name}': '{member.filename}'"
+                                        )
+                                        issues.extend([f"    - {issue}" for issue in nested_validation.issues])
                             except Exception as extract_err:
                                 issues.append(
                                     f"Error extracting/validating internal file '{member.filename}': {extract_err}")
@@ -555,6 +674,13 @@ class FileValidator:
                                         tar.extract(member, path=extract_dir)
                                     internal_file_path = extract_dir / member.name
                                     internal_media_type_key = _resolve_media_type_key(internal_file_path)
+
+                                    if not internal_media_type_key:
+                                        issues.append(
+                                            f"Archive contains file with unsupported type: {member.name}"
+                                        )
+                                        continue
+
                                     logging.debug(
                                         f"Validating internal file: {member.name} (as {internal_media_type_key or 'generic'})")
                                     internal_validation_result = self.validate_file(
@@ -566,6 +692,19 @@ class FileValidator:
                                         issues.append(
                                             f"Invalid file in archive '{archive_path_obj.name}': '{member.name}'")
                                         issues.extend([f"    - {issue}" for issue in internal_validation_result.issues])
+                                    elif (
+                                        internal_media_type_key == "archive"
+                                        and archive_config.get("scan_contents")
+                                    ):
+                                        nested_validation = self.validate_archive_contents(
+                                            internal_file_path,
+                                            _current_depth=_current_depth + 1,
+                                        )
+                                        if not nested_validation:
+                                            issues.append(
+                                                f"Invalid nested archive in '{archive_path_obj.name}': '{member.name}'"
+                                            )
+                                            issues.extend([f"    - {issue}" for issue in nested_validation.issues])
                                 except Exception as extract_err:
                                     issues.append(
                                         f"Error extracting/validating internal file '{member.name}': {extract_err}")
@@ -675,10 +814,15 @@ def process_and_validate_file(
         media_type_key = _resolve_media_type_key(p_file_path.name)
 
     if not media_type_key:
-        logging.warning(f"Could not determine specific media type for '{_original_filename}' based on extension. "
-                        "Performing generic validation.")
-        # Perform a generic validation (no specific media_type_key implies less strict rules or default rules)
-        return validator.validate_file(p_file_path, _original_filename, media_type_key=None)
+        issue = (f"Unsupported or unrecognized media type for '{_original_filename}'. "
+                 "Rejecting file with unknown extension.")
+        logging.warning(issue)
+        return ValidationResult(
+            False,
+            [issue],
+            p_file_path,
+            detected_extension=p_file_path.suffix.lower() if p_file_path.suffix else None,
+        )
 
     media_config = validator.get_media_config(media_type_key)
 

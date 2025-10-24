@@ -143,7 +143,22 @@ class DocumentGeneratorService:
         self._prompt_cache: Dict[DocumentType, Dict[str, Any]] = {}
         
         # No longer need provider mapping - using chat_api_call abstraction
-    
+    @staticmethod
+    def _normalize_conversation_id(conversation_id: Optional[Union[str, int]]) -> Optional[str]:
+        """Normalize conversation identifiers provided by API/legacy callers."""
+        if conversation_id is None:
+            return None
+        if isinstance(conversation_id, str):
+            cleaned = conversation_id.strip()
+            return cleaned or None
+        try:
+            numeric = int(conversation_id)
+        except (TypeError, ValueError):
+            return None
+        if numeric <= 0:
+            return None
+        return str(numeric)
+
     def _init_tables(self):
         """Initialize document generation tables in the user's database if they don't exist."""
         try:
@@ -153,7 +168,7 @@ class DocumentGeneratorService:
                     CREATE TABLE IF NOT EXISTS generation_jobs (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         job_id TEXT NOT NULL UNIQUE,
-                        conversation_id INTEGER,
+                        conversation_id TEXT,
                         document_type TEXT NOT NULL,
                         status TEXT NOT NULL,
                         provider TEXT,
@@ -188,7 +203,7 @@ class DocumentGeneratorService:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS generated_documents (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        conversation_id INTEGER,
+                        conversation_id TEXT,
                         document_type TEXT NOT NULL,
                         title TEXT NOT NULL,
                         content TEXT NOT NULL,
@@ -464,7 +479,7 @@ class DocumentGeneratorService:
     
     def generate_document(
         self,
-        conversation_id: int,
+        conversation_id: Union[str, int],
         document_type: DocumentType,
         provider: str,
         model: str,
@@ -490,13 +505,28 @@ class DocumentGeneratorService:
             Generated document content or job info for async generation
         """
         start_time = time.time()
-        logger.info(f"Generating {document_type.value} for conversation {conversation_id} (user: {self.user_id})")
+        normalized_conversation_id = self._normalize_conversation_id(conversation_id)
+        if not normalized_conversation_id:
+            logger.warning("Invalid conversation identifier provided: %s", conversation_id)
+            return {
+                "success": False,
+                "error": "Invalid conversation identifier",
+                "document_type": document_type.value,
+                "conversation_id": conversation_id,
+            }
+
+        logger.info(
+            "Generating %s for conversation %s (user: %s)",
+            document_type.value,
+            normalized_conversation_id,
+            self.user_id,
+        )
         
         # Get conversation context
         try:
-            messages = self.get_conversation_context(conversation_id)
+            messages = self.get_conversation_context(normalized_conversation_id)
             if not messages:
-                logger.warning(f"No messages found for conversation {conversation_id}")
+                logger.warning("No messages found for conversation %s", normalized_conversation_id)
                 return {
                     "success": False,
                     "error": f"No messages found for conversation {conversation_id}",
@@ -541,7 +571,7 @@ class DocumentGeneratorService:
                 # Save the generated document
                 generation_time_ms = int((time.time() - start_time) * 1000)
                 self._save_generated_document(
-                    conversation_id=conversation_id,
+                    conversation_id=normalized_conversation_id,
                     document_type=document_type,
                     title=f"{document_type.value.replace('_', ' ').title()} - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     content=result,
@@ -607,7 +637,7 @@ class DocumentGeneratorService:
     
     def _save_generated_document(
         self,
-        conversation_id: Optional[int],
+        conversation_id: Optional[Union[str, int]],
         document_type: DocumentType,
         title: str,
         content: str,
@@ -632,6 +662,8 @@ class DocumentGeneratorService:
         Returns:
             Document ID
         """
+        normalized_conversation_id = self._normalize_conversation_id(conversation_id)
+
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
@@ -641,7 +673,7 @@ class DocumentGeneratorService:
                      generation_time_ms, token_count)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (conversation_id, document_type.value, title, content, provider,
+                    (normalized_conversation_id, document_type.value, title, content, provider,
                      model, generation_time_ms, token_count)
                 )
                 document_id = cursor.lastrowid
@@ -657,7 +689,7 @@ class DocumentGeneratorService:
     def record_streamed_document(
         self,
         *,
-        conversation_id: Optional[int],
+        conversation_id: Optional[Union[str, int]],
         document_type: DocumentType,
         content: str,
         provider: str,
@@ -713,7 +745,7 @@ class DocumentGeneratorService:
         metadata: Optional[Dict[str, Any]] = None,
         provider: str = "watchlists",
         model: str = "watchlists",
-        conversation_id: Optional[int] = None,
+        conversation_id: Optional[Union[str, int]] = None,
         token_count: Optional[int] = None,
     ) -> int:
         """
@@ -743,7 +775,7 @@ class DocumentGeneratorService:
     
     def get_generated_documents(
         self,
-        conversation_id: Optional[int] = None,
+        conversation_id: Optional[Union[str, int]] = None,
         document_type: Optional[DocumentType] = None,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
@@ -763,9 +795,10 @@ class DocumentGeneratorService:
                 query = "SELECT * FROM generated_documents WHERE 1=1"
                 params = []
                 
-                if conversation_id:
+                normalized_conversation_id = self._normalize_conversation_id(conversation_id)
+                if normalized_conversation_id:
                     query += " AND conversation_id = ?"
-                    params.append(conversation_id)
+                    params.append(normalized_conversation_id)
                 
                 if document_type:
                     query += " AND document_type = ?"
@@ -778,9 +811,11 @@ class DocumentGeneratorService:
                 documents = []
                 
                 for row in cursor.fetchall():
+                    conv_id = row[1]
+                    conv_id_str = str(conv_id) if conv_id is not None else ""
                     documents.append({
                         'id': row[0],
-                        'conversation_id': row[1],
+                        'conversation_id': conv_id_str,
                         'document_type': row[2],
                         'title': row[3],
                         'content': row[4],
@@ -819,9 +854,11 @@ class DocumentGeneratorService:
                 if not row:
                     return None
                 
+                conv_id = row[1]
+                conv_id_str = str(conv_id) if conv_id is not None else ""
                 return {
                     'id': row[0],
-                    'conversation_id': row[1],
+                    'conversation_id': conv_id_str,
                     'document_type': row[2],
                     'title': row[3],
                     'content': row[4],
@@ -867,7 +904,7 @@ class DocumentGeneratorService:
     
     def create_generation_job(
         self,
-        conversation_id: int,
+        conversation_id: Union[str, int],
         document_type: DocumentType,
         provider: str,
         model: str,
@@ -888,6 +925,7 @@ class DocumentGeneratorService:
         """
         import uuid
         job_id = str(uuid.uuid4())
+        normalized_conversation_id = self._normalize_conversation_id(conversation_id)
         
         try:
             with self.db.get_connection() as conn:
@@ -897,7 +935,7 @@ class DocumentGeneratorService:
                     (job_id, conversation_id, document_type, status, provider, model, prompt_config)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (job_id, conversation_id, document_type.value, GenerationStatus.PENDING.value,
+                    (job_id, normalized_conversation_id, document_type.value, GenerationStatus.PENDING.value,
                      provider, model, json.dumps(prompt_config))
                 )
                 conn.commit()
@@ -933,9 +971,11 @@ class DocumentGeneratorService:
                 row = cursor.fetchone()
                 
                 if row:
+                    conv_id = row[1]
+                    conv_id_str = str(conv_id) if conv_id is not None else ""
                     return {
                         'job_id': row[0],
-                        'conversation_id': row[1],
+                        'conversation_id': conv_id_str,
                         'document_type': row[2],
                         'status': row[3],
                         'provider': row[4],

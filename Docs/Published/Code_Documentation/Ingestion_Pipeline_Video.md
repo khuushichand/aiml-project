@@ -75,6 +75,7 @@ Endpoint specifics:
 - Uses a managed temporary directory (`TempDirManager`) and passes its path to `process_videos`.
 - Provider API keys are read from server configuration; the library calls do not require an `api_key` argument.
 - Uploaded files are validated for allowed video types; remote URLs are downloaded via yt-dlp inside the library.
+- Playlist URLs (e.g., YouTube playlists) are expanded server-side into per-video entries before processing begins.
 
 ## Dependencies & Config
 
@@ -88,3 +89,4 @@ Endpoint specifics:
 - Audio is extracted by yt-dlp (audio-only by default); ffmpeg must be available in PATH for post-processing.
 - Chunking occurs only when analysis is requested; otherwise, no chunks are produced.
 - Per-item results include: `content` (transcript), `segments` (with timestamps if requested), `chunks` (when chunking/analysis enabled), and `analysis` (summary).
+- `start_time` and `end_time` accept integers or `HH:MM:SS(.sss)` values; invalid timestamps are rejected with a validation error instead of failing mid-run.

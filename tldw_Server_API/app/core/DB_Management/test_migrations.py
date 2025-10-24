@@ -146,18 +146,17 @@ class TestMigrations(unittest.TestCase):
             version=1,
             name="add_column",
             up_sql="ALTER TABLE test_table ADD COLUMN new_col TEXT;",
-            down_sql="-- SQLite doesn't support DROP COLUMN directly"
+            down_sql=None,
         )
         
-        # For SQLite, we'll just test the record removal
-        self.migrator.execute_migration(migration, "down")
+        with self.assertRaises(MigrationError):
+            self.migrator.execute_migration(migration, "down")
         
-        # Check migration record was removed
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute(
             "SELECT version FROM schema_migrations WHERE version = 1"
         )
-        self.assertIsNone(cursor.fetchone())
+        self.assertIsNotNone(cursor.fetchone())
         conn.close()
     
     def test_migrate_to_version(self):
@@ -189,6 +188,20 @@ class TestMigrations(unittest.TestCase):
         self.assertEqual(result["current_version"], 1)
         self.assertEqual(len(result["migrations_applied"]), 1)
         self.assertEqual(result["migrations_applied"][0]["direction"], "down")
+
+    def test_sql_migration_without_down_sql_prevents_downgrade(self):
+        """Ensure SQL migrations without down_sql cannot be downgraded."""
+        sql_path = Path(self.migrations_dir) / "001_add_flag.sql"
+        sql_path.write_text("ALTER TABLE test_table ADD COLUMN flag INTEGER;")
+
+        up_result = self.migrator.migrate_to_version(1)
+        self.assertEqual(up_result["status"], "success")
+        self.assertEqual(self.migrator.get_current_version(), 1)
+
+        with self.assertRaises(MigrationError):
+            self.migrator.migrate_to_version(0)
+
+        self.assertEqual(self.migrator.get_current_version(), 1)
     
     def test_create_backup(self):
         """Test database backup creation"""

@@ -302,6 +302,18 @@ class ChatCompletionRequest(BaseModel):
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field("auto", description="Controls tool usage (provider support varies).")
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
 
+    # --- Conversation history controls ---
+    history_message_limit: Optional[int] = Field(
+        None,
+        ge=1,
+        le=500,
+        description="Optional override for the number of previous messages to load into context."
+    )
+    history_message_order: Optional[Literal["asc", "desc"]] = Field(
+        None,
+        description="Optional override for history ordering: 'asc' for oldest first, 'desc' for newest first."
+    )
+
     # --- Bedrock Guardrails Extensions ---
     extra_headers: Optional[Dict[str, str]] = Field(
         None,

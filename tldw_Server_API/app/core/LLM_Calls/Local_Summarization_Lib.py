@@ -20,14 +20,16 @@
 # Import necessary libraries
 import json
 import os
+from typing import Optional
 # Import 3rd-party Libraries
+import httpx
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 #
 # Import Local Libraries
 from tldw_Server_API.app.core.Utils.Utils import extract_text_from_segments, logging
-from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.config import load_and_log_configs, load_settings
 
 #
 #######################################################################################################################
@@ -52,6 +54,29 @@ summarizer_prompt = """
                         - Ensure adherence to specified format
                         - Do not reference these instructions in your response.</s> {{ .Prompt }}
                     """
+
+
+def _resolve_local_llm_url(configured_base: Optional[str]) -> str:
+    """
+    Build the chat completions URL from the configured base, falling back to the default.
+    Mirrors the logic used by generic local handlers to avoid double path segments.
+    """
+    default_url = "http://127.0.0.1:8080/v1/chat/completions"
+    if configured_base is None:
+        return default_url
+
+    normalized_base = str(configured_base).strip()
+    if not normalized_base:
+        return default_url
+
+    normalized_base = normalized_base.rstrip("/")
+    lower_base = normalized_base.lower()
+
+    if "chat/completions" in lower_base or lower_base.endswith("/completion"):
+        return normalized_base
+    if lower_base.endswith("/v1"):
+        return normalized_base + "/chat/completions"
+    return normalized_base + "/v1/chat/completions"
 
 
 def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message=None, streaming=False):
@@ -80,6 +105,11 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
         if system_message is None:
             system_message = "You are a helpful AI assistant."
 
+        settings = load_settings()
+        local_llm_cfg = settings.get("local_llm") or {}
+        url = _resolve_local_llm_url(local_llm_cfg.get("api_ip"))
+        logging.debug(f"Local LLM: Using endpoint {url}")
+
         headers = {
             'Content-Type': 'application/json'
         }
@@ -103,7 +133,6 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
         }
 
         logging.debug("Local LLM: Posting request")
-        url = 'http://127.0.0.1:8080/v1/chat/completions'
         if streaming:
             logging.debug("Local LLM: Processing streaming response")
             client = httpx.Client()

@@ -18,6 +18,7 @@ from ..Embeddings_Server.Embeddings_Create import (
     OpenAIModelCfg,
     LocalAPICfg,
     create_embeddings_batch,
+    resolve_model_storage_base_dir,
 )
 from ..queue_schemas import (
     EmbeddingData,
@@ -666,7 +667,7 @@ class EmbeddingWorker(BaseWorker):
             app_config = {
                 "embedding_config": {
                     "default_model_id": model_id,
-                    "model_storage_base_dir": "./models/embedding_models_data/",
+                    "model_storage_base_dir": resolve_model_storage_base_dir(),
                     "models": {model_id: cfg_obj},
                 }
             }

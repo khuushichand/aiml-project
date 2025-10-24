@@ -86,6 +86,14 @@ class ChunkingOptionsRequest(BaseModel):
                                                     description="Sentence overlap for 'semantic' chunking.")
     json_chunkable_data_key: Optional[str] = Field(default_chunk_options_from_lib.get('json_chunkable_data_key', 'data'),
                                                  description="Key in JSON object whose dict value should be chunked.")
+    enable_frontmatter_parsing: Optional[bool] = Field(
+        default_chunk_options_from_lib.get('enable_frontmatter_parsing', True),
+        description="Toggle JSON frontmatter extraction when sentinel key is present."
+    )
+    frontmatter_sentinel_key: Optional[str] = Field(
+        default_chunk_options_from_lib.get('frontmatter_sentinel_key', '__tldw_frontmatter__'),
+        description="Sentinel key required inside JSON frontmatter to permit extraction."
+    )
 
     # Options for 'rolling_summarize' (high-level controls)
     summarization_detail: Optional[float] = Field(default_chunk_options_from_lib.get('summarization_detail'), ge=0.0, le=1.0,

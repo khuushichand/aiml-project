@@ -161,7 +161,9 @@ class TestWorldBookService:
         # Check insert SQL
         mock_conn.execute.assert_called_once()
         call_args = mock_conn.execute.call_args[0]
-        assert "INSERT OR REPLACE INTO character_world_books" in call_args[0]
+        sql_text = call_args[0].lower()
+        assert "insert into character_world_books" in sql_text
+        assert "on conflict" in sql_text
         assert call_args[1] == (1, 1, True, 100)
     
     def test_detach_from_character(self, service, mock_db):
@@ -366,7 +368,7 @@ class TestWorldBookService:
         # Should soft delete (UPDATE to set deleted flag)
         calls = mock_conn.execute.call_args_list
         assert len(calls) == 1
-        assert "UPDATE world_books SET deleted = 1" in calls[0][0][0]
+        assert "update world_books set deleted =" in calls[0][0][0].lower()
     
     def test_update_entry(self, service, mock_db):
         """Test updating a world book entry."""

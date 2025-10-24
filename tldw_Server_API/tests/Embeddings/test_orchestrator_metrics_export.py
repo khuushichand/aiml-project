@@ -6,7 +6,8 @@ from tldw_Server_API.app.main import app
 
 
 @pytest.mark.unit
-def test_prometheus_metrics_contains_orchestrator_gauges(disable_heavy_startup, admin_user, fake_redis):
+def test_prometheus_metrics_contains_orchestrator_gauges(disable_heavy_startup, admin_user, redis_client):
+    redis_client.run(redis_client.xadd("embeddings:embedding", {"seq": "0"}))
     # Trigger snapshot so gauges are set
     client = TestClient(app)
     r0 = client.get("/api/v1/embeddings/orchestrator/summary")
@@ -45,7 +46,7 @@ def test_summary_failure_increments_counter(disable_heavy_startup, admin_user, m
 
 
 @pytest.mark.unit
-def test_sse_disconnect_increments_counter(disable_heavy_startup, fake_redis, monkeypatch):
+def test_sse_disconnect_increments_counter(disable_heavy_startup, redis_client, monkeypatch):
     # Call the endpoint function directly and close its generator to trigger disconnect accounting
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import orchestrator_events
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
@@ -53,17 +54,15 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, fake_redis, mo
     # Create admin user for direct call
     admin = User(id=1, username="admin", email="a@x", is_active=True, is_admin=True)
 
-    # Patch redis client factory to use fake_redis
+    # Patch redis client factory to use the shared redis_client
     import redis.asyncio as aioredis
 
     async def fake_from_url(url, decode_responses=True):
-        return fake_redis
+        return redis_client.client
 
     monkeypatch.setattr(aioredis, "from_url", fake_from_url)
 
     # Run SSE endpoint to get StreamingResponse; then consume once and close
-    import asyncio as _asyncio
-
     async def _run_once_and_close():
         resp = await orchestrator_events(current_user=admin)
         agen = resp.body_iterator
@@ -77,7 +76,7 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, fake_redis, mo
         except Exception:
             pass
 
-    _asyncio.run(_run_once_and_close())
+    redis_client.run(_run_once_and_close())
 
     client = TestClient(app)
     r2 = client.get("/api/v1/metrics/text")
@@ -89,7 +88,7 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, fake_redis, mo
 
 
 @pytest.mark.unit
-def test_stage_flag_metric_after_pause(disable_heavy_startup, admin_user, fake_redis):
+def test_stage_flag_metric_after_pause(disable_heavy_startup, admin_user, redis_client):
     client = TestClient(app)
     # Pause embedding stage via admin API
     r0 = client.post("/api/v1/embeddings/stage/control", json={"stage": "embedding", "action": "pause"})

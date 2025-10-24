@@ -127,12 +127,17 @@ class CSRFTokenManager:
         if any(path.startswith(excluded) for excluded in self.excluded_paths):
             return False
         
-        # Skip if single-user mode with API key auth
+        # Skip if single-user mode with API key auth (X-API-KEY or Bearer fallback)
         if self.settings.AUTH_MODE == "single_user":
             # Check if API key is present
             api_key = request.headers.get("X-API-KEY")
             if api_key:
                 return False  # API key auth doesn't need CSRF
+            authorization = request.headers.get("authorization") or request.headers.get("Authorization")
+            if authorization:
+                scheme, _, credential = authorization.partition(" ")
+                if scheme.lower() == "bearer" and credential.strip():
+                    return False
         
         # Check content type
         content_type = request.headers.get("content-type", "").lower()

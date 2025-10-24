@@ -1,4 +1,5 @@
 # Utils.py
+from __future__ import annotations
 #########################################
 # General Utilities Library
 # This library is used to hold random utilities used by various other libraries.
@@ -29,11 +30,6 @@
 ####################
 #
 # Import necessary libraries
-import mimetypes
-import sys
-import zipfile
-from pathlib import Path
-
 import chardet
 import configparser
 import hashlib
@@ -43,7 +39,12 @@ import re
 import tempfile
 import time
 import uuid
+import mimetypes
+import sys
+import zipfile
 from datetime import timedelta, datetime
+from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 from typing import Union, AnyStr, Tuple, List, Optional, Protocol, cast
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 #
@@ -281,23 +282,50 @@ def convert_to_seconds(time_str):
     if not time_str:
         return 0
 
-    # If it's already a number, assume it's in seconds
-    if time_str.isdigit():
-        return int(time_str)
+    time_str = str(time_str).strip()
+    if not time_str:
+        return 0
 
-    # Parse time string in format HH:MM:SS, MM:SS, or SS
+    def _as_int(value: float) -> int:
+        if value < 0:
+            raise ValueError("Time values must be non-negative")
+        quantized = Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        return int(quantized)
+
+    # If it's already a plain number (allowing decimals), treat as seconds.
+    try:
+        if ":" not in time_str:
+            return _as_int(float(time_str))
+    except ValueError as exc:
+        raise ValueError(f"Invalid time value '{time_str}'") from exc
+
+    # Parse time string in format HH:MM:SS(.sss), MM:SS(.sss), or SS(.sss)
     time_parts = time_str.split(':')
     if len(time_parts) == 3:
-        return int(timedelta(hours=int(time_parts[0]),
-                             minutes=int(time_parts[1]),
-                             seconds=int(time_parts[2])).total_seconds())
-    elif len(time_parts) == 2:
-        return int(timedelta(minutes=int(time_parts[0]),
-                             seconds=int(time_parts[1])).total_seconds())
-    elif len(time_parts) == 1:
-        return int(time_parts[0])
-    else:
-        raise ValueError(f"Invalid time format: {time_str}")
+        hours, minutes, seconds = time_parts
+        try:
+            total_seconds = (
+                int(hours) * 3600 +
+                int(minutes) * 60 +
+                float(seconds)
+            )
+        except ValueError as exc:
+            raise ValueError(f"Invalid HH:MM:SS value '{time_str}'") from exc
+        return _as_int(total_seconds)
+    if len(time_parts) == 2:
+        minutes, seconds = time_parts
+        try:
+            total_seconds = int(minutes) * 60 + float(seconds)
+        except ValueError as exc:
+            raise ValueError(f"Invalid MM:SS value '{time_str}'") from exc
+        return _as_int(total_seconds)
+    if len(time_parts) == 1:
+        try:
+            return _as_int(float(time_parts[0]))
+        except ValueError as exc:
+            raise ValueError(f"Invalid seconds value '{time_str}'") from exc
+
+    raise ValueError(f"Invalid time format '{time_str}'")
 
 
 def truncate_content(content: Optional[str], max_length: int = 200) -> Optional[str]:

@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 import time
 import threading
+import hashlib
+import re
 from functools import wraps
 from typing import Any, Dict, List, Optional
 #
@@ -70,6 +72,66 @@ COMMIT_HASHES: Dict[str, str] = {
     "Alibaba-NLP/gte-large-en-v1.5": "104333d6af6f97649377c2afbde10a7704870c7b",
     "dunzhang/setll_en_400M_v5": "2aa5579fcae1c579de199a3866b6e514bbbf5d10",
 }
+
+_CACHE_SUBDIR_PATTERN = re.compile(r"[^0-9A-Za-z_.-]+")
+
+
+def _model_cache_subdir_name(model_id: str) -> str:
+    """
+    Return a filesystem-safe subdirectory name for caching model artifacts.
+
+    The name retains enough of the original identifier for debugging while
+    appending an 8-char hash suffix to avoid collisions. All characters are
+    limited to a portable ASCII set so the path works across platforms
+    (including Windows, where ':' is illegal).
+    """
+    sanitized = _CACHE_SUBDIR_PATTERN.sub("_", model_id).strip("._")
+    if not sanitized:
+        sanitized = "model"
+    if len(sanitized) > 80:
+        sanitized = sanitized[:80].rstrip("._-")
+        if not sanitized:
+            sanitized = "model"
+    digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]
+    return f"{sanitized}-{digest}"
+
+
+def resolve_model_storage_base_dir(
+    embedding_settings: Optional[Dict[str, Any]] = None,
+    default: Optional[str] = None,
+) -> str:
+    """
+    Determine the base directory used to persist embedding model artifacts.
+
+    Preference order:
+        1. Explicit override on the provided embedding_settings mapping.
+        2. Global settings["EMBEDDINGS_MODEL_STORAGE_DIR"].
+        3. Environment variable EMBEDDINGS_MODEL_STORAGE_DIR.
+        4. Supplied default argument.
+        5. Project default ./models/embedding_models_data/
+    """
+    from tldw_Server_API.app.core.config import settings
+
+    embedding_settings = embedding_settings or settings.get("EMBEDDING_CONFIG", {}) or {}
+    candidate = embedding_settings.get("model_storage_base_dir")
+    if candidate:
+        return str(candidate)
+
+    try:
+        configured_dir = settings.get("EMBEDDINGS_MODEL_STORAGE_DIR")
+    except Exception:
+        configured_dir = None
+    if configured_dir:
+        return str(configured_dir)
+
+    env_dir = os.getenv("EMBEDDINGS_MODEL_STORAGE_DIR")
+    if env_dir:
+        return env_dir
+
+    if default:
+        return str(default)
+
+    return "./models/embedding_models_data/"
 
 # Resource limits - loaded from config or use defaults
 def get_resource_limits():
@@ -738,7 +800,13 @@ class HuggingFaceEmbedder:
 
 
 class ONNXEmbedder:
-    def __init__(self, model_identifier: str, config: ONNXModelCfg, onnx_model_base_storage_dir: str):
+    def __init__(
+        self,
+        model_identifier: str,
+        config: ONNXModelCfg,
+        onnx_model_base_storage_dir: str,
+        model_storage_dir: Optional[str] = None,
+    ):
         self._lock = threading.RLock()  # Reentrant lock for this instance
         self.model_identifier = model_identifier
         self.config = config
@@ -746,10 +814,13 @@ class ONNXEmbedder:
         self.revision = config.revision or COMMIT_HASHES.get(config.model_name_or_path)
 
         # Directory for this specific ONNX model's files (model.onnx, tokenizer, config)
-        self.model_specific_onnx_dir = os.path.join(
-            onnx_model_base_storage_dir,  # e.g., .../onnx_models/
-            config.model_name_or_path.split("/")[-1]  # e.g., gte-large-en-v1.5
-        )
+        if model_storage_dir:
+            self.model_specific_onnx_dir = model_storage_dir
+        else:
+            self.model_specific_onnx_dir = os.path.join(
+                onnx_model_base_storage_dir,
+                config.model_name_or_path.split("/")[-1],
+            )
         os.makedirs(self.model_specific_onnx_dir, exist_ok=True)
         self.onnx_model_file_path = os.path.join(self.model_specific_onnx_dir, "model.onnx")  # Standard name by optimum
 
@@ -1021,10 +1092,12 @@ def create_embeddings_batch(
                     # Setup cache directory
                     hf_cache_dir = os.path.join(base_dir, model_spec.hf_cache_dir_subpath)
                     os.makedirs(hf_cache_dir, exist_ok=True)
+
+                    cache_subdir = _model_cache_subdir_name(model_id_to_use)
+                    model_cache_dir = os.path.join(hf_cache_dir, cache_subdir)
                     
                     # Check resource limits before loading - use actual path if available
-                    model_path = os.path.join(hf_cache_dir, model_id_to_use.replace('/', '_'))
-                    estimated_size = estimate_model_size(model_id_to_use, model_path)
+                    estimated_size = estimate_model_size(model_id_to_use, model_cache_dir)
                     
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
@@ -1044,7 +1117,12 @@ def create_embeddings_batch(
                         logging.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
                     
-                    embedding_models[model_id_to_use] = HuggingFaceEmbedder(model_id_to_use, model_spec, hf_cache_dir)
+                    os.makedirs(model_cache_dir, exist_ok=True)
+                    embedding_models[model_id_to_use] = HuggingFaceEmbedder(
+                        model_id_to_use,
+                        model_spec,
+                        model_cache_dir,
+                    )
                     model_memory_usage[model_id_to_use] = estimated_size
                     model_last_used[model_id_to_use] = time.time()
                     logging.info(f"Loaded model {model_id_to_use} (size: {estimated_size:.2f} GB)")
@@ -1065,8 +1143,12 @@ def create_embeddings_batch(
                 if model_id_to_use not in embedding_models:
                     logging.info(f"ONNX model ID {model_id_to_use} not in cache. Initializing.")
                     
+                    onnx_root_dir = os.path.join(base_dir, model_spec.onnx_storage_dir_subpath)
+                    os.makedirs(onnx_root_dir, exist_ok=True)
+                    cache_subdir = _model_cache_subdir_name(model_id_to_use)
+                    onnx_model_path = os.path.join(onnx_root_dir, cache_subdir)
+                    
                     # Check resource limits before loading - use actual path if available
-                    onnx_model_path = os.path.join(base_dir, model_spec.onnx_storage_dir_subpath, model_id_to_use.replace('/', '_'))
                     estimated_size = estimate_model_size(model_id_to_use, onnx_model_path)
                     
                     if not check_memory_limit(estimated_size):
@@ -1087,10 +1169,12 @@ def create_embeddings_batch(
                         logging.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
                     
-                    # The ONNXEmbedder itself will construct the full path to its model directory
-                    # using base_dir and onnx_storage_dir_subpath.
-                    # We just need to pass the base for all ONNX models.
-                    embedding_models[model_id_to_use] = ONNXEmbedder(model_id_to_use, model_spec, base_dir)
+                    embedding_models[model_id_to_use] = ONNXEmbedder(
+                        model_id_to_use,
+                        model_spec,
+                        onnx_root_dir,
+                        model_storage_dir=onnx_model_path,
+                    )
                     model_memory_usage[model_id_to_use] = estimated_size
                     model_last_used[model_id_to_use] = time.time()
                     logging.info(f"Loaded ONNX model {model_id_to_use} (size: {estimated_size:.2f} GB)")
@@ -1286,7 +1370,8 @@ def get_embedding_config() -> Dict[str, Any]:
         "embedding_config": {
             # Default to a lightweight, widely available HF model
             "default_model_id": embedding_settings.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2'),
-            "models": {}
+            "models": {},
+            "model_storage_base_dir": resolve_model_storage_base_dir(embedding_settings),
         }
     }
     

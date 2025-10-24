@@ -2212,12 +2212,12 @@ def validate_audio_file(file_path: str) -> tuple:
         
         # Find ffprobe command
         ffmpeg_cmd = _find_ffmpeg()
-        # Try to get ffprobe by replacing ffmpeg with ffprobe
-        if 'ffmpeg' in ffmpeg_cmd:
-            ffprobe_cmd = ffmpeg_cmd.replace('ffmpeg', 'ffprobe')
-        else:
-            # Fallback to just 'ffprobe' if pattern doesn't match
-            ffprobe_cmd = 'ffprobe'
+        ffprobe_cmd = shutil.which("ffprobe")
+        if not ffprobe_cmd:
+            ffmpeg_path = Path(ffmpeg_cmd)
+            suffix = ffmpeg_path.suffix  # '.exe' on Windows
+            candidate = ffmpeg_path.with_name(f"ffprobe{suffix}")
+            ffprobe_cmd = str(candidate) if candidate.exists() else "ffprobe"
         
         # Use ffprobe to check for audio streams
         result = subprocess.run(

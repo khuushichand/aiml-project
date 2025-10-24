@@ -9,7 +9,7 @@
 import os
 from typing import Optional, Dict, Any
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, BackendType
@@ -49,15 +49,24 @@ class AuthDatabaseConfig:
     
     def _detect_backend(self):
         """Detect database backend from environment or settings."""
+        # Always refresh settings snapshot in case reset_settings() was called
+        try:
+            self.settings = get_settings()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"AuthDatabaseConfig: falling back to existing settings snapshot: {exc}")
+
         # Check environment variable first
         self.backend_type = os.getenv("TLDW_USER_DB_BACKEND", "").lower()
         
         # If not set, try to infer from DATABASE_URL
         if not self.backend_type:
             db_url = self.settings.DATABASE_URL
-            if db_url.startswith("postgresql://") or db_url.startswith("postgres://"):
+            parsed = urlparse(db_url)
+            scheme = (parsed.scheme or "").lower()
+            base_scheme = scheme.split("+", 1)[0]
+            if base_scheme in {"postgresql", "postgres"}:
                 self.backend_type = "postgresql"
-            elif db_url.startswith("sqlite://"):
+            elif base_scheme in {"sqlite", "file"}:
                 self.backend_type = "sqlite"
             else:
                 # Default to SQLite
@@ -84,24 +93,49 @@ class AuthDatabaseConfig:
         Returns:
             DatabaseConfig: SQLite-specific configuration
         """
+        raw_url = self.settings.DATABASE_URL
         # Extract path from sqlite:/// URL or use as-is
-        db_path = self.settings.DATABASE_URL
-        if db_path.startswith("sqlite:///"):
-            db_path = db_path.replace("sqlite:///", "")
-        
-        # Ensure path is relative to project root if not absolute
-        if not Path(db_path).is_absolute():
-            db_path = str(Path.cwd() / db_path)
-        
+        parsed = urlparse(raw_url)
+        scheme = (parsed.scheme or "").lower()
+        base_scheme = scheme.split("+", 1)[0]
+
+        def _combine_path() -> str:
+            netloc = parsed.netloc or ""
+            path = parsed.path or ""
+            combined = f"{netloc}{path}" if netloc else path
+            combined = unquote(combined or "")
+            # Handle sqlite:///:memory: and variants
+            if combined in {":memory:", "/:memory:"}:
+                return ":memory:"
+            if combined.startswith("///"):
+                combined = combined.lstrip("/")
+            if combined.startswith("/"):
+                try:
+                    return str(Path(combined).resolve())
+                except Exception:
+                    return combined
+            # Relative path — resolve against project root
+            return str((Path.cwd() / combined).resolve())
+
+        if base_scheme in {"sqlite", "file", ""}:
+            combined = _combine_path()
+            if combined == ":memory:":
+                sqlite_path = ":memory:"
+            else:
+                sqlite_path = combined
+        else:
+            # Fallback for unexpected schemes, treat as direct path
+            sqlite_path = raw_url
+
         config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
-            sqlite_path=db_path,
+            sqlite_path=sqlite_path,
             sqlite_wal_mode=self._get_bool_env("TLDW_SQLITE_WAL_MODE", True),
             sqlite_foreign_keys=self._get_bool_env("TLDW_SQLITE_FOREIGN_KEYS", True),
             echo=self._get_bool_env("TLDW_DB_ECHO", False)
         )
         
-        logger.debug(f"SQLite config: path={db_path}")
+        logger.debug(f"SQLite config: path={sqlite_path}")
         return config
     
     def _get_postgresql_config(self) -> DatabaseConfig:
@@ -161,6 +195,8 @@ class AuthDatabaseConfig:
     def reset(self):
         """Reset configuration and database instance (mainly for testing)."""
         self._user_db = None
+        # Ensure backend detection reflects updated environment/settings
+        self.settings = get_settings()
         self._detect_backend()
     
     @staticmethod

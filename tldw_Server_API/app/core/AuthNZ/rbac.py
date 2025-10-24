@@ -10,6 +10,7 @@ from typing import List
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 def _user_db():
@@ -26,7 +27,14 @@ def get_effective_permissions(user_id: int) -> List[str]:
         db = _user_db()
         return db.get_user_permissions(user_id)
     except Exception as e:
-        logger.error(f"RBAC: failed to compute effective permissions for user {user_id}: {e}")
+        try:
+            redact_logs = get_settings().PII_REDACT_LOGS
+        except Exception:
+            redact_logs = False
+        if redact_logs:
+            logger.error(f"RBAC: failed to compute effective permissions for authenticated user (details redacted): {e}")
+        else:
+            logger.error(f"RBAC: failed to compute effective permissions for user {user_id}: {e}")
         return []
 
 
@@ -36,6 +44,12 @@ def user_has_permission(user_id: int, permission: str) -> bool:
         db = _user_db()
         return db.has_permission(user_id, permission)
     except Exception as e:
-        logger.error(f"RBAC: permission check failed for user {user_id}, perm={permission}: {e}")
+        try:
+            redact_logs = get_settings().PII_REDACT_LOGS
+        except Exception:
+            redact_logs = False
+        if redact_logs:
+            logger.error(f"RBAC: permission check failed for authenticated user (details redacted), perm={permission}: {e}")
+        else:
+            logger.error(f"RBAC: permission check failed for user {user_id}, perm={permission}: {e}")
         return False
-

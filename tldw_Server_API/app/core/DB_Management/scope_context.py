@@ -33,6 +33,24 @@ class ScopeContext:
         return self.team_ids[0] if self.team_ids else None
 
 
+def _ordered_unique_ints(values: Iterable[int]) -> List[int]:
+    """Return integers in first-seen order without duplicates."""
+    seen: set[int] = set()
+    ordered: List[int] = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            as_int = int(value)
+        except (TypeError, ValueError):
+            continue
+        if as_int in seen:
+            continue
+        seen.add(as_int)
+        ordered.append(as_int)
+    return ordered
+
+
 _SCOPE_CTX: ContextVar[Optional[ScopeContext]] = ContextVar("content_scope_ctx", default=None)
 
 
@@ -47,10 +65,13 @@ def set_scope(
     session_role: Optional[str] = None,
 ) -> Token:
     """Set the current scope context and return a token for later reset."""
+    org_list = _ordered_unique_ints(org_ids)
+    team_list = _ordered_unique_ints(team_ids)
+
     scope = ScopeContext(
         user_id=user_id,
-        org_ids=list({int(o) for o in org_ids if o is not None}),
-        team_ids=list({int(t) for t in team_ids if t is not None}),
+        org_ids=org_list,
+        team_ids=team_list,
         active_org_id=int(active_org_id) if active_org_id is not None else None,
         active_team_id=int(active_team_id) if active_team_id is not None else None,
         is_admin=is_admin,

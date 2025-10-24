@@ -362,11 +362,8 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                         "These are not allowed for security reasons."
                     )
                 
-                # Additional check for external references
-                if any(x in text.lower() for x in ['file://', 'http://', 'https://', 'ftp://']):
-                    raise InvalidInputError(
-                        "XML contains external references which are not allowed for security reasons."
-                    )
+                # External references are only dangerous when used in DTD/ENTITY constructs.
+                # Since we already reject any DTD/ENTITY declarations above, allow URLs in text nodes.
                 
                 root = ET.fromstring(text, parser=parser)
                 logger.debug("Using standard xml.etree with security checks")

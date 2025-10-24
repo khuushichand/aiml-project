@@ -73,6 +73,39 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
     import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_mod
     monkeypatch.setattr(llm_mod.requests, "Session", _FakeSession)
 
+    streaming_payloads = [
+        _json.dumps({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
+        }),
+        _json.dumps({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
+        }),
+        _json.dumps({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]
+        }),
+    ]
+    stream_chunks = [
+        f"event: completion.chunk\ndata: {payload}\n\n" for payload in streaming_payloads
+    ]
+    stream_chunks.append("event: close\n\n")
+    stream_chunks.append("data: [DONE]\n\n")
+
+    import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as chat_sessions_mod
+
+    def _fake_perform_chat_api_call(*args, **kwargs):
+        def _generator():
+            for chunk in stream_chunks:
+                yield chunk
+        return _generator()
+
+    monkeypatch.setattr(chat_sessions_mod, "perform_chat_api_call", _fake_perform_chat_api_call)
+
     # Isolate DB
     tmpdir = tempfile.mkdtemp(prefix="chacha_stream_e2e_")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
@@ -96,21 +129,9 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
             url = f"/api/v1/chats/{chat_id}/complete-v2"
             expected_lines = [
                 # Each line should be forwarded 1:1
-                'data: ' + _json.dumps({
-                    "id": "chatcmpl-1",
-                    "object": "chat.completion.chunk",
-                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
-                }),
-                'data: ' + _json.dumps({
-                    "id": "chatcmpl-1",
-                    "object": "chat.completion.chunk",
-                    "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
-                }),
-                'data: ' + _json.dumps({
-                    "id": "chatcmpl-1",
-                    "object": "chat.completion.chunk",
-                    "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]
-                }),
+                'data: ' + streaming_payloads[0],
+                'data: ' + streaming_payloads[1],
+                'data: ' + streaming_payloads[2],
                 'data: [DONE]'
             ]
             collected = []
@@ -128,4 +149,3 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
             assert collected == expected_lines
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-

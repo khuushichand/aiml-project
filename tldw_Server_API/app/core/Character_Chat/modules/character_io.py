@@ -12,7 +12,7 @@ import os
 import time
 import uuid
 import yaml
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, List, Optional, Tuple, Any, Union, Set
 
 from PIL import Image
 from loguru import logger
@@ -456,14 +456,35 @@ def load_chat_history_from_file_and_save_to_db(
             return None, None
 
         # Parse content – prefer JSON, fall back to YAML, finally treat as plain text
-        chat_data: Dict[str, Any]
+        def _normalise_chat_data(raw_data: Any) -> Optional[Dict[str, Any]]:
+            if isinstance(raw_data, dict):
+                return raw_data
+            if isinstance(raw_data, list):
+                return {"messages": raw_data}
+            if raw_data is None:
+                return None
+            if isinstance(raw_data, str):
+                if not raw_data.strip():
+                    return None
+                return {"messages": [{"role": "user", "content": raw_data}]}
+            # Fallback: coerce to string representation
+            coerced = str(raw_data).strip()
+            if not coerced:
+                return None
+            return {"messages": [{"role": "user", "content": coerced}]}
+
+        chat_data_raw: Any = None
         try:
-            chat_data = json.loads(content)
+            chat_data_raw = json.loads(content)
         except json.JSONDecodeError:
             try:
-                chat_data = yaml.safe_load(content) or {}
+                chat_data_raw = yaml.safe_load(content)
             except Exception:
-                chat_data = {"messages": [{"role": "user", "content": content}]}
+                chat_data_raw = None
+
+        chat_data = _normalise_chat_data(chat_data_raw)
+        if not chat_data:
+            chat_data = {"messages": [{"role": "user", "content": content}]}
 
         # Resolve placeholders and conversation metadata
         inferred_user_name = user_name_for_placeholders or chat_data.get("user_name")
@@ -471,6 +492,127 @@ def load_chat_history_from_file_and_save_to_db(
 
         if not title:
             title = f"Imported Chat - {time.strftime('%Y-%m-%d %H:%M:%S')}"
+
+        def _normalize_message_content(raw_content: Any) -> Optional[str]:
+            """Flatten structured message content into a plain string when possible."""
+
+            collected_parts: List[str] = []
+            appended_via_fallback = False
+
+            def _collect(item: Any) -> None:
+                nonlocal appended_via_fallback
+                if item is None:
+                    return
+                if isinstance(item, str):
+                    if item:
+                        collected_parts.append(item)
+                    return
+                if isinstance(item, (list, tuple)):
+                    for sub_item in item:
+                        _collect(sub_item)
+                    return
+                if isinstance(item, dict):
+                    # Common structured keys from OpenAI/Anthropic/Gemini payloads
+                    for key in (
+                        "text",
+                        "content",
+                        "value",
+                        "message",
+                        "data",
+                        "input_text",
+                        "output_text",
+                    ):
+                        if key in item:
+                            _collect(item[key])
+
+                    if "parts" in item:
+                        _collect(item["parts"])
+                    if "arguments" in item:
+                        try:
+                            collected_parts.append(json.dumps(item["arguments"], ensure_ascii=False))
+                            appended_via_fallback = True
+                        except Exception:
+                            pass
+                    if "children" in item:
+                        _collect(item["children"])
+
+                    # If nothing was gathered, fall back to serialising the dict for traceability.
+                    if not collected_parts:
+                        try:
+                            collected_parts.append(json.dumps(item, ensure_ascii=False))
+                            appended_via_fallback = True
+                        except Exception:
+                            collected_parts.append(str(item))
+                    return
+
+                collected_parts.append(str(item))
+
+            _collect(raw_content)
+            if not collected_parts:
+                return None
+
+            combined = "\n".join(part for part in (segment.strip("\n") for segment in collected_parts) if part)
+            combined = combined.strip()
+            if combined:
+                return combined
+
+            if appended_via_fallback:
+                return None
+            return None
+
+        user_aliases_for_resolution: Set[str] = {"user", "human", "speaker", "speaker1", "speaker 1", "speaker-1"}
+        if inferred_user_name:
+            user_aliases_for_resolution.add(str(inferred_user_name).strip().lower())
+
+        def _resolve_sender(role_value: Any, entry_data: Any) -> Tuple[bool, Optional[str]]:
+            """Determine whether a message is from the user and capture explicit role labels."""
+            if role_value is None:
+                return True, None
+
+            normalized = str(role_value).strip()
+            if not normalized:
+                return True, None
+
+            lowered = normalized.lower()
+            if lowered in user_aliases_for_resolution:
+                return True, None
+
+            character_aliases = {
+                "assistant",
+                "bot",
+                "ai",
+                "character",
+            }
+            if inferred_char_name:
+                character_aliases.add(str(inferred_char_name).strip().lower())
+
+            if lowered in character_aliases:
+                return False, None
+
+            if lowered == "system":
+                return False, "system"
+
+            if lowered in {"tool", "function"}:
+                tool_name: Optional[str] = None
+                if isinstance(entry_data, dict):
+                    tool_name = entry_data.get("name") or entry_data.get("tool_name") or entry_data.get("tool", None)
+                    if not tool_name:
+                        function_details = entry_data.get("function")
+                        if isinstance(function_details, dict):
+                            tool_name = function_details.get("name") or function_details.get("type")
+                    if not tool_name:
+                        tool_calls = entry_data.get("tool_calls")
+                        if isinstance(tool_calls, list) and tool_calls:
+                            first_call = tool_calls[0]
+                            if isinstance(first_call, dict):
+                                tool_name = first_call.get("name")
+                                if not tool_name and isinstance(first_call.get("function"), dict):
+                                    tool_name = first_call["function"].get("name")
+                sender_label = f"{lowered}:{tool_name}" if tool_name else lowered
+                return False, sender_label
+
+            # Preserve unknown roles explicitly so downstream can inspect them.
+            return False, normalized
 
         from .character_chat import start_new_chat_session, post_message_to_conversation
         from .character_utils import replace_placeholders
@@ -494,113 +636,131 @@ def load_chat_history_from_file_and_save_to_db(
         character_name = (char_data or {}).get("name") or inferred_char_name or "Character"
         user_name = inferred_user_name or "User"
 
-        # New conversations created via the facade may contain an auto-generated
-        # greeting. Remove any pre-seeded messages so the imported history is the
-        # sole content.
-        try:
-            seeded_messages = db.get_messages_for_conversation(conversation_id, limit=50)
-        except CharactersRAGDBError as fetch_exc:
-            logger.debug(
-                "Unable to inspect seeded messages for conversation %s: %s",
-                conversation_id,
-                fetch_exc,
-            )
-            seeded_messages = []
-
-        for seeded_msg in seeded_messages:
+        def _cleanup_failed_import() -> None:
             try:
-                db.soft_delete_message(seeded_msg["id"], seeded_msg.get("version", 1))
-            except (CharactersRAGDBError, ConflictError) as delete_exc:
-                logger.debug(
-                    "Non-fatal: failed to remove seeded message %s from conversation %s during import: %s",
-                    seeded_msg.get("id"),
+                convo_meta = db.get_conversation_by_id(conversation_id)
+                if not convo_meta:
+                    return
+                version = convo_meta.get("version", 1)
+                if not isinstance(version, int):
+                    version = 1
+                db.soft_delete_conversation(conversation_id, version)
+            except (CharactersRAGDBError, ConflictError) as cleanup_exc:
+                logger.warning(
+                    "Non-fatal: failed to clean up conversation %s after import failure: %s",
                     conversation_id,
-                    delete_exc,
+                    cleanup_exc,
+                )
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "Unexpected error while cleaning up conversation %s after import failure: %s",
+                    conversation_id,
+                    cleanup_exc,
                 )
 
-        messages_added = 0
+        try:
+            # New conversations created via the facade may contain an auto-generated
+            # greeting. Remove any pre-seeded messages so the imported history is the
+            # sole content.
+            try:
+                seeded_messages = db.get_messages_for_conversation(conversation_id, limit=50)
+            except CharactersRAGDBError as fetch_exc:
+                logger.debug(
+                    "Unable to inspect seeded messages for conversation %s: %s",
+                    conversation_id,
+                    fetch_exc,
+                )
+                seeded_messages = []
 
-        def _normalise_role_to_is_user(role_value: Any) -> bool:
-            if role_value is None:
-                return True
-            role_text = str(role_value).strip()
-            if not role_text:
-                return True
-            lowered = role_text.lower()
-            if lowered in {"user", "human", "speaker", "speaker1", user_name.lower()}:
-                return True
-            if lowered in {
-                "assistant",
-                "bot",
-                "ai",
-                "character",
-                "npc",
-                "speaker2",
-                "system",
-                character_name.lower(),
-            }:
-                return False
-            # Default: treat unknown roles as character utterances to keep chronology
-            return False
-
-        def _add_message_to_conversation(message_text: str, is_user_message: bool) -> None:
-            nonlocal messages_added
-            cleaned = replace_placeholders(message_text, character_name, user_name)
-            post_message_to_conversation(
-                db=db,
-                conversation_id=conversation_id,
-                character_name=character_name,
-                message_content=cleaned,
-                is_user_message=is_user_message,
-            )
-            messages_added += 1
-
-        # Helper to process pair-based history entries (legacy export format)
-        def _process_pair_history(entries: List[Any]) -> None:
-            for idx, entry in enumerate(entries):
-                if not isinstance(entry, (list, tuple)):
-                    logger.warning("Skipping malformed message pair at index %s: not a list", idx)
-                    continue
-
-                if len(entry) > 2:
-                    logger.warning(
-                        "Skipping malformed message pair at index %s: expected at most 2 elements, got %s",
-                        idx,
-                        len(entry),
+            for seeded_msg in seeded_messages:
+                try:
+                    db.soft_delete_message(seeded_msg["id"], seeded_msg.get("version", 1))
+                except (CharactersRAGDBError, ConflictError) as delete_exc:
+                    logger.debug(
+                        "Non-fatal: failed to remove seeded message %s from conversation %s during import: %s",
+                        seeded_msg.get("id"),
+                        conversation_id,
+                        delete_exc,
                     )
-                    continue
 
-                user_chunk = entry[0] if len(entry) > 0 and isinstance(entry[0], str) else None
-                char_chunk = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else None
+            messages_added = 0
 
-                if user_chunk:
-                    _add_message_to_conversation(user_chunk, True)
-                if char_chunk:
-                    _add_message_to_conversation(char_chunk, False)
-                if not user_chunk and not char_chunk:
-                    logger.warning("Skipping malformed message pair at index %s: empty or non-string values", idx)
+            def _add_message_to_conversation(
+                message_text: str,
+                is_user_message: bool,
+                sender_override: Optional[str],
+            ) -> None:
+                nonlocal messages_added
+                cleaned = replace_placeholders(message_text, character_name, user_name)
+                post_message_to_conversation(
+                    db=db,
+                    conversation_id=conversation_id,
+                    character_name=character_name,
+                    message_content=cleaned,
+                    is_user_message=is_user_message,
+                    sender_override=sender_override,
+                )
+                messages_added += 1
 
-        history_node = chat_data.get("history")
-        if isinstance(history_node, dict) and isinstance(history_node.get("internal"), list):
-            _process_pair_history(history_node["internal"])
-        else:
-            messages = chat_data.get("messages", [])
-            if isinstance(messages, list):
-                for entry in messages:
-                    if not isinstance(entry, dict):
-                        logger.warning("Skipping malformed message entry (expected dict): %s", entry)
+            # Helper to process pair-based history entries (legacy export format)
+            def _process_pair_history(entries: List[Any]) -> None:
+                for idx, entry in enumerate(entries):
+                    if not isinstance(entry, (list, tuple)):
+                        logger.warning("Skipping malformed message pair at index %s: not a list", idx)
                         continue
-                    content = entry.get("content")
-                    if not isinstance(content, str) or not content.strip():
-                        logger.warning("Skipping message with empty or invalid content: %s", entry)
+
+                    if len(entry) > 2:
+                        logger.warning(
+                            "Skipping malformed message pair at index %s: expected at most 2 elements, got %s",
+                            idx,
+                            len(entry),
+                        )
                         continue
-                    is_user = _normalise_role_to_is_user(entry.get("role"))
-                    _add_message_to_conversation(content, is_user)
 
-        if messages_added == 0:
-            logger.info("Chat history import completed but contained no valid messages.")
+                    user_chunk_raw = entry[0] if len(entry) > 0 else None
+                    char_chunk_raw = entry[1] if len(entry) > 1 else None
 
-        return conversation_id, character_id
+                    user_chunk = _normalize_message_content(user_chunk_raw) if user_chunk_raw is not None else None
+                    char_chunk = _normalize_message_content(char_chunk_raw) if char_chunk_raw is not None else None
+
+                    if user_chunk:
+                        _add_message_to_conversation(user_chunk, True, None)
+                    if char_chunk:
+                        _add_message_to_conversation(char_chunk, False, None)
+                    if not user_chunk and not char_chunk:
+                        logger.warning("Skipping malformed message pair at index %s: empty or non-string values", idx)
+
+            history_node = chat_data.get("history")
+            if isinstance(history_node, dict) and isinstance(history_node.get("internal"), list):
+                _process_pair_history(history_node["internal"])
+            else:
+                messages = chat_data.get("messages", [])
+                if isinstance(messages, list):
+                    for entry in messages:
+                        if not isinstance(entry, dict):
+                            logger.warning("Skipping malformed message entry (expected dict): %s", entry)
+                            continue
+                        raw_content = entry.get("content")
+                        normalized_content = _normalize_message_content(raw_content)
+                        if normalized_content is None or not normalized_content.strip():
+                            logger.warning("Skipping message with empty or invalid content: %s", entry)
+                            continue
+                        is_user, sender_override = _resolve_sender(entry.get("role"), entry)
+                        if sender_override and sender_override.lower() == "system" and not normalized_content.strip():
+                            logger.debug(
+                                "System message with empty content skipped for conversation import: %s",
+                                entry,
+                            )
+                            continue
+                        _add_message_to_conversation(normalized_content, is_user, sender_override)
+
+            if messages_added == 0:
+                logger.info("Chat history import completed but contained no valid messages.")
+
+            return conversation_id, character_id
+        except Exception:
+            _cleanup_failed_import()
+            raise
 
     except Exception as exc:
         logger.error("Error loading chat history: %s", exc, exc_info=True)

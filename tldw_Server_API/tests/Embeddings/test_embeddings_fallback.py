@@ -73,9 +73,8 @@ def test_provider_fallback_to_hf(client, monkeypatch):
     r = client.post("/api/v1/embeddings", json=payload)
     assert r.status_code == 200
     data = r.json()
-    # Expect model string to indicate huggingface actually served it
-    assert isinstance(data.get("model"), str)
-    assert data["model"].startswith("huggingface:")
+    # Expect model string to indicate the actual fallback model
+    assert data["model"] == "huggingface:sentence-transformers/all-MiniLM-L6-v2"
     # Headers reflect fallback
     assert r.headers.get("X-Embeddings-Provider") == "huggingface"
     assert r.headers.get("X-Embeddings-Fallback-From") == "openai"

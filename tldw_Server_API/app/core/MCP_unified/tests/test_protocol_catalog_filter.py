@@ -161,3 +161,64 @@ async def test_protocol_catalog_resolution_precedence(monkeypatch):
     res_unres = await proto._handle_tools_list({"catalog": "missing"}, ctx_global)
     names_unres = {t.get("name") for t in res_unres.get("tools", [])}
     assert names_unres == {"team.only", "org.only", "global.only"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_protocol_resources_list_uses_catalog_filter(monkeypatch):
+    os.environ["TEST_MODE"] = "true"
+
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+
+    class _PoolStub:
+        async def fetchone(self, query: str, *args):
+            return {"id": 10}
+
+        async def fetchall(self, query: str, *args):
+            return [{"tool_name": "allowed.tool"}]
+
+    async def _get_db_pool_stub():
+        return _PoolStub()
+
+    import tldw_Server_API.app.core.AuthNZ.database as db_mod
+    monkeypatch.setattr(db_mod, "get_db_pool", _get_db_pool_stub)
+
+    class _AllowedModule:
+        name = "Allowed"
+
+        async def get_tools(self):
+            return [{"name": "allowed.tool"}]
+
+        async def get_resources(self):
+            return [{"uri": "allowed://one"}]
+
+    class _BlockedModule:
+        name = "Blocked"
+
+        async def get_tools(self):
+            return [{"name": "other.tool"}]
+
+        async def get_resources(self):
+            return [{"uri": "blocked://one"}]
+
+    class _RegistryStub:
+        async def get_all_modules(self):
+            return {"allowed": _AllowedModule(), "blocked": _BlockedModule()}
+
+    proto = MCPProtocol()
+    proto.module_registry = _RegistryStub()
+
+    async def _allow_module(*_args, **_kwargs):
+        return True
+
+    async def _allow_resource(*_args, **_kwargs):
+        return True
+
+    proto._has_module_permission = _allow_module  # type: ignore
+    proto._has_resource_permission = _allow_resource  # type: ignore
+
+    ctx = RequestContext(request_id="r", user_id="u", client_id="c", metadata={})
+    result = await proto._handle_resources_list({"catalog": "A"}, ctx)
+    uris = {res.get("uri") for res in result.get("resources", [])}
+    assert "allowed://one" in uris
+    assert "blocked://one" not in uris

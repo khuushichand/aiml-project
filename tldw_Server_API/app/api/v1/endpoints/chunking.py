@@ -367,7 +367,7 @@ async def process_text_for_chunking_json(
             llm_call_func_to_use,      # Pass the prepared LLM function
             llm_api_config_to_use      # Pass the config for that LLM function
         )
-    except (ChunkingError, InvalidInputError, InvalidChunkingMethodError) as lib_error: # Catch specific errors from Chunk_Lib
+    except (ChunkingError, InvalidInputError, InvalidChunkingMethodError) as lib_error: # Catch specific errors from chunker
         logger.warning(f"Chunking library error for '{request_data.file_name}': {lib_error}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error))
     except ValueError as ve: # General value errors (e.g., from Pydantic or type conversions if not caught earlier)

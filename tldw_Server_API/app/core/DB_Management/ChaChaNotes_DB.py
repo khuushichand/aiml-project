@@ -77,7 +77,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
-from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 #
 ########################################################################################################################
 #
@@ -3762,7 +3762,9 @@ UPDATE db_schema_version
                 logger.error("PostgreSQL FTS search failed for character cards term '%s': %s", search_term, exc)
                 raise
 
-        safe_search_term = f'"{search_term}"'
+        # Escape embedded quotes to avoid breaking the literal phrase wrapper
+        safe_literal = search_term.replace('"', '""')
+        safe_search_term = f'"{safe_literal}"'
         query = """
                 SELECT cc.*
                 FROM character_cards_fts, character_cards cc
@@ -4040,17 +4042,27 @@ UPDATE db_schema_version
             logger.error(f"Database error fetching conversation ID {conversation_id}: {e}")
             raise
 
-    def get_conversations_for_character(self, character_id: int, limit: int = 50, offset: int = 0) -> List[
-        Dict[str, Any]]:
+    def get_conversations_for_character(
+        self,
+        character_id: int,
+        limit: int = 50,
+        offset: int = 0,
+        client_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Lists conversations associated with a specific character ID.
 
         Only non-deleted conversations are returned, ordered by `last_modified` descending.
+        Results are automatically scoped to the active client's conversations unless
+        `client_id` is explicitly provided. Pass `client_id=None` to disable scoping.
 
         Args:
             character_id: The integer ID of the character.
             limit: The maximum number of conversations to return. Defaults to 50.
             offset: The number of conversations to skip. Defaults to 0.
+            client_id: Optional override for the client scope. Defaults to the
+                database instance's `client_id`. Use `None` to query across all
+                clients (only for privileged workflows).
 
         Returns:
             A list of dictionaries, each representing a conversation. Can be empty.
@@ -4058,9 +4070,21 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        query = "SELECT * FROM conversations WHERE character_id = ? AND deleted = 0 ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        client_filter = self.client_id if client_id is None else client_id
+        query = (
+            "SELECT * FROM conversations "
+            "WHERE character_id = ? AND deleted = 0"
+        )
+        params: List[Any] = [character_id]
+
+        if client_filter is not None:
+            query += " AND client_id = ?"
+            params.append(client_filter)
+
+        query += " ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (character_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching conversations for character ID {character_id}: {e}")
@@ -4449,8 +4473,13 @@ UPDATE db_schema_version
                 exc_info=True)
             raise
 
-    def search_conversations_by_title(self, title_query: str, character_id: Optional[int] = None, limit: int = 10) -> \
-            List[Dict[str, Any]]:
+    def search_conversations_by_title(
+        self,
+        title_query: str,
+        character_id: Optional[int] = None,
+        limit: int = 10,
+        client_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Searches conversations by title using FTS.
 
@@ -4462,6 +4491,9 @@ UPDATE db_schema_version
             title_query: The search term for the title. Supports FTS query syntax.
             character_id: Optional character ID to filter results.
             limit: Maximum number of results. Defaults to 10.
+            client_id: Optional override for client scoping. Defaults to the
+                database instance's `client_id`. Pass `None` to search across all
+                clients (reserved for privileged workflows).
 
         Returns:
             A list of matching conversation dictionaries. Can be empty.
@@ -4472,6 +4504,8 @@ UPDATE db_schema_version
         if not title_query.strip():
             logger.warning("Empty title_query provided for conversation search. Returning empty list.")
             return []
+
+        client_filter = self.client_id if client_id is None else client_id
 
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
@@ -4490,6 +4524,9 @@ UPDATE db_schema_version
             if character_id is not None:
                 base_query.append("AND c.character_id = ?")
                 params_list.append(character_id)
+            if client_filter is not None:
+                base_query.append("AND c.client_id = ?")
+                params_list.append(client_filter)
 
             base_query.append("ORDER BY rank DESC, c.last_modified DESC")
             base_query.append("LIMIT ?")
@@ -4514,6 +4551,9 @@ UPDATE db_schema_version
         if character_id is not None:
             base_query += " AND c.character_id = ?"
             params_list.append(character_id)
+        if client_filter is not None:
+            base_query += " AND c.client_id = ?"
+            params_list.append(client_filter)
 
         base_query += " ORDER BY bm25(conversations_fts) ASC, c.last_modified DESC LIMIT ?"
         params_list.append(limit)
@@ -4570,6 +4610,34 @@ UPDATE db_schema_version
                 if isinstance(img_bytes, memoryview):
                     img_bytes = img_bytes.tobytes()
                 normalized_images.append((img_bytes, str(img_mime)))
+
+        # Enforce maximum image sizes (single and multi-image) using settings override
+        try:
+            _max_img_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
+        except Exception:
+            _max_img_bytes = 5 * 1024 * 1024  # 5MB default
+
+        # Validate primary image size if present
+        primary_img = msg_data.get('image_data')
+        if isinstance(primary_img, memoryview):
+            primary_img = primary_img.tobytes()
+        if isinstance(primary_img, (bytes, bytearray)):
+            if len(primary_img) > _max_img_bytes:
+                raise InputError(
+                    f"Primary image attachment exceeds maximum size of {_max_img_bytes} bytes"
+                )
+
+        # Validate any additional images provided via 'images'
+        if normalized_images:
+            for b, _m in normalized_images:
+                if b is None:
+                    continue
+                if isinstance(b, memoryview):
+                    b = b.tobytes()
+                if isinstance(b, (bytes, bytearray)) and len(b) > _max_img_bytes:
+                    raise InputError(
+                        f"Message image attachment exceeds maximum size of {_max_img_bytes} bytes"
+                    )
 
         msg_id = msg_data.get('id') or self._generate_uuid()
 
@@ -4731,7 +4799,7 @@ UPDATE db_schema_version
             raise
 
     def get_messages_for_conversation(self, conversation_id: str, limit: int = 100, offset: int = 0,
-                                      order_by_timestamp: str = "ASC") -> List[Dict[str, Any]]:
+                                      order_by_timestamp: str = "ASC", include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         Lists messages for a specific conversation.
         Returns non-deleted messages, ordered by `timestamp` according to `order_by_timestamp`.
@@ -4741,6 +4809,11 @@ UPDATE db_schema_version
             raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")
 
         # The new query joins with conversations to check its 'deleted' status.
+        if include_deleted:
+            delete_clause = ""
+        else:
+            delete_clause = "AND m.deleted = 0"
+
         query = f"""
             SELECT m.id, m.conversation_id, m.parent_message_id, m.sender, m.content, 
                    m.image_data, m.image_mime_type, m.timestamp, m.ranking, 
@@ -4748,7 +4821,7 @@ UPDATE db_schema_version
             FROM messages m
             JOIN conversations c ON m.conversation_id = c.id
             WHERE m.conversation_id = ? 
-              AND m.deleted = 0
+              {delete_clause}
               AND c.deleted = 0
             ORDER BY m.timestamp {order_by_timestamp} 
             LIMIT ? OFFSET ?
@@ -5809,7 +5882,8 @@ UPDATE db_schema_version
         )
 
     def search_keyword_collections(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
-        safe_search_term = f'"{search_term}"'
+        safe_literal = search_term.replace('"', '""')
+        safe_search_term = f'"{safe_literal}"'
         return self._search_generic_items_fts("keyword_collections_fts", "keyword_collections", "name", safe_search_term,
                                               limit)
 
@@ -5855,6 +5929,17 @@ UPDATE db_schema_version
     def list_notes(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         # Using _list_generic_items but ensuring table name and order_by_col are correct for notes
         return self._list_generic_items("notes", "last_modified DESC", limit, offset)
+
+    def count_notes(self) -> int:
+        """Return count of active (non-deleted) notes."""
+        query = "SELECT COUNT(*) AS cnt FROM notes WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Error counting notes: {exc}")
+            raise
 
     def update_note(self, note_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
         if not update_data:
@@ -5975,8 +6060,8 @@ UPDATE db_schema_version
                          exc_info=True)
             raise
 
-    def search_notes(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Searches notes_fts (title and content). Corrected JOIN condition."""
+    def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """Searches notes_fts (title and content) with optional pagination."""
         # FTS5 requires wrapping terms with special characters in double quotes
         # to be treated as a literal phrase.
         if self.backend_type == BackendType.POSTGRESQL:
@@ -5991,30 +6076,70 @@ UPDATE db_schema_version
                 WHERE n.deleted = FALSE
                   AND n.notes_fts_tsv @@ to_tsquery('english', ?)
                 ORDER BY rank DESC, n.last_modified DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
             """
             try:
-                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                cursor = self.execute_query(query, (tsquery, tsquery, limit, offset))
                 return [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
                 logger.error("PostgreSQL FTS search failed for notes term '%s': %s", search_term, exc)
                 raise
 
-        safe_search_term = f'"{search_term}"'
+        safe_literal = search_term.replace('"', '""')
+        safe_search_term = f'"{safe_literal}"'
 
         query = """
-                SELECT main.*
-                FROM notes_fts, notes main
-                WHERE notes_fts.rowid = main.rowid
-                  AND notes_fts MATCH ?
+                SELECT main.*, bm25(notes_fts) AS bm25_score
+                FROM notes_fts
+                JOIN notes AS main ON notes_fts.rowid = main.rowid
+                WHERE notes_fts MATCH ?
                   AND main.deleted = 0
-                ORDER BY bm25(notes_fts) LIMIT ?
+                ORDER BY bm25_score, main.last_modified DESC
+                LIMIT ? OFFSET ?
                 """
         try:
-            cursor = self.execute_query(query, (safe_search_term, limit))
+            cursor = self.execute_query(query, (safe_search_term, limit, offset))
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
             logger.error(f"Error searching notes for '{search_term}': {e}")
+            raise
+
+
+    def count_notes_matching(self, search_term: str) -> int:
+        """Returns the total number of active notes matching the FTS query."""
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                return 0
+            query = """
+                SELECT COUNT(*) AS cnt
+                FROM notes n
+                WHERE n.deleted = FALSE
+                  AND n.notes_fts_tsv @@ to_tsquery('english', ?)
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery,))
+                row = cursor.fetchone()
+                return int(row["cnt"]) if row else 0
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS count failed for notes term '%s': %s", search_term, exc)
+                raise
+
+        safe_literal = search_term.replace('"', '""')
+        safe_search_term = f'"{safe_literal}"'
+        query = """
+                SELECT COUNT(*) AS cnt
+                FROM notes_fts
+                JOIN notes AS main ON notes_fts.rowid = main.rowid
+                WHERE notes_fts MATCH ?
+                  AND main.deleted = 0
+        """
+        try:
+            cursor = self.execute_query(query, (safe_search_term,))
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error("SQLite FTS count failed for notes term '%s': %s", search_term, exc)
             raise
 
 

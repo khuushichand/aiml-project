@@ -10,7 +10,7 @@ The Chunking module turns raw text (or structured content) into smaller, semanti
 - Consistent metadata on chunk boundaries and positions
 - Streaming and hierarchical chunking helpers
 - Metrics and tracing hooks for observability
-- Backward-compat helpers for legacy code (v1)
+- Compatibility helpers for legacy call sites
 
 ## Module Layout
 
@@ -31,7 +31,6 @@ The Chunking module turns raw text (or structured content) into smaller, semanti
     - `words.py`, `sentences.py`, `paragraphs.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `propositions.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, …
   - `templates.py` – Template system (processor/manager/learner)
   - `template_initialization.py` – Built‑in chunking template seeding and updates (DB‑backed)
-  - `Chunk_Lib.py` – Legacy v1 implementation (kept for tests/back‑compat)
   - `__init__.py` – Public API surface, defaults, and legacy bridges
 
 ## Key Types
@@ -73,10 +72,10 @@ Example (excerpt):
     - `get_strategy(method)` – retrieve or instantiate a strategy
     - `clear_cache()`, `get_cache_stats()`
 
-- Legacy bridges (back‑compat):
+- Compatibility helpers:
   - `from ...Chunking import improved_chunking_process` – simplified wrapper around `Chunker`
   - `from ...Chunking import chunk_for_embedding` – standardized format for embedding pipelines
-  - `from ...Chunking import flatten_hierarchical` – bridge to v1 flattener when available
+  - `from ...Chunking import flatten_hierarchical` – convenience flattener built on the v2 chunker
 
 ## Strategy Interface
 
@@ -110,7 +109,7 @@ When writing a new strategy:
 
 - Chunking integrates with the unified metrics system (`app/core/Metrics`).
 - High‑level operations observe histograms (e.g., front‑matter parsing, header stripping, overall processing) and increment counters.
-- Legacy v1 registers Prometheus metric definitions (chunk counts, bytes, timing) for benchmarks and existing tests.
+- Prometheus metric definitions (chunk counts, bytes, timing) ship with the module for benchmarks and existing tests.
 - Use labels consistently (e.g., `method`, `language`) for cardinality control.
 
 ## Caching
@@ -135,7 +134,7 @@ When writing a new strategy:
 3. Register the strategy in `Chunker._register_strategy_factories()`:
    - `self._strategy_factories[ChunkingMethod.YOUR_METHOD.value] = lambda: YourStrategy(language=lang)`
 4. (Optional) Add template support and defaults if needed.
-5. Add unit tests under `tldw_Server_API/tests/Chunking_NEW/` and/or integration/bench tests.
+5. Add unit tests under `tldw_Server_API/tests/Chunking/` and/or integration/bench tests.
 6. If collecting metrics, use the unified metrics API and add label docs as needed.
 
 ## Testing & Benchmarks
@@ -144,7 +143,7 @@ When writing a new strategy:
   - Strategy chunk boundaries and metadata
   - Method dispatch and validation
   - Hierarchical splitting on common markdown patterns
-- Performance tests live under `tests/Chunking_NEW/bench/` (use `pytest -m bench` or `-k bench`); ensure reasonable thresholds and avoid flakiness.
+- Performance tests can reuse the fixtures in `tests/Chunking/` (e.g., mark with `@pytest.mark.benchmark`) to avoid diverging harnesses.
 - The chunking metrics test expects Prometheus metric names like:
   - `chunk_time_seconds`, `chunk_output_bytes`, `chunk_input_bytes`, `chunk_count`, `chunk_avg_chunk_size_bytes`
 
@@ -155,8 +154,8 @@ When writing a new strategy:
   - `chunks = chunker.chunk_text_with_metadata(text, method="sentences", max_size=512, overlap=50)`
 - Hierarchical (flat):
   - `chunks = chunker.chunk_text_hierarchical_flat(text, method="words", max_size=400, overlap=50, template=template_dict)`
-- End‑to‑end normalization:
-  - `rows = chunker.process_text(text, options={...})` – returns a list of dicts with consistent metadata fields
+- End-to-end normalization:
+  - `rows = chunker.process_text(text, options={...})` – returns a list of dicts with consistent metadata fields. JSON frontmatter is stripped only when the leading object includes the sentinel key (`__tldw_frontmatter__` by default); override with `frontmatter_sentinel_key` or disable via `enable_frontmatter_parsing=False`.
 - Streaming a large file:
   - `for ch in chunker.chunk_file_stream(path, method="sentences", max_size=2048): ...`
 

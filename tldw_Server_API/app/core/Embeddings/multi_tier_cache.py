@@ -6,7 +6,7 @@ import json
 import pickle
 import hashlib
 import threading
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Dict, Any, Optional, List, Tuple, Union, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from collections import OrderedDict
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import mmap
 import redis
 import asyncio
+import functools
 
 from loguru import logger
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
@@ -256,6 +257,14 @@ class L2DiskCache:
                 self._remove_entry(key)
                 self.stats['misses'] += 1
                 return None
+
+    def get_access_count(self, key: str) -> int:
+        """Return the current access count for a cached item."""
+        with self._lock:
+            entry_info = self.index.get(key)
+            if not entry_info:
+                return 0
+            return int(entry_info.get('access_count', 0))
     
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Set value in cache"""
@@ -563,6 +572,12 @@ class MultiTierCache:
         self.l3_to_l2_threshold = config.get('l3_to_l2_threshold', 3)
         
         logger.info("Multi-tier cache initialized with L1, L2, and L3 tiers")
+
+    async def _call_in_executor(self, func: Callable[..., Any], *args, **kwargs):
+        """Run a blocking cache operation in the default executor."""
+        loop = asyncio.get_running_loop()
+        bound = functools.partial(func, *args, **kwargs)
+        return await loop.run_in_executor(None, bound)
     
     async def get_async(self, key: str) -> Optional[Any]:
         """Async get from cache with automatic promotion"""
@@ -572,22 +587,21 @@ class MultiTierCache:
             return value
         
         # Try L2
-        value = self.l2.get(key)
+        value = await self._call_in_executor(self.l2.get, key)
         if value is not None:
-            # Check if should promote to L1
-            if key in self.l2.index:
-                access_count = self.l2.index[key].get('access_count', 0)
-                if access_count >= self.l2_to_l1_threshold:
-                    self.l1.set(key, value)
+            access_count = self.l2.get_access_count(key)
+            if access_count >= self.l2_to_l1_threshold:
+                self.l1.set(key, value)
             return value
         
         # Try L3
-        value = self.l3.get(key)
-        if value is not None:
-            # Promote to L2 for future access
-            self.l2.set(key, value)
-            return value
-        
+        if self.l3.enabled:
+            value = await self._call_in_executor(self.l3.get, key)
+            if value is not None:
+                await self._call_in_executor(self.l2.set, key, value, None)
+                self.l1.set(key, value)
+                return value
+
         return None
     
     def get(self, key: str) -> Optional[Any]:
@@ -599,20 +613,19 @@ class MultiTierCache:
         # Always write to L1 for immediate access
         success = self.l1.set(key, value, ttl)
         
-        # Write-through to L2 and L3 in background
+        # Write-through to L2 and L3 using executor offloads
         if success:
-            # Write to L2
-            self.l2.set(key, value, ttl)
+            await self._call_in_executor(self.l2.set, key, value, ttl)
             
-            # Write to L3 if available
-            self.l3.set(key, value, ttl)
+            if self.l3.enabled:
+                await self._call_in_executor(self.l3.set, key, value, ttl)
         
         return success
     
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Synchronous set in cache"""
         return asyncio.run(self.set_async(key, value, ttl))
-    
+
     def invalidate(self, key: str):
         """Invalidate entry across all tiers"""
         # Remove from L1
@@ -638,7 +651,6 @@ class MultiTierCache:
         self.l1.clear()
         self.l2.clear()
         self.l3.clear()
-    
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics for all tiers"""
         return {

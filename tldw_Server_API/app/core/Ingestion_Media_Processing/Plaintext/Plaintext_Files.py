@@ -6,13 +6,20 @@ import re
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
-import xml.etree.ElementTree as ET
 #
 # External Imports
 from bs4 import BeautifulSoup
 from docx2txt import docx2txt
 import html2text
 from pypandoc import convert_file
+try:
+    from defusedxml import ElementTree as DET  # type: ignore
+    from defusedxml.common import DefusedXmlException  # type: ignore
+    _DEFUSED_AVAILABLE = True
+except Exception:  # pragma: no cover - defusedxml optional dependency
+    DET = None  # type: ignore
+    _DEFUSED_AVAILABLE = False
+    DefusedXmlException = Exception  # type: ignore
 #
 # Local Imports
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
@@ -26,6 +33,15 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 
 class PandocMissing(Exception): # Custom exception for Pandoc not found
     pass
+
+
+def _ensure_secure_xml_support() -> None:
+    """Ensure defusedxml is available for safe XML handling."""
+    if not _DEFUSED_AVAILABLE:
+        raise ValueError(
+            "Secure XML conversion requires the 'defusedxml' package. "
+            "Install defusedxml to enable XML ingestion."
+        )
 
 
 def _read_text(path: Path) -> str:
@@ -157,7 +173,8 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
         elif extension == '.xml':
             # Simple text extraction from XML - may need refinement based on XML structure
             try:
-                tree = ET.parse(str(file_path))
+                _ensure_secure_xml_support()
+                tree = DET.parse(str(file_path))  # type: ignore[union-attr]
                 root = tree.getroot()
                 # Basic text concatenation - consider xml_to_markdown if structure is important
                 content = _xml_to_text_simple(root)
@@ -175,8 +192,8 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
                 extracted_title = title_elem.text.strip() if title_elem is not None and title_elem.text else None
                 raw_metadata = {'xml_root_tag': root.tag, 'xml_title': extracted_title}
                 log_counter("xml_conversion_success", labels={"file_path": str(file_path)})
-            except ET.ParseError as xml_err:
-                 raise ValueError(f"Failed to parse XML file {file_path}: {xml_err}") from xml_err
+            except (DefusedXmlException, OSError) as xml_err:
+                raise ValueError(f"Failed to parse XML file {file_path}: {xml_err}") from xml_err
         # Add other formats like OPML if needed, similar to XML/HTML handling
         # elif extension == '.opml': ...
         else:

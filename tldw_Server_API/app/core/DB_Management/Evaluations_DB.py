@@ -742,23 +742,28 @@ class EvaluationsDatabase:
         self,
         limit: int = 20,
         after: Optional[str] = None,
-        eval_type: Optional[str] = None
+        eval_type: Optional[str] = None,
+        created_by: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], bool]:
         """List evaluations with pagination"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             query = "SELECT * FROM evaluations WHERE deleted_at IS NULL"
             params = []
-            
+
             if eval_type:
                 query += " AND eval_type = ?"
                 params.append(eval_type)
-            
+
+            if created_by:
+                query += " AND created_by = ?"
+                params.append(created_by)
+
             if after:
                 query += " AND created_at < (SELECT created_at FROM evaluations WHERE id = ?)"
                 params.append(after)
-            
+
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
             

@@ -564,7 +564,23 @@ class Settings(BaseSettings):
                     )
             logger.info("Using configured JWT secret key")
             return
-        
+
+        # Allow deterministic fallback in explicit test contexts
+        test_mode = (
+            os.getenv("PYTEST_CURRENT_TEST") is not None
+            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+        )
+        if test_mode:
+            fallback = os.getenv(
+                "JWT_SECRET_TEST_KEY",
+                "test-secret-jwt-key-please-change-1234567890"
+            )
+            if len(fallback) < 32:
+                fallback = (fallback * 2)[:32]
+            self.JWT_SECRET_KEY = fallback
+            logger.debug("Initialized deterministic JWT secret for test context")
+            return
+
         # No JWT secret available - this is a configuration error
         raise ValueError(
             "JWT_SECRET_KEY must be set via environment variable for multi-user mode.\n"

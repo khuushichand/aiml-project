@@ -13,6 +13,7 @@ from .modules import *
 # Compatibility wrapper: enrich message with placeholder substitution
 from .modules.character_chat import retrieve_message_details as _retrieve_msg_basic
 from .modules.character_utils import replace_placeholders as _replace_placeholders
+from .modules.character_utils import map_sender_to_role as map_sender_to_role
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from typing import Optional, Dict, Any
 
@@ -173,6 +174,7 @@ MODULE_STRUCTURE = {
         "lines": "~700",
         "functions": [
             "process_db_messages_to_ui_history",
+            "process_db_messages_to_rich_ui_history",
             "load_chat_and_character",
             "start_new_chat_session",
             "list_character_conversations",
@@ -217,6 +219,7 @@ __all__ = [
     'replace_user_placeholder',
     'extract_character_id_from_ui_choice',
     'get_character_list_for_ui',
+    'map_sender_to_role',
     
     # I/O
     'extract_json_from_image_file',
@@ -248,6 +251,7 @@ __all__ = [
     
     # Chat
     'process_db_messages_to_ui_history',
+    'process_db_messages_to_rich_ui_history',
     'load_chat_and_character',
     'start_new_chat_session',
     'list_character_conversations',

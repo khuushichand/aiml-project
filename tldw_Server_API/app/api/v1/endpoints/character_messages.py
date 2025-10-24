@@ -42,7 +42,8 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     retrieve_conversation_messages_for_ui,
     edit_message_content,
     remove_message_from_conversation,
-    find_messages_in_conversation
+    find_messages_in_conversation,
+    map_sender_to_role,
 )
 
 # Rate limiting
@@ -172,7 +173,7 @@ async def send_message(
         # Enforce per-chat message cap
         try:
             existing_msgs = db.get_messages_for_conversation(chat_id, limit=10000)
-            await rate_limiter.check_message_limit(chat_id, len(existing_msgs))
+            await rate_limiter.check_message_limit(chat_id, len(existing_msgs) + 1)
         except HTTPException:
             raise
         except Exception:
@@ -302,8 +303,8 @@ async def get_chat_messages(
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
         
-        # Get messages
-        messages = db.get_messages_for_conversation(chat_id, limit=limit+offset)
+        # Get messages (honor include_deleted and DB pagination)
+        messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset, include_deleted=include_deleted)
         # Enforce per-chat message cap via limiter (use current count before appending new)
         try:
             await get_character_rate_limiter().check_message_limit(chat_id, len(messages))
@@ -314,13 +315,7 @@ async def get_chat_messages(
         
         if not messages:
             messages = []
-        
-        # Filter deleted if needed
-        if not include_deleted:
-            messages = [msg for msg in messages if not msg.get('deleted')]
-        
-        # Apply offset
-        paginated = messages[offset:offset+limit]
+        paginated = messages
         
         # If character context or completions format requested
         if include_character_context or format_for_completions:
@@ -352,7 +347,7 @@ async def get_chat_messages(
                 import re as _re
                 _suffix_re = _re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", _re.DOTALL)
                 for msg in paginated:
-                    role = msg.get('sender', 'user')
+                    role = map_sender_to_role(msg.get('sender'), character.get('name') if character else None)
                     content = msg.get('content', '')
                     msg_id = msg.get('id')
 
@@ -517,7 +512,7 @@ async def get_chat_messages(
             limit=limit,
             offset=offset
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -753,8 +748,20 @@ async def search_messages(
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
         
-        # Search messages
-        results = find_messages_in_conversation(db, chat_id, query, limit=limit)
+        # Resolve character/user names for placeholder-aware search
+        character_id = conversation.get('character_id')
+        character = db.get_character_card_by_id(character_id) if character_id else None
+        character_name = character.get('name', 'Assistant') if character else 'Assistant'
+        user_name = conversation.get('user_name', 'User')
+        # Search messages with placeholder replacement
+        results = find_messages_in_conversation(
+            db,
+            chat_id,
+            query,
+            character_name_for_placeholders=character_name,
+            user_name_for_placeholders=user_name,
+            limit=limit,
+        )
         
         if not results:
             results = []

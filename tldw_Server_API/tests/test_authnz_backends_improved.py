@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import (
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, BackendType
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 ########################################################################################################################
 # Test Configuration
@@ -587,6 +588,76 @@ class TestEdgeCases(AuthNZTestBase):
         success = self.user_db.delete_user(None)
         self.assertFalse(success)
 
+class TestAuthDatabaseConfigDetection(unittest.TestCase):
+    """Validate AuthDatabaseConfig handles edge-case URLs and settings refresh."""
+
+    def setUp(self):
+        self._env_backup: Dict[str, Optional[str]] = {}
+
+    def tearDown(self):
+        for key, original in self._env_backup.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+        reset_settings()
+        AuthDatabaseConfig().reset()
+
+    def _set_env(self, key: str, value: Optional[str]):
+        if key not in self._env_backup:
+            self._env_backup[key] = os.environ.get(key)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+    def test_detects_postgres_with_driver_suffix(self):
+        """Driver-qualified PostgreSQL URLs should map to postgres backend."""
+        self._set_env("AUTH_MODE", "multi_user")
+        self._set_env("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/testdb")
+        self._set_env("TLDW_USER_DB_BACKEND", None)
+        reset_settings()
+
+        config = AuthDatabaseConfig()
+        config.reset()
+
+        self.assertEqual(config.backend_type, "postgresql")
+        db_config = config.get_config()
+        self.assertEqual(db_config.backend_type, BackendType.POSTGRESQL)
+
+    def test_sqlite_memory_url_remains_in_memory(self):
+        """sqlite:///:memory: must not be coerced into a filesystem path."""
+        self._set_env("AUTH_MODE", "single_user")
+        self._set_env("DATABASE_URL", "sqlite:///:memory:")
+        self._set_env("TLDW_USER_DB_BACKEND", None)
+        reset_settings()
+
+        config = AuthDatabaseConfig()
+        config.reset()
+
+        db_config = config.get_config()
+        self.assertEqual(db_config.backend_type, BackendType.SQLITE)
+        self.assertEqual(db_config.sqlite_path, ":memory:")
+
+    def test_reset_reflects_updated_database_url(self):
+        """Calling reset() after reset_settings() must pick up new DATABASE_URL values."""
+        self._set_env("AUTH_MODE", "single_user")
+        self._set_env("TLDW_USER_DB_BACKEND", None)
+
+        self._set_env("DATABASE_URL", "sqlite:///./first_authnz.db")
+        reset_settings()
+        config = AuthDatabaseConfig()
+        config.reset()
+        first_path = config.get_config().sqlite_path
+
+        self._set_env("DATABASE_URL", "sqlite:///./second_authnz.db")
+        reset_settings()
+        config.reset()
+        second_path = config.get_config().sqlite_path
+
+        self.assertNotEqual(first_path, second_path)
+        self.assertTrue(second_path.endswith("second_authnz.db"))
+
 ########################################################################################################################
 # Test Suites
 ########################################################################################################################
@@ -596,8 +667,8 @@ def create_test_suite(backend_type: str) -> unittest.TestSuite:
     suite = unittest.TestSuite()
     
     # Set backend type for all test classes
-    for test_class in [TestUserCRUD, TestRBAC, TestRegistrationCodes, 
-                       TestAuthentication, TestEdgeCases]:
+    for test_class in [TestUserCRUD, TestRBAC, TestRegistrationCodes,
+                       TestAuthentication, TestEdgeCases, TestAuthDatabaseConfigDetection]:
         test_class.backend_type = backend_type
         suite.addTests(unittest.TestLoader().loadTestsFromTestCase(test_class))
     

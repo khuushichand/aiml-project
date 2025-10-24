@@ -97,7 +97,7 @@ class EvaluationsConfigManager:
         self.config_path = Path(config_path)
         self.environment = environment or os.getenv("ENVIRONMENT", "development")
         self.enable_hot_reload = enable_hot_reload
-        
+
         # Configuration cache
         self._config: Dict[str, Any] = {}
         self._config_hash: Optional[str] = None
@@ -107,16 +107,38 @@ class EvaluationsConfigManager:
         # Parsed configurations
         self._rate_limit_tiers: Dict[str, RateLimitTierConfig] = {}
         self._circuit_breaker_configs: Dict[str, CircuitBreakerConfig] = {}
-        
+
         # Hot reload task
         self._reload_task: Optional[asyncio.Task] = None
-        
+        self._pending_hot_reload: bool = False
+
         # Load initial configuration
         self.load_config()
-        
+
         if enable_hot_reload:
-            asyncio.create_task(self._start_hot_reload())
-    
+            self._schedule_hot_reload()
+
+    def _schedule_hot_reload(self) -> None:
+        """Start hot reload watcher when an event loop is available."""
+        if self._reload_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("Evaluations hot reload enabled but no running event loop; deferring watcher startup")
+            self._pending_hot_reload = True
+            return
+        self._reload_task = loop.create_task(self._start_hot_reload())
+        self._pending_hot_reload = False
+
+    def ensure_hot_reload_started(self) -> None:
+        """Public helper to start hot reload once a loop is running."""
+        if not self.enable_hot_reload or self._reload_task is not None:
+            return
+        if not self._pending_hot_reload:
+            return
+        self._schedule_hot_reload()
+
     def load_config(self) -> bool:
         """
         Load configuration from file.
@@ -436,6 +458,12 @@ config_manager = EvaluationsConfigManager(
     environment=os.getenv("ENVIRONMENT", "development"),
     enable_hot_reload=os.getenv("ENABLE_CONFIG_HOT_RELOAD", "false").lower() == "true"
 )
+
+try:
+    config_manager.ensure_hot_reload_started()
+except Exception:
+    # Best-effort: avoid import-time crashes if no loop is running yet
+    pass
 
 
 # Convenience functions

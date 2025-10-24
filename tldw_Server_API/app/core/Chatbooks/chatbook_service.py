@@ -422,7 +422,11 @@ class ChatbookService:
         try:
             # First try FTS search
             if hasattr(self.db, 'search_conversations_by_title'):
-                results = self.db.search_conversations_by_title(name, limit=10)
+                results = self.db.search_conversations_by_title(
+                    name,
+                    limit=10,
+                    client_id=getattr(self.db, "client_id", None),
+                )
                 logger.debug(f"FTS search for conversation '{name}', found {len(results)} results")
                 # Look for exact match
                 for conv in results:

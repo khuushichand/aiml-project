@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock
 import uuid
 
@@ -214,6 +214,19 @@ def test_delete_fts_keyword_postgres_nulls_vector() -> None:
     assert params == (7,)
 
 
+def test_backup_database_postgres_returns_false(tmp_path: Path) -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.backend = MagicMock()
+    db.db_path_str = "postgresql://cluster"
+    db.is_memory_db = False
+
+    backup_path = tmp_path / "pg_backup.sql"
+    result = db.backup_database(str(backup_path))
+
+    assert result is False
+
+
 def test_search_media_db_postgres_uses_tsquery():
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
@@ -258,3 +271,169 @@ def test_search_media_db_postgres_uses_tsquery():
     assert "ts_rank(m.media_fts_tsv, to_tsquery('english', ?))" in result_sql
     assert result_params[0] == "deep & learning"
     assert result_params[1] == "deep & learning"
+
+
+def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.client_id = "tenant-42"
+
+    conn = object()
+
+    def fake_transaction():
+        @contextmanager
+        def _ctx():
+            yield conn
+        return _ctx()
+
+    db.transaction = fake_transaction  # type: ignore[assignment]
+
+    class FakeCursor:
+        def __init__(self, rows=None, rowcount: int = 0):
+            self._rows = rows or []
+            self.rowcount = rowcount
+
+        def fetchall(self):
+            return self._rows
+
+    db._fetchone_with_connection = MagicMock(  # type: ignore[attr-defined]
+        side_effect=[
+            {'id': 7, 'uuid': 'kw-uuid', 'version': 2},
+        ]
+    )
+    db._execute_with_connection = MagicMock(  # type: ignore[attr-defined]
+        side_effect=[
+            FakeCursor(rowcount=1),
+            FakeCursor(rows=[{'media_id': 3, 'media_uuid': 'media-uuid'}]),
+            FakeCursor(rowcount=1),
+        ]
+    )
+    db._log_sync_event = MagicMock()  # type: ignore[attr-defined]
+    db._delete_fts_keyword = MagicMock()  # type: ignore[attr-defined]
+
+    assert db.soft_delete_keyword("Science") is True
+
+    db._fetchone_with_connection.assert_called_once()  # type: ignore[attr-defined]
+    update_call = db._execute_with_connection.call_args_list[0]  # type: ignore[attr-defined]
+    assert "UPDATE Keywords" in update_call.args[1]
+    db._delete_fts_keyword.assert_called_once_with(conn, 7)  # type: ignore[attr-defined]
+    assert db._log_sync_event.call_count >= 2  # type: ignore[attr-defined]
+
+
+def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.client_id = "tenant-42"
+
+    conn = object()
+
+    def fake_transaction():
+        @contextmanager
+        def _ctx():
+            yield conn
+        return _ctx()
+
+    db.transaction = fake_transaction  # type: ignore[assignment]
+
+    base_chunk_count = 2
+
+    def fetch_side_effect(connection, query, params=None):
+        assert connection is conn
+        if "SELECT 1 FROM Media" in query:
+            return {'exists': 1}
+        if "SELECT COUNT(*)" in query:
+            return {'chunk_count': base_chunk_count}
+        raise AssertionError(f"Unexpected query: {query}")
+
+    db._fetchone_with_connection = MagicMock(side_effect=fetch_side_effect)  # type: ignore[attr-defined]
+    db._executemany_with_connection = MagicMock()  # type: ignore[attr-defined]
+    db._log_sync_event = MagicMock()  # type: ignore[attr-defined]
+    db._get_current_utc_timestamp_str = MagicMock(return_value="2024-01-01T00:00:00Z")  # type: ignore[attr-defined]
+
+    db._generate_uuid = MagicMock(return_value="uuid-1")  # type: ignore[attr-defined]
+
+    result = db.batch_insert_chunks(
+        99,
+        [
+            {'text': 'First chunk', 'metadata': {'start_index': 0, 'end_index': 12}},
+        ],
+    )
+
+    assert result == 1
+    db._executemany_with_connection.assert_called_once()  # type: ignore[attr-defined]
+    insert_call = db._executemany_with_connection.call_args  # type: ignore[attr-defined]
+    assert insert_call.args[0] is conn
+    assert "INSERT INTO MediaChunks" in insert_call.args[1]
+    params_list = insert_call.args[2]
+    expected_chunk_id = f"99_chunk_{base_chunk_count + 1}"
+    assert params_list[0][4] == expected_chunk_id
+    assert params_list[0][5] == "uuid-1"
+    db._log_sync_event.assert_called_once()  # type: ignore[attr-defined]
+
+
+def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.client_id = "tenant-42"
+
+    class FailingConnection:
+        def execute(self, *args, **kwargs):
+            raise AssertionError("execute should not be called directly on backend connections")
+
+    check_conn = FailingConnection()
+    db.get_connection = MagicMock(return_value=check_conn)  # type: ignore[attr-defined]
+
+    tx_conn = object()
+
+    def fake_transaction():
+        @contextmanager
+        def _ctx():
+            yield tx_conn
+        return _ctx()
+
+    db.transaction = fake_transaction  # type: ignore[assignment]
+
+    db._fetchone_with_connection = MagicMock(return_value={'exists': 1})  # type: ignore[attr-defined]
+    db.execute_many = MagicMock()  # type: ignore[attr-defined]
+    db._log_sync_event = MagicMock()  # type: ignore[attr-defined]
+    db._get_current_utc_timestamp_str = MagicMock(return_value="2024-01-01T00:00:00Z")  # type: ignore[attr-defined]
+    db._generate_uuid = MagicMock(side_effect=["chunk-id-1", "uuid-1"])  # type: ignore[attr-defined]
+
+    db.process_chunks(
+        11,
+        [{'text': 'Body', 'start_index': 0, 'end_index': 5}],
+        batch_size=1,
+    )
+
+    db._fetchone_with_connection.assert_called_once()  # type: ignore[attr-defined]
+    db.execute_many.assert_called_once()  # type: ignore[attr-defined]
+    args, kwargs = db.execute_many.call_args  # type: ignore[attr-defined]
+    assert "INSERT INTO MediaChunks" in args[0]
+    db._log_sync_event.assert_called_once()  # type: ignore[attr-defined]
+    args, kwargs = db._log_sync_event.call_args  # type: ignore[attr-defined]
+    if kwargs:
+        payload = kwargs["payload"]
+        assert kwargs["conn"] is tx_conn
+        assert kwargs["entity"] == "MediaChunks"
+        assert kwargs["entity_uuid"] == "uuid-1"
+        assert kwargs["operation"] == "create"
+        assert kwargs["version"] == 1
+    else:
+        payload = args[5]
+        assert args[0] is tx_conn
+        assert args[1] == "MediaChunks"
+        assert args[2] == "uuid-1"
+        assert args[3] == "create"
+        assert args[4] == 1
+    assert payload == {
+        'media_id': 11,
+        'chunk_text': 'Body',
+        'start_index': 0,
+        'end_index': 5,
+        'chunk_id': 'chunk-id-1',
+        'uuid': 'uuid-1',
+        'last_modified': "2024-01-01T00:00:00Z",
+        'version': 1,
+        'client_id': "tenant-42",
+        'deleted': 0,
+    }

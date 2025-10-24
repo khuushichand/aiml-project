@@ -1619,6 +1619,10 @@ async def lifespan(app: FastAPI):
         if 'db_pool' in locals():
             import os as _os, sys as _sys
             _in_pytest = bool(_os.getenv("PYTEST_CURRENT_TEST") or ("pytest" in _sys.modules))
+            try:
+                _is_test_mode = _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+            except Exception:
+                _is_test_mode = False
             if not (_is_test_mode or _in_pytest):
                 await db_pool.close()
                 logger.info("App Shutdown: Auth database pool closed")

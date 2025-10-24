@@ -235,7 +235,7 @@ Supporting endpoints for discovering providers and models:
 - `GET /api/v1/llm/models/metadata` – Flattened model capability metadata
 
 ## Commercial Tests
-- Scope: Optional integration tests for commercial providers (OpenAI, Anthropic, Cohere, Groq, OpenRouter, DeepSeek, Mistral, Google, HuggingFace, Qwen). Disabled by default to avoid accidental network calls.
+- Scope: Optional integration tests for commercial providers (OpenAI, Anthropic, Cohere, Groq, OpenRouter, DeepSeek, Mistral, Google, HuggingFace, Qwen, Moonshot, Z.AI). Disabled by default to avoid accidental network calls.
 - Opt-in flag: Set `RUN_COMMERCIAL_CHAT_TESTS=true` in your environment or `.env`.
 - Keys: Provide real API keys via env, `.env`/`.ENV` (repo root or `tldw_Server_API/Config_Files/`), or `Config_Files/config.txt` `[API]` entries. Mock/test keys (e.g., `sk-mock...`, `test-...`) are ignored by the tests.
 - Network: Ensure outbound network access when running these tests.

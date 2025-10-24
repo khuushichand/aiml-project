@@ -743,20 +743,19 @@ Format as JSON.
 """
             
             response = chat_with_openai(
-                api_key="",
-                prompt="",
+                input_data=[{"role": "user", "content": analysis_prompt}],
                 system_message="You are an expert prompt analyst.",
-                input_data=analysis_prompt,
                 model=model_name,
                 temp=0.7,
-                api_endpoint=""
             )
-            
+
+            response_text = self._extract_llm_content(response)
+
             # Parse response
             try:
-                analysis = json.loads(response)
+                analysis = json.loads(response_text)
             except json.JSONDecodeError:
-                analysis = {"raw_analysis": response}
+                analysis = {"raw_analysis": response_text}
             
             return {
                 "prompt_id": prompt_id,
@@ -876,16 +875,45 @@ Provide only the improved text, no explanations.
 """
         
         response = chat_with_openai(
-            api_key="",
-            prompt="",
+            input_data=[{"role": "user", "content": improvement_prompt}],
             system_message="You are an expert prompt engineer focused on improvement.",
-            input_data=improvement_prompt,
             model=model_name,
             temp=0.7,
-            api_endpoint=""
         )
-        
-        return response.strip()
+
+        improved_text = self._extract_llm_content(response)
+        return improved_text.strip()
+
+    def _extract_llm_content(self, response: Any) -> str:
+        """
+        Normalize an OpenAI-style chat completion response to raw text content.
+        """
+        if isinstance(response, str):
+            return response
+
+        if isinstance(response, dict):
+            choices = response.get("choices") or []
+            for choice in choices:
+                message = choice.get("message")
+                if message:
+                    content = message.get("content")
+                    if isinstance(content, str):
+                        return content
+                    if isinstance(content, list):
+                        parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+                        if parts:
+                            return "".join(parts)
+                delta = choice.get("delta")
+                if delta:
+                    delta_content = delta.get("content")
+                    if isinstance(delta_content, str):
+                        return delta_content
+                    if isinstance(delta_content, list):
+                        parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                        if parts:
+                            return "".join(parts)
+
+        raise ValueError("LLM response did not contain any assistant content.")
     
     def _analyze_improvements(self, old_system: str, new_system: str,
                             old_user: str, new_user: str) -> Dict[str, Any]:

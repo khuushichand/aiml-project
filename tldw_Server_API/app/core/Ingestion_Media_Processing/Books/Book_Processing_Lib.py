@@ -735,7 +735,7 @@ def process_epub(
         if perform_chunking:
             effective_chunk_options = chunk_options or {}
             # Default to ebook_chapters for EPUBs unless specified otherwise in chunk_options.
-            # This method name must match one of the methods handled by Chunker.chunk_text in Chunk_Lib.py
+            # This method name must match one of the methods handled by Chunker.chunk_text
             effective_chunk_options.setdefault('method', 'ebook_chapters') # UPDATED
 
             # Default size/overlap are used by 'ebook_chapters' for sub-chunking very large chapters,

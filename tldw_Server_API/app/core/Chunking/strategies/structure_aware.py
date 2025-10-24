@@ -173,7 +173,9 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         # Regex patterns for structure detection
         self.patterns = {
             'markdown_header': re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE),
-            'code_block': re.compile(r'```(\w*)\n(.*?)\n```', re.DOTALL),
+            # Broaden code fence support: ``` or ~~~, flexible language tags, optional newline before close
+            # Groups: 1=fence, 2=language spec (may contain non-word chars), 3=body
+            'code_block': re.compile(r'(?:\A|\n)(```|~~~)([^\n]*)\n(.*?)(?:\n\1|\1)', re.DOTALL),
             'table_markdown': re.compile(r'^\|.*\|.*$', re.MULTILINE),
             'list_item': re.compile(r'^[\s]*[-*+]\s+(.+)$', re.MULTILINE),
             'numbered_list': re.compile(r'^[\s]*\d+\.\s+(.+)$', re.MULTILINE),
@@ -271,8 +273,8 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         # Extract code blocks first (they can contain other patterns)
         if options.get('preserve_code_blocks', True):
             for match in self.patterns['code_block'].finditer(text):
-                language = match.group(1) or 'text'
-                code_content = match.group(2)
+                language = (match.group(2) or '').strip() or 'text'
+                code_content = match.group(3)
                 elements.append(DocumentElement(
                     type=StructureType.CODE_BLOCK,
                     content=code_content,
@@ -449,9 +451,10 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         if len(lines) < 2:
             return None
         
-        # Parse header
+        # Parse header (preserve empty cells)
         header_line = lines[0]
-        headers = [cell.strip() for cell in re.split(r'\s*\|\s*', header_line) if cell.strip()]
+        header_raw = header_line.strip().strip('|')
+        headers = [cell.strip() for cell in header_raw.split('|')]
         
         # Skip separator line
         separator_idx = 1
@@ -464,9 +467,9 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         rows = []
         for line in lines[separator_idx + 1:]:
             if '|' in line:
-                row = [cell.strip() for cell in re.split(r'\s*\|\s*', line) if cell.strip()]
-                if row:
-                    rows.append(row)
+                row_raw = line.strip().strip('|')
+                row = [cell.strip() for cell in row_raw.split('|')]
+                rows.append(row)
         
         if headers or rows:
             return Table(headers=headers, rows=rows, format=TableFormat.MARKDOWN)

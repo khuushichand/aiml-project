@@ -305,7 +305,10 @@ class PasswordService:
             for old_hash in password_hashes:
                 is_match, _ = self.verify_password(new_password, old_hash)
                 if is_match:
-                    logger.warning(f"User {user_id} attempted to reuse a recent password")
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.warning("Authenticated user attempted to reuse a recent password")
+                    else:
+                        logger.warning(f"User {user_id} attempted to reuse a recent password")
                     return False
             
             return True
@@ -377,7 +380,10 @@ class PasswordService:
                     (user_id, user_id, self.settings.PASSWORD_HISTORY_RETENTION_COUNT)
                 )
                 
-            logger.debug(f"Added password to history for user {user_id}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Added password to history for authenticated user (details redacted)")
+            else:
+                logger.debug(f"Added password to history for user {user_id}")
             
         except Exception as e:
             logger.error(f"Error adding to password history: {e}")

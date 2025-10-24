@@ -5,6 +5,11 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import hashlib
+import uuid
+import sqlite3
+
+import asyncpg
+import aiosqlite
 #
 # 3rd-party imports
 from loguru import logger
@@ -41,6 +46,12 @@ class UsersDB:
         self.db_pool = db_pool
         self._initialized = False
         self.settings = get_settings()
+
+    def _using_postgres_backend(self) -> bool:
+        """Return True when the underlying DatabasePool is backed by PostgreSQL."""
+        if self.db_pool is None:
+            return False
+        return getattr(self.db_pool, "pool", None) is not None
         
     async def initialize(self):
         """Initialize database connection and ensure tables exist"""
@@ -107,7 +118,7 @@ class UsersDB:
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS users (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            uuid TEXT UNIQUE,
+                            uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
                             username TEXT UNIQUE NOT NULL,
                             email TEXT UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
@@ -130,9 +141,15 @@ class UsersDB:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
                     cursor = await conn.execute("PRAGMA table_info(users)")
-                    columns = {row[1] for row in await cursor.fetchall()}
+                    columns_info = await cursor.fetchall()
+                    columns = {row[1] for row in columns_info}
                     if "metadata" not in columns:
                         await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
+                    if "uuid" not in columns:
+                        await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                    await conn.execute(
+                        "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
+                    )
                     
                     await conn.commit()
                     
@@ -171,7 +188,7 @@ class UsersDB:
             user_dict = dict(result)
             
             # Convert boolean fields for SQLite
-            if not hasattr(self.db_pool, 'fetchval'):  # SQLite
+            if not self._using_postgres_backend():  # SQLite
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
@@ -210,7 +227,7 @@ class UsersDB:
             user_dict = dict(result)
             
             # Convert boolean fields for SQLite
-            if not hasattr(self.db_pool, 'fetchval'):  # SQLite
+            if not self._using_postgres_backend():  # SQLite
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
@@ -248,7 +265,7 @@ class UsersDB:
 
             user_dict = dict(result)
 
-            if not hasattr(self.db_pool, 'fetchval'):  # SQLite conversions
+            if not self._using_postgres_backend():  # SQLite conversions
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
@@ -285,7 +302,7 @@ class UsersDB:
             user_dict = dict(result)
             
             # Convert boolean fields for SQLite
-            if not hasattr(self.db_pool, 'fetchval'):  # SQLite
+            if not self._using_postgres_backend():  # SQLite
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
@@ -337,19 +354,21 @@ class UsersDB:
             raise DuplicateUserError(f"Email '{email}' already exists")
         
         try:
+            generated_uuid = str(uuid.uuid4())
+
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     user_id = await conn.fetchval(
                         """
                         INSERT INTO users (
-                            username, email, password_hash, role,
+                            uuid, username, email, password_hash, role,
                             is_active, is_superuser, storage_quota_mb
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         RETURNING id
                         """,
-                        username, email.lower(), password_hash, role,
+                        generated_uuid, username, email.lower(), password_hash, role,
                         is_active, is_superuser, storage_quota_mb
                     )
                 else:
@@ -357,13 +376,21 @@ class UsersDB:
                     cursor = await conn.execute(
                         """
                         INSERT INTO users (
-                            username, email, password_hash, role,
+                            uuid, username, email, password_hash, role,
                             is_active, is_superuser, storage_quota_mb
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (username, email.lower(), password_hash, role,
-                         int(is_active), int(is_superuser), storage_quota_mb)
+                        (
+                            generated_uuid,
+                            username,
+                            email.lower(),
+                            password_hash,
+                            role,
+                            int(is_active),
+                            int(is_superuser),
+                            storage_quota_mb,
+                        )
                     )
                     user_id = cursor.lastrowid
                     await conn.commit()
@@ -373,6 +400,18 @@ class UsersDB:
                 # Return the created user
                 return await self.get_user_by_id(user_id)
                 
+        except DuplicateUserError:
+            raise
+        except asyncpg.exceptions.UniqueViolationError as e:
+            logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
+            raise DuplicateUserError("Username or email already exists")
+        except (aiosqlite.IntegrityError, sqlite3.IntegrityError) as e:
+            message = str(e).lower()
+            if "unique constraint failed" in message or "unique constraint violation" in message:
+                logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
+                raise DuplicateUserError("Username or email already exists") from e
+            logger.error(f"Failed to create user {username}: {e}")
+            raise DatabaseError(f"Failed to create user: {e}") from e
         except Exception as e:
             logger.error(f"Failed to create user {username}: {e}")
             raise DatabaseError(f"Failed to create user: {e}")
@@ -517,7 +556,7 @@ class UsersDB:
             
             if is_active is not None:
                 query += " AND is_active = ?"
-                params.append(int(is_active) if not hasattr(self.db_pool, 'fetchval') else is_active)
+                params.append(int(is_active) if not self._using_postgres_backend() else is_active)
             
             query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
             params.extend([limit, offset])
@@ -529,7 +568,7 @@ class UsersDB:
                 user_dict = dict(row)
                 
                 # Convert boolean fields for SQLite
-                if not hasattr(self.db_pool, 'fetchval'):  # SQLite
+                if not self._using_postgres_backend():  # SQLite
                     user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                     user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                     user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))

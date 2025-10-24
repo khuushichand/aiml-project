@@ -94,21 +94,48 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         return tokenizer(text)
     
     def _tokenize_with_spans(self, text: str) -> tuple[List[str], List[tuple[int, int]]]:
-        """Tokenize text and return tokens with character spans."""
+        """Tokenize text and return tokens with character spans.
+
+        Implementation notes:
+        - Uses a single forward scan with bounded lookups to avoid O(n^2) behavior
+          on adversarial/repeated tokens.
+        - We never rescan the entire string from the beginning; if a token cannot be
+          found ahead of the rolling cursor, we conservatively place it at the cursor
+          to maintain monotonic spans. This guarantees linear-time progress.
+        """
         tokens = self._tokenize_text(text)
         spans: List[tuple[int, int]] = []
+        n = len(text)
         cursor = 0
+
+        # Languages without inter-word spaces
+        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
+        is_no_space_lang = (self.language or '').lower() in no_space_languages
+
         for token in tokens:
             if token == "":
                 spans.append((cursor, cursor))
                 continue
-            idx = text.find(token, cursor)
-            if idx == -1:
-                idx = text.find(token)
+
+            # For space-delimited languages, skip whitespace between tokens
+            if not is_no_space_lang:
+                while cursor < n and text[cursor].isspace():
+                    cursor += 1
+
+            tlen = len(token)
+            # Fast-path: direct match at cursor
+            if cursor + tlen <= n and text[cursor:cursor + tlen] == token:
+                idx = cursor
+            else:
+                # Bounded forward search only; do not rescan from the beginning
+                idx = text.find(token, cursor)
                 if idx == -1:
                     idx = cursor
-            spans.append((idx, idx + len(token)))
-            cursor = idx + len(token)
+
+            end = min(n, idx + tlen)
+            spans.append((idx, end))
+            cursor = end
+
         return tokens, spans
     
     def _prepare_chunk_records(
@@ -235,28 +262,32 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         """
         try:
             import fugashi
-            tagger = fugashi.Tagger('-Owakati')
-            words = tagger.parse(text).split()
-            logger.debug(f"Tokenized Japanese text into {len(words)} words using fugashi")
-            return words
         except ImportError:
             logger.warning("fugashi not available, falling back to character splitting for Japanese")
-            # Similar to Chinese fallback
-            text = text.replace(' ', '').replace('\n', ' ')
-            import re
-            punct_pattern = re.compile(r'[。！？、]')
-            words = []
-            last_end = 0
-            for match in punct_pattern.finditer(text):
-                segment = text[last_end:match.start()]
-                if segment:
-                    words.extend(list(segment))
-                words.append(match.group())
-                last_end = match.end()
-            tail = text[last_end:]
-            if tail:
-                words.extend(list(tail))
-            return words
+        else:
+            try:
+                tagger = fugashi.Tagger('-Owakati')
+                words = tagger.parse(text).split()
+                logger.debug(f"Tokenized Japanese text into {len(words)} words using fugashi")
+                return words
+            except Exception as exc:
+                logger.warning(f"fugashi initialization failed, falling back to character splitting for Japanese: {exc}")
+        # Fallback path when fugashi is unavailable or fails at runtime
+        text = text.replace(' ', '').replace('\n', ' ')
+        import re
+        punct_pattern = re.compile(r'[。！？、]')
+        words = []
+        last_end = 0
+        for match in punct_pattern.finditer(text):
+            segment = text[last_end:match.start()]
+            if segment:
+                words.extend(list(segment))
+            words.append(match.group())
+            last_end = match.end()
+        tail = text[last_end:]
+        if tail:
+            words.extend(list(tail))
+        return words
     
     def _tokenize_korean(self, text: str) -> List[str]:
         """

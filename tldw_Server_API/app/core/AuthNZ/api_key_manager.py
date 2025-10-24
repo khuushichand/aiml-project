@@ -17,7 +17,10 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
+    derive_hmac_key,
+    derive_hmac_key_candidates,
+)
 
 #######################################################################################################################
 #
@@ -261,8 +264,23 @@ class APIKeyManager:
         Returns:
             HMAC-SHA256 hash of the API key
         """
-        hmac_key = derive_hmac_key(self.settings)
-        return hmac.new(hmac_key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+        candidates = self.hash_candidates(api_key)
+        if not candidates:
+            raise ValueError("Unable to derive API key hash candidates")
+        return candidates[0]
+
+    def hash_candidates(self, api_key: str) -> List[str]:
+        """Return ordered HMAC hashes for API keys across active/legacy secrets."""
+        hashes: List[str] = []
+        try:
+            key_candidates = derive_hmac_key_candidates(self.settings)
+        except Exception:
+            key_candidates = [derive_hmac_key(self.settings)]
+        for key in key_candidates:
+            digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+            if digest not in hashes:
+                hashes.append(digest)
+        return hashes
     
     async def create_api_key(
         self,
@@ -345,7 +363,10 @@ class APIKeyManager:
                 # Log the creation
                 await self._log_action(key_id, "created", user_id)
                 
-                logger.info(f"Created API key {key_id} for user {user_id}")
+                if get_settings().PII_REDACT_LOGS:
+                    logger.info("Created API key for authenticated user (details redacted)")
+                else:
+                    logger.info(f"Created API key {key_id} for user {user_id}")
                 
                 return {
                     "id": key_id,
@@ -560,7 +581,9 @@ class APIKeyManager:
         if not self._initialized:
             await self.initialize()
         
-        key_hash = self.hash_api_key(api_key)
+        hash_candidates = self.hash_candidates(api_key)
+        if not hash_candidates:
+            return None
         
         try:
             # Get key information (dialect-aware placeholders)
@@ -568,7 +591,7 @@ class APIKeyManager:
                 result = await self.db_pool.fetchone(
                     """
                     SELECT id, user_id, name, scope, status, expires_at,
-                           rate_limit, allowed_ips, usage_count,
+                           rate_limit, allowed_ips, usage_count, key_hash,
                            COALESCE(is_virtual, FALSE) AS is_virtual,
                            parent_key_id, org_id, team_id,
                            llm_budget_day_tokens, llm_budget_month_tokens,
@@ -576,15 +599,17 @@ class APIKeyManager:
                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                            metadata
                     FROM api_keys
-                    WHERE key_hash = $1 AND status = $2
+                    WHERE key_hash = ANY($1::text[]) AND status = $2
+                    ORDER BY created_at DESC
+                    LIMIT 1
                     """,
-                    key_hash, APIKeyStatus.ACTIVE.value
+                    hash_candidates, APIKeyStatus.ACTIVE.value
                 )
             else:
-                result = await self.db_pool.fetchone(
-                    """
+                placeholders = ",".join("?" for _ in hash_candidates)
+                query = f"""
                     SELECT id, user_id, name, scope, status, expires_at,
-                           rate_limit, allowed_ips, usage_count,
+                           rate_limit, allowed_ips, usage_count, key_hash,
                            COALESCE(is_virtual, 0) AS is_virtual,
                            parent_key_id, org_id, team_id,
                            llm_budget_day_tokens, llm_budget_month_tokens,
@@ -592,16 +617,20 @@ class APIKeyManager:
                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                            metadata
                     FROM api_keys
-                    WHERE key_hash = ? AND status = ?
-                    """,
-                    key_hash, APIKeyStatus.ACTIVE.value
-                )
+                    WHERE key_hash IN ({placeholders}) AND status = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                params = (*hash_candidates, APIKeyStatus.ACTIVE.value)
+                result = await self.db_pool.fetchone(query, params)
             
             if not result:
                 return None
             
             key_info = dict(result)
-            
+            stored_hash = key_info.get("key_hash")
+            primary_hash = hash_candidates[0]
+
             # Check expiration
             if key_info['expires_at']:
                 expires_at = datetime.fromisoformat(key_info['expires_at']) if isinstance(key_info['expires_at'], str) else key_info['expires_at']
@@ -610,12 +639,45 @@ class APIKeyManager:
                     return None
             
             # Check IP restrictions
-            if key_info['allowed_ips'] and ip_address:
-                import json
-                allowed_ips = json.loads(key_info['allowed_ips'])
-                if ip_address not in allowed_ips:
-                    logger.warning(f"API key {key_info['id']} used from unauthorized IP: {ip_address}")
+            if key_info['allowed_ips']:
+                try:
+                    raw = key_info['allowed_ips']
+                    if isinstance(raw, str):
+                        allowed_ips = json.loads(raw)
+                    else:
+                        allowed_ips = raw
+                    allowed_ips = {str(ip).strip() for ip in (allowed_ips or []) if str(ip).strip()}
+                except Exception as decode_error:
+                    logger.error(
+                        f"API key {key_info['id']} allowlist could not be decoded; denying access: {decode_error}"
+                    )
                     return None
+                if allowed_ips:
+                    normalized_ip = (ip_address or "").strip()
+                    if not normalized_ip:
+                        logger.warning(
+                            f"API key {key_info['id']} requires client IP but none was supplied; denying access"
+                        )
+                        return None
+                    if normalized_ip not in allowed_ips:
+                        logger.warning(
+                            f"API key {key_info['id']} used from unauthorized IP: {normalized_ip}"
+                        )
+                        return None
+            
+            if stored_hash and stored_hash != primary_hash:
+                try:
+                    await self.db_pool.execute(
+                        "UPDATE api_keys SET key_hash = ? WHERE id = ?",
+                        primary_hash,
+                        key_info["id"],
+                    )
+                    key_info["key_hash"] = primary_hash
+                except Exception as normalize_exc:
+                    logger.warning(
+                        f"Failed to normalize API key hash for key {key_info.get('id')}: {normalize_exc}"
+                    )
+            key_info.pop("key_hash", None)
             
             # Check scope
             if required_scope:

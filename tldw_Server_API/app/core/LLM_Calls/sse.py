@@ -1,5 +1,7 @@
 import json
-from typing import Any, Dict, Iterable, Iterator, Optional
+from typing import Any, Dict, Iterable, Optional
+
+_SSE_CONTROL_PREFIXES = ("event:", "id:", "retry:")
 
 
 def finalize_stream(response: Optional[Any], done_already: bool = False) -> Iterable[str]:
@@ -40,3 +42,33 @@ def ensure_sse_line(line: str) -> str:
 def openai_delta_chunk(text: str) -> str:
     """Wrap a plain text delta into an OpenAI-compatible SSE chunk."""
     return sse_data({"choices": [{"delta": {"content": text}}]})
+
+
+def is_done_line(line: str) -> bool:
+    """Return True when the raw line represents the [DONE] sentinel."""
+    return line.strip().lower() == "data: [done]"
+
+
+def normalize_provider_line(line: str) -> Optional[str]:
+    """
+    Normalize a raw provider SSE line into a chunk we can forward.
+
+    - Ignores control fields such as event:/id:/retry: and comment lines.
+    - Preserves proper data frames using SSE framing.
+    - Falls back to wrapping unexpected payload lines as OpenAI deltas.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    lower = stripped.lower()
+    for prefix in _SSE_CONTROL_PREFIXES:
+        if lower.startswith(prefix):
+            return None
+    if stripped.startswith(":"):
+        return None
+
+    if stripped.startswith("data:"):
+        return ensure_sse_line(stripped)
+
+    return openai_delta_chunk(stripped)

@@ -2,7 +2,7 @@
 """
 Document processing integration for the RAG service.
 
-This module integrates with the existing Chunk_Lib.py to provide enhanced
+This module integrates with the unified v2 chunking module to provide enhanced
 document processing capabilities specifically optimized for RAG retrieval.
 """
 

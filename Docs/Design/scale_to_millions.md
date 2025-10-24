@@ -131,7 +131,7 @@ Notes:
 
 ## 7) Ingestion & Jobs
 
-- Chunking: leverage existing `Chunk_Lib` and ingestion pipeline; ensure chunks carry stable `chunk_id` and `tenant_id`.
+- Chunking: leverage the unified chunking module and ingestion pipeline; ensure chunks carry stable `chunk_id` and `tenant_id`.
 - Batch writes: use COPY (psycopg `copy_expert`) or `executemany` with batches of 500–2000 rows depending on payload size.
 - Background workers: use existing worker/orchestrator modules to process embedding jobs and storage in parallel (bounded concurrency per tenant).
 - Backpressure & retries: queue size caps per tenant; exponential backoff; idempotent upserts by `chunk_id`.

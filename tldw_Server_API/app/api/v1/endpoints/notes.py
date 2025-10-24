@@ -2,11 +2,10 @@
 #
 #
 # Imports
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 from loguru import logger
-import time
-from collections import defaultdict
-import sys
-from typing import List, Optional, Dict, Any
 #
 # 3rd-party Libraries
 from fastapi import (
@@ -19,8 +18,8 @@ from fastapi import (
     Body,
     Header  # Keep Header for expected_version
 )
-from fastapi.responses import StreamingResponse, PlainTextResponse
-from loguru import logger  # Using loguru as in your chat example
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected import path if needed
@@ -34,10 +33,17 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     NoteKeywordLinkResponse, KeywordsForNoteResponse, NotesForKeywordResponse,
     DetailResponse,
     NoteBulkCreateRequest, NoteBulkCreateItemResult, NoteBulkCreateResponse,
+    NotesListResponse, NotesExportResponse,
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 #
 #
 #######################################################################################################################
@@ -45,39 +51,6 @@ from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_top
 # Functions:
 
 router = APIRouter()
-
-# Simple rate limiter for resource creation
-class SimpleRateLimiter:
-    def __init__(self, max_requests_per_minute: int = 30):
-        self.max_requests = max_requests_per_minute
-        self.requests = defaultdict(list)
-    
-    def check_rate_limit(self, client_id: str, request=None) -> bool:
-        """Check if client has exceeded rate limit."""
-        # Skip rate limiting in test contexts
-        import os
-        if os.getenv("TEST_MODE") == "true" or os.getenv("PYTEST_CURRENT_TEST") is not None or "pytest" in sys.modules:
-            return True
-            
-        current_time = time.time()
-        minute_ago = current_time - 60
-        
-        # Clean up old requests
-        self.requests[client_id] = [
-            req_time for req_time in self.requests[client_id]
-            if req_time > minute_ago
-        ]
-        
-        # Check if limit exceeded
-        if len(self.requests[client_id]) >= self.max_requests:
-            return False
-        
-        # Add current request
-        self.requests[client_id].append(current_time)
-        return True
-
-# Initialize rate limiter for notes creation
-notes_rate_limiter = SimpleRateLimiter(max_requests_per_minute=30)
 
 # --- Helper for Exception Handling (largely the same) ---
 def handle_db_errors(e: Exception, entity_type: str = "resource"):
@@ -126,27 +99,34 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
     summary="Notes service health",
     tags=["notes"]
 )
-async def notes_health() -> Dict[str, Any]:
-    """Lightweight health endpoint for the Notes subsystem."""
-    from tldw_Server_API.app.core.config import settings
+async def notes_health(current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
+    """Lightweight health endpoint for the Notes subsystem, scoped to the current user."""
     import os
-    from pathlib import Path
-
+    user_base: Optional[Path] = None
+    chacha_db_path: Optional[Path] = None
     health = {
         "service": "notes",
         "status": "healthy",
         "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
         "components": {}
     }
+    storage_info: Dict[str, Any] = {
+        "base_dir": None,
+        "db_path": None,
+        "exists": False,
+        "writable": False,
+    }
 
     try:
-        base_dir = settings.get("USER_DB_BASE_DIR")
-        base_ok = base_dir is not None
-        exists = Path(base_dir).exists() if base_ok else False
+        # Resolve per-user base directory and DB path without forcing DB initialization
+        user_base = DatabasePaths.get_user_base_directory(int(current_user.id))
+        chacha_db_path = user_base / DatabasePaths.CHACHA_DB_NAME
+
+        exists = user_base.exists()
         writable = False
         if exists:
             try:
-                test_path = Path(base_dir) / ".health_check"
+                test_path = user_base / ".health_check"
                 with open(test_path, "w") as f:
                     f.write("ok")
                 os.remove(test_path)
@@ -154,21 +134,28 @@ async def notes_health() -> Dict[str, Any]:
             except Exception:
                 writable = False
 
-        health["components"]["storage"] = {
-            "base_dir": str(base_dir) if base_dir else None,
-            "exists": exists,
-            "writable": writable
-        }
+        storage_info.update(
+            {
+                "base_dir": str(user_base),
+                "db_path": str(chacha_db_path),
+                "exists": exists,
+                "writable": writable,
+            }
+        )
 
-        if not base_ok or not exists:
-            health["status"] = "degraded"
-        if base_ok and exists and not writable:
+        if not exists or not writable:
             health["status"] = "degraded"
     except Exception as e:
         health["status"] = "unhealthy"
         health["error"] = str(e)
+        if user_base:
+            storage_info["base_dir"] = str(user_base)
+        if chacha_db_path:
+            storage_info["db_path"] = str(chacha_db_path)
 
+    health["components"]["storage"] = storage_info
     return health
+
 @router.post(
     "/",
     response_model=NoteResponse,
@@ -179,16 +166,21 @@ async def notes_health() -> Dict[str, Any]:
 async def create_note(
         request: Request,
         note_in: NoteCreate,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)  # Use the user-specific DB instance
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),  # Use the user-specific DB instance
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.create")),
 ):
     try:
-        # Check rate limit for note creation
-        client_id = db.client_id or "anonymous"
-        if not notes_rate_limiter.check_rate_limit(client_id, request):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Rate limit exceeded. Maximum 30 notes per minute allowed."
-            )
+        # Centralized rate limit for notes.create
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.create")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.create",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         
         # The user context (user_id) is implicitly handled by `get_chacha_db_for_user`
         # The `db` instance is already specific to the authenticated user.
@@ -280,7 +272,7 @@ async def get_note(
 
 @router.get(
     "/",
-    response_model=Any,
+    response_model=NotesListResponse,
     summary="List all notes for the current user",
     tags=["notes"]
 )
@@ -289,10 +281,22 @@ async def list_notes(
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000, description="Number of notes to return"),
         offset: int = Query(0, ge=0, description="Offset for pagination"),
-        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note")
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.list")),
 ):
     """Always returns a consistent object with a `notes` array and pagination fields."""
     try:
+        # Rate limit: notes.list
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.list")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.list",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.debug(f"User (DB client_id: {db.client_id}) listing notes: limit={limit}, offset={offset}")
         notes_data = db.list_notes(limit=limit, offset=offset)
         # Attach keywords inline for each note (optional for performance)
@@ -308,11 +312,8 @@ async def list_notes(
         # Lightweight total count
         total = None
         try:
-            cursor = db.execute_query("SELECT COUNT(*) AS cnt FROM notes WHERE deleted = 0")
-            row = cursor.fetchone()
-            total = int(row["cnt"]) if row is not None else None
+            total = db.count_notes()
         except Exception:
-            # Fallback: approximate if count not available
             total = None
         # Back-compat aliases for list consumers
         return {
@@ -342,12 +343,28 @@ async def update_note(
         note_id: str,
         note_in: NoteUpdate,
         expected_version: int = Header(..., description="The expected version of the note for optimistic locking"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.update")),
 ):
-    update_data = note_in.model_dump(exclude_unset=True)
+    update_data = {
+        key: value
+        for key, value in note_in.model_dump(exclude_unset=True).items()
+        if value is not None
+    }
     if not update_data:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
+        # Rate limit: notes.update
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.update",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(
             f"User (DB client_id: {db.client_id}) updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
         # Topic monitoring (non-blocking) for updated fields
@@ -394,13 +411,20 @@ async def patch_note(
         note_id: str,
         note_in: NoteUpdate,
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        expected_version: Optional[int] = Header(None, description="Optional expected version for optimistic locking")
+        expected_version: Optional[int] = Header(None, description="Optional expected version for optimistic locking"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.update")),
 ):
     """PATCH variant that allows updates without an explicit expected-version header.
     If header is not provided, it fetches current version and applies the update."""
-    update_data = note_in.model_dump(exclude_unset=True)
+    update_data = {
+        key: value
+        for key, value in note_in.model_dump(exclude_unset=True).items()
+        if value is not None
+    }
     if not update_data:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
         if expected_version is None:
             # Fallback to current version if not provided
@@ -409,6 +433,15 @@ async def patch_note(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
             expected_version = int(current.get("version", 1))
 
+        # Rate limit: notes.update
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.update",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(
             f"User (DB client_id: {db.client_id}) partially updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
         success = db.update_note(
@@ -441,9 +474,21 @@ async def patch_note(
 async def delete_note(
         note_id: str,
         expected_version: int = Header(..., description="The expected version of the note for optimistic locking"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.delete")),
 ):
     try:
+        # Rate limit: notes.delete
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.delete")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.delete",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(
             f"User (DB client_id: {db.client_id}) soft-deleting note: ID='{note_id}', Version={expected_version}")
         success = db.soft_delete_note(
@@ -469,11 +514,24 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
         query: str = Query(..., min_length=1, description="Search term for notes"),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(10, ge=1, le=100, description="Number of results to return"),
-        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note")
+        offset: int = Query(0, ge=0, description="Result offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.search")),
 ):
     try:
-        logger.debug(f"User (DB client_id: {db.client_id}) searching notes: query='{query}', limit={limit}")
-        notes_data = db.search_notes(search_term=query, limit=limit)
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.search")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.search",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        logger.debug(
+            f"User (DB client_id: {db.client_id}) searching notes: query='{query}', limit={limit}, offset={offset}")
+        notes_data = db.search_notes(search_term=query, limit=limit, offset=offset)
         # Attach keywords inline (optional)
         if include_keywords:
             try:
@@ -491,7 +549,7 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
 
 @router.get(
     "/export",
-    response_model=Any,
+    response_model=NotesExportResponse,
     summary="Export notes as JSON",
     tags=["notes"]
 )
@@ -501,41 +559,38 @@ async def export_notes(
         limit: int = Query(1000, ge=1, le=10000, description="Max notes to export"),
         offset: int = Query(0, ge=0, description="Offset for pagination"),
         include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
-        format: str = Query("json", pattern="^(json|csv)$", description="Export format")
+        format: str = Query("json", pattern="^(json|csv)$", description="Export format"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.export")),
 ):
     """Simple JSON export for notes. If `q` is provided, uses FTS search; otherwise lists notes."""
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.export",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         total = None
         if q:
-            # emulate offset by over-fetching then slicing
-            rows = db.search_notes(search_term=q, limit=limit + offset)
-            notes_data = rows[offset: offset + limit]
-            # Total count for FTS path (best-effort)
+            notes_data = db.search_notes(search_term=q, limit=limit, offset=offset)
             try:
-                if getattr(db, 'backend_type', None).name == 'POSTGRESQL':
-                    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
-                    tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
-                    c = db.execute_query(
-                        "SELECT COUNT(*) AS cnt FROM notes n WHERE n.deleted = FALSE AND n.notes_fts_tsv @@ to_tsquery('english', ?)",
-                        (tsquery,)
-                    )
-                else:
-                    c = db.execute_query(
-                        "SELECT COUNT(*) AS cnt FROM notes_fts fts JOIN notes n ON fts.rowid = n.rowid WHERE n.deleted = 0 AND notes_fts MATCH ?",
-                        (f'"{q}"',)
-                    )
-                r = c.fetchone()
-                total = int(r["cnt"]) if r is not None else None
+                total = db.count_notes_matching(q)
             except Exception:
                 total = None
         else:
             notes_data = db.list_notes(limit=limit, offset=offset)
             try:
-                c = db.execute_query("SELECT COUNT(*) AS cnt FROM notes WHERE deleted = 0")
-                r = c.fetchone()
-                total = int(r["cnt"]) if r is not None else None
+                total = db.count_notes()
             except Exception:
                 total = None
+        for nd in notes_data:
+            if isinstance(nd, dict):
+                nd.pop("bm25_score", None)
+                nd.pop("rank", None)
         if include_keywords:
             for nd in notes_data:
                 try:
@@ -565,7 +620,9 @@ async def export_notes(
                     row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
                 writer.writerow(row)
             output.seek(0)
-            return StreamingResponse(output, media_type="text/csv")
+            from datetime import datetime as _dt
+            headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"}
+            return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
 
         return {
             "notes": notes_data,
@@ -584,16 +641,27 @@ async def export_notes(
 
 @router.post(
     "/export",
-    response_model=Any,
+    response_model=NotesExportResponse,
     summary="Export selected notes by ID",
     tags=["notes"]
 )
 async def export_notes_post(
         payload: Dict[str, Any] = Body(..., description="Export request with note_ids and optional format"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.export")),
 ):
     """Export notes by explicit IDs (parity with E2E scaffold)."""
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.export",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         note_ids = payload.get("note_ids") or []
         include_keywords = bool(payload.get("include_keywords", False))
         fmt = str(payload.get("format", "json")).lower()
@@ -639,7 +707,9 @@ async def export_notes_post(
                     row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
                 writer.writerow(row)
             output.seek(0)
-            return StreamingResponse(output, media_type="text/csv")
+            from datetime import datetime as _dt
+            headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"}
+            return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
 
         return {
             "notes": results,
@@ -659,17 +729,28 @@ async def export_notes_post(
 @router.post(
     "/bulk",
     response_model=NoteBulkCreateResponse,
-    status_code=status.HTTP_201_CREATED,
     summary="Bulk create notes with optional keywords",
-    tags=["notes"]
+    tags=["notes"],
+    dependencies=[Depends(rbac_rate_limit("notes.bulk_create"))]
 )
 async def bulk_create_notes(
         request: NoteBulkCreateRequest,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user)
 ):
     results: List[NoteBulkCreateItemResult] = []
     created = 0
     failed = 0
+    # Enforce centralized per-request rate limit (notes.bulk_create)
+    try:
+        allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.bulk_create")
+    except Exception:
+        allowed, meta = True, {}
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail="Rate limit exceeded for notes.bulk_create",
+                            headers={"Retry-After": str(meta.get("retry_after", 60))})
 
     for item in request.notes:
         try:
@@ -717,7 +798,9 @@ async def bulk_create_notes(
             results.append(NoteBulkCreateItemResult(success=False, error=str(e)))
             failed += 1
 
-    return NoteBulkCreateResponse(results=results, created_count=created, failed_count=failed)
+    response_payload = NoteBulkCreateResponse(results=results, created_count=created, failed_count=failed)
+    response_status = status.HTTP_200_OK if failed == 0 else status.HTTP_207_MULTI_STATUS
+    return JSONResponse(content=jsonable_encoder(response_payload), status_code=response_status)
 
 
 @router.post(
@@ -729,9 +812,20 @@ async def bulk_create_notes(
 )
 async def create_keyword(
         keyword_in: KeywordCreate,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.create")),
 ):
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.create")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.create",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(f"User (DB client_id: {db.client_id}) creating keyword: Text='{keyword_in.keyword}'")
         keyword_id = db.add_keyword(keyword_text=keyword_in.keyword)
         if keyword_id is None:
@@ -803,9 +897,20 @@ async def get_keyword_by_text(
 async def list_keywords_endpoint(  # Renamed to avoid conflict
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000),
-        offset: int = Query(0, ge=0)
+        offset: int = Query(0, ge=0),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.list")),
 ):
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.list")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.list",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.debug(f"User (DB client_id: {db.client_id}) listing keywords: limit={limit}, offset={offset}")
         keywords_data = db.list_keywords(limit=limit, offset=offset)
         return keywords_data
@@ -826,9 +931,20 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
 async def delete_keyword(
         keyword_id: int,
         expected_version: int = Header(..., description="The expected version of the keyword for optimistic locking"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.delete")),
 ):
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.delete")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.delete",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(
             f"User (DB client_id: {db.client_id}) soft-deleting keyword: ID='{keyword_id}', Version={expected_version}")
         success = db.soft_delete_keyword(
@@ -853,9 +969,20 @@ async def delete_keyword(
 async def search_keywords_endpoint(  # Renamed
         query: str = Query(..., min_length=1, description="Search term for keywords"),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        limit: int = Query(10, ge=1, le=100)
+        limit: int = Query(10, ge=1, le=100),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.search")),
 ):
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.search")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.search",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.debug(f"User (DB client_id: {db.client_id}) searching keywords: query='{query}', limit={limit}")
         keywords_data = db.search_keywords(search_term=query, limit=limit)
         return keywords_data

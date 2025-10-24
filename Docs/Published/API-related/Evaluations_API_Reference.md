@@ -949,6 +949,8 @@ groq_model = mixtral-8x7b-32768
 - HuggingFace
 - OpenRouter
 - Local models (via Ollama, llama.cpp, etc.)
+ - Moonshot
+ - Z.AI
 
 ## Important Notes
 

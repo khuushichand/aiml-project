@@ -252,12 +252,10 @@ class TestChatDictionaryService:
         
         # Check that UPDATE was called for soft delete
         calls = mock_conn.execute.call_args_list
-        update_call = None
-        for call in calls:
-            if "UPDATE chat_dictionaries SET deleted = 1" in call[0][0]:
-                update_call = call
-                break
-        assert update_call is not None
+        assert any(
+            "update chat_dictionaries set deleted =" in call[0][0].lower()
+            for call in calls
+        )
     
     def test_import_from_markdown(self, service, mock_db):
         """Test importing dictionary from markdown format."""

@@ -436,6 +436,7 @@ class RateLimiter:
         self.limiters = {}
         self._using_distributed = False
         self._defer_cleanup = False
+        self._cleanup_task_handle: Optional[asyncio.Task] = None
         self._init_limiters()
         # Optional category-specific limiters (e.g., ingestion vs read)
         # Defaults fall back to the main limiter rates
@@ -483,7 +484,7 @@ class RateLimiter:
         if not self._using_distributed:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._cleanup_task())
+                self._cleanup_task_handle = loop.create_task(self._cleanup_task())
             except RuntimeError:
                 # No running event loop in this context (e.g., sync test setup)
                 # Defer scheduling until later; functional behavior unaffected.
@@ -518,6 +519,20 @@ class RateLimiter:
             per=60,
             burst=self.config.rate_limit_burst_size
         )
+    
+    def _ensure_cleanup_task(self) -> None:
+        """Schedule cleanup task once an event loop is available."""
+        if self._using_distributed or not self._defer_cleanup:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._cleanup_task_handle and not self._cleanup_task_handle.done():
+            self._defer_cleanup = False
+            return
+        self._cleanup_task_handle = loop.create_task(self._cleanup_task())
+        self._defer_cleanup = False
         logger.info("Using in-memory token bucket rate limiting")
     
     async def check_rate_limit(
@@ -538,6 +553,8 @@ class RateLimiter:
         if not self.config.rate_limit_enabled:
             return
         
+        self._ensure_cleanup_task()
+        
         limiter = limiter or self.default_limiter
         allowed, retry_after = await limiter.is_allowed(key)
         
@@ -547,10 +564,12 @@ class RateLimiter:
     
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get rate limit usage for a key"""
+        self._ensure_cleanup_task()
         return await self.default_limiter.get_usage(key)
     
     async def reset(self, key: str):
         """Reset rate limit for a key"""
+        self._ensure_cleanup_task()
         await self.default_limiter.reset(key)
         logger.info(f"Rate limit reset for key: {key}", extra={"audit": True})
     

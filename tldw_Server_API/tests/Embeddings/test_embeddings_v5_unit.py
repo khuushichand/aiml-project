@@ -217,6 +217,23 @@ class TestTTLCache:
         assert await cache.get("key_5") == [5.0]
         assert await cache.get("key_25") == [25.0]
 
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_cache_thread_cleanup_removes_expired_entries(self, monkeypatch):
+        import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as embeddings_mod
+
+        monkeypatch.setattr(embeddings_mod, "CACHE_CLEANUP_INTERVAL", 0.05)
+
+        cache = embeddings_mod.TTLCache(max_size=10, ttl_seconds=0)
+        await cache.set("stale", [1.0])
+        await cache.start_cleanup_task()
+        try:
+            await asyncio.sleep(0.15)
+        finally:
+            await cache.stop_cleanup_task()
+
+        assert await cache.get("stale") is None
+
 
 class TestConnectionPooling:
     """Test connection pool management"""
@@ -241,6 +258,26 @@ class TestConnectionPooling:
         finally:
             await manager.close_all()
 
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_connection_pool_reopens_after_close(self):
+        """Manager should recreate sessions after shutdown."""
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import ConnectionPoolManager
+
+        manager = ConnectionPoolManager()
+
+        try:
+            first_session = await manager.get_session("huggingface")
+            assert first_session is not None
+
+            await manager.close_all()
+
+            second_session = await manager.get_session("huggingface")
+            assert second_session is not None
+            assert second_session is not first_session
+        finally:
+            await manager.close_all()
+
 
 class TestRetryLogic:
     """Test retry logic and error handling"""
@@ -254,7 +291,7 @@ class TestRetryLogic:
         
         attempt_count = 0
         
-        def mock_embeddings(texts, app_config, model_id):
+        def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
             nonlocal attempt_count
             attempt_count += 1
             
@@ -264,19 +301,27 @@ class TestRetryLogic:
             
             return [[1.0, 2.0, 3.0]] * len(texts)
         
-        # Mock create_embeddings_batch with retry decorator
-        with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch') as mock_batch:
-            # Add retry behavior to the mock
-            from tenacity import retry, stop_after_attempt, retry_if_exception_type
-            
-            @retry(
-                stop=stop_after_attempt(3),
-                retry=retry_if_exception_type(ConnectionError)
+        from tenacity import retry, stop_after_attempt, retry_if_exception_type
+
+        @retry(
+            stop=stop_after_attempt(3),
+            retry=retry_if_exception_type(ConnectionError),
+        )
+        def retry_wrapper_sync(*, texts, config, model_id_override, metadata=None):
+            return mock_embeddings(
+                texts=texts,
+                config=config,
+                model_id_override=model_id_override,
+                metadata=metadata,
             )
-            def retry_wrapper(texts, app_config, model_id):
-                return mock_embeddings(texts, app_config, model_id)
-            
-            mock_batch.side_effect = retry_wrapper
+
+        async def retry_wrapper(**kwargs):
+            return retry_wrapper_sync(**kwargs)
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.batching_create_embeddings_batch_async',
+            new=AsyncMock(side_effect=retry_wrapper),
+        ):
             
             config = {"api_key": "test-key"}
             
@@ -309,17 +354,16 @@ class TestRetryLogic:
         
         attempt_count = 0
         
-        def mock_embeddings(texts, app_config, model_id):
+        def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
             nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Invalid input")
         
-        # Mock create_embeddings_batch matching the actual function call signature
-        with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch') as mock_batch:
-            mock_batch.side_effect = mock_embeddings
-            
-            # The function runs in an executor, so exceptions might be wrapped
-            with pytest.raises(ValueError) as exc_info:
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.batching_create_embeddings_batch_async',
+            new=AsyncMock(side_effect=mock_embeddings),
+        ):
+            with pytest.raises(ValueError):
                 config = {"api_key": "test-key"}
                 await create_embeddings_with_circuit_breaker(
                     ["test text"],
@@ -327,9 +371,9 @@ class TestRetryLogic:
                     "test-model",
                     config
                 )
-            
-            # Should only try once since ValueError is not retryable
-            assert attempt_count == 1
+        
+        # Should only try once since ValueError is not retryable
+        assert attempt_count == 1
 
 
 class TestErrorHandling:
@@ -393,7 +437,7 @@ class TestMockedFlow:
         
         app.dependency_overrides[get_request_user] = override_user
         
-        async def mock_embeddings(texts, provider, model_id, dimensions=None, api_key=None, api_url=None):
+        async def mock_embeddings(texts, provider, model_id, dimensions=None, api_key=None, api_url=None, metadata=None):
             return [[float(i), float(i+1), float(i+2)] for i, _ in enumerate(texts)]
         
         with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch_async', new=mock_embeddings):
@@ -428,7 +472,7 @@ class TestMockedFlow:
         
         call_count = 0
         
-        async def mock_embeddings(texts, provider, model_id, dimensions=None, api_key=None, api_url=None):
+        async def mock_embeddings(texts, provider, model_id, dimensions=None, api_key=None, api_url=None, metadata=None):
             nonlocal call_count
             call_count += 1
             return [[1.0, 2.0, 3.0]] * len(texts)  # Return same embedding for consistent caching
@@ -436,8 +480,8 @@ class TestMockedFlow:
         # Mock the embedding function at the right level
         with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker') as mock_create:
             # Wrap to track calls
-            async def wrapper(texts, provider, model_id, config):
-                return await mock_embeddings(texts, provider, model_id)
+            async def wrapper(texts, provider, model_id, config, metadata=None):
+                return await mock_embeddings(texts, provider, model_id, metadata=metadata)
             mock_create.side_effect = wrapper
             
             # First request

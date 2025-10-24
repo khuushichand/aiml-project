@@ -93,7 +93,15 @@ class TestPromptGenerator:
     def generator(self):
         """Create a PromptGenerator instance."""
         return PromptGenerator()
-    
+
+    @pytest.fixture
+    def generator_with_db(self):
+        """Create a PromptGenerator instance wired to a mocked database."""
+        mock_db = Mock()
+        mock_db.client_id = "test-client"
+        mock_db.create_prompt.return_value = {"id": 99}
+        return PromptGenerator(db=mock_db)
+
     def test_generator_initialization(self):
         """Test PromptGenerator initialization."""
         generator = PromptGenerator()
@@ -124,7 +132,42 @@ class TestPromptGenerator:
         
         assert "step by step" in prompt["user"].lower() or "think through" in prompt["user"].lower()
         assert len(prompt["user"]) > len("Calculate compound interest")
-    
+
+    def test_generate_prompt_parses_openai_response(self, generator_with_db, monkeypatch):
+        """Ensure generate_prompt handles OpenAI-format responses."""
+        payload = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "SYSTEM_PROMPT:\nStay helpful.\n\nUSER_PROMPT:\nSummarize {input}.\n\nINSTRUCTIONS:\nUse bullet points."
+                    }
+                }
+            ]
+        }
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_generator.chat_with_openai",
+            lambda **kwargs: payload,
+        )
+
+        result = generator_with_db.generate_prompt(
+            project_id=1,
+            task_description="Summarize quarterly results",
+            template_name="default",
+            model_name="gpt-4o-mini",
+        )
+
+        assert result["system_prompt"] == "Stay helpful."
+        assert "Summarize {input}" in result["user_prompt"]
+        assert "bullet points" in result["instructions"]
+        generator_with_db.db.create_prompt.assert_called_once()
+
     def test_generate_few_shot(self, generator):
         """Test generating few-shot prompt."""
         examples = [

@@ -690,7 +690,8 @@ def process_pdf(
         final_analysis = None # Or final_summary
         # Use path_for_processing for logging context if needed
         logging.debug(f"PROCESS_PDF: Checking condition -> perform_analysis={perform_analysis}, api_name='{api_name}', api_key='{api_key}', chunks_exist={bool(processed_chunks)}") # Keep this log
-        if perform_analysis and api_name and api_key and processed_chunks:
+        # Allow analysis to proceed without explicit api_key (resolved from server config)
+        if perform_analysis and api_name and processed_chunks:
             logging.info(f"Summarization enabled for {len(processed_chunks)} chunks of {filename} using API: {api_name}.")
             log_counter("pdf_summarization_attempt", value=len(processed_chunks), labels={"file_name": filename, "api_name": api_name})
 

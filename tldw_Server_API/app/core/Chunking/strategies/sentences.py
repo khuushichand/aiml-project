@@ -45,11 +45,25 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             'ko': ['.', '!', '?', '。', '！', '？'],
             'ar': ['.', '!', '?', '؟', '۔'],
             'hi': ['।', '|', '.', '!', '?'],
-            'th': [' ', '!', '?'],
+            # Thai has no explicit spaces between sentences; avoid space as a delimiter.
+            # Prefer PyThaiNLP when available; fallback uses punctuation only.
+            'th': ['!', '?'],
             'default': ['.', '!', '?']
         }
         
         logger.debug(f"SentenceChunkingStrategy initialized for language: {language}")
+        
+        # Optional Thai sentence tokenizer (PyThaiNLP)
+        self.pythainlp_available = False
+        self._th_sent_tokenize = None
+        if self.language == 'th':
+            try:
+                from pythainlp.tokenize import sent_tokenize as _th_sent_tokenize  # type: ignore
+                self._th_sent_tokenize = _th_sent_tokenize
+                self.pythainlp_available = True
+                logger.debug("PyThaiNLP available for Thai sentence segmentation")
+            except Exception:
+                logger.debug("PyThaiNLP not available; using regex fallback for Thai")
     
     def chunk(self,
               text: str,
@@ -95,7 +109,16 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of sentences
         """
-        # Try pysbd first if available
+        # Thai first: prefer PyThaiNLP when available
+        if self.language == 'th' and self.pythainlp_available and callable(self._th_sent_tokenize):
+            try:
+                sents = [s for s in self._th_sent_tokenize(text) if s and s.strip()]
+                if sents:
+                    return sents
+            except Exception:
+                logger.debug("PyThaiNLP sentence splitting failed; falling back")
+        
+        # Try pysbd next if available
         if self.pysbd_available:
             sentences = self._split_with_pysbd(text)
             if sentences:
@@ -110,7 +133,24 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         Uses the same underlying splitting as _split_sentences to ensure
         parity, but carries start/end offsets robustly (avoids naive find()).
         """
-        # Try pysbd first if available; if used, recover spans via rolling pointer
+        # Thai first: prefer PyThaiNLP when available; recover spans via rolling pointer
+        if self.language == 'th' and self.pythainlp_available and callable(self._th_sent_tokenize):
+            try:
+                sentences = [s for s in self._th_sent_tokenize(text) if s and s.strip()]
+                spans = []
+                pos = 0
+                for s in sentences:
+                    idx = text.find(s, pos)
+                    if idx == -1:
+                        idx = pos
+                    spans.append((s, idx, idx + len(s)))
+                    pos = idx + len(s)
+                if spans:
+                    return spans
+            except Exception:
+                logger.debug("PyThaiNLP sentence splitting (spans) failed; falling back")
+        
+        # Try pysbd next if available; if used, recover spans via rolling pointer
         if self.pysbd_available:
             try:
                 sentences = self._split_with_pysbd(text)
@@ -271,7 +311,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         current_end: Optional[int] = None
         min_length = max(0, int(min_length))
         
-        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja'}
+        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
         
         for sentence, start, end in sentences_with_spans:
             if current_start is None:
@@ -313,7 +353,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         
         for sentence in sentences:
             if len(current) + len(sentence) < min_length:
-                if self.language in ['zh', 'zh-cn', 'zh-tw', 'ja']:
+                if self.language in ['zh', 'zh-cn', 'zh-tw', 'ja', 'th']:
                     current += sentence
                 else:
                     current = (current + " " + sentence).strip()
@@ -375,7 +415,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         
         records: List[Dict[str, Any]] = []
         step = max(1, max_size - overlap)
-        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja'}
+        no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
         
         for i in range(0, len(combined), step):
             window = combined[i:i + max_size]

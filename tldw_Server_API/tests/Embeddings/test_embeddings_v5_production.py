@@ -333,7 +333,7 @@ class TestRetryLogic:
         
         attempt_count = 0
         
-        def mock_embeddings(texts, app_config, model_id):
+        def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
             nonlocal attempt_count
             attempt_count += 1
             
@@ -343,19 +343,28 @@ class TestRetryLogic:
             
             return [[1.0, 2.0, 3.0]] * len(texts)
         
-        # Mock create_embeddings_batch with retry decorator
-        with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch') as mock_batch:
-            # Add retry behavior to the mock
-            from tenacity import retry, stop_after_attempt, retry_if_exception_type
-            
-            @retry(
-                stop=stop_after_attempt(3),
-                retry=retry_if_exception_type(ConnectionError)
+        # Mock batching helper with retry decorator that simulates internal retries
+        from tenacity import retry, stop_after_attempt, retry_if_exception_type
+
+        @retry(
+            stop=stop_after_attempt(3),
+            retry=retry_if_exception_type(ConnectionError),
+        )
+        def retry_wrapper_sync(*, texts, config, model_id_override, metadata=None):
+            return mock_embeddings(
+                texts=texts,
+                config=config,
+                model_id_override=model_id_override,
+                metadata=metadata,
             )
-            def retry_wrapper(texts, app_config, model_id):
-                return mock_embeddings(texts, app_config, model_id)
-            
-            mock_batch.side_effect = retry_wrapper
+
+        async def retry_wrapper(**kwargs):
+            return retry_wrapper_sync(**kwargs)
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.batching_create_embeddings_batch_async',
+            new=AsyncMock(side_effect=retry_wrapper),
+        ):
             
             config = {"api_key": "test-key"}
             
@@ -387,15 +396,16 @@ class TestRetryLogic:
         
         attempt_count = 0
         
-        def mock_embeddings(texts, app_config, model_id):
+        def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
             nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Invalid input")
         
-        # Mock create_embeddings_batch with correct signature
-        with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch') as mock_batch:
-            mock_batch.side_effect = mock_embeddings
-            
+        # Mock batching helper and ensure ValueError is propagated without retry
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.batching_create_embeddings_batch_async',
+            new=AsyncMock(side_effect=mock_embeddings),
+        ):
             with pytest.raises(ValueError):
                 config = {"api_key": "test-key"}
                 await create_embeddings_with_circuit_breaker(
@@ -545,7 +555,7 @@ class TestPerformance:
         app.dependency_overrides[get_request_user] = override_user
         call_sizes = []
 
-        async def fake_embeddings(texts, provider, model_id, config):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
             nonlocal call_sizes
             batch = texts if isinstance(texts, list) else [texts]
             call_sizes.append(len(batch))
@@ -634,7 +644,7 @@ class TestEndToEnd:
             return setup.regular_user
         
         app.dependency_overrides[get_request_user] = override_user
-        async def fake_embeddings(texts, provider, model_id, config):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
             batch = texts if isinstance(texts, list) else [texts]
             return [[float(idx), float(idx + 1), float(idx + 2)] for idx, _ in enumerate(batch)]
 
@@ -672,7 +682,7 @@ class TestEndToEnd:
         unique_text = f"cache test {datetime.now().isoformat()}"
         call_count = 0
 
-        async def fake_embeddings(texts, provider, model_id, config):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
             nonlocal call_count
             call_count += 1
             batch = texts if isinstance(texts, list) else [texts]
@@ -853,7 +863,7 @@ class TestIntegration:
         
         # First, ensure the model is loaded with a single request
         print("Loading HuggingFace model...")
-        async def fake_embeddings(texts, provider, model_id, config):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
             batch = texts if isinstance(texts, list) else [texts]
             return [[0.1, 0.2, 0.3] for _ in batch]
 

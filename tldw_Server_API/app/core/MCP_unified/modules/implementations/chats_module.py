@@ -124,7 +124,12 @@ class ChatsModule(BaseModule):
         results: List[Dict[str, Any]] = []
         # Conversations by title
         if by in {"both", "title"}:
-            convs = db.search_conversations_by_title(query, character_id=character_id, limit=limit + offset)
+            convs = db.search_conversations_by_title(
+                query,
+                character_id=character_id,
+                limit=limit + offset,
+                client_id=None,  # MCP operates with a synthetic client_id; fetch full tenant scope explicitly.
+            )
             for r in convs[offset: offset + limit]:
                 results.append({
                     "id": r.get("id"),

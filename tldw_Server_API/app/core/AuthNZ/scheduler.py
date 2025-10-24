@@ -661,17 +661,30 @@ class AuthNZScheduler:
             time_window = datetime.utcnow() - timedelta(minutes=5)
             is_postgres = getattr(db_pool, "pool", None) is not None
             cutoff = time_window if is_postgres else time_window.isoformat()
-            
-            result = await db_pool.fetchone(
-                """
-                SELECT COUNT(*) as failure_count,
-                       COUNT(DISTINCT ip_address) as unique_ips
-                FROM audit_logs 
-                WHERE action IN (?, ?, ?)
-                AND created_at > ?
-                """,
-                ('login_failed', 'invalid_api_key', 'invalid_token', cutoff),
-            )
+
+            if is_postgres:
+                result = await db_pool.fetchone(
+                    """
+                    SELECT COUNT(*) as failure_count,
+                           COUNT(DISTINCT ip_address) as unique_ips
+                    FROM audit_logs 
+                    WHERE action = ANY($1)
+                    AND created_at > $2
+                    """,
+                    ['login_failed', 'invalid_api_key', 'invalid_token'],
+                    cutoff,
+                )
+            else:
+                result = await db_pool.fetchone(
+                    """
+                    SELECT COUNT(*) as failure_count,
+                           COUNT(DISTINCT ip_address) as unique_ips
+                    FROM audit_logs 
+                    WHERE action IN (?, ?, ?)
+                    AND created_at > ?
+                    """,
+                    ('login_failed', 'invalid_api_key', 'invalid_token', cutoff),
+                )
             
             if result:
                 failure_count = result['failure_count'] or 0

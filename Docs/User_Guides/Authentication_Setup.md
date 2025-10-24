@@ -54,6 +54,7 @@ python -c "from cryptography.fernet import Fernet; print('SESSION_ENCRYPTION_KEY
 #    - Set AUTH_MODE=multi_user
 #    - Add generated JWT_SECRET_KEY
 #    - Add generated SESSION_ENCRYPTION_KEY
+#      (the server writes Config_Files/session_encryption.key with 0600 permissions; keep manual copies owner-readable only)
 #    - Configure database settings
 
 # 4. Initialize and create admin user

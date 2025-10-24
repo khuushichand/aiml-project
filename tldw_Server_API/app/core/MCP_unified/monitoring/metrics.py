@@ -6,7 +6,7 @@ Provides Prometheus-compatible metrics and health monitoring.
 
 import time
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
@@ -230,12 +230,15 @@ class MetricsCollector:
         labels: Optional[Dict[str, str]] = None
     ):
         """Record an API request"""
+        internal_labels = dict(labels or {})
+        internal_labels.setdefault("status", status)
+
         # Internal metrics
         metric = MetricData(
             name=f"request_{method}",
             type=MetricType.HISTOGRAM,
             value=duration,
-            labels=labels or {},
+            labels=internal_labels,
             description=f"Request to {method}"
         )
         self._metrics[f"request_{method}"].append(metric)
@@ -501,25 +504,46 @@ class MetricsCollector:
             
             # Aggregate based on metric type
             first_metric = recent_metrics[0]
+
+            # Group metrics by label set for detailed breakdowns
+            label_groups: Dict[Tuple[Tuple[str, str], ...], List[MetricData]] = defaultdict(list)
+            for metric in recent_metrics:
+                key = tuple(sorted(metric.labels.items()))
+                label_groups[key].append(metric)
             
             if first_metric.type == MetricType.COUNTER:
-                # Sum for counters
+                total_value = sum(m.value for m in recent_metrics)
                 aggregated[metric_name] = {
                     "type": "counter",
-                    "value": sum(m.value for m in recent_metrics),
-                    "count": len(recent_metrics)
+                    "value": total_value,
+                    "count": len(recent_metrics),
+                    "labels": [
+                        {
+                            "labels": dict(label_key),
+                            "value": sum(m.value for m in metrics),
+                            "count": len(metrics)
+                        }
+                        for label_key, metrics in label_groups.items()
+                    ]
                 }
             
             elif first_metric.type == MetricType.GAUGE:
-                # Latest value for gauges
+                latest_metric = recent_metrics[-1]
                 aggregated[metric_name] = {
                     "type": "gauge",
-                    "value": recent_metrics[-1].value,
-                    "timestamp": recent_metrics[-1].timestamp.isoformat()
+                    "value": latest_metric.value,
+                    "timestamp": latest_metric.timestamp.isoformat(),
+                    "labels": [
+                        {
+                            "labels": dict(label_key),
+                            "value": metrics[-1].value,
+                            "timestamp": metrics[-1].timestamp.isoformat()
+                        }
+                        for label_key, metrics in label_groups.items()
+                    ]
                 }
             
             elif first_metric.type in [MetricType.HISTOGRAM, MetricType.SUMMARY]:
-                # Statistics for histograms/summaries
                 values = [m.value for m in recent_metrics]
                 aggregated[metric_name] = {
                     "type": first_metric.type.value,
@@ -530,7 +554,24 @@ class MetricsCollector:
                     "max": max(values) if values else 0,
                     "p50": self._percentile(values, 50),
                     "p95": self._percentile(values, 95),
-                    "p99": self._percentile(values, 99)
+                    "p99": self._percentile(values, 99),
+                    "labels": [
+                        {
+                            "labels": dict(label_key),
+                            "count": len(group_values),
+                            "sum": sum(group_values),
+                            "avg": sum(group_values) / len(group_values) if group_values else 0,
+                            "min": min(group_values) if group_values else 0,
+                            "max": max(group_values) if group_values else 0,
+                            "p50": self._percentile(group_values, 50),
+                            "p95": self._percentile(group_values, 95),
+                            "p99": self._percentile(group_values, 99)
+                        }
+                        for label_key, group_values in (
+                            (label_key, [m.value for m in metrics])
+                            for label_key, metrics in label_groups.items()
+                        )
+                    ]
                 }
         
         return aggregated
@@ -565,20 +606,20 @@ class MetricsCollector:
             self._collection_task = None
             logger.info("Metrics collection stopped")
     
+    async def _sample_system_metrics(self):
+        """Sample system metrics without blocking the event loop."""
+        import psutil
+
+        memory = psutil.virtual_memory()
+        cpu_percent = await asyncio.to_thread(psutil.cpu_percent, interval=None)
+        self.update_system_metrics(memory_bytes=memory.used, cpu_percent=cpu_percent)
+
     async def _collection_loop(self):
         """Background task for system metrics collection"""
         while True:
             try:
-                # Collect system metrics
-                import psutil
-                
-                # Memory usage
-                memory = psutil.virtual_memory()
-                self.update_system_metrics(
-                    memory_bytes=memory.used,
-                    cpu_percent=psutil.cpu_percent(interval=1)
-                )
-                
+                await self._sample_system_metrics()
+
                 # Clean old metrics
                 self._clean_old_metrics()
                 

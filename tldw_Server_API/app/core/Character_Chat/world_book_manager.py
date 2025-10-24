@@ -45,6 +45,13 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
     ConflictError
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+
+
+def _is_unique_violation(error: Exception) -> bool:
+    """Best-effort detection of unique constraint/duplicate key violations across backends."""
+    message = str(error).lower()
+    return "unique constraint" in message or "duplicate key" in message
 
 
 class WorldBookEntry:
@@ -291,58 +298,105 @@ class WorldBookService:
     
     def _init_tables(self):
         """Initialize world book tables in the user's database if they don't exist."""
+        backend_type = getattr(self.db, "backend_type", BackendType.SQLITE)
         try:
             with self.db.get_connection() as conn:
-                # Create world_books table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS world_books (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT NOT NULL UNIQUE,
-                        description TEXT,
-                        scan_depth INTEGER DEFAULT 3,
-                        token_budget INTEGER DEFAULT 500,
-                        recursive_scanning BOOLEAN DEFAULT 0,
-                        enabled BOOLEAN DEFAULT 1,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        version INTEGER DEFAULT 1,
-                        deleted BOOLEAN DEFAULT 0
-                    )
-                """)
-                
-                # Create world_book_entries table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS world_book_entries (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        world_book_id INTEGER NOT NULL,
-                        keywords TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        priority INTEGER DEFAULT 0,
-                        enabled BOOLEAN DEFAULT 1,
-                        case_sensitive BOOLEAN DEFAULT 0,
-                        regex_match BOOLEAN DEFAULT 0,
-                        whole_word_match BOOLEAN DEFAULT 1,
-                        metadata TEXT DEFAULT '{}',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
-                    )
-                """)
-                
-                # Create character_world_books linking table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS character_world_books (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        character_id INTEGER NOT NULL,
-                        world_book_id INTEGER NOT NULL,
-                        enabled BOOLEAN DEFAULT 1,
-                        priority INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(character_id, world_book_id),
-                        FOREIGN KEY (character_id) REFERENCES character_cards(id) ON DELETE CASCADE,
-                        FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
-                    )
-                """)
+                if backend_type == BackendType.POSTGRESQL:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS world_books (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL UNIQUE,
+                            description TEXT,
+                            scan_depth INTEGER DEFAULT 3,
+                            token_budget INTEGER DEFAULT 500,
+                            recursive_scanning BOOLEAN DEFAULT FALSE,
+                            enabled BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            version INTEGER DEFAULT 1,
+                            deleted BOOLEAN DEFAULT FALSE
+                        )
+                    """)
+
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS world_book_entries (
+                            id SERIAL PRIMARY KEY,
+                            world_book_id INTEGER NOT NULL,
+                            keywords TEXT NOT NULL,
+                            content TEXT NOT NULL,
+                            priority INTEGER DEFAULT 0,
+                            enabled BOOLEAN DEFAULT TRUE,
+                            case_sensitive BOOLEAN DEFAULT FALSE,
+                            regex_match BOOLEAN DEFAULT FALSE,
+                            whole_word_match BOOLEAN DEFAULT TRUE,
+                            metadata TEXT DEFAULT '{}',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
+                        )
+                    """)
+
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS character_world_books (
+                            id SERIAL PRIMARY KEY,
+                            character_id INTEGER NOT NULL,
+                            world_book_id INTEGER NOT NULL,
+                            enabled BOOLEAN DEFAULT TRUE,
+                            priority INTEGER DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(character_id, world_book_id),
+                            FOREIGN KEY (character_id) REFERENCES character_cards(id) ON DELETE CASCADE,
+                            FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
+                        )
+                    """)
+                else:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS world_books (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT NOT NULL UNIQUE,
+                            description TEXT,
+                            scan_depth INTEGER DEFAULT 3,
+                            token_budget INTEGER DEFAULT 500,
+                            recursive_scanning BOOLEAN DEFAULT 0,
+                            enabled BOOLEAN DEFAULT 1,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            version INTEGER DEFAULT 1,
+                            deleted BOOLEAN DEFAULT 0
+                        )
+                    """)
+
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS world_book_entries (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            world_book_id INTEGER NOT NULL,
+                            keywords TEXT NOT NULL,
+                            content TEXT NOT NULL,
+                            priority INTEGER DEFAULT 0,
+                            enabled BOOLEAN DEFAULT 1,
+                            case_sensitive BOOLEAN DEFAULT 0,
+                            regex_match BOOLEAN DEFAULT 0,
+                            whole_word_match BOOLEAN DEFAULT 1,
+                            metadata TEXT DEFAULT '{}',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
+                        )
+                    """)
+
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS character_world_books (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            character_id INTEGER NOT NULL,
+                            world_book_id INTEGER NOT NULL,
+                            enabled BOOLEAN DEFAULT 1,
+                            priority INTEGER DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(character_id, world_book_id),
+                            FOREIGN KEY (character_id) REFERENCES character_cards(id) ON DELETE CASCADE,
+                            FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
+                        )
+                    """)
                 
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_wb_entries_book_id ON world_book_entries(world_book_id)")
@@ -390,25 +444,50 @@ class WorldBookService:
         
         try:
             with self.db.get_connection() as conn:
-                cursor = conn.execute(
-                    """
+                insert_sql = """
                     INSERT INTO world_books 
                     (name, description, scan_depth, token_budget, recursive_scanning, enabled)
                     VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (name.strip(), description, scan_depth, token_budget, recursive_scanning, enabled)
+                """
+                params = (
+                    name.strip(),
+                    description,
+                    scan_depth,
+                    token_budget,
+                    bool(recursive_scanning),
+                    bool(enabled),
                 )
-                world_book_id = cursor.lastrowid
+                if self.db.backend_type == BackendType.POSTGRESQL:
+                    insert_sql += " RETURNING id"
+
+                cursor = conn.execute(insert_sql, params)
+
+                if self.db.backend_type == BackendType.POSTGRESQL:
+                    row = cursor.fetchone()
+                    world_book_id = (row or {}).get("id") if row else None
+                else:
+                    world_book_id = cursor.lastrowid
+
+                if world_book_id is None:
+                    raise CharactersRAGDBError("Database did not return a world book id.")
+
                 conn.commit()
                 
                 logger.info(f"Created world book '{name}' with ID {world_book_id}")
                 self._invalidate_cache()
-                return world_book_id
+                return int(world_book_id)
                 
         except sqlite3.IntegrityError as e:
-            if "UNIQUE constraint failed" in str(e):
+            if _is_unique_violation(e):
                 raise ConflictError(f"World book with name '{name}' already exists", "world_books", name)
             raise CharactersRAGDBError(f"Database error creating world book: {e}")
+        except CharactersRAGDBError as e:
+            if _is_unique_violation(e):
+                raise ConflictError(f"World book with name '{name}' already exists", "world_books", name)
+            raise
+        except Exception as e:
+            logger.error(f"Database error creating world book: {e}")
+            raise CharactersRAGDBError(f"Database error creating world book: {e}") from e
     
     def get_world_book(self, world_book_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
@@ -431,17 +510,17 @@ class WorldBookService:
                     cursor = conn.execute(
                         """
                         SELECT * FROM world_books 
-                        WHERE id = ? AND deleted = 0
+                        WHERE id = ? AND deleted = ?
                         """,
-                        (world_book_id,)
+                        (world_book_id, False)
                     )
                 elif name:
                     cursor = conn.execute(
                         """
                         SELECT * FROM world_books 
-                        WHERE name = ? AND deleted = 0
+                        WHERE name = ? AND deleted = ?
                         """,
-                        (name,)
+                        (name, False)
                     )
                 else:
                     return None
@@ -470,12 +549,14 @@ class WorldBookService:
         """
         try:
             with self.db.get_connection() as conn:
-                query = "SELECT * FROM world_books WHERE deleted = 0"
+                query = "SELECT * FROM world_books WHERE deleted = ?"
+                params: List[Any] = [False]
                 if not include_disabled:
-                    query += " AND enabled = 1"
+                    query += " AND enabled = ?"
+                    params.append(True)
                 query += " ORDER BY name"
                 
-                cursor = conn.execute(query)
+                cursor = conn.execute(query, tuple(params))
                 books = [dict(row) for row in cursor.fetchall()]
                 
                 # Cache the books
@@ -529,22 +610,22 @@ class WorldBookService:
                 params.append(token_budget)
             if recursive_scanning is not None:
                 updates.append("recursive_scanning = ?")
-                params.append(int(recursive_scanning))
+                params.append(bool(recursive_scanning))
             if enabled is not None:
                 updates.append("enabled = ?")
-                params.append(int(enabled))
+                params.append(bool(enabled))
             
             if not updates:
                 return True
             
             updates.append("last_modified = CURRENT_TIMESTAMP")
             updates.append("version = version + 1")
-            params.append(world_book_id)
+            params.extend([world_book_id, False])
             
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
-                    f"UPDATE world_books SET {', '.join(updates)} WHERE id = ? AND deleted = 0",
-                    params
+                    f"UPDATE world_books SET {', '.join(updates)} WHERE id = ? AND deleted = ?",
+                    tuple(params)
                 )
                 conn.commit()
                 
@@ -555,9 +636,13 @@ class WorldBookService:
                 return False
                 
         except sqlite3.IntegrityError as e:
-            if "UNIQUE constraint failed" in str(e):
+            if _is_unique_violation(e):
                 raise ConflictError(f"World book name '{name}' already exists", "world_books", name)
             raise CharactersRAGDBError(f"Database error updating world book: {e}")
+        except CharactersRAGDBError as e:
+            if _is_unique_violation(e):
+                raise ConflictError(f"World book name '{name}' already exists", "world_books", name)
+            raise
     
     def delete_world_book(self, world_book_id: int, hard_delete: bool = False, **kwargs) -> bool:
         """
@@ -582,8 +667,8 @@ class WorldBookService:
                     )
                 else:
                     cursor = conn.execute(
-                        "UPDATE world_books SET deleted = 1, last_modified = CURRENT_TIMESTAMP WHERE id = ?",
-                        (world_book_id,)
+                        "UPDATE world_books SET deleted = ?, last_modified = CURRENT_TIMESTAMP WHERE id = ?",
+                        (True, world_book_id)
                     )
                 conn.commit()
                 
@@ -661,26 +746,75 @@ class WorldBookService:
         
         try:
             with self.db.get_connection() as conn:
-                cursor = conn.execute(
-                    """
+                insert_sql = """
                     INSERT INTO world_book_entries 
                     (world_book_id, keywords, content, priority, enabled, 
                      case_sensitive, regex_match, whole_word_match, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (world_book_id, keywords_json, content, priority, enabled,
-                     case_sensitive, regex_match, whole_word_match, metadata_json)
+                """
+                params = (
+                    world_book_id,
+                    keywords_json,
+                    content,
+                    priority,
+                    bool(enabled),
+                    bool(case_sensitive),
+                    bool(regex_match),
+                    bool(whole_word_match),
+                    metadata_json,
                 )
-                entry_id = cursor.lastrowid
+                if self.db.backend_type == BackendType.POSTGRESQL:
+                    insert_sql += " RETURNING id"
+
+                cursor = conn.execute(insert_sql, params)
+
+                if self.db.backend_type == BackendType.POSTGRESQL:
+                    row = cursor.fetchone()
+                    entry_id = (row or {}).get("id") if row else None
+                else:
+                    entry_id = cursor.lastrowid
+
+                if entry_id is None:
+                    raise CharactersRAGDBError("Database did not return a world book entry id.")
+
                 conn.commit()
                 
                 logger.info(f"Added entry {entry_id} to world book {world_book_id}")
                 self._invalidate_cache()
-                return entry_id
+                return int(entry_id)
                 
         except Exception as e:
             logger.error(f"Error adding world book entry: {e}")
             raise CharactersRAGDBError(f"Error adding world book entry: {e}")
+
+    def add_world_book_entry(
+        self,
+        world_book_id: int,
+        keywords: List[str],
+        content: str,
+        priority: int = 0,
+        enabled: bool = True,
+        case_sensitive: bool = False,
+        regex_match: bool = False,
+        whole_word_match: bool = True,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> int:
+        """
+        Legacy alias maintained for backwards compatibility.
+        """
+        return self.add_entry(
+            world_book_id=world_book_id,
+            keywords=keywords,
+            content=content,
+            priority=priority,
+            enabled=enabled,
+            case_sensitive=case_sensitive,
+            regex_match=regex_match,
+            whole_word_match=whole_word_match,
+            metadata=metadata,
+            **kwargs,
+        )
     
     def get_entries(
         self,
@@ -710,19 +844,20 @@ class WorldBookService:
                     SELECT e.*, wb.enabled as book_enabled
                     FROM world_book_entries e
                     JOIN world_books wb ON e.world_book_id = wb.id
-                    WHERE wb.deleted = 0
+                    WHERE wb.deleted = ?
                 """
-                params = []
+                params: List[Any] = [False]
                 
                 if world_book_id:
                     query += " AND e.world_book_id = ?"
                     params.append(world_book_id)
                 if enabled_only:
-                    query += " AND e.enabled = 1 AND wb.enabled = 1"
+                    query += " AND e.enabled = ? AND wb.enabled = ?"
+                    params.extend([True, True])
                 
                 query += " ORDER BY e.priority DESC, e.id"
                 
-                cursor = conn.execute(query, params)
+                cursor = conn.execute(query, tuple(params))
                 entries: List[WorldBookEntry] = []
                 
                 for row in cursor.fetchall():
@@ -796,19 +931,19 @@ class WorldBookService:
                 
             if enabled is not None:
                 updates.append("enabled = ?")
-                params.append(int(enabled))
-                
+                params.append(bool(enabled))
+            
             if case_sensitive is not None:
                 updates.append("case_sensitive = ?")
-                params.append(int(case_sensitive))
-                
+                params.append(bool(case_sensitive))
+            
             if regex_match is not None:
                 updates.append("regex_match = ?")
-                params.append(int(regex_match))
-                
+                params.append(bool(regex_match))
+            
             if whole_word_match is not None:
                 updates.append("whole_word_match = ?")
-                params.append(int(whole_word_match))
+                params.append(bool(whole_word_match))
                 
             if metadata is not None:
                 updates.append("metadata = ?")
@@ -823,7 +958,7 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
                     f"UPDATE world_book_entries SET {', '.join(updates)} WHERE id = ?",
-                    params
+                    tuple(params)
                 )
                 conn.commit()
                 
@@ -890,21 +1025,47 @@ class WorldBookService:
         """
         try:
             with self.db.get_connection() as conn:
+                params = (character_id, world_book_id, bool(enabled), int(priority))
                 try:
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO character_world_books 
-                        (character_id, world_book_id, enabled, priority)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (character_id, world_book_id, enabled, priority)
-                    )
+                    if self.db.backend_type == BackendType.POSTGRESQL:
+                        conn.execute(
+                            """
+                            INSERT INTO character_world_books (character_id, world_book_id, enabled, priority)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (character_id, world_book_id)
+                            DO UPDATE SET enabled = EXCLUDED.enabled,
+                                          priority = EXCLUDED.priority
+                            """,
+                            params,
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO character_world_books (character_id, world_book_id, enabled, priority)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(character_id, world_book_id)
+                            DO UPDATE SET enabled = excluded.enabled,
+                                          priority = excluded.priority
+                            """,
+                            params,
+                        )
                     conn.commit()
                     logger.info(f"Attached world book {world_book_id} to character {character_id}")
                     return OpResult(True)
                 except sqlite3.IntegrityError as e:
                     if 'FOREIGN KEY constraint failed' in str(e):
-                        logger.warning(f"Attach failed due to missing character_id {character_id} for world_book {world_book_id}")
+                        logger.warning(
+                            f"Attach failed due to missing character_id {character_id} for world_book {world_book_id}"
+                        )
+                        return OpResult(False)
+                    raise
+                except Exception as e:
+                    # psycopg raises different exceptions; detect FK violation generically
+                    msg = str(e).lower()
+                    if "foreign key" in msg and "constraint" in msg:
+                        logger.warning(
+                            f"Attach failed due to missing character_id {character_id} for world_book {world_book_id}"
+                        )
                         return OpResult(False)
                     raise
                 
@@ -960,16 +1121,17 @@ class WorldBookService:
                     SELECT wb.*, cwb.enabled as attachment_enabled, cwb.priority as attachment_priority
                     FROM world_books wb
                     JOIN character_world_books cwb ON wb.id = cwb.world_book_id
-                    WHERE cwb.character_id = ? AND wb.deleted = 0
+                    WHERE cwb.character_id = ? AND wb.deleted = ?
                 """
-                params = [character_id]
+                params: List[Any] = [character_id, False]
                 
                 if enabled_only:
-                    query += " AND cwb.enabled = 1 AND wb.enabled = 1"
+                    query += " AND cwb.enabled = ? AND wb.enabled = ?"
+                    params.extend([True, True])
                 
                 query += " ORDER BY cwb.priority DESC, wb.name"
                 
-                cursor = conn.execute(query, params)
+                cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
                 
         except Exception as e:
@@ -1317,31 +1479,40 @@ class WorldBookService:
                     }
             with self.db.get_connection() as conn:
                 # Get world book counts
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT 
                         COUNT(*) as total_world_books,
-                        SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) as enabled_world_books
+                        SUM(CASE WHEN enabled THEN 1 ELSE 0 END) as enabled_world_books
                     FROM world_books 
-                    WHERE deleted = 0
-                """)
+                    WHERE deleted = ?
+                    """,
+                    (False,),
+                )
                 book_stats = dict(cursor.fetchone())
                 
                 # Get entry counts
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT COUNT(*) as total_entries
                     FROM world_book_entries e
                     JOIN world_books w ON e.world_book_id = w.id
-                    WHERE w.deleted = 0
-                """)
+                    WHERE w.deleted = ?
+                    """,
+                    (False,),
+                )
                 entry_stats = dict(cursor.fetchone())
                 
                 # Get character attachment counts
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT COUNT(DISTINCT character_id) as total_attachments
                     FROM character_world_books c
                     JOIN world_books w ON c.world_book_id = w.id
-                    WHERE w.deleted = 0
-                """)
+                    WHERE w.deleted = ?
+                    """,
+                    (False,),
+                )
                 attachment_stats = dict(cursor.fetchone())
                 
                 # Calculate average entries per world book
@@ -1375,9 +1546,9 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 q = [
                     "SELECT e.*, w.name as world_book_name FROM world_book_entries e JOIN world_books w ON e.world_book_id = w.id",
-                    "WHERE w.deleted = 0"
+                    "WHERE w.deleted = ?"
                 ]
-                params: List[Any] = []
+                params: List[Any] = [False]
                 if world_book_id is not None:
                     q.append("AND e.world_book_id = ?")
                     params.append(world_book_id)
@@ -1385,7 +1556,7 @@ class WorldBookService:
                     q.append("AND (e.keywords LIKE ? OR e.content LIKE ?)")
                     params.extend([f"%{query}%", f"%{query}%"])
                 q.append("ORDER BY w.name, e.priority DESC")
-                cursor = conn.execute(" ".join(q), params)
+                cursor = conn.execute(" ".join(q), tuple(params))
                 results: List[Dict[str, Any]] = []
                 for row in cursor.fetchall():
                     rd = dict(row)
@@ -1519,9 +1690,17 @@ class WorldBookService:
                              case_sensitive, regex_match, whole_word_match, metadata)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
-                            (new_wb_id, json.dumps(entry.get('keywords') or []), entry.get('content', ''), 
-                             int(entry.get('priority', 0)), int(bool(entry.get('enabled', 1))), int(bool(entry.get('case_sensitive', 0))),
-                             int(bool(entry.get('regex_match', 0))), int(bool(entry.get('whole_word_match', 1))), metadata_json)
+                            (
+                                new_wb_id,
+                                json.dumps(entry.get('keywords') or []),
+                                entry.get('content', ''),
+                                int(entry.get('priority', 0)),
+                                bool(entry.get('enabled', True)),
+                                bool(entry.get('case_sensitive', False)),
+                                bool(entry.get('regex_match', False)),
+                                bool(entry.get('whole_word_match', True)),
+                                metadata_json,
+                            ),
                         )
                     conn.commit()
             
@@ -1557,7 +1736,7 @@ class WorldBookService:
                 current = bool(row[0]) if row else True
                 cur = conn.execute(
                     "UPDATE world_book_entries SET enabled = ?, last_modified = CURRENT_TIMESTAMP WHERE id = ?",
-                    (int(not current), entry_id)
+                    (not current, entry_id)
                 )
                 conn.commit()
                 if cur.rowcount > 0:

@@ -1,6 +1,7 @@
 import os
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,30 @@ def test_validate_tar_archive_limits(tmp_path: Path):
 
 
 @pytest.mark.unit
+def test_nested_archive_scanning_detects_inner_payload(tmp_path: Path):
+    inner_zip = tmp_path / "inner.zip"
+    with zipfile.ZipFile(inner_zip, "w") as zf:
+        zf.writestr("payload.exe", b"MZ")
+
+    outer_zip = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer_zip, "w") as zf:
+        zf.write(inner_zip, arcname="inner.zip")
+
+    validator = FileValidator(custom_media_configs={
+        "archive": {
+            "allowed_mimetypes": None,
+            "max_internal_files": 10,
+            "max_depth": 2,
+        }
+    })
+
+    res = validator.validate_archive_contents(outer_zip)
+    assert not res.is_valid
+    message = " ".join(res.issues).lower()
+    assert "nested archive" in message or ".exe" in message
+
+
+@pytest.mark.unit
 def test_html_sanitization_removes_script():
     validator = FileValidator()
     html = "<html><head><script>alert('x')</script></head><body><p>OK</p></body></html>"
@@ -79,4 +104,3 @@ def test_xml_sanitization_strips_comments_and_pi():
     low = cleaned.lower()
     assert "processing" not in low and "comment" not in low
     assert "child" in low and "ok" in low
-

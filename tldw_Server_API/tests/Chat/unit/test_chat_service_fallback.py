@@ -7,7 +7,11 @@ from fastapi import HTTPException
 
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-from tldw_Server_API.app.core.Chat.chat_service import execute_non_stream_call, execute_streaming_call
+from tldw_Server_API.app.core.Chat.chat_service import (
+    execute_non_stream_call,
+    execute_streaming_call,
+    merge_api_keys_for_provider,
+)
 
 
 class _DummyMetrics:
@@ -210,3 +214,26 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
     assert exc_info.value is http_exc
     # The last llm call recorded should indicate an HTTPException error type
     assert metrics.llm_calls[-1][3] in ("HTTPException", "HTTPException")
+
+
+def test_merge_api_keys_prefers_dynamic_over_module():
+    module_keys = {"openai": "module-key", "anthropic": "module-anthropic"}
+    dynamic_keys = {"openai": "dynamic-key", "anthropic": ""}
+
+    raw_openai, normalized_openai = merge_api_keys_for_provider(
+        "openai",
+        module_keys,
+        dynamic_keys,
+        {},
+    )
+    assert raw_openai == "dynamic-key"
+    assert normalized_openai == "dynamic-key"
+
+    raw_anthropic, normalized_anthropic = merge_api_keys_for_provider(
+        "anthropic",
+        module_keys,
+        dynamic_keys,
+        {},
+    )
+    assert raw_anthropic == "module-anthropic"
+    assert normalized_anthropic == "module-anthropic"

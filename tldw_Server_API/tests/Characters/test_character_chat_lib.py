@@ -3,6 +3,7 @@
 #
 # --- Imports ---
 import logging
+import copy
 import re
 
 import hypothesis
@@ -29,6 +30,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     extract_character_id_from_ui_choice,
     load_character_and_image,
     process_db_messages_to_ui_history,
+    process_db_messages_to_rich_ui_history,
     load_chat_and_character,
     load_character_wrapper,
     parse_character_book,
@@ -41,6 +43,8 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     import_character_card_from_json_string,
     load_character_card_from_string_content,
     import_and_save_character_from_file,
+    _prepare_character_data_for_db_storage,
+    create_new_character_from_data,
     load_chat_history_from_file_and_save_to_db,
     start_new_chat_session,
     list_character_conversations,
@@ -169,6 +173,7 @@ def caplog_handler(caplog):
     ("Hello {{char}}, I am {{user}}.", "Alice", "Bob", "Hello Alice, I am Bob."),
     ("User: <USER>, Char: <CHAR>", "Wizard", "Hero", "User: Hero, Char: Wizard"),
     ("{{random_user}} says hi.", None, "Guest", "Guest says hi."),
+    ("Numeric {{user}}", "Char", 123, "Numeric 123"),
     ("", "Char", "User", ""), (None, "Char", "User", ""),
 ])
 def test_replace_placeholders(text, char_name, user_name, expected):
@@ -257,7 +262,7 @@ def test_process_db_messages_to_ui_history_normalizes_common_roles():
     ]
     expected = [
         ("hello Botty", "hi Human"),
-        (None, "meta message"),
+        (None, "[system] meta message"),
         ("final turn", None),
     ]
     assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
@@ -282,6 +287,211 @@ def test_process_db_messages_to_ui_history_handles_additional_alias():
         additional_char_sender_ids=["OldBot"],
     )
     assert history == expected
+
+
+def test_process_db_messages_to_ui_history_handles_legacy_user_alias():
+    char_name = "Botty"
+    user_name = "Friend"
+    db_messages = [
+        {"sender": "You", "content": "Hi {{char}}"},
+        {"sender": "Botty", "content": "Hello {{user}}"},
+    ]
+    expected = [("Hi Botty", "Hello Friend")]
+    assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
+
+
+def test_process_db_messages_to_ui_history_respects_user_display_name():
+    char_name = "Botty"
+    user_name = "Companion"
+    db_messages = [
+        {"sender": "Companion", "content": "Hey there"},
+        {"sender": char_name, "content": "Welcome back, {{user}}"},
+    ]
+    expected = [("Hey there", "Welcome back, Companion")]
+    assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
+
+
+def test_process_db_messages_to_ui_history_handles_character_named_like_user_alias():
+    char_name = "User"
+    user_name = "Player"
+    greeting_template = "Greetings {{user}}"
+
+    db_messages = [
+        {
+            "id": "char-1",
+            "sender": "User",
+            "content": greeting_template,
+            "timestamp": "2024-01-01T00:00:00Z",
+            "version": 1,
+        },
+        {
+            "id": "user-1",
+            "sender": "User",
+            "content": "Hi there {{char}}",
+            "timestamp": "2024-01-01T00:00:01Z",
+            "version": 1,
+        },
+        {
+            "id": "char-2",
+            "sender": "User",
+            "content": "Nice to see you, {{user}}",
+            "timestamp": "2024-01-01T00:00:02Z",
+            "version": 1,
+        },
+    ]
+
+    expected_history = [
+        (None, replace_placeholders(greeting_template, char_name, user_name)),
+        (
+            replace_placeholders("Hi there {{char}}", char_name, user_name),
+            replace_placeholders("Nice to see you, {{user}}", char_name, user_name),
+        ),
+    ]
+
+    history = process_db_messages_to_ui_history(
+        db_messages,
+        char_name,
+        user_name,
+        actual_user_sender_id_in_db="User",
+        actual_char_sender_id_in_db=char_name,
+        char_first_message=replace_placeholders(greeting_template, char_name, user_name),
+    )
+
+    assert history == expected_history
+
+
+def test_process_db_messages_to_rich_ui_history_includes_metadata():
+    char_name = "Botty"
+    user_name = "Human"
+    db_messages = [
+        {
+            "id": "user-1",
+            "sender": "User",
+            "content": "Hello {{char}}",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "ranking": None,
+            "version": 1,
+        },
+        {
+            "id": "char-1",
+            "sender": char_name,
+            "content": "Hi {{user}}",
+            "timestamp": "2024-01-01T00:00:01Z",
+            "ranking": 2,
+            "version": 1,
+            "image_data": b"fake-image-bytes",
+            "image_mime_type": "image/png",
+            "images": [
+                {"position": 1, "image_data": b"secondary-bytes", "image_mime_type": "image/jpeg"},
+            ],
+        },
+    ]
+
+    history = process_db_messages_to_rich_ui_history(db_messages, char_name, user_name)
+
+    assert len(history) == 1
+    turn = history[0]
+
+    assert turn["user"] is not None and turn["character"] is not None
+    assert turn["user"]["id"] == "user-1"
+    assert turn["user"]["content"] == "Hello Botty"
+    assert turn["character"]["id"] == "char-1"
+    assert turn["character"]["content"] == "Hi Human"
+    attachments = turn["character"]["attachments"]
+    assert len(attachments) == 2
+    # Ensure attachment metadata preserved
+    assert attachments[0]["mime_type"] == "image/png"
+    assert attachments[1]["mime_type"] == "image/jpeg"
+    assert attachments[0]["encoding"] == "base64"
+    assert attachments[0]["size"] == len(b"fake-image-bytes")
+    assert base64.b64decode(attachments[0]["data"]) == b"fake-image-bytes"
+    assert base64.b64decode(attachments[1]["data"]) == b"secondary-bytes"
+
+    from fastapi.encoders import jsonable_encoder
+
+    serialized = jsonable_encoder(history)
+    assert serialized[0]["character"]["attachments"][0]["data"] == attachments[0]["data"]
+
+
+def test_process_db_messages_to_rich_ui_history_handles_non_character_roles():
+    db_messages = [
+        {"id": "user-1", "sender": "User", "content": "What's happening?"},
+        {"id": "system-1", "sender": "system", "content": "Maintenance window in effect."},
+    ]
+    history = process_db_messages_to_rich_ui_history(db_messages, "Caretaker", "Admin")
+
+    assert len(history) == 1
+    turn = history[0]
+    assert turn["user"]["id"] == "user-1"
+    assert turn["non_character"]["id"] == "system-1"
+    assert turn["non_character"]["content"] == "[system] Maintenance window in effect."
+
+
+def test_chat_history_import_handles_structured_content_and_roles(db):
+    char_payload = {
+        "name": "Test Character",
+        "description": "Helpful entity",
+        "personality": "Warm",
+        "scenario": "Testing importer",
+        "first_message": "Greetings, {{user}}.",
+        "message_example": "User: Hello\nTest Character: Hi there!",
+    }
+    char_id = create_new_character_from_data(db, char_payload)
+
+    sample_history = {
+        "messages": [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are in a simulation."}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello there, {{user}}."}],
+            },
+            {
+                "role": "tool",
+                "name": "lookup",
+                "content": [{"type": "text", "text": "Tool output"}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Thanks!"},
+                ],
+            },
+        ]
+    }
+
+    conversation_id, imported_char_id = load_chat_history_from_file_and_save_to_db(
+        db,
+        character_id=char_id,
+        file_content=json.dumps(sample_history),
+        user_name_for_placeholders="Alice",
+    )
+
+    assert conversation_id
+    assert imported_char_id == char_id
+
+    stored_messages = db.get_messages_for_conversation(conversation_id, limit=10)
+    senders = [msg["sender"] for msg in stored_messages]
+    contents = [msg["content"] for msg in stored_messages]
+
+    assert senders == ["system", "Test Character", "tool:lookup", "User"]
+    assert contents[0] == "You are in a simulation."
+    assert "Tool output" in contents[2]
+    assert contents[3] == "Thanks!"
+
+    ui_history = retrieve_conversation_messages_for_ui(
+        db,
+        conversation_id=conversation_id,
+        character_name="Test Character",
+        user_name="Alice",
+    )
+
+    assert ui_history[0][1] == "[system] You are in a simulation."
+    assert ui_history[1][1] == "Hello there, Alice."
+    assert ui_history[2][1] == "[tool:lookup] Tool output"
+    assert ui_history[-1][0] == "Thanks!"
 
 
 MINIMAL_V2_DATA_NODE_UNIT = {
@@ -318,12 +528,40 @@ def test_parse_v2_card_unit():
     assert len(parsed_with_book["extensions"]["character_book"]["entries"]) == 1
 
 
+def test_parse_v2_card_missing_mes_example_defaults_empty(caplog_handler):
+    card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
+    card["spec_version"] = "2.4"
+    card["data"] = card["data"].copy()
+    card["data"].pop("mes_example", None)
+    caplog = caplog_handler
+    with caplog.at_level("WARNING", logger="tldw_Server_API"):
+        parsed = parse_v2_card(card)
+    assert parsed is not None
+    assert parsed["message_example"] == ""
+    assert "mes_example" in caplog.text
+
+
 def test_parse_v1_card_unit():
     parsed = parse_v1_card(MINIMAL_V1_CARD_UNIT.copy())
     assert parsed is not None and parsed["name"] == "TestV1"
     v1_extra = {**MINIMAL_V1_CARD_UNIT, "custom_field": "custom_val"}
     parsed_extra = parse_v1_card(v1_extra)
     assert parsed_extra["extensions"]["custom_field"] == "custom_val"
+
+
+def test_prepare_character_data_preserves_transparency():
+    transparent_img = io.BytesIO()
+    PILImageReal.new("RGBA", (2, 2), (255, 0, 0, 0)).save(transparent_img, format="PNG")
+    encoded = base64.b64encode(transparent_img.getvalue()).decode("utf-8")
+
+    db_ready = _prepare_character_data_for_db_storage({"name": "TransparentChar", "image_base64": encoded})
+    stored_image_bytes = db_ready["image"]
+    assert isinstance(stored_image_bytes, (bytes, bytearray))
+
+    processed = PILImageReal.open(io.BytesIO(stored_image_bytes))
+    assert processed.mode in ("RGBA", "LA")
+    pixel = processed.getpixel((0, 0))
+    assert len(pixel) >= 2 and pixel[-1] == 0
 
 
 def test_parse_character_book_unit():
@@ -384,6 +622,24 @@ def test_validate_v2_card_unit():
     assert not is_valid_ns and "Missing 'spec' field" in errors_ns[0]
 
 
+def test_validate_v2_card_accepts_newer_minor_version():
+    card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
+    card["spec_version"] = "2.3"
+    is_valid, errors = validate_v2_card(card)
+    assert is_valid and not errors
+
+
+def test_validate_v2_card_missing_mes_example_logs_warning(caplog_handler):
+    card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
+    card["data"] = card["data"].copy()
+    card["data"].pop("mes_example", None)
+    caplog = caplog_handler
+    with caplog.at_level("WARNING", logger="tldw_Server_API"):
+        is_valid, errors = validate_v2_card(card)
+    assert is_valid and not errors
+    assert "mes_example" in caplog.text
+
+
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.validate_v2_card")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.parse_v2_card")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.parse_v1_card")
@@ -437,6 +693,21 @@ def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_imp
     assert "Error parsing YAML frontmatter" in caplog_handler.text  # Should pass now
     mock_import_json_str.assert_called()  # It will create JSON from plain text and import it
     mock_yaml_module.safe_load.side_effect = None
+
+
+def test_create_new_character_from_data_accepts_wrapped_base64(db):
+    image_bytes = create_dummy_png_bytes()
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    wrapped = "\n".join(encoded[i:i + 60] for i in range(0, len(encoded), 60))
+
+    payload = {"name": "WhitespaceImageChar", "image_base64": wrapped}
+
+    char_id = create_new_character_from_data(db, payload)
+    assert char_id is not None
+
+    stored = db.get_character_card_by_id(char_id)
+    assert stored is not None
+    assert isinstance(stored.get("image"), bytes)
 
 
 def test_load_character_card_from_plain_text_creates_minimal_card():
@@ -826,6 +1097,40 @@ def test_load_character_and_image_integration(MockPILImageModule, db, caplog_han
     MockPILImageModule.open.return_value = mock_opened_image  # Reset return value for other tests
 
 
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock)
+def test_load_character_and_image_accepts_memoryview(MockPILImageModule, db):
+    mock_opened_image = MockPILImageObject(format="PNG")
+    mock_converted_image = MockPILImageObject(format="PNG", mode="RGBA")
+    MockPILImageModule.open.return_value = mock_opened_image
+    mock_opened_image.convert = mock.Mock(return_value=mock_converted_image)
+
+    image_bytes = create_dummy_png_bytes()
+    char_id = db.add_character_card(
+        {
+            "name": "Memory",
+            "description": "Handles binary buffers",
+            "first_message": "Hi {{user}}",
+            "image": image_bytes,
+        }
+    )
+
+    original_get = db.get_character_card_by_id
+
+    def _get_with_memoryview(character_id_value: int):
+        data = original_get(character_id_value)
+        if data and data.get("image"):
+            data["image"] = memoryview(data["image"])
+        return data
+
+    with mock.patch.object(db, "get_character_card_by_id", side_effect=_get_with_memoryview):
+        loaded_char, history, image_obj = load_character_and_image(db, char_id, "Frodo")
+
+    assert loaded_char["name"] == "Memory"
+    assert history == [(None, "Hi Frodo")]
+    assert image_obj == mock_converted_image
+    mock_opened_image.convert.assert_called_once_with("RGBA")
+
+
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.yaml")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
@@ -899,6 +1204,77 @@ def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, d
 
 
 
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
+def test_load_chat_history_plain_text_fallback(mock_strftime, db):
+    char_id = db.add_character_card({"name": "PlainChar", "first_message": "Hi there"})
+    conv_id, returned_char_id = load_chat_history_from_file_and_save_to_db(
+        db,
+        char_id,
+        file_content="User says hello to {{char}}",
+        user_name_for_placeholders="Tester",
+    )
+
+    assert conv_id is not None
+    assert returned_char_id == char_id
+    messages = db.get_messages_for_conversation(conv_id)
+    assert len(messages) == 1
+    assert messages[0]["sender"] == "User"
+    assert messages[0]["content"] == "User says hello to PlainChar"
+
+
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
+def test_load_chat_history_yaml_sequence(mock_strftime, db):
+    char_name = "YamlChar"
+    char_id = db.add_character_card({"name": char_name, "first_message": "Hi there"})
+    yaml_history = """
+- role: assistant
+  content: "Greetings {{user}}"
+- role: user
+  content: "Hello {{char}}"
+"""
+    conv_id, returned_char_id = load_chat_history_from_file_and_save_to_db(
+        db,
+        char_id,
+        file_content=yaml_history,
+        user_name_for_placeholders="YamlUser",
+    )
+
+    assert conv_id is not None
+    assert returned_char_id == char_id
+    messages = db.get_messages_for_conversation(conv_id)
+    assert len(messages) == 2
+    assert messages[0]["sender"] == char_name
+    assert messages[0]["content"] == "Greetings YamlUser"
+    assert messages[1]["sender"] == "User"
+    assert messages[1]["content"] == "Hello YamlChar"
+
+
+def test_load_chat_history_cleanup_on_failure(db):
+    char_id = db.add_character_card({"name": "CleanupChar", "first_message": "Hi there"})
+    failing_payload = json.dumps(
+        {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi!"}
+            ]
+        }
+    )
+
+    with mock.patch(
+        f"{MODULE_PATH_PREFIX}.character_chat.post_message_to_conversation",
+        side_effect=CharactersRAGDBError("boom"),
+    ):
+        result = load_chat_history_from_file_and_save_to_db(
+            db,
+            char_id,
+            file_content=failing_payload,
+            user_name_for_placeholders="Tester",
+        )
+
+    assert result == (None, None)
+    assert db.get_conversations_for_character(char_id) == []
+
+
 def test_load_chat_and_character_handles_legacy_alias(db):
     char_id = db.add_character_card({"name": "NewName", "first_message": "Hi {{user}}"})
     conv_id = db.add_conversation({"character_id": char_id, "title": "Legacy"})
@@ -912,6 +1288,17 @@ def test_load_chat_and_character_handles_legacy_alias(db):
         (None, "Hello Friend"),
         ("Hi", "Welcome back, Friend"),
     ]
+
+
+def test_load_chat_and_character_handles_legacy_you_sender(db):
+    char_id = db.add_character_card({"name": "Botty", "first_message": "Hi {{user}}"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Legacy"})
+    db.add_message({"conversation_id": conv_id, "sender": "You", "content": "Hi {{char}}"})
+    db.add_message({"conversation_id": conv_id, "sender": "Botty", "content": "Hello {{user}}"})
+
+    char_data, history, _ = load_chat_and_character(db, conv_id, "Friend")
+    assert char_data and char_data["name"] == "Botty"
+    assert history == [("Hi Botty", "Hello Friend")]
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_chat.time.strftime", return_value=MOCK_TIME_STRFTIME)
@@ -963,6 +1350,89 @@ def test_full_chat_session_flow_integration(MockPILImageModule, mock_strftime, d
     assert delete_conversation_by_id(db, conv_id, conv_to_del['version'])
     assert db.get_conversation_by_id(conv_id) is None
 
+
+def test_retrieve_conversation_messages_for_ui_desc_order(db):
+    char_id = db.add_character_card({"name": "Chrony"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
+
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Hello {{char}}"})
+    db.add_message({"conversation_id": conv_id, "sender": "Chrony", "content": "Hi there, {{user}}"})
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Goodbye {{char}}"})
+
+    asc_history = retrieve_conversation_messages_for_ui(db, conv_id, "Chrony", "Alice", order="ASC")
+    assert asc_history == [
+        ("Hello Chrony", "Hi there, Alice"),
+        ("Goodbye Chrony", None),
+    ]
+
+    desc_history = retrieve_conversation_messages_for_ui(db, conv_id, "Chrony", "Alice", order="DESC")
+    assert desc_history == [
+        ("Goodbye Chrony", None),
+        ("Hello Chrony", "Hi there, Alice"),
+    ]
+
+
+def test_retrieve_conversation_messages_for_ui_rich_output(db):
+    char_id = db.add_character_card({"name": "Chrony"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
+
+    db.add_message(
+        {
+            "conversation_id": conv_id,
+            "sender": "User",
+            "content": "Hello {{char}}",
+        }
+    )
+    msg_id = db.add_message(
+        {
+            "conversation_id": conv_id,
+            "sender": "Chrony",
+            "content": "Hi there, {{user}}",
+            "image_data": b"123",
+            "image_mime_type": "image/png",
+        }
+    )
+
+    history = retrieve_conversation_messages_for_ui(
+        db,
+        conversation_id=conv_id,
+        character_name="Chrony",
+        user_name="Alice",
+        rich_output=True,
+    )
+
+    assert len(history) == 1
+    turn = history[0]
+    assert turn["character"]["id"] == msg_id
+    assert turn["character"]["content"] == "Hi there, Alice"
+    assert turn["character"]["attachments"]
+
+
+def test_sender_override_is_treated_as_user(db):
+    char_id = db.add_character_card({"name": "Botty"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Alias Chat"})
+
+    db.add_message({"conversation_id": conv_id, "sender": "Botty", "content": "Hello {{user}}"})
+    db.add_message({"conversation_id": conv_id, "sender": "Alice", "content": "Hi {{char}}"})
+    db.add_message({"conversation_id": conv_id, "sender": "Botty", "content": "How are you, {{user}}?"})
+    db.add_message({"conversation_id": conv_id, "sender": "Alice", "content": "Feeling great!"})
+
+    history = retrieve_conversation_messages_for_ui(
+        db,
+        conversation_id=conv_id,
+        character_name="Botty",
+        user_name="Alice",
+        rich_output=True,
+    )
+
+    assert len(history) == 2
+    # First turn: character greeting only
+    assert history[0]["character"]["content"] == "Hello Alice"
+    # Second turn: ensure Alice remains the user
+    assert history[1]["user"]["sender"] == "Alice"
+    assert history[1]["user"]["content"] == "Hi Botty"
+    assert history[1]["character"]["sender"] == "Botty"
+    assert history[1]["character"]["content"] == "How are you, Alice?"
 
 
 def test_load_chat_and_character_integration(db):

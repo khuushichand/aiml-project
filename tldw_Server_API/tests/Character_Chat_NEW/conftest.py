@@ -523,7 +523,7 @@ def markdown_dictionary():
 - **Type**: literal
 - **Pattern**: lol
 - **Replacement**: laugh out loud
-- **Probability**: 0.5
+- **Probability**: 50
 - **Enabled**: true
 """
 

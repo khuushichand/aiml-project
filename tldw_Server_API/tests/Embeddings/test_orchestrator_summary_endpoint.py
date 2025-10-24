@@ -16,7 +16,27 @@ def _override_user_admin():
 
 
 @pytest.mark.unit
-def test_orchestrator_summary_endpoint(disable_heavy_startup, admin_user, fake_redis):
+def test_orchestrator_summary_endpoint(disable_heavy_startup, admin_user, redis_client):
+    async def _seed():
+        queues = {
+            "embeddings:chunking": 1,
+            "embeddings:embedding": 2,
+            "embeddings:storage": 3,
+        }
+        for name, count in queues.items():
+            for idx in range(count):
+                await redis_client.xadd(name, {"seq": str(idx)})
+        await redis_client.xadd("embeddings:embedding:dlq", {"error": "boom"})
+        metrics = [
+            {"worker_type": "chunking", "jobs_processed": 10, "jobs_failed": 1},
+            {"worker_type": "embedding", "jobs_processed": 20, "jobs_failed": 2},
+            {"worker_type": "storage", "jobs_processed": 30, "jobs_failed": 3},
+        ]
+        for idx, metric in enumerate(metrics):
+            await redis_client.set(f"worker:metrics:{idx}", json.dumps(metric))
+
+    redis_client.run(_seed())
+
     client = TestClient(app)
     resp = client.get("/api/v1/embeddings/orchestrator/summary")
     assert resp.status_code == 200
@@ -79,15 +99,13 @@ def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.parametrize('stage', ['chunking', 'embedding', 'storage'])
-def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user, fake_redis, stage):
+def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user, redis_client, stage):
     # Set flags before request
-    import asyncio as _asyncio
-
     async def _set_flags():
-        await fake_redis.set(f"embeddings:stage:{stage}:paused", "1")
-        await fake_redis.set(f"embeddings:stage:{stage}:drain", "1")
+        await redis_client.set(f"embeddings:stage:{stage}:paused", "1")
+        await redis_client.set(f"embeddings:stage:{stage}:drain", "1")
 
-    _asyncio.run(_set_flags())
+    redis_client.run(_set_flags())
 
     client = TestClient(app)
     resp = client.get("/api/v1/embeddings/orchestrator/summary")
@@ -157,12 +175,19 @@ def test_build_orchestrator_snapshot_age_zero_when_empty_xrange():
 
 
 @pytest.mark.unit
-def test_orchestrator_summary_priority_depths(disable_heavy_startup, admin_user, fake_redis, monkeypatch):
+def test_orchestrator_summary_priority_depths(disable_heavy_startup, admin_user, redis_client, monkeypatch):
     # Enable priority flag and seed per-priority queue depths
     monkeypatch.setenv("EMBEDDINGS_PRIORITY_ENABLED", "true")
-    fake_redis._queues["embeddings:embedding:high"] = 5
-    fake_redis._queues["embeddings:embedding:normal"] = 3
-    fake_redis._queues["embeddings:embedding:low"] = 1
+    async def _seed_priority():
+        for name, count in (
+            ("embeddings:embedding:high", 5),
+            ("embeddings:embedding:normal", 3),
+            ("embeddings:embedding:low", 1),
+        ):
+            for idx in range(count):
+                await redis_client.xadd(name, {"seq": f"{name}:{idx}"})
+
+    redis_client.run(_seed_priority())
     client = TestClient(app)
     resp = client.get("/api/v1/embeddings/orchestrator/summary")
     assert resp.status_code == 200

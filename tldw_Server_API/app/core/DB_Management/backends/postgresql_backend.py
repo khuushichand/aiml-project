@@ -245,7 +245,11 @@ class PostgreSQLBackend(DatabaseBackend):
         )
 
     def _apply_scope_settings(self, connection: Any) -> None:
-        """Apply scope-related GUC settings for row-level security."""
+        """Apply scope-related GUC settings for row-level security.
+
+        Avoid rolling back active transactions unless necessary; if setting
+        parameters fails due to a bad transaction state, rollback and retry once.
+        """
         try:
             scope = get_scope()
         except Exception:
@@ -284,45 +288,67 @@ class PostgreSQLBackend(DatabaseBackend):
             ("SELECT set_config('app.is_admin', %s, false)", (is_admin,)),
         ]
 
-        try:
-            if hasattr(connection, "autocommit") and not connection.autocommit:
+        def _run_with_cursor(cur) -> None:
+            if session_role:
+                escaped_role = session_role.replace('"', '""')
                 try:
-                    connection.rollback()
-                except Exception as rollback_exc:
-                    logger.debug(
-                        "Rollback failed while preparing scope settings: %s",
-                        rollback_exc,
-                    )
-
-            cursor_factory = getattr(connection, "cursor", None)
-            if cursor_factory:
-                with cursor_factory() as cur:
-                    if session_role:
-                        escaped_role = session_role.replace('"', '""')
-                        try:
-                            cur.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
-                        except Exception:
-                            try:
-                                cur.execute(f'SET ROLE "{escaped_role}"')
-                            except Exception as role_exc:
-                                raise DatabaseError(
-                                    f"Unable to adjust session role to {session_role}: {role_exc}"
-                                ) from role_exc
-                    else:
-                        try:
-                            cur.execute("RESET SESSION AUTHORIZATION")
-                        except Exception:
-                            cur.execute("RESET ROLE")
-
-                    try:
-                        cur.execute("SET row_security = on")
-                    except Exception:
-                        pass
-
-                    for sql_stmt, params in statements:
-                        cur.execute(sql_stmt, params)
+                    cur.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
+                except Exception:
+                    cur.execute(f'SET ROLE "{escaped_role}"')
             else:
                 try:
+                    cur.execute("RESET SESSION AUTHORIZATION")
+                except Exception:
+                    cur.execute("RESET ROLE")
+
+            try:
+                cur.execute("SET row_security = on")
+            except Exception:
+                pass
+
+            for sql_stmt, params in statements:
+                cur.execute(sql_stmt, params)
+
+        cursor_factory = getattr(connection, "cursor", None)
+
+        # First attempt: try to set configs without touching transaction state
+        try:
+            if cursor_factory:
+                with cursor_factory() as cur:
+                    _run_with_cursor(cur)
+            else:
+                # Fallback if connection supports execute directly
+                if session_role:
+                    escaped_role = session_role.replace('"', '""')
+                    try:
+                        connection.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
+                    except Exception:
+                        connection.execute(f'SET ROLE "{escaped_role}"')
+                else:
+                    try:
+                        connection.execute("RESET SESSION AUTHORIZATION")
+                    except Exception:
+                        connection.execute("RESET ROLE")
+                try:
+                    connection.execute("SET row_security = on")
+                except Exception:
+                    pass
+                for sql_stmt, params in statements:
+                    try:
+                        connection.execute(sql_stmt, params)
+                    except Exception as cfg_exc:
+                        logger.debug(f"Unable to apply scope settings via execute: {cfg_exc}")
+        except Exception as exc:
+            # If we failed (e.g., transaction aborted), rollback and try once more
+            try:
+                connection.rollback()
+            except Exception as rollback_exc:
+                logger.debug("Rollback while configuring scope failed: %s", rollback_exc)
+            try:
+                if cursor_factory:
+                    with cursor_factory() as cur:
+                        _run_with_cursor(cur)
+                else:
                     if session_role:
                         escaped_role = session_role.replace('"', '""')
                         try:
@@ -334,21 +360,17 @@ class PostgreSQLBackend(DatabaseBackend):
                             connection.execute("RESET SESSION AUTHORIZATION")
                         except Exception:
                             connection.execute("RESET ROLE")
-                except Exception as role_exc:
-                    raise DatabaseError(f"Unable to adjust session role via execute: {role_exc}") from role_exc
-
-                try:
-                    connection.execute("SET row_security = on")
-                except Exception:
-                    pass
-
-                for sql_stmt, params in statements:
                     try:
-                        connection.execute(sql_stmt, params)
-                    except Exception as cfg_exc:
-                        logger.debug(f"Unable to apply scope settings via execute: {cfg_exc}")
-        except Exception as exc:
-            logger.debug(f"Failed to configure session scope settings: {exc}")
+                        connection.execute("SET row_security = on")
+                    except Exception:
+                        pass
+                    for sql_stmt, params in statements:
+                        try:
+                            connection.execute(sql_stmt, params)
+                        except Exception as cfg_exc:
+                            logger.debug(f"Unable to apply scope settings via execute (after rollback): {cfg_exc}")
+            except Exception as final_exc:
+                logger.debug(f"Failed to configure session scope settings: {final_exc}")
     
     def _tx_depth(self, connection: Any) -> int:
         return self._managed_tx_depths.get(id(connection), 0)

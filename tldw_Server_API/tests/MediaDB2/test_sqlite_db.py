@@ -666,3 +666,61 @@ class TestDatabaseFTS:
         # Search for banana should still work
         cursor = db_instance.execute_query("SELECT rowid FROM keyword_fts WHERE keyword_fts MATCH ?", ("banana",))
         assert cursor.fetchone()['rowid'] == kw2_id
+
+    def test_search_media_db_filters_by_uuid(self, db_instance):
+        title = "UUID filter entry"
+        content = "This entry is retrieved via UUID"
+        media_id, media_uuid, _ = db_instance.add_media_with_keywords(title=title, content=content, media_type="uuid_test")
+
+        results, total = MediaDatabase.search_media_db(
+            db_instance,
+            search_query=None,
+            search_fields=[],
+            media_ids_filter=[media_uuid],
+        )
+
+        assert total == 1
+        assert len(results) == 1
+        assert results[0]['id'] == media_id
+        assert results[0]['uuid'] == media_uuid
+
+    def test_search_media_db_fts_fallback_preserves_filters(self, db_instance):
+        # Seed two records that share the search term so the UUID filter is the differentiator.
+        db_instance.add_media_with_keywords(
+            title="Fallback Candidate A",
+            content="Shared fallback term",
+            media_type="fallback_test",
+        )
+        media_id_b, media_uuid_b, _ = db_instance.add_media_with_keywords(
+            title="Fallback Candidate B",
+            content="Shared fallback term with extra context",
+            media_type="fallback_test",
+        )
+
+        original_execute = db_instance.execute_query
+        raised = {"value": False}
+
+        def flaky_execute(self, sql, params=None, *, commit=False):
+            if (
+                not raised["value"]
+                and "MATCH" in sql
+                and "COUNT" in sql.upper()
+            ):
+                raised["value"] = True
+                raise sqlite3.OperationalError("unable to use function MATCH in the requested context")
+            return original_execute(sql, params=params, commit=commit)
+
+        db_instance.execute_query = flaky_execute.__get__(db_instance, MediaDatabase)
+
+        results, total = MediaDatabase.search_media_db(
+            db_instance,
+            search_query="fallback",
+            search_fields=["title", "content"],
+            media_ids_filter=[media_uuid_b],
+        )
+
+        assert raised["value"] is True, "Fallback path was not exercised"
+        assert total == 1
+        assert len(results) == 1
+        assert results[0]['id'] == media_id_b
+        assert results[0]['uuid'] == media_uuid_b

@@ -157,6 +157,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
+from fastapi.encoders import jsonable_encoder
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -293,7 +294,9 @@ async def _process_content_for_db_sync(
     images_sync: list[tuple[bytes, str]] = []   # (bytes, mime)
 
     processed_content_iterable: Any # Define type more specifically if possible
-    if isinstance(content_iterable, str):
+    if content_iterable is None:
+        processed_content_iterable = []
+    elif isinstance(content_iterable, str):
         processed_content_iterable = [{"type": "text", "text": content_iterable}]
     elif isinstance(content_iterable, list):
         processed_content_iterable = content_iterable
@@ -358,6 +361,65 @@ async def _process_content_for_db_sync(
                 text_parts_sync.append(f"<Image URL (not processed): {url_str[:200]}>")
     return text_parts_sync, images_sync
 
+def _jsonify_metadata_payload(value: Any) -> Any:
+    """Best-effort conversion of metadata objects to JSON-safe structures."""
+    if value is None:
+        return None
+    try:
+        encoded = jsonable_encoder(value)
+    except Exception:
+        encoded = value
+    try:
+        return json.loads(json.dumps(encoded, default=str))
+    except Exception as exc:
+        logger.warning(
+            "Failed to normalize metadata payload of type %s: %s",
+            type(value).__name__,
+            exc,
+        )
+        if isinstance(encoded, (dict, list, str, int, float, bool)) or encoded is None:
+            return encoded
+        return str(encoded)
+
+def _summarize_tool_calls(tool_calls: Any) -> str:
+    """Produce a concise placeholder string describing tool call names."""
+    try:
+        iterable = tool_calls if isinstance(tool_calls, list) else [tool_calls]
+        names: list[str] = []
+        for entry in iterable:
+            if not isinstance(entry, dict):
+                continue
+            func_section = entry.get("function")
+            name = None
+            if isinstance(func_section, dict):
+                name = func_section.get("name")
+            if not name:
+                name = entry.get("name")
+            if name:
+                names.append(str(name))
+        if not names:
+            return "[tool_call]"
+        suffix = "…" if len(names) > 5 else ""
+        return "[tool_call: {}{}]".format(", ".join(names[:5]), suffix)
+    except Exception:
+        return "[tool_call]"
+
+def _persist_message_sync(
+    db: CharactersRAGDB,
+    payload: Dict[str, Any],
+    tool_calls: Optional[Any],
+    extra_metadata: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Persist a message and optional metadata synchronously."""
+    message_id = db.add_message(payload)
+    if tool_calls is not None or extra_metadata is not None:
+        success = db.add_message_metadata(message_id, tool_calls=tool_calls, extra=extra_metadata)
+        if not success:
+            raise CharactersRAGDBError(
+                f"Failed to persist metadata for message {message_id}"
+            )
+    return message_id
+
 async def _save_message_turn_to_db(
     db: CharactersRAGDB,
     conversation_id: str,
@@ -409,12 +471,41 @@ async def _save_message_turn_to_db(
         error.log()
         return None
 
-    if not text_parts and not images: # Issue 1 Fix
-        # Save a placeholder message to maintain conversation continuity
-        # This ensures we don't lose track of failed image processing attempts
-        logger.warning("Message with no valid content after processing for conv=%s, saving placeholder", conversation_id)
-        text_parts = ["<Message processing failed - no valid content>"]
-        # Continue to save the message with placeholder text
+    tool_calls_raw = message_obj.get("tool_calls")
+    function_call_raw = message_obj.get("function_call")
+    serialized_tool_calls = _jsonify_metadata_payload(tool_calls_raw) if tool_calls_raw else None
+    serialized_extra: Optional[Dict[str, Any]] = None
+    if function_call_raw is not None:
+        serialized_extra = {"function_call": _jsonify_metadata_payload(function_call_raw)}
+    placeholder_reason: Optional[str] = None
+
+    if not text_parts and not images:
+        if serialized_tool_calls is not None:
+            text_parts = [_summarize_tool_calls(serialized_tool_calls)]
+            placeholder_reason = "tool_calls"
+        elif serialized_extra is not None:
+            placeholder_reason = "function_call"
+            function_name = None
+            try:
+                function_name = serialized_extra.get("function_call", {}).get("name")  # type: ignore[union-attr]
+            except Exception:
+                function_name = None
+            display = f"[function_call: {function_name}]" if function_name else "[function_call]"
+            text_parts = [display]
+        else:
+            logger.warning(
+                "Message with no valid content after processing for conv=%s, saving placeholder",
+                conversation_id,
+            )
+            text_parts = ["<Message processing failed - no valid content>"]
+
+    if placeholder_reason:
+        if serialized_extra is None:
+            serialized_extra = {}
+        serialized_extra["content_placeholder_reason"] = placeholder_reason
+
+    if serialized_extra is not None and not serialized_extra:
+        serialized_extra = None
 
     # Persist the primary image via the schema-supported columns.
     primary_image_data: Optional[bytes] = None
@@ -445,25 +536,31 @@ async def _save_message_turn_to_db(
         db_payload["images"] = [{"data": item["data"], "mime": item["mime"]} for item in normalized_images]
 
     try:
-        # Track database operation
         async with metrics.track_database_operation("save_message"):
             if use_transaction:
-                # Track transaction metrics
-                retries = 0
                 try:
-                    async with db_transaction(db) as transaction_ctx:
-                        # Track retry count if available
-                        if hasattr(transaction_ctx, 'retry_count'):
-                            retries = transaction_ctx.retry_count
-                        result = await current_loop.run_in_executor(None, db.add_message, db_payload)
-                        metrics.track_transaction(success=True, retries=retries)
-                        metrics.track_message_saved(conversation_id, role)
-                        return result
-                except Exception as e:
-                    metrics.track_transaction(success=False, retries=retries)
+                    async with db_transaction(db):
+                        result = _persist_message_sync(
+                            db,
+                            db_payload,
+                            serialized_tool_calls,
+                            serialized_extra,
+                        )
+                    metrics.track_transaction(success=True, retries=0)
+                    metrics.track_message_saved(conversation_id, role)
+                    return result
+                except Exception:
+                    metrics.track_transaction(success=False, retries=0)
                     raise
             else:
-                result = await current_loop.run_in_executor(None, db.add_message, db_payload)
+                saver = partial(
+                    _persist_message_sync,
+                    db,
+                    db_payload,
+                    serialized_tool_calls,
+                    serialized_extra,
+                )
+                result = await current_loop.run_in_executor(None, saver)
                 metrics.track_message_saved(conversation_id, role)
                 return result
     except (InputError, ConflictError, CharactersRAGDBError) as e_db:
@@ -1025,7 +1122,7 @@ async def create_chat_completion(
                     queue = queue_candidate
             if queue is not None and not queue_is_active(queue):
                 queue = None
-            if queue is not None and not QUEUED_EXECUTION:
+            if queue is not None and QUEUED_EXECUTION:
                 try:
                     # Estimate tokens for queue gating (reuse serialized JSON size)
                     est_tokens_for_queue = max(1, len(request_json) // 4)
@@ -1780,8 +1877,8 @@ async def add_dictionary_entry(
                 "type": entry.type,
                 "enabled": entry.enabled,
                 "case_sensitive": entry.case_sensitive,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.datetime.utcnow(),
+                "updated_at": datetime.datetime.utcnow(),
             }
 
         return _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
@@ -2223,13 +2320,62 @@ async def generate_document(
         
         # Convert string enum to internal enum
         doc_type = DocumentType(request.document_type.value)
+
+        # Resolve provider configuration and API key (reuse chat provider plumbing)
+        provider_name = (request.provider or "").strip()
+        if not provider_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provider is required")
+        provider_key = provider_name.lower()
+
+        schema_keys = None
+        try:
+            from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
+            _schema_keys = getattr(_schemas_mod, "API_KEYS", None)
+            if isinstance(_schema_keys, dict) and _schema_keys:
+                schema_keys = dict(_schema_keys)
+        except Exception:
+            schema_keys = None
+
+        local_module_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
+        if isinstance(schema_keys, dict) and isinstance(local_module_keys, dict):
+            module_keys = {**schema_keys, **local_module_keys}
+        elif isinstance(schema_keys, dict):
+            module_keys = schema_keys
+        elif isinstance(local_module_keys, dict):
+            module_keys = dict(local_module_keys)
+        else:
+            module_keys = None
+
+        dynamic_keys = get_api_keys()
+        explicit_key = (request.api_key or "").strip() if request.api_key else None
+        _raw_key = explicit_key
+        provider_api_key = explicit_key
+
+        try:
+            from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+        except Exception:
+            PROVIDER_REQUIRES_KEY = {}
+
+        if not provider_api_key:
+            _raw_key, provider_api_key = merge_api_keys_for_provider(
+                provider_key,
+                module_keys,
+                dynamic_keys,
+                PROVIDER_REQUIRES_KEY,
+            )
+
+        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Service for '{provider_name}' is not configured (key missing)."
+            )
         
         if request.async_generation:
             # Create async job
             job_id = service.create_generation_job(
                 conversation_id=request.conversation_id,
                 document_type=doc_type,
-                provider=request.provider,
+                provider=provider_name,
                 model=request.model,
                 prompt_config={
                     "specific_message": request.specific_message,
@@ -2247,16 +2393,19 @@ async def generate_document(
             )
         else:
             # Synchronous generation
-            content = service.generate_document(
-                conversation_id=request.conversation_id,
-                document_type=doc_type,
-                provider=request.provider,
-                model=request.model,
-                api_key=request.api_key,
-                specific_message=request.specific_message,
-                custom_prompt=request.custom_prompt,
-                stream=request.stream
-            )
+            def _generate_doc(stream: bool):
+                return service.generate_document(
+                    conversation_id=request.conversation_id,
+                    document_type=doc_type,
+                    provider=provider_name,
+                    model=request.model,
+                    api_key=provider_api_key,
+                    specific_message=request.specific_message,
+                    custom_prompt=request.custom_prompt,
+                    stream=stream
+                )
+
+            content = await asyncio.to_thread(_generate_doc, request.stream)
             
             if isinstance(content, dict):
                 if content.get("success") is False:
@@ -2279,7 +2428,7 @@ async def generate_document(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Unexpected document generation response format"
                 )
-            
+
             if request.stream:
                 # Return SSE streaming response for consistency with chat streaming
                 streaming_source = content
@@ -2301,38 +2450,49 @@ async def generate_document(
                 stream_started_at = time.perf_counter()
                 collected_chunks: List[str] = []
 
+                async def _iter_stream() -> AsyncIterator[Any]:
+                    nonlocal streaming_source
+                    if hasattr(streaming_source, "__aiter__"):
+                        async for chunk in streaming_source:  # type: ignore[attr-defined]
+                            yield chunk
+                        return
+                    if hasattr(streaming_source, "__iter__") and not isinstance(
+                        streaming_source, (str, bytes, bytearray)
+                    ):
+                        iterator = iter(streaming_source)  # type: ignore[arg-type]
+                        while True:
+                            try:
+                                chunk = await asyncio.to_thread(next, iterator)
+                            except StopIteration:
+                                break
+                            yield chunk
+                        return
+                    yield streaming_source
+
                 async def _sse_stream() -> AsyncIterator[str]:
                     try:
-                        if hasattr(streaming_source, "__aiter__"):
-                            async for chunk in streaming_source:  # type: ignore[attr-defined]
-                                payload = _normalize_chunk(chunk)
-                                if payload:
-                                    collected_chunks.append(payload)
-                                    yield _encode_sse(payload)
-                        elif hasattr(streaming_source, "__iter__") and not isinstance(
-                            streaming_source, (str, bytes, bytearray)
-                        ):
-                            for chunk in streaming_source:  # type: ignore[not-an-iterable]
-                                payload = _normalize_chunk(chunk)
-                                if payload:
-                                    collected_chunks.append(payload)
-                                    yield _encode_sse(payload)
-                        else:
-                            payload = _normalize_chunk(streaming_source)
+                        async for chunk in _iter_stream():
+                            payload = _normalize_chunk(chunk)
                             if payload:
                                 collected_chunks.append(payload)
                                 yield _encode_sse(payload)
+                    except asyncio.CancelledError:
+                        logger.info(
+                            "Document generation stream cancelled for conversation %s",
+                            request.conversation_id,
+                        )
+                        raise
                     finally:
-                        yield "data: [DONE]\n\n"
                         try:
                             document_body = "".join(collected_chunks).strip()
                             if document_body:
                                 generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
-                                service.record_streamed_document(
+                                await asyncio.to_thread(
+                                    service.record_streamed_document,
                                     conversation_id=request.conversation_id,
                                     document_type=doc_type,
                                     content=document_body,
-                                    provider=request.provider,
+                                    provider=provider_name,
                                     model=request.model,
                                     generation_time_ms=generation_time_ms
                                 )
@@ -2341,12 +2501,16 @@ async def generate_document(
                                     "Streamed document produced no content for conversation %s; skipping persistence",
                                     request.conversation_id
                                 )
+                        except asyncio.CancelledError:
+                            # Propagate cancellation after best-effort persistence shielded above.
+                            raise
                         except Exception as persist_exc:  # pragma: no cover - defensive logging
                             logger.error(
                                 "Failed to persist streamed document for conversation %s: %s",
                                 request.conversation_id,
                                 persist_exc
                             )
+                    yield "data: [DONE]\n\n"
 
                 return StreamingResponse(
                     _sse_stream(),
@@ -2502,7 +2666,7 @@ async def cancel_job(
     tags=["chat-documents"],
 )
 async def list_generated_documents(
-    conversation_id: Optional[int] = Query(None, description="Filter by conversation ID"),
+    conversation_id: Optional[str] = Query(None, min_length=1, description="Filter by conversation ID"),
     document_type: Optional[DocType] = Query(None, description="Filter by document type"),
     limit: int = Query(50, ge=1, le=200, description="Maximum number of documents"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)

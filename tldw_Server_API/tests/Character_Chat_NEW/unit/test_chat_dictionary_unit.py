@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 import re
 import random
+from datetime import timedelta
 
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
 
@@ -329,6 +330,51 @@ class TestTextProcessing:
                     replacements += 1
 
         assert 0 < replacements < iterations
+
+    @pytest.mark.unit
+    def test_delay_prevents_initial_trigger(self, chat_dictionary_service, monkeypatch):
+        """Ensure configured delay blocks the first replacement until the window has elapsed."""
+        from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd
+
+        original_datetime = cd.datetime
+        anchor_time = original_datetime.utcnow()
+
+        class _FakeDatetime(original_datetime):  # type: ignore[misc]
+            _delta = timedelta(0)
+
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                current = anchor_time + cls._delta
+                if tz is not None:
+                    return tz.fromutc(current.replace(tzinfo=tz))
+                return current
+
+            @classmethod
+            def utcnow(cls):
+                return anchor_time + cls._delta
+
+        monkeypatch.setattr(cd, "datetime", _FakeDatetime)
+
+        service = chat_dictionary_service
+        dict_id = service.create_dictionary(name="Delay Test")
+        service.add_entry(
+            dict_id,
+            pattern="trigger",
+            replacement="applied",
+            timed_effects={"delay": 60, "cooldown": 0, "sticky": 0},
+        )
+
+        source_text = "trigger phrase"
+        first_pass = service.process_text(source_text, dict_id)
+        assert "applied" not in str(first_pass)
+
+        _FakeDatetime._delta = timedelta(seconds=61)
+        entry_snapshot = service.get_entry_objects(dict_id, active_only=True)[0]
+        assert (
+            cd.datetime.utcnow() - entry_snapshot._loaded_at
+        ).total_seconds() >= 60
+        second_pass = service.process_text(source_text, dict_id)
+        assert "applied" in str(second_pass)
     
     @pytest.mark.unit
     def test_multiple_replacements(self, chat_dictionary_service):
@@ -461,6 +507,8 @@ class TestImportExport:
         entries = service.get_entries(dict_id)
         assert len(entries) == 3
         assert any(e['pattern'] == 'AI' for e in entries)
+        slang_entry = next(e for e in entries if e['pattern'] == 'lol')
+        assert slang_entry['probability'] == pytest.approx(0.5, rel=1e-6)
     
     @pytest.mark.unit
     def test_export_to_json(self, chat_dictionary_service, sample_dictionary):
@@ -634,3 +682,19 @@ class TestCacheManagement:
         # Process again (should work without cache)
         result = service.process_text("test text", dict_id)
         assert "replacement" in result
+
+    @pytest.mark.unit
+    def test_toggle_entry_invalidates_cache(self, chat_dictionary_service):
+        """Disabling an entry should stop replacements even with cached entries."""
+        service = chat_dictionary_service
+
+        dict_id = service.create_dictionary(name="Toggle Cache Test")
+        entry_id = service.add_entry(dict_id, "world", "universe")
+
+        warm_result = service.process_text("hello world")
+        assert "universe" in str(warm_result)
+
+        service.toggle_entry_active(entry_id, is_active=False)
+
+        post_toggle_result = service.process_text("hello world")
+        assert "universe" not in str(post_toggle_result)

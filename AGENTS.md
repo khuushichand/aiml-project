@@ -76,7 +76,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
    - Soft delete with recovery options
 
 6. **API Providers Supported**
-   - **Commercial**: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
+   - **Commercial**: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen, Moonshot, Z.AI
    - **Local**: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, Custom OpenAI-compatible
 
 7. **MCP Unified**
@@ -242,6 +242,12 @@ python -m pytest --cov=tldw_Server_API --cov-report=term-missing
 python -m pytest -m "unit" -v
 python -m pytest -m "integration" -v
 ```
+
+### AuthNZ PostgreSQL Fixture
+- `tldw_Server_API/tests/AuthNZ/conftest.py` provisions a per-test Postgres database via the `isolated_test_environment` fixture.
+- Tests auto-start a local Dockerized Postgres unless `TLDW_TEST_NO_DOCKER=1`.
+- Provide `TEST_DATABASE_URL` (or related `TEST_DB_*` vars) to reuse an existing cluster.
+- Skip Postgres-dependent tests only when the fixture reports Postgres unavailable; never roll your own database setup.
 
 ### Database Operations
 ```python

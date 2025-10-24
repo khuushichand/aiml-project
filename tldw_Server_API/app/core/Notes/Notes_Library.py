@@ -5,6 +5,7 @@
 from loguru import logger
 import threading
 import sqlite3  # For exception handling in _get_db
+import re
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Union
 #
@@ -52,16 +53,18 @@ class NotesInteropService:
         # Backward-compatible lock naming expected by tests
         self._lock = threading.Lock()
         self._db_lock = self._lock  # alias used internally
+        self._resolved_base_db_directory: Optional[Path] = None
 
         try:
             self.base_db_directory.mkdir(parents=True, exist_ok=True)
+            self._resolved_base_db_directory = self.base_db_directory.resolve()
             logger.info(f"NotesInteropService initialized. Base DB directory: {self.base_db_directory}")
         except OSError as e:
             logger.error(f"Failed to create base DB directory {self.base_db_directory}: {e}")
             # This is a critical failure for the service's operation.
             raise CharactersRAGDBError(f"Failed to create base DB directory {self.base_db_directory}: {e}") from e
 
-    def _get_db(self, user_id: str) -> CharactersRAGDB:
+    def _get_db(self, user_id: Union[str, int]) -> CharactersRAGDB:
         """
         Retrieves or creates a CharactersRAGDB instance for a given user_id.
         Instances are cached for efficiency. This method is thread-safe.
@@ -76,9 +79,19 @@ class NotesInteropService:
             ValueError: If user_id is empty.
             CharactersRAGDBError: If the database initialization fails.
         """
-        if not isinstance(user_id, str) or not user_id.strip():
+        # Accept numeric IDs (common in AuthNZ) by normalizing to string
+        if isinstance(user_id, int):
+            user_id = str(user_id)
+        elif not isinstance(user_id, str) or not user_id.strip():
+            # Keep error message for backward-compatibility with existing tests
             raise ValueError("user_id must be a non-empty string.")
-        user_id = user_id.strip()
+        else:
+            user_id = user_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", user_id):
+            raise ValueError("user_id contains unsupported characters; only letters, numbers, underscores, and hyphens are allowed.")
+        db_directory_resolved = self._resolved_base_db_directory
+        if db_directory_resolved is None:
+            raise CharactersRAGDBError("NotesInteropService has no resolved base directory; initialization may have failed.")
         # Fast path: check if instance already exists without lock
         if user_id in self._db_instances:
             return self._db_instances[user_id]
@@ -86,7 +99,31 @@ class NotesInteropService:
         # Slow path: acquire lock and double-check
         with self._db_lock:
             if user_id not in self._db_instances:
-                db_path = self.base_db_directory / f"user_{user_id}.sqlite"
+                user_dir = self.base_db_directory / user_id
+                try:
+                    user_dir.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    logger.error(
+                        "Failed to create notes directory '%s' for user_id '%s': %s",
+                        user_dir,
+                        user_id,
+                        exc,
+                    )
+                    raise CharactersRAGDBError(
+                        f"Failed to prepare user directory for notes at {user_dir}: {exc}"
+                    ) from exc
+                candidate_path = (user_dir / "ChaChaNotes.db").resolve()
+                try:
+                    candidate_path.relative_to(db_directory_resolved)
+                except ValueError as exc:
+                    logger.error(
+                        "Resolved database path '%s' escapes base directory '%s' for user_id '%s'.",
+                        candidate_path,
+                        db_directory_resolved,
+                        user_id,
+                    )
+                    raise CharactersRAGDBError("Resolved database path escapes configured base directory.") from exc
+                db_path = candidate_path
                 logger.info(f"Creating or loading DB for user_id '{user_id}' at path: {db_path}")
                 try:
                     db_instance = CharactersRAGDB(db_path=db_path, client_id=self.api_client_id)
@@ -167,11 +204,26 @@ class NotesInteropService:
         - Positional: update_note(user_id, note_id, update_data, expected_version)
         - Keyword-only: update_note(user_id=..., note_id=..., title=..., content=..., expected_version=..., update_data=...)
         """
+        def _coerce_expected_version(value: Any) -> int:
+            if value is None:
+                raise ValueError("expected_version is required for note updates.")
+            try:
+                coerced = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("expected_version must be an integer for note updates.") from exc
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError("expected_version must be a whole number for note updates.")
+            if coerced < 0:
+                raise ValueError("expected_version must be non-negative for note updates.")
+            return coerced
+
         # Positional compatibility path used by unit tests
         if args and len(args) >= 4:
             user_id, note_id, update_data, expected_version = args[:4]
+            # `update_data` is expected to be a dict; rely on ChaChaNotes_DB to validate keys.
             db = self._get_db(user_id)
-            return db.update_note(note_id=note_id, update_data=update_data, expected_version=expected_version)
+            coerced_version = _coerce_expected_version(expected_version)
+            return db.update_note(note_id=note_id, update_data=update_data, expected_version=coerced_version)
 
         # Keyword/modern path
         user_id: str = kwargs.get("user_id")
@@ -180,7 +232,7 @@ class NotesInteropService:
         note_id: str = kwargs.get("note_id")
         if not note_id:
             raise ValueError("note_id is required")
-        expected_version: Optional[int] = kwargs.get("expected_version")
+        expected_version = kwargs.get("expected_version")
         title: Optional[str] = kwargs.get("title")
         content: Optional[str] = kwargs.get("content")
         update_data: Optional[Dict[str, Any]] = kwargs.get("update_data")
@@ -191,7 +243,8 @@ class NotesInteropService:
             data["title"] = title
         if content is not None:
             data["content"] = content
-        return db.update_note(note_id=note_id, update_data=data, expected_version=expected_version)
+        coerced_version = _coerce_expected_version(expected_version)
+        return db.update_note(note_id=note_id, update_data=data, expected_version=coerced_version)
 
     def delete_note(self, *, note_id: str, user_id: str) -> Any:
         """Delete a note for tests. Uses mock-style `delete_note` if available, else soft delete requires version."""
@@ -215,32 +268,39 @@ class NotesInteropService:
         - Keyword: search_notes(user_id=..., query=... or search_term=..., limit=..., offset=...)
         """
         if args and len(args) >= 2:
-            # Positional style: prefer real DB signature (search_term, limit)
+            # Positional style: search_notes(user_id, term, [limit], [offset])
             user_id = args[0]
             term = args[1]
-            limit = kwargs.get("limit", 10)
-            offset = kwargs.get("offset", 0)
+            # If provided positionally, honor those; otherwise fall back to kwargs/defaults
+            limit = args[2] if len(args) >= 3 and args[2] is not None else kwargs.get("limit", 10)
+            offset = args[3] if len(args) >= 4 and args[3] is not None else kwargs.get("offset", 0)
+            # Validate search term early to avoid DB-level failures
+            if term is None or (isinstance(term, str) and term.strip() == ""):
+                raise ValueError("search term must be a non-empty string")
             db = self._get_db(user_id)
             try:
-                return db.search_notes(search_term=term, limit=limit)
+                return db.search_notes(search_term=term, limit=int(limit), offset=int(offset))
             except TypeError:
-                return db.search_notes(query=term, limit=limit, offset=offset)
+                return db.search_notes(query=term, limit=int(limit), offset=int(offset))
         else:
             user_id = kwargs.get("user_id")
             term = kwargs.get("query") if kwargs.get("query") is not None else kwargs.get("search_term")
             limit = kwargs.get("limit", 10)
             offset = kwargs.get("offset", 0)
+            # Validate search term early
+            if term is None or (isinstance(term, str) and term.strip() == ""):
+                raise ValueError("search term must be a non-empty string")
             db = self._get_db(user_id)
             if "query" in kwargs:
                 try:
-                    return db.search_notes(query=term, limit=limit, offset=offset)
+                    return db.search_notes(query=term, limit=int(limit), offset=int(offset))
                 except TypeError:
-                    return db.search_notes(search_term=term, limit=limit)
+                    return db.search_notes(search_term=term, limit=int(limit), offset=int(offset))
             else:
                 try:
-                    return db.search_notes(search_term=term, limit=limit)
+                    return db.search_notes(search_term=term, limit=int(limit), offset=int(offset))
                 except TypeError:
-                    return db.search_notes(query=term, limit=limit, offset=offset)
+                    return db.search_notes(query=term, limit=int(limit), offset=int(offset))
 
     # --- Note-Keyword Linking Methods ---
 
@@ -356,6 +416,8 @@ class NotesInteropService:
             logger.info(f"Closing all {len(self._db_instances)} cached user DB connections.")
             for user_id, db_instance in self._db_instances.items():
                 try:
+                    if hasattr(db_instance, "close_all_connections"):
+                        db_instance.close_all_connections()
                     # Prefer mock-style close()
                     if hasattr(db_instance, "close"):
                         db_instance.close()
@@ -376,6 +438,8 @@ class NotesInteropService:
             if user_id in self._db_instances:
                 db_instance = self._db_instances.pop(user_id)  # Remove from cache
                 try:
+                    if hasattr(db_instance, "close_all_connections"):
+                        db_instance.close_all_connections()
                     if hasattr(db_instance, "close"):
                         db_instance.close()
                     elif hasattr(db_instance, "close_connection"):

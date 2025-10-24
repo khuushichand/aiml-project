@@ -55,17 +55,18 @@ def process_media_update(
     if new_content is None:
         return {"status": "Error", "error": "No content available to create version", "media_id": media_id}
 
-    # Create a new document version
-    dv_info = db.create_document_version(
-        media_id=media_id,
-        content=new_content,
-        prompt=new_prompt,
-        analysis_content=new_analysis,
-    )
+    with db.transaction() as conn:
+        # Create a new document version
+        dv_info = db.create_document_version(
+            media_id=media_id,
+            content=new_content,
+            prompt=new_prompt,
+            analysis_content=new_analysis,
+        )
 
-    # Update keywords if requested
-    if keywords is not None:
-        db.update_keywords_for_media(media_id, keywords)
+        # Update keywords if requested
+        if keywords is not None:
+            db.update_keywords_for_media(media_id, keywords, conn=conn)
 
     # Return concise details about latest version after update
     latest_after = _get_document_version(db, media_id=media_id, version_number=None, include_content=False) or {}

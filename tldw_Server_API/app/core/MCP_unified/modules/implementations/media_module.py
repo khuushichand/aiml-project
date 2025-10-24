@@ -9,8 +9,11 @@ import asyncio
 import uuid
 import socket
 import ipaddress
+import hashlib
+import json
+from collections import OrderedDict
 from urllib.parse import urlsplit
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 from loguru import logger
@@ -58,6 +61,7 @@ class MediaModule(BaseModule):
             # Cache for frequently accessed data
             self._media_cache = {}
             self._cache_ttl = self.config.settings.get("cache_ttl", 300)  # 5 minutes
+            self._semantic_retrievers: Dict[Tuple[Optional[str], Optional[str]], Any] = {}
             
             logger.info(f"Media module initialized with database: {db_path}")
             
@@ -70,6 +74,18 @@ class MediaModule(BaseModule):
         try:
             # Clear cache
             self._media_cache.clear()
+            try:
+                if hasattr(self, "_semantic_retrievers"):
+                    for retriever in self._semantic_retrievers.values():
+                        close_fn = getattr(retriever, "close", None)
+                        if callable(close_fn):
+                            try:
+                                close_fn()
+                            except Exception:
+                                pass
+                    self._semantic_retrievers.clear()
+            except Exception:
+                pass
             
             # Close database connections
             if hasattr(self.db, 'close_pool'):
@@ -353,7 +369,7 @@ class MediaModule(BaseModule):
             elif tool_name == "media.get":
                 return await self._media_get_normalized(context=context, **arguments)
             elif tool_name == "search_media":
-                return await self._search_media(**arguments)
+                return await self._search_media(context=context, **arguments)
 
             elif tool_name == "get_transcript":
                 return await self._get_transcript(context=context, **arguments)
@@ -736,59 +752,422 @@ class MediaModule(BaseModule):
         search_type: str = "keyword",
         limit: int = 10,
         offset: int = 0,
+        context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
-        """Search media with caching"""
-        # Validate inputs
+        """Search media with caching and unified keyword/semantic support."""
         if not query or len(query) > 1000:
             raise ValueError("Invalid search query")
-        
-        if limit > 100:
-            limit = 100
-        
-        # Check cache
-        cache_key = f"search:{query}:{search_type}:{limit}:{offset}"
-        if cache_key in self._media_cache:
-            cached = self._media_cache[cache_key]
-            if (datetime.utcnow() - cached["time"]).seconds < self._cache_ttl:
-                logger.debug(f"Cache hit for search: {cache_key}")
-                return cached["data"]
-        
-        # Perform search
+
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+
+        dbi = self._open_media_db(context)
+
+        search_fields = kwargs.get("search_fields")
+        media_types = kwargs.get("media_types")
+        date_range = kwargs.get("date_range")
+        must_have_keywords = kwargs.get("must_have_keywords")
+        must_not_have_keywords = kwargs.get("must_not_have_keywords")
+        sort_by_value = kwargs.get("sort_by")
+        order_by_param = kwargs.get("order_by")
+        if sort_by_value is None and isinstance(order_by_param, str):
+            order_key = order_by_param.strip().lower()
+            if order_key == "relevance":
+                sort_by_value = "relevance"
+            elif order_key in {"recent", "last_modified_desc"}:
+                sort_by_value = "last_modified_desc"
+            elif order_key == "last_modified_asc":
+                sort_by_value = "last_modified_asc"
+            elif order_key in {"date_desc", "ingestion_desc"}:
+                sort_by_value = "date_desc"
+            elif order_key in {"date_asc", "ingestion_asc"}:
+                sort_by_value = "date_asc"
+            elif order_key in {"title_asc", "title_desc"}:
+                sort_by_value = order_key
+
+        media_ids_filter = kwargs.get("media_ids_filter")
+        include_trash = bool(kwargs.get("include_trash", False))
+        include_deleted = bool(kwargs.get("include_deleted", False))
+        metadata_filter = kwargs.get("metadata_filter")
+        index_namespace = kwargs.get("index_namespace")
+        query_vector = kwargs.get("query_vector")
+
+        cache_payload = {
+            "db_path": getattr(dbi, "db_path_str", None),
+            "query": query,
+            "search_type": search_type,
+            "limit": limit,
+            "offset": offset,
+            "search_fields": search_fields,
+            "media_types": media_types,
+            "date_range": date_range,
+            "must_have_keywords": must_have_keywords,
+            "must_not_have_keywords": must_not_have_keywords,
+            "sort_by": sort_by_value,
+            "order_by": order_by_param,
+            "media_ids_filter": media_ids_filter,
+            "include_trash": include_trash,
+            "include_deleted": include_deleted,
+            "metadata_filter": metadata_filter,
+            "index_namespace": index_namespace,
+            "user_id": getattr(context, "user_id", None),
+        }
+        if query_vector is not None:
+            cache_payload["query_vector"] = query_vector
+
+        cache_key = self._make_cache_key("search_media", cache_payload)
+        cached = self._media_cache.get(cache_key)
+        if cached and (datetime.utcnow() - cached["time"]).seconds < self._cache_ttl:
+            logger.debug(f"Cache hit for search: {cache_key}")
+            return cached["data"]
+
         try:
             if search_type == "keyword":
-                results = self.db.search_media_db(query, limit=limit)
+                rows, total = self._keyword_search(
+                    dbi=dbi,
+                    query=query,
+                    limit=limit,
+                    offset=offset,
+                    search_fields=search_fields,
+                    media_types=media_types,
+                    date_range=date_range,
+                    must_have_keywords=must_have_keywords,
+                    must_not_have_keywords=must_not_have_keywords,
+                    sort_by_value=sort_by_value,
+                    media_ids_filter=media_ids_filter,
+                    include_trash=include_trash,
+                    include_deleted=include_deleted,
+                )
             elif search_type == "semantic":
-                # Implement semantic search
-                results = []  # Placeholder
-            else:  # hybrid
-                # Combine keyword and semantic
-                results = self.db.search_media_db(query, limit=limit)
-            
-            # Format results
+                rows, total = await self._semantic_search(
+                    query=query,
+                    limit=limit,
+                    offset=offset,
+                    dbi=dbi,
+                    media_types=media_types,
+                    metadata_filter=metadata_filter,
+                    index_namespace=index_namespace,
+                    media_ids_filter=media_ids_filter,
+                    context=context,
+                    query_vector=query_vector,
+                )
+            elif search_type == "hybrid":
+                rows, total = await self._hybrid_search(
+                    query=query,
+                    limit=limit,
+                    offset=offset,
+                    dbi=dbi,
+                    media_types=media_types,
+                    date_range=date_range,
+                    must_have_keywords=must_have_keywords,
+                    must_not_have_keywords=must_not_have_keywords,
+                    sort_by_value=sort_by_value,
+                    media_ids_filter=media_ids_filter,
+                    include_trash=include_trash,
+                    include_deleted=include_deleted,
+                    search_fields=search_fields,
+                    metadata_filter=metadata_filter,
+                    index_namespace=index_namespace,
+                    context=context,
+                    query_vector=query_vector,
+                )
+            else:
+                raise ValueError(f"Unknown search type: {search_type}")
+
             formatted_results = {
                 "query": query,
                 "type": search_type,
-                "count": len(results),
-                "results": results,
+                "count": len(rows),
+                "results": rows,
                 "offset": offset,
-                "limit": limit
+                "limit": limit,
+                "total": total,
             }
-            
-            # Cache results
+
             self._media_cache[cache_key] = {
                 "time": datetime.utcnow(),
-                "data": formatted_results
+                "data": formatted_results,
             }
-            
-            # Clean old cache entries
             await self._clean_cache()
-            
             return formatted_results
-            
+
         except Exception as e:
             logger.error(f"Search failed: {e}")
             raise
+    
+    def _serialize_for_cache(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(k): self._serialize_for_cache(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+        if isinstance(value, (list, tuple, set)):
+            return [self._serialize_for_cache(v) for v in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, (bytes, bytearray)):
+            return value.hex()
+        return value
+
+    def _make_cache_key(self, namespace: str, payload: Dict[str, Any]) -> str:
+        try:
+            normalised = self._serialize_for_cache(payload)
+            raw = json.dumps(normalised, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            raw = repr(payload)
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return f"{namespace}:{digest}"
+
+    def _keyword_search(
+        self,
+        dbi: MediaDatabase,
+        query: str,
+        limit: int,
+        offset: int,
+        *,
+        search_fields: Optional[List[str]],
+        media_types: Optional[List[str]],
+        date_range: Optional[Dict[str, Any]],
+        must_have_keywords: Optional[List[str]],
+        must_not_have_keywords: Optional[List[str]],
+        sort_by_value: Optional[str],
+        media_ids_filter: Optional[List[Any]],
+        include_trash: bool,
+        include_deleted: bool,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        page = (offset // max(1, limit)) + 1
+        rows, total = dbi.search_media_db(
+            search_query=query,
+            search_fields=search_fields,
+            media_types=media_types,
+            date_range=date_range,
+            must_have_keywords=must_have_keywords,
+            must_not_have_keywords=must_not_have_keywords,
+            sort_by=sort_by_value or "last_modified_desc",
+            media_ids_filter=media_ids_filter,
+            page=page,
+            results_per_page=limit,
+            include_trash=include_trash,
+            include_deleted=include_deleted,
+        )
+        return rows, total
+
+    def _keyword_search_head(
+        self,
+        dbi: MediaDatabase,
+        query: str,
+        size: int,
+        *,
+        search_fields: Optional[List[str]],
+        media_types: Optional[List[str]],
+        date_range: Optional[Dict[str, Any]],
+        must_have_keywords: Optional[List[str]],
+        must_not_have_keywords: Optional[List[str]],
+        sort_by_value: Optional[str],
+        media_ids_filter: Optional[List[Any]],
+        include_trash: bool,
+        include_deleted: bool,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        fetch_ceiling = int(self.config.settings.get("hybrid_fetch_ceiling", 200))
+        fetch_size = max(1, min(int(size), fetch_ceiling))
+        rows, total = dbi.search_media_db(
+            search_query=query,
+            search_fields=search_fields,
+            media_types=media_types,
+            date_range=date_range,
+            must_have_keywords=must_have_keywords,
+            must_not_have_keywords=must_not_have_keywords,
+            sort_by=sort_by_value or "last_modified_desc",
+            media_ids_filter=media_ids_filter,
+            page=1,
+            results_per_page=fetch_size,
+            include_trash=include_trash,
+            include_deleted=include_deleted,
+        )
+        return rows[:fetch_size], total
+
+    def _get_semantic_retriever(self, dbi: MediaDatabase, context: Any | None):
+        db_path = getattr(dbi, "db_path_str", None)
+        user_key = str(getattr(context, "user_id", None) or "0")
+        retriever_key = (db_path, user_key)
+        retriever = self._semantic_retrievers.get(retriever_key)
+        if retriever is False:
+            return None
+        if retriever is None:
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (  # lazy import
+                    MediaDBRetriever,
+                    RetrievalConfig,
+                )
+                config = RetrievalConfig(max_results=20, use_fts=True, use_vector=True)
+                retriever = MediaDBRetriever(
+                    db_path=db_path,
+                    config=config,
+                    user_id=user_key,
+                    media_db=dbi,
+                )
+                self._semantic_retrievers[retriever_key] = retriever
+            except Exception as exc:
+                logger.debug(f"Semantic retriever unavailable: {exc}")
+                self._semantic_retrievers[retriever_key] = False  # sentinel to avoid retries
+                return None
+        return retriever
+
+    async def _semantic_search(
+        self,
+        *,
+        query: str,
+        limit: int,
+        offset: int,
+        dbi: MediaDatabase,
+        media_types: Optional[List[str]],
+        metadata_filter: Optional[Dict[str, Any]],
+        index_namespace: Any,
+        media_ids_filter: Optional[List[Any]],
+        context: Any | None,
+        query_vector: Any,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        retriever = self._get_semantic_retriever(dbi, context)
+        if retriever is None:
+            return [], 0
+        max_results = max(1, limit + offset)
+        try:
+            retriever.config.max_results = max_results
+        except Exception:
+            pass
+
+        media_type_arg: Optional[str] = None
+        if isinstance(media_types, list) and len(media_types) == 1:
+            media_type_arg = media_types[0]
+
+        try:
+            docs = await retriever._retrieve_vector(  # type: ignore[attr-defined]
+                query,
+                media_type=media_type_arg,
+                metadata_filter=metadata_filter,
+                index_namespace=index_namespace,
+                allowed_media_ids=media_ids_filter,
+                query_vector=query_vector,
+            )
+        except Exception as exc:
+            logger.debug(f"Semantic retrieval failed, falling back to empty set: {exc}")
+            docs = []
+
+        allowed_types = {t.lower() for t in media_types} if media_types else None
+        rows: List[Dict[str, Any]] = []
+        for doc in docs or []:
+            meta = getattr(doc, "metadata", {}) or {}
+            media_type_val = (
+                meta.get("media_type")
+                or meta.get("type")
+                or meta.get("mediaType")
+                or meta.get("kind")
+            )
+            if allowed_types:
+                if not media_type_val:
+                    continue
+                if str(media_type_val).lower() not in allowed_types:
+                    continue
+            doc_id = getattr(doc, "id", None)
+            try:
+                media_id = int(doc_id) if doc_id is not None else None
+            except (TypeError, ValueError):
+                media_id = doc_id
+            record = {
+                "id": media_id,
+                "title": meta.get("title"),
+                "content": getattr(doc, "content", None),
+                "type": media_type_val or meta.get("type"),
+                "media_type": media_type_val or meta.get("type"),
+                "url": meta.get("url"),
+                "ingestion_date": meta.get("created_at") or meta.get("ingestion_date"),
+                "last_modified": meta.get("last_modified"),
+                "semantic_score": float(getattr(doc, "score", 0.0) or 0.0),
+                "score_type": "semantic",
+            }
+            rows.append(record)
+
+        total = len(rows)
+        return rows[offset: offset + limit], total
+
+    async def _hybrid_search(
+        self,
+        *,
+        query: str,
+        limit: int,
+        offset: int,
+        dbi: MediaDatabase,
+        media_types: Optional[List[str]],
+        date_range: Optional[Dict[str, Any]],
+        must_have_keywords: Optional[List[str]],
+        must_not_have_keywords: Optional[List[str]],
+        sort_by_value: Optional[str],
+        media_ids_filter: Optional[List[Any]],
+        include_trash: bool,
+        include_deleted: bool,
+        search_fields: Optional[List[str]],
+        metadata_filter: Optional[Dict[str, Any]],
+        index_namespace: Any,
+        context: Any | None,
+        query_vector: Any,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        fetch_size = limit + offset
+        keyword_rows_all, keyword_total = self._keyword_search_head(
+            dbi=dbi,
+            query=query,
+            size=fetch_size,
+            search_fields=search_fields,
+            media_types=media_types,
+            date_range=date_range,
+            must_have_keywords=must_have_keywords,
+            must_not_have_keywords=must_not_have_keywords,
+            sort_by_value=sort_by_value,
+            media_ids_filter=media_ids_filter,
+            include_trash=include_trash,
+            include_deleted=include_deleted,
+        )
+
+        semantic_rows_all, semantic_total = await self._semantic_search(
+            query=query,
+            limit=max(1, fetch_size),
+            offset=0,
+            dbi=dbi,
+            media_types=media_types,
+            metadata_filter=metadata_filter,
+            index_namespace=index_namespace,
+            media_ids_filter=media_ids_filter,
+            context=context,
+            query_vector=query_vector,
+        )
+
+        combined: "OrderedDict[Any, Dict[str, Any]]" = OrderedDict()
+        for row in keyword_rows_all:
+            key = row.get("id")
+            if key is None:
+                continue
+            merged = dict(row)
+            merged.setdefault("score_type", "fts")
+            combined[key] = merged
+
+        for row in semantic_rows_all:
+            key = row.get("id")
+            if key is None:
+                continue
+            merged = dict(row)
+            existing = combined.get(key)
+            if existing:
+                if "semantic_score" in merged:
+                    existing["semantic_score"] = merged["semantic_score"]
+                existing["score_type"] = "hybrid"
+            else:
+                combined[key] = merged
+
+        combined_rows = list(combined.values())
+        total_estimate = max(keyword_total, semantic_total, len(combined_rows))
+        paged = combined_rows[offset: offset + limit]
+        for row in paged:
+            row.setdefault("score_type", "hybrid")
+        return paged, total_estimate
     
     async def _get_transcript(
         self,
@@ -1019,22 +1398,60 @@ class MediaModule(BaseModule):
     
     async def read_resource(self, uri: str) -> Dict[str, Any]:
         """Read media resource"""
+        def _rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            items = []
+            for row in rows:
+                items.append({
+                    "id": row.get("id"),
+                    "title": row.get("title"),
+                    "type": row.get("type"),
+                    "media_type": row.get("type"),
+                    "ingestion_date": row.get("ingestion_date"),
+                    "last_modified": row.get("last_modified"),
+                    "url": row.get("url"),
+                })
+            return items
+
         if uri == "media://recent":
-            # Get recent media
-            recent = self.db.get_recent_media(limit=20)
+            rows, _ = self.db.search_media_db(
+                search_query=None,
+                search_fields=None,
+                media_types=None,
+                date_range=None,
+                must_have_keywords=None,
+                must_not_have_keywords=None,
+                sort_by="last_modified_desc",
+                media_ids_filter=None,
+                page=1,
+                results_per_page=20,
+                include_trash=False,
+                include_deleted=False,
+            )
             return {
                 "uri": uri,
                 "type": "media_list",
-                "items": recent
+                "items": _rows_to_items(rows),
             }
         
         elif uri == "media://popular":
-            # Get popular media
-            popular = self.db.get_popular_media(limit=20)
+            rows, _ = self.db.search_media_db(
+                search_query=None,
+                search_fields=None,
+                media_types=None,
+                date_range=None,
+                must_have_keywords=None,
+                must_not_have_keywords=None,
+                sort_by="date_desc",
+                media_ids_filter=None,
+                page=1,
+                results_per_page=20,
+                include_trash=False,
+                include_deleted=False,
+            )
             return {
                 "uri": uri,
                 "type": "media_list",
-                "items": popular
+                "items": _rows_to_items(rows),
             }
         elif uri == "media://types":
             types = self.db.get_distinct_media_types()
@@ -1058,10 +1475,8 @@ class MediaModule(BaseModule):
             del self._media_cache[key]
     
     def _clear_media_cache(self, media_id: int):
-        """Clear cache entries for specific media"""
-        keys_to_clear = [k for k in self._media_cache.keys() if str(media_id) in k]
-        for key in keys_to_clear:
-            del self._media_cache[key]
+        """Clear cached search results (all entries)."""
+        self._media_cache.clear()
     
     def _validate_url(self, url: str) -> bool:
         """Validate URL for ingestion with SSRF safeguards.

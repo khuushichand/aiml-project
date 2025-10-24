@@ -72,7 +72,7 @@ class TestNotesInteropService(unittest.TestCase):
     def test_get_db_new_instance(self):
         user_id = "user1"
         db_instance = self.service._get_db(user_id)
-        expected_db_path = (self.base_db_dir / f"user_{user_id}.sqlite").resolve()
+        expected_db_path = (self.base_db_dir / user_id / "ChaChaNotes.db").resolve()
         self.MockCharactersRAGDB_class.assert_called_once_with(
             db_path=expected_db_path, client_id=self.api_client_id
         )
@@ -112,7 +112,10 @@ class TestNotesInteropService(unittest.TestCase):
         self.assertIs(cm.exception, db_error_instance)
 
         # Expecting the log message from the except (CharactersRAGDBError, SchemaError, sqlite3.Error) block
-        expected_log_message = f"Failed to initialize DB for user_id '{user_id}' at {self.base_db_dir / f'user_{user_id}.sqlite'}: {db_error_message}"
+        expected_db_path = (self.base_db_dir / user_id / "ChaChaNotes.db").resolve()
+        expected_log_message = (
+            f"Failed to initialize DB for user_id '{user_id}' at {expected_db_path}: {db_error_message}"
+        )
         self.mock_notes_library_logger.error.assert_called_once_with(
             expected_log_message, exc_info=True
         )
@@ -127,8 +130,10 @@ class TestNotesInteropService(unittest.TestCase):
         self.assertIs(cm.exception, sqlite_error_instance)
 
         # Expecting the log message from the except (CharactersRAGDBError, SchemaError, sqlite3.Error) block
-        expected_db_path = self.base_db_dir / f"user_{user_id}.sqlite"
-        expected_log_message = f"Failed to initialize DB for user_id '{user_id}' at {expected_db_path}: {sqlite_error_message}"
+        expected_db_path = (self.base_db_dir / user_id / "ChaChaNotes.db").resolve()
+        expected_log_message = (
+            f"Failed to initialize DB for user_id '{user_id}' at {expected_db_path}: {sqlite_error_message}"
+        )
         self.mock_notes_library_logger.error.assert_called_once_with(
             expected_log_message, exc_info=True
         )
@@ -139,7 +144,7 @@ class TestNotesInteropService(unittest.TestCase):
         with self.assertRaisesRegex(Actual_CharactersRAGDBError,
                                     f"Unexpected error initializing DB for user {user_id}: Unexpected boom"):
             self.service._get_db(user_id)
-        expected_db_path = self.base_db_dir / f"user_{user_id}.sqlite"
+        expected_db_path = (self.base_db_dir / user_id / "ChaChaNotes.db").resolve()
         self.mock_notes_library_logger.error.assert_called_once_with(
             f"Unexpected error initializing DB for user_id '{user_id}' at {expected_db_path}: Unexpected boom",
             exc_info=True
@@ -229,7 +234,7 @@ class TestNotesInteropService(unittest.TestCase):
         expected_results = [{"id": "1", "content": "Contains search term"}]
         self.mock_db_instance.search_notes.return_value = expected_results
         results = self.service.search_notes(user_id, term, limit=5)
-        self.mock_db_instance.search_notes.assert_called_once_with(search_term=term, limit=5)
+        self.mock_db_instance.search_notes.assert_called_once_with(search_term=term, limit=5, offset=0)
         self.assertEqual(results, expected_results)
 
     def test_add_keyword(self):
@@ -252,7 +257,9 @@ class TestNotesInteropService(unittest.TestCase):
         db_mock = self.service._get_db(user_id)
         self.assertIs(db_mock, self.mock_db_instance)
         self.assertIn(user_id, self.service._db_instances)
+        self.mock_db_instance.reset_mock()
         self.service.close_user_connection(user_id)
+        self.mock_db_instance.close_all_connections.assert_called_once()
         self.mock_db_instance.close_connection.assert_called_once()
         self.assertNotIn(user_id, self.service._db_instances)
         self.mock_notes_library_logger.info.assert_any_call(
@@ -260,7 +267,9 @@ class TestNotesInteropService(unittest.TestCase):
 
     def test_close_user_connection_not_exist(self):
         user_id = "non_existent_user"
+        self.mock_db_instance.reset_mock()
         self.service.close_user_connection(user_id)
+        self.mock_db_instance.close_all_connections.assert_not_called()
         self.mock_db_instance.close_connection.assert_not_called()
         self.mock_notes_library_logger.debug.assert_any_call(
             f"No active DB connection found in cache for user_id '{user_id}' to close.")
@@ -273,6 +282,8 @@ class TestNotesInteropService(unittest.TestCase):
         self.assertIs(db_instance1_ret, mock_db_1_instance)
         self.assertIs(db_instance2_ret, mock_db_2_instance)
         self.service.close_all_user_connections()
+        mock_db_1_instance.close_all_connections.assert_called_once()
+        mock_db_2_instance.close_all_connections.assert_called_once()
         mock_db_1_instance.close_connection.assert_called_once()
         mock_db_2_instance.close_connection.assert_called_once()
         self.assertEqual(len(self.service._db_instances), 0)
@@ -285,8 +296,10 @@ class TestNotesInteropService(unittest.TestCase):
         user_id = "user_close_fail"
         db_mock = self.service._get_db(user_id)
         self.assertIs(db_mock, self.mock_db_instance)
+        self.mock_db_instance.reset_mock()
         self.mock_db_instance.close_connection.side_effect = Exception("Failed to close")
         self.service.close_user_connection(user_id)
+        self.mock_db_instance.close_all_connections.assert_called_once()
         self.assertNotIn(user_id, self.service._db_instances)
         self.mock_notes_library_logger.error.assert_called_with(
             f"Error closing DB connection for user_id '{user_id}': Failed to close", exc_info=True

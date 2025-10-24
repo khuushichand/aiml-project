@@ -68,16 +68,17 @@ def _prepare_character_data_for_db_storage(
             try:
                 if "," in base64_str and base64_str.startswith("data:image"):
                     base64_str = base64_str.split(",", 1)[1]
-                image_bytes = base64.b64decode(base64_str, validate=True)
+                base64_str_clean = "".join(str(base64_str).split())
+                if not base64_str_clean:
+                    raise ValueError("image_base64 data is empty after removing whitespace.")
+                image_bytes = base64.b64decode(base64_str_clean, validate=True)
 
                 try:
                     img = Image.open(io.BytesIO(image_bytes))
-
-                    if img.mode == "RGBA":
-                        background = Image.new("RGB", img.size, (255, 255, 255))
-                        background.paste(img, mask=img.split()[3])
-                        img = background
-                    elif img.mode not in ["RGB", "L"]:
+                    has_alpha = "A" in img.getbands()
+                    if has_alpha and img.mode != "RGBA":
+                        img = img.convert("RGBA")
+                    elif not has_alpha and img.mode not in ["RGB", "L"]:
                         img = img.convert("RGB")
 
                     max_size = (512, 768)
@@ -90,7 +91,13 @@ def _prepare_character_data_for_db_storage(
                         )
 
                     output = io.BytesIO()
-                    img.save(output, format="WEBP", quality=85, method=6, optimize=True)
+                    img.save(
+                        output,
+                        format="WEBP",
+                        quality=85,
+                        method=6,
+                        optimize=True,
+                    )
                     db_data["image"] = output.getvalue()
                     logger.info(
                         "Optimized character image: %s -> %s bytes",
@@ -314,10 +321,26 @@ def load_character_and_image(
         chat_history: List[Tuple[Optional[str], Optional[str]]] = [(None, first_mes_content)]
 
         img: Optional[Image.Image] = None
-        if char_data.get("image") and isinstance(char_data["image"], bytes):
+        image_field = char_data.get("image")
+        if isinstance(image_field, memoryview):
             try:
-                image_data_bytes = char_data["image"]
-                img = Image.open(io.BytesIO(image_data_bytes)).convert("RGBA")
+                image_field = image_field.tobytes()
+            except TypeError:
+                image_field = bytes(image_field)
+            char_data["image"] = image_field
+        elif isinstance(image_field, bytearray):
+            image_field = bytes(image_field)
+            char_data["image"] = image_field
+        elif hasattr(image_field, "tobytes") and not isinstance(image_field, bytes):
+            try:
+                image_field = image_field.tobytes()  # type: ignore[attr-defined]
+                char_data["image"] = image_field
+            except Exception:
+                pass
+
+        if isinstance(image_field, bytes) and image_field:
+            try:
+                img = Image.open(io.BytesIO(image_field)).convert("RGBA")
                 logger.debug(f"Successfully loaded image for character '{char_name_from_card}'")
             except Exception as exc:
                 logger.error(

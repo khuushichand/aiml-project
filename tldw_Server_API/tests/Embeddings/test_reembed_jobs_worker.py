@@ -7,9 +7,10 @@ from tldw_Server_API.app.core.Embeddings.services import reembed_worker
 
 
 @pytest.mark.integration
-def test_reembed_worker_expands_to_embedding_stream(monkeypatch, fake_redis):
+def test_reembed_worker_expands_to_embedding_stream(monkeypatch, redis_client):
     # Patch chunk fetch to avoid DB dependencies
     monkeypatch.setattr(reembed_worker, "_fetch_chunks", lambda db, media_id: [("hello world", 0, 11), ("two", 12, 15)])
+    monkeypatch.setenv("EMBEDDINGS_REDIS_URL", redis_client.url)
 
     # Prepare Jobs DB (SQLite file in repo Databases/ for simplicity)
     db_path = "Databases/test_jobs_reembed_e2e.db"
@@ -51,13 +52,13 @@ def test_reembed_worker_expands_to_embedding_stream(monkeypatch, fake_redis):
     # Verify the embedding stream received entries (poll briefly to avoid races)
     async def _poll_stream():
         for _ in range(60):  # up to ~1.2s @ 20ms
-            out = await fake_redis.xrange("embeddings:embedding", "-", "+", count=10)
+            out = await redis_client.xrange("embeddings:embedding", "-", "+", count=10)
             if isinstance(out, list) and len(out) >= 1 and isinstance(out[0], (list, tuple)):
                 return out
             await asyncio.sleep(0.02)
         return []
 
-    res = asyncio.run(_poll_stream())
+    res = redis_client.run(_poll_stream())
     assert isinstance(res, list) and len(res) >= 1
     # Fields should include job_id
     entry_id, fields = res[0]

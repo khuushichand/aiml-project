@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
 @pytest.mark.unit
-def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, fake_redis, monkeypatch):
+def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, redis_client, monkeypatch):
     # Ensure encryption key is set
     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
     from tldw_Server_API.app.core.Embeddings.dlq_crypto import encrypt_payload_if_configured
@@ -26,10 +26,8 @@ def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, fake_red
     # Write a DLQ entry with payload_enc
     dlq_stream = "embeddings:embedding:dlq"
     _ = app  # app imported for context
-    import asyncio as _asyncio
-
     async def _write():
-        await fake_redis.xadd(dlq_stream, {
+        await redis_client.xadd(dlq_stream, {
             "original_queue": "embeddings:embedding",
             "consumer_group": "embedding-group",
             "worker_id": "w1",
@@ -42,8 +40,7 @@ def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, fake_red
             "payload_enc": enc,
         })
 
-    # Use asyncio.run for Python 3.11+ compatibility
-    _asyncio.run(_write())
+    redis_client.run(_write())
 
     client = TestClient(app)
     r = client.get("/api/v1/embeddings/dlq", params={"stage": "embedding", "count": 10})
@@ -81,7 +78,7 @@ class _StubAuditService:
 
 
 @pytest.mark.unit
-def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monkeypatch):
+def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, monkeypatch):
     # Make sure audit service calls are captured
     stub = _StubAuditService()
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
@@ -92,10 +89,8 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monk
     monkeypatch.setattr(emb_mod, "get_audit_service_for_user", _get_audit_service_for_user)
 
     # Seed one DLQ entry
-    import asyncio as _asyncio
-
     async def _seed():
-        await fake_redis.xadd("embeddings:embedding:dlq", {
+        await redis_client.xadd("embeddings:embedding:dlq", {
             "original_queue": "embeddings:embedding",
             "job_id": "job-audit",
             "error": "boom",
@@ -105,7 +100,7 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monk
             "payload": json.dumps({"job_id": "job-audit"}),
         })
 
-    _asyncio.run(_seed())
+    redis_client.run(_seed())
 
     client = TestClient(app)
     # Requeue single
@@ -119,7 +114,7 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, fake_redis, monk
     assert any(e.get("action") == "requeue" for e in stub.events)
 
     # Bulk requeue with a second item (not found + success mix)
-    _asyncio.run(_seed())
+    redis_client.run(_seed())
     resp2 = client.get("/api/v1/embeddings/dlq", params={"stage": "embedding", "count": 10})
     assert resp2.status_code == 200
     entry_ids = [it["entry_id"] for it in resp2.json()["items"]]

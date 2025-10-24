@@ -188,6 +188,7 @@ class HuggingFaceAPI:
         
         # Ensure destination directory exists
         destination.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = destination.with_suffix(".tmp")
         
         async with httpx.AsyncClient() as client:
             try:
@@ -202,7 +203,6 @@ class HuggingFaceAPI:
                 
                 # Download with progress
                 downloaded = 0
-                temp_file = destination.with_suffix(".tmp")
                 
                 async with client.stream("GET", url, headers=self.headers, follow_redirects=True) as response:
                     response.raise_for_status()

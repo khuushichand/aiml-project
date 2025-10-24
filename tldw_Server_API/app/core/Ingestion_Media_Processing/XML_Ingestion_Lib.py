@@ -3,7 +3,18 @@
 # Imports
 from pathlib import Path
 from typing import Optional, Tuple
-import xml.etree.ElementTree as ET
+
+try:  # Prefer hardened XML parser
+    from defusedxml import ElementTree as DET  # type: ignore
+    _DEFUSED_AVAILABLE = True
+except Exception:  # pragma: no cover - defusedxml is an optional dependency
+    DET = None  # type: ignore
+    _DEFUSED_AVAILABLE = False
+
+try:  # Fallback parse error type used when defusedxml is unavailable
+    from xml.etree.ElementTree import ParseError as _StdXMLParseError  # type: ignore
+except Exception:  # pragma: no cover - extremely unlikely to be missing
+    _StdXMLParseError = Exception  # type: ignore
 #
 # External Imports
 # 
@@ -55,9 +66,35 @@ def _read_xml_source(import_file) -> Tuple[str, str]:
     raise ValueError("Unsupported XML input type; expected path, file-like, or UploadFile.")
 
 
+def _ensure_defusedxml():
+    """
+    Ensure a safe XML parser is available.
+
+    Raises:
+        RuntimeError: if defusedxml is not installed.
+    """
+    if not _DEFUSED_AVAILABLE:
+        raise RuntimeError(
+            "Secure XML ingestion requires the 'defusedxml' package. "
+            "Install it to enable XML parsing."
+        )
+
+
+def _parse_xml_string(xml_text: str):
+    """Parse XML safely, leveraging defusedxml."""
+    _ensure_defusedxml()
+    return DET.fromstring(xml_text)  # type: ignore[union-attr]
+
+
+def _parse_xml_file(xml_file: str):
+    """Parse XML file safely, leveraging defusedxml."""
+    _ensure_defusedxml()
+    return DET.parse(xml_file)  # type: ignore[union-attr]
+
+
 def xml_to_text(xml_file):
     try:
-        tree = ET.parse(xml_file)
+        tree = _parse_xml_file(xml_file)
         root = tree.getroot()
         # Extract text content recursively
         text_content = []
@@ -65,7 +102,7 @@ def xml_to_text(xml_file):
             if elem.text and elem.text.strip():
                 text_content.append(elem.text.strip())
         return '\n'.join(text_content)
-    except ET.ParseError as e:
+    except Exception as e:
         logging.error(f"Error parsing XML file: {str(e)}")
         return None
 
@@ -78,7 +115,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
     try:
         xml_text, display_name = _read_xml_source(import_file)
         # Parse XML and extract text with structure
-        root = ET.fromstring(xml_text)
+        root = _parse_xml_string(xml_text)
 
         # Create chunk options
         chunk_options = {
@@ -90,7 +127,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
 
         # Use improved_chunking_process with xml method to get structured chunks
         chunk_options['method'] = 'xml'
-        chunks = improved_chunking_process(ET.tostring(root, encoding='unicode'), chunk_options)
+        chunks = improved_chunking_process(DET.tostring(root, encoding='unicode'), chunk_options)  # type: ignore[union-attr]
 
         # Convert chunks to segments format expected by add_media_with_keywords
         segments = []
@@ -137,7 +174,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
 
         return f"XML file '{display_name}' import complete. Database result: {result}"
 
-    except ET.ParseError as e:
+    except getattr(DET, "ParseError", _StdXMLParseError) as e:  # type: ignore[arg-type]
         logging.error(f"XML parsing error: {str(e)}")
         return f"Error parsing XML file: {str(e)}"
     except Exception as e:

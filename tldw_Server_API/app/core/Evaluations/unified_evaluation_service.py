@@ -308,7 +308,7 @@ class UnifiedEvaluationService:
     ) -> Tuple[List[Dict], bool]:
         """
         List evaluations with pagination and filtering.
-        
+
         Args:
             limit: Maximum number of results
             after: Cursor for pagination
@@ -322,7 +322,8 @@ class UnifiedEvaluationService:
             return self.db.list_evaluations(
                 limit=limit,
                 after=after,
-                eval_type=eval_type
+                eval_type=eval_type,
+                created_by=created_by
             )
         except Exception as e:
             logger.error(f"Failed to list evaluations: {e}")
@@ -1233,7 +1234,8 @@ class UnifiedEvaluationService:
             # We need to filter results manually since the DB method doesn't support all filters
             evaluations, _ = self.db.list_evaluations(
                 limit=limit + offset,  # Get more results to handle offset manually
-                eval_type=evaluation_type
+                eval_type=evaluation_type,
+                created_by=user_id
             )
             
             # Manual filtering for user_id and date ranges since DB method doesn't support these
@@ -1303,7 +1305,8 @@ class UnifiedEvaluationService:
             # Get all evaluations and count them with filters
             evaluations, _ = self.db.list_evaluations(
                 limit=10000,  # Large limit to get all
-                eval_type=evaluation_type
+                eval_type=evaluation_type,
+                created_by=user_id
             )
             
             # Manual filtering and counting

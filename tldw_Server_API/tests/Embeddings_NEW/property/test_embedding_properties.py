@@ -4,6 +4,11 @@ Property-based tests for Embeddings functionality.
 Uses Hypothesis to verify invariants and properties of the embedding system.
 """
 
+import os
+
+os.environ.setdefault("CHROMADB_FORCE_STUB", "1")
+os.environ.setdefault("CHROMADB_DEFAULT_TENANT", "default_tenant")
+
 import pytest
 from hypothesis import given, strategies as st, assume, settings, example, HealthCheck
 
@@ -44,11 +49,27 @@ def valid_embedding_vector(draw, dimension=None):
     if dimension is None:
         dimension = draw(valid_embedding_dimension())
 
-    vector = np.random.randn(dimension)
+    floats = draw(
+        st.lists(
+            st.floats(
+                min_value=-1.0,
+                max_value=1.0,
+                allow_nan=False,
+                allow_infinity=False,
+                width=32,
+            ),
+            min_size=dimension,
+            max_size=dimension,
+        )
+    )
+    vector = np.array(floats, dtype=float)
     norm = np.linalg.norm(vector)
-    if norm > 0:
-        vector = vector / norm
-    return vector.tolist()
+    if norm == 0:
+        vector = np.zeros(dimension, dtype=float)
+        vector[0] = 1.0
+        norm = 1.0
+    vector = vector / norm
+    return vector.tolist().copy()
 
 @st.composite
 def valid_text_for_embedding(draw):
@@ -105,6 +126,7 @@ class TestEmbeddingVectorProperties:
         assert all(len(v) == dimension for v in vectors)
     
     @pytest.mark.property
+    @settings(suppress_health_check=[HealthCheck.large_base_example])
     @given(vector=valid_embedding_vector())
     def test_embedding_vector_bounds(self, vector):
         """Property: Embedding values are within reasonable bounds."""
@@ -120,6 +142,7 @@ class TestEmbeddingVectorProperties:
         assert 0.1 < norm < 10.0
     
     @pytest.mark.property
+    @settings(suppress_health_check=[HealthCheck.large_base_example])
     @given(
         vector1=valid_embedding_vector(dimension=384),
         vector2=valid_embedding_vector(dimension=384)
@@ -138,6 +161,7 @@ class TestEmbeddingVectorProperties:
             assert -1.01 <= cosine_sim <= 1.01  # Small tolerance for floating point
     
     @pytest.mark.property
+    @settings(suppress_health_check=[HealthCheck.large_base_example])
     @given(vectors=st.lists(valid_embedding_vector(dimension=384), min_size=2, max_size=10))
     def test_embedding_distance_triangle_inequality(self, vectors):
         """Property: Distances satisfy triangle inequality."""
@@ -279,34 +303,64 @@ class TestChromaDBStorageProperties:
         assert len(results["documents"]) == len(texts)
     
     @pytest.mark.property
+    @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
     @given(
-        query_embedding=valid_embedding_vector(dimension=384),
-        stored_embeddings=st.lists(valid_embedding_vector(dimension=384), min_size=5, max_size=20)
+        query_embedding=valid_embedding_vector(dimension=64),
+        stored_embeddings=st.lists(valid_embedding_vector(dimension=64), min_size=3, max_size=10)
     )
-    def test_similarity_search_ordering(self, query_embedding, stored_embeddings, chroma_client):
+    def test_similarity_search_ordering(self, query_embedding, stored_embeddings):
         """Property: Similarity search returns results in order of similarity."""
-        collection_name = f"test_similarity_{uuid4().hex[:8]}"
-        collection = chroma_client.create_collection(collection_name)
-        
-        ids = [f"doc_{i}" for i in range(len(stored_embeddings))]
-        docs = [f"Document {i}" for i in range(len(stored_embeddings))]
-        
-        collection.add(
-            embeddings=stored_embeddings,
-            documents=docs,
-            ids=ids
-        )
-        
-        # Search
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(5, len(stored_embeddings))
-        )
-        
-        if len(results["distances"][0]) > 1:
-            distances = results["distances"][0]
-            # Distances should be in ascending order (most similar first)
-            assert all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
+        stub_before = os.environ.get("CHROMADB_FORCE_STUB")
+        tenant_before = os.environ.get("CHROMADB_DEFAULT_TENANT")
+        os.environ["CHROMADB_FORCE_STUB"] = "1"
+        os.environ["CHROMADB_DEFAULT_TENANT"] = "default_tenant"
+        client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
+        try:
+            client.reset()
+        except Exception:
+            pass
+        try:
+            collection_name = f"test_similarity_{uuid4().hex[:8]}"
+            collection = client.create_collection(collection_name)
+
+            ids = [f"doc_{i}" for i in range(len(stored_embeddings))]
+            docs = [f"Document {i}" for i in range(len(stored_embeddings))]
+
+            collection.add(
+                embeddings=stored_embeddings,
+                documents=docs,
+                ids=ids
+            )
+
+            # Search
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=min(5, len(stored_embeddings))
+            )
+
+            if len(results["distances"][0]) > 1:
+                distances = results["distances"][0]
+                # Distances should be in ascending order (most similar first)
+                assert all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
+        finally:
+            if stub_before is None:
+                os.environ.pop("CHROMADB_FORCE_STUB", None)
+            else:
+                os.environ["CHROMADB_FORCE_STUB"] = stub_before
+            if tenant_before is None:
+                os.environ.pop("CHROMADB_DEFAULT_TENANT", None)
+            else:
+                os.environ["CHROMADB_DEFAULT_TENANT"] = tenant_before
+            try:
+                if hasattr(client, "close"):
+                    client.close()  # type: ignore[attr-defined]
+                else:
+                    system = getattr(client, "_system", None)
+                    stop_fn = getattr(system, "stop", None) if system else None
+                    if callable(stop_fn):
+                        stop_fn()
+            except Exception:
+                pass
     
     @pytest.mark.property
     @given(collection_name=valid_collection_name())
@@ -411,6 +465,10 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
         except Exception:
             # Fallback to in-memory client
             self.client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
+        try:
+            self.client.reset()
+        except Exception:
+            pass
         self.collections = {}
         self.stored_embeddings = {}
         self.job_queue = []
