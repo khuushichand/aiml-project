@@ -261,7 +261,8 @@ async def get_prompt_studio_user(
         )
 
     # 3) Default path: use unified request user dependency (supports single and multi user)
-    current_user: User = await get_request_user()  # direct call to avoid hard FastAPI DI coupling here
+    # Use unified request-user dependency, passing the current Request explicitly
+    current_user: User = await get_request_user(request)  # direct call to avoid hard FastAPI DI coupling here
 
     # Build user context from normalized User model
     try:

@@ -99,8 +99,8 @@ class SQLiteConnectionPool(ConnectionPool):
         if self.config.sqlite_foreign_keys:
             conn.execute("PRAGMA foreign_keys = ON")
 
-        # Reduce lock contention under concurrent access
-        conn.execute("PRAGMA busy_timeout = 5000")
+        # Reduce lock contention under concurrent access (increase to 10s)
+        conn.execute("PRAGMA busy_timeout = 10000")
 
         # Additional optimizations
         conn.execute("PRAGMA cache_size = -2000")  # 2MB cache
@@ -216,8 +216,8 @@ class SQLiteBackend(DatabaseBackend):
         if self.config.sqlite_foreign_keys:
             conn.execute("PRAGMA foreign_keys = ON")
 
-        # Reduce lock contention under concurrent access
-        conn.execute("PRAGMA busy_timeout = 5000")
+        # Reduce lock contention under concurrent access (increase to 10s)
+        conn.execute("PRAGMA busy_timeout = 10000")
 
         return conn
     

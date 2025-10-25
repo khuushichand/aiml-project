@@ -184,7 +184,7 @@ def transactional(max_retries: int = 3):
 
 
 async def save_conversation_with_messages(
-    db: CharactersRAGDB,
+    db: CharactersRAGDB | AsyncDatabaseWrapper,
     conversation_data: dict,
     messages: list[dict],
     max_retries: int = 3
@@ -204,26 +204,44 @@ async def save_conversation_with_messages(
     Raises:
         CharactersRAGDBError: On database errors
     """
+    # If provided an AsyncDatabaseWrapper, execute within a single executor-held transaction
+    if isinstance(db, AsyncDatabaseWrapper):
+        def _work(sync_db: CharactersRAGDB) -> tuple[str, list[str]]:
+            conversation_id = sync_db.add_conversation(conversation_data)
+            if not conversation_id:
+                raise CharactersRAGDBError("Failed to create conversation")
+            message_ids: list[str] = []
+            for message in messages:
+                message['conversation_id'] = conversation_id
+                message_id = sync_db.add_message(message)
+                if not message_id:
+                    raise CharactersRAGDBError(
+                        f"Failed to add message to conversation {conversation_id}"
+                    )
+                message_ids.append(message_id)
+            return conversation_id, message_ids
+
+        return await run_transaction(db, _work, max_retries=max_retries)
+
+    # Fallback: use async transaction wrapper that may block event loop if used directly in async contexts
     async with db_transaction(db, max_retries):
-        # Create conversation
-        conversation_id = db.add_conversation(conversation_data)
+        conversation_id = db.add_conversation(conversation_data)  # type: ignore[attr-defined]
         if not conversation_id:
             raise CharactersRAGDBError("Failed to create conversation")
-        
-        # Add messages
         message_ids = []
         for message in messages:
             message['conversation_id'] = conversation_id
-            message_id = db.add_message(message)
+            message_id = db.add_message(message)  # type: ignore[attr-defined]
             if not message_id:
-                raise CharactersRAGDBError(f"Failed to add message to conversation {conversation_id}")
+                raise CharactersRAGDBError(
+                    f"Failed to add message to conversation {conversation_id}"
+                )
             message_ids.append(message_id)
-        
         return conversation_id, message_ids
 
 
 async def update_conversation_with_rollback(
-    db: CharactersRAGDB,
+    db: CharactersRAGDB | AsyncDatabaseWrapper,
     conversation_id: str,
     updates: dict,
     new_messages: Optional[list[dict]] = None
@@ -241,23 +259,42 @@ async def update_conversation_with_rollback(
         True if successful, False otherwise
     """
     try:
+        if isinstance(db, AsyncDatabaseWrapper):
+            def _work(sync_db: CharactersRAGDB) -> bool:
+                if updates:
+                    success = sync_db.update_conversation(conversation_id, updates)
+                    if not success:
+                        raise CharactersRAGDBError(
+                            f"Failed to update conversation {conversation_id}"
+                        )
+                if new_messages:
+                    for message in new_messages:
+                        message['conversation_id'] = conversation_id
+                        message_id = sync_db.add_message(message)
+                        if not message_id:
+                            raise CharactersRAGDBError(
+                                f"Failed to add message to conversation {conversation_id}"
+                            )
+                return True
+
+            return await run_transaction(db, _work)
+
         async with db_transaction(db):
-            # Update conversation
             if updates:
-                success = db.update_conversation(conversation_id, updates)
+                success = db.update_conversation(conversation_id, updates)  # type: ignore[attr-defined]
                 if not success:
-                    raise CharactersRAGDBError(f"Failed to update conversation {conversation_id}")
-            
-            # Add new messages if provided
+                    raise CharactersRAGDBError(
+                        f"Failed to update conversation {conversation_id}"
+                    )
             if new_messages:
                 for message in new_messages:
                     message['conversation_id'] = conversation_id
-                    message_id = db.add_message(message)
+                    message_id = db.add_message(message)  # type: ignore[attr-defined]
                     if not message_id:
-                        raise CharactersRAGDBError(f"Failed to add message to conversation {conversation_id}")
-            
+                        raise CharactersRAGDBError(
+                            f"Failed to add message to conversation {conversation_id}"
+                        )
             return True
-            
     except Exception as e:
         logger.error(f"Failed to update conversation {conversation_id}: {e}")
         return False

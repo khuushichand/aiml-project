@@ -575,23 +575,38 @@ class RateLimiter:
     
     async def _cleanup_task(self):
         """Background task to clean up old entries"""
-        while True:
-            await asyncio.sleep(3600)  # Run every hour
-            
-            try:
-                if hasattr(self.default_limiter, 'cleanup_old_entries'):
-                    await self.default_limiter.cleanup_old_entries()
-                if hasattr(self.ingestion_limiter, 'cleanup_old_entries'):
-                    await self.ingestion_limiter.cleanup_old_entries()
-                if hasattr(self.read_limiter, 'cleanup_old_entries'):
-                    await self.read_limiter.cleanup_old_entries()
-                
-                for limiter in self.limiters.values():
-                    if hasattr(limiter, 'cleanup_old_entries'):
-                        await limiter.cleanup_old_entries()
-                        
-            except Exception as e:
-                logger.error(f"Error in rate limit cleanup: {e}")
+        try:
+            while True:
+                await asyncio.sleep(3600)  # Run every hour
+                try:
+                    if hasattr(self.default_limiter, 'cleanup_old_entries'):
+                        await self.default_limiter.cleanup_old_entries()
+                    if hasattr(self.ingestion_limiter, 'cleanup_old_entries'):
+                        await self.ingestion_limiter.cleanup_old_entries()
+                    if hasattr(self.read_limiter, 'cleanup_old_entries'):
+                        await self.read_limiter.cleanup_old_entries()
+
+                    for limiter in self.limiters.values():
+                        if hasattr(limiter, 'cleanup_old_entries'):
+                            await limiter.cleanup_old_entries()
+
+                except Exception as e:
+                    logger.error(f"Error in rate limit cleanup: {e}")
+        except asyncio.CancelledError:
+            logger.info("Rate limiter cleanup task cancelled")
+            return
+
+    async def shutdown(self) -> None:
+        """Cancel background cleanup task if running."""
+        try:
+            if getattr(self, "_cleanup_task_handle", None) and not self._cleanup_task_handle.done():
+                self._cleanup_task_handle.cancel()
+                try:
+                    await self._cleanup_task_handle
+                except asyncio.CancelledError:
+                    pass
+        except Exception:
+            pass
 
     def get_category_limiter(self, category: str) -> BaseRateLimiter:
         """Return limiter for a category ('ingestion' or 'read')."""
@@ -610,3 +625,12 @@ def get_rate_limiter() -> RateLimiter:
     if _rate_limiter is None:
         _rate_limiter = RateLimiter()
     return _rate_limiter
+
+async def shutdown_rate_limiter() -> None:
+    """Shutdown the singleton rate limiter, cancelling cleanup task if active."""
+    try:
+        global _rate_limiter
+        if _rate_limiter is not None:
+            await _rate_limiter.shutdown()
+    except Exception:
+        pass

@@ -314,18 +314,29 @@ async def websearch_endpoint(
             "final_answer_llm": payload.final_answer_llm,
         }
 
-        phase1 = generate_and_search(payload.query, search_params)
+        # Run potentially blocking provider calls off the event loop
+        phase1 = await asyncio.to_thread(generate_and_search, payload.query, search_params)
 
         if payload.aggregate:
             # Cancellation propagates if client disconnects
             cancel_event = asyncio.Event()
 
             async def _watch_disconnect():
+                if request is None:
+                    return
                 try:
-                    if request is not None:
-                        await request.is_disconnected()
-                        cancel_event.set()
+                    # Poll for client disconnect, then signal cancellation
+                    while not cancel_event.is_set():
+                        try:
+                            if await request.is_disconnected():
+                                cancel_event.set()
+                                break
+                        except Exception:
+                            # If the underlying server doesn't support disconnect checks, stop monitoring
+                            break
+                        await asyncio.sleep(0.5)
                 except Exception:
+                    # Never let the monitor crash the endpoint
                     pass
 
             monitor = asyncio.create_task(_watch_disconnect())

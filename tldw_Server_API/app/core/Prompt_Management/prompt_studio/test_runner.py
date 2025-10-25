@@ -65,7 +65,7 @@ class TestRunner:
                 chat_api_call,
                 api_endpoint="openai",
                 model=model,
-                messages=[
+                messages_payload=[
                     {"role": "system", "content": prompt.get("system_prompt")},
                     {"role": "user", "content": user_prompt}
                 ],
@@ -105,6 +105,53 @@ class TestRunner:
             "actual": stored_run.get("outputs", actual_output),
             "model": stored_run.get("model_name", model),
         }
+
+    async def run_single_test(
+        self,
+        *,
+        prompt_id: int,
+        test_case_id: int,
+        model_config: Dict[str, Any],
+        metrics: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        """Compatibility wrapper used by optimizers.
+
+        Executes a single test case using model_config and returns a dict that
+        includes a simple 'scores' map for downstream selection logic.
+        """
+        params = (model_config or {}).get("parameters", {})
+        model = (model_config or {}).get("model", "gpt-3.5-turbo")
+        temperature = float(params.get("temperature", 0.7)) if params is not None else 0.7
+        max_tokens = int(params.get("max_tokens", 1000)) if params is not None else 1000
+
+        result = await self.run_test_case(
+            prompt_id=prompt_id,
+            test_case_id=test_case_id,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        # Provide a basic aggregate score based on expected vs actual overlap
+        expected = result.get("expected", {}) or {}
+        actual = result.get("actual", {}) or {}
+        exp = str(expected.get("response", "")).lower()
+        act = str(actual.get("response", "")).lower()
+        if not exp and not act:
+            score = 0.0
+        elif exp == act:
+            score = 1.0
+        elif exp and act and (exp in act or act in exp):
+            score = 0.5
+        else:
+            # very rough token overlap
+            ew = set(exp.split())
+            aw = set(act.split())
+            score = (len(ew & aw) / max(1, len(ew))) if ew else 0.0
+
+        result = dict(result)
+        result["success"] = True
+        result["scores"] = {"aggregate_score": float(score)}
+        return result
     
     async def run_multiple_tests(
         self,

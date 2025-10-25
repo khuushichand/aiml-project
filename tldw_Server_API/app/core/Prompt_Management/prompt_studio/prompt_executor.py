@@ -308,7 +308,8 @@ class PromptExecutor:
         Returns:
             Final prompt string
         """
-        template = prompt.get("content", "")
+        # Prompt Studio stores system and user prompts separately; use user_prompt as the template
+        template = (prompt.get("user_prompt") or "")
         
         # Replace variables in template
         for key, value in inputs.items():
@@ -484,15 +485,17 @@ class PromptValidator:
         Returns:
             Tuple of (is_valid, error_message)
         """
-        if not prompt.get("content"):
+        # Use user_prompt (Prompt Studio schema) as the primary template content
+        user_text = prompt.get("user_prompt") or ""
+        if not user_text:
             return False, "Prompt content is required"
-        
-        if len(prompt["content"]) > 50000:
+
+        if len(user_text) > 50000:
             return False, "Prompt content exceeds maximum length"
-        
+
         # Check for required variables
         import re
-        variables = re.findall(r'\{(\w+)\}|\$(\w+)|<(\w+)>', prompt["content"])
+        variables = re.findall(r'\{(\w+)\}|\$(\w+)|<(\w+)>', user_text)
         flat_vars = [v for group in variables for v in group if v]
         
         if len(set(flat_vars)) > 20:

@@ -25,11 +25,15 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
 
 
 def _compute_window_start(now: datetime, window_minutes: int) -> datetime:
-    """Return the start of the current time bucket for the requested window size."""
+    """Return the start of the current time bucket for the requested window size.
+
+    Uses day-based modulo so windows > 60 minutes align correctly.
+    """
     window_minutes = max(1, int(window_minutes))
     window_seconds = window_minutes * 60
-    seconds_since_hour = now.minute * 60 + now.second
-    offset = seconds_since_hour % window_seconds
+    # Seconds since start of day, to avoid anchoring only to the current hour
+    seconds_since_day = now.hour * 3600 + now.minute * 60 + now.second
+    offset = seconds_since_day % window_seconds
     window_start = now - timedelta(seconds=offset, microseconds=now.microsecond)
     return window_start.replace(microsecond=0)
 
@@ -860,6 +864,27 @@ class RateLimiter:
             await self.initialize()
         
         try:
+            # Collect distinct endpoints for Redis cleanup before DB deletion when endpoint is None
+            endpoints_for_cleanup: Optional[list[str]] = None
+            if self.redis_client and endpoint is None:
+                try:
+                    async with self.db_pool.acquire() as aconn:
+                        if hasattr(aconn, 'fetch'):  # Postgres
+                            rows = await aconn.fetch(
+                                "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = $1",
+                                identifier,
+                            )
+                            endpoints_for_cleanup = [str(r['endpoint']) for r in rows]
+                        else:
+                            cursor = await aconn.execute(
+                                "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = ?",
+                                (identifier,),
+                            )
+                            rows = await cursor.fetchall()
+                            endpoints_for_cleanup = [str(r[0]) for r in rows]
+                except Exception as _e:
+                    logger.debug(f"reset_rate_limit: failed to enumerate endpoints for {identifier}: {_e}")
+
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
@@ -889,9 +914,17 @@ class RateLimiter:
                 
                 # Clear Redis cache if available
                 if self.redis_client:
-                    pattern = f"rate:{self._create_key(identifier, endpoint or '*')}:*"
-                    async for key in self.redis_client.scan_iter(pattern):
-                        await self.redis_client.delete(key)
+                    # Keys are stored as rate:{md5(identifier:endpoint)}:{window}
+                    if endpoint:
+                        pattern = f"rate:{self._create_key(identifier, endpoint)}:*"
+                        async for key in self.redis_client.scan_iter(pattern):
+                            await self.redis_client.delete(key)
+                    else:
+                        # Use the enumerated endpoints to compute hashed keys and delete them
+                        for ep in endpoints_for_cleanup or []:
+                            pattern = f"rate:{self._create_key(identifier, ep)}:*"
+                            async for key in self.redis_client.scan_iter(pattern):
+                                await self.redis_client.delete(key)
                 
                 if self.settings.PII_REDACT_LOGS:
                     logger.info("Reset rate limit [redacted]")
@@ -971,12 +1004,15 @@ class RateLimiter:
         window_start = now.replace(second=0, microsecond=0)
         
         try:
+            # SQLite stores window_start as TEXT; pass ISO string in that case.
+            is_postgres = bool(getattr(self.db_pool, "pool", None))
+            win_param = window_start if is_postgres else window_start.isoformat()
             result = await self.db_pool.fetchone(
                 """
                 SELECT request_count FROM rate_limits
                 WHERE identifier = ? AND endpoint = ? AND window_start = ?
                 """,
-                identifier, endpoint, window_start
+                identifier, endpoint, win_param
             )
             
             current_count = result['request_count'] if result else 0

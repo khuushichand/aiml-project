@@ -56,10 +56,10 @@ class AsyncDatabaseWrapper:
         Returns:
             Conversation ID if successful, None otherwise
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self._executor,
-            self.db.add_conversation,
-            conversation_data
+            functools.partial(self.db.add_conversation, conversation_data),
         )
     
     async def get_conversation_by_id(self, conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -72,10 +72,10 @@ class AsyncDatabaseWrapper:
         Returns:
             Conversation data if found, None otherwise
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self._executor,
-            self.db.get_conversation_by_id,
-            conversation_id
+            functools.partial(self.db.get_conversation_by_id, conversation_id),
         )
     
     async def add_message(self, message_data: Dict[str, Any]) -> Optional[str]:
@@ -88,17 +88,18 @@ class AsyncDatabaseWrapper:
         Returns:
             Message ID if successful, None otherwise
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self._executor,
-            self.db.add_message,
-            message_data
+            functools.partial(self.db.add_message, message_data),
         )
     
     async def get_messages_for_conversation(
-        self, 
+        self,
         conversation_id: str,
         limit: Optional[int] = None,
-        offset: int = 0
+        offset: int = 0,
+        page_size: int = 50,
     ) -> List[Dict[str, Any]]:
         """
         Async version of get_messages_for_conversation with pagination support.
@@ -111,17 +112,40 @@ class AsyncDatabaseWrapper:
         Returns:
             List of message dictionaries
         """
-        # Use a wrapper function to handle pagination
-        def get_paginated_messages():
-            all_messages = self.db.get_messages_for_conversation(conversation_id)
-            if limit:
-                return all_messages[offset:offset + limit]
-            return all_messages[offset:]
-        
-        return await asyncio.get_event_loop().run_in_executor(
-            self._executor,
-            get_paginated_messages
-        )
+        # If a limit is provided, fetch a single page from the database.
+        if limit is not None:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self._executor,
+                functools.partial(
+                    self.db.get_messages_for_conversation,
+                    conversation_id,
+                    limit=limit,
+                    offset=offset,
+                ),
+            )
+
+        # Otherwise, stream pages from the database until exhaustion.
+        results: List[Dict[str, Any]] = []
+        current_offset = offset
+        loop = asyncio.get_running_loop()
+        while True:
+            page = await loop.run_in_executor(
+                self._executor,
+                functools.partial(
+                    self.db.get_messages_for_conversation,
+                    conversation_id,
+                    limit=page_size,
+                    offset=current_offset,
+                ),
+            )
+            if not page:
+                break
+            results.extend(page)
+            current_offset += page_size
+            # small pause to avoid hammering DB
+            await asyncio.sleep(0.005)
+        return results
     
     async def get_character_card_by_id(self, character_id: Any) -> Optional[Dict[str, Any]]:
         """
@@ -133,10 +157,10 @@ class AsyncDatabaseWrapper:
         Returns:
             Character card data if found, None otherwise
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self._executor,
-            self.db.get_character_card_by_id,
-            character_id
+            functools.partial(self.db.get_character_card_by_id, character_id),
         )
     
     async def get_character_card_by_name(self, name: str) -> Optional[Dict[str, Any]]:
@@ -149,10 +173,10 @@ class AsyncDatabaseWrapper:
         Returns:
             Character card data if found, None otherwise
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self._executor,
-            self.db.get_character_card_by_name,
-            name
+            functools.partial(self.db.get_character_card_by_name, name),
         )
     
     async def batch_add_messages(self, messages: List[Dict[str, Any]]) -> List[Optional[str]]:
@@ -177,9 +201,10 @@ class AsyncDatabaseWrapper:
                         results.append(None)
             return results
         
-        return await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self._executor,
-            batch_insert
+            batch_insert,
         )
     
     def __getattr__(self, name: str) -> Any:
@@ -197,11 +222,10 @@ class AsyncDatabaseWrapper:
         if callable(attr):
             @functools.wraps(attr)
             async def async_wrapper(*args, **kwargs):
-                return await asyncio.get_event_loop().run_in_executor(
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(
                     self._executor,
-                    attr,
-                    *args,
-                    **kwargs
+                    functools.partial(attr, *args, **kwargs),
                 )
             return async_wrapper
         return attr

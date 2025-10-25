@@ -6,14 +6,16 @@ except Exception:
     from pydantic import validator as field_validator  # type: ignore
 
 
-SUPPORTED_WEBSEARCH_ENGINES = {"google", "duckduckgo", "bing", "brave"}
+# Only expose engines which are implemented and supported server-side.
+# Bing is deprecated in the core and should not be allowed.
+SUPPORTED_WEBSEARCH_ENGINES = {"google", "duckduckgo", "brave", "kagi", "tavily", "searx"}
 
 
 class WebSearchRequest(BaseModel):
     query: str = Field(..., description="User query to search the web for")
     engine: str = Field(
         "google",
-        description="Search engine to use. Supported: google, duckduckgo, bing, brave",
+        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx",
     )
     result_count: int = Field(10, ge=1, le=50)
     content_country: str = Field("US")

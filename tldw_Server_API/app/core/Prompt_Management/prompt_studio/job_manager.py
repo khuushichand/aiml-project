@@ -95,6 +95,12 @@ class JobManager:
             )
             logger.info(f"Created {job_type} job {job.get('id')} for entity {entity_id}")
             try:
+                self._metrics.metrics_manager.increment(
+                    "jobs.scheduled_total", labels={"job_type": job_type.value}
+                )
+            except Exception:
+                pass
+            try:
                 self._refresh_gauges_for_type(job_type.value)
             except Exception:
                 pass
@@ -362,15 +368,18 @@ class JobManager:
             
         except Exception as e:
             logger.error(f"Job {job['id']} failed: {e}")
-            
-            # Check if should retry
-            if job["retry_count"] < job["max_retries"]:
-                self.retry_job(job["id"])
-            else:
+
+            # Delegate retry decision to retry_job() to keep semantics consistent
+            try:
+                scheduled = self.retry_job(job["id"])  # returns True if re-queued
+            except Exception:
+                scheduled = False
+
+            if not scheduled:
                 self.update_job_status(
-                    job["id"], 
+                    job["id"],
                     JobStatus.FAILED,
-                    error_message=str(e)
+                    error_message=str(e),
                 )
                 try:
                     self._metrics.metrics_manager.increment(

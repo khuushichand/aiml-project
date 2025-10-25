@@ -147,6 +147,10 @@ class ConversationRateLimiter:
         
         # Sliding window for more accurate tracking
         self.request_windows: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+
+        # Idle cleanup support
+        self._last_cleanup: float = time.time()
+        self._idle_threshold_seconds: int = 3600  # default: purge buckets idle > 1h
     
     def _get_or_create_bucket(
         self,
@@ -177,6 +181,14 @@ class ConversationRateLimiter:
         Returns:
             Tuple of (allowed, error_message)
         """
+        # Opportunistic idle cleanup every 5 minutes
+        now = time.time()
+        if now - self._last_cleanup > 300:
+            try:
+                self.cleanup_idle_buckets(self._idle_threshold_seconds)
+            finally:
+                self._last_cleanup = now
+
         # Check global rate limit
         if not await self.global_bucket.consume():
             return False, "Global rate limit exceeded"
@@ -299,13 +311,15 @@ class ConversationRateLimiter:
         # Get current bucket states
         user_bucket = self.user_buckets.get(user_id)
         user_tokens_available = user_bucket.tokens if user_bucket else self.config.per_user_rpm
+        token_bucket = self.user_token_buckets.get(user_id)
+        user_token_capacity = token_bucket.tokens if token_bucket else self.config.per_user_tokens_per_minute
         
         return {
             "total_requests": stats.request_count,
             "total_tokens": stats.token_count,
             "requests_per_minute": requests_per_minute,
             "tokens_per_minute": tokens_per_minute,
-            "tokens_available": user_tokens_available,
+            "tokens_available": user_token_capacity,
             "last_request": stats.last_request_time,
             "conversation_counts": dict(stats.conversation_request_counts),
             "limits": {
@@ -337,6 +351,47 @@ class ConversationRateLimiter:
                         self.conversation_buckets[conv_id].capacity
         
         logger.info(f"Reset rate limits for user {user_id}")
+
+    def cleanup_idle_buckets(self, max_idle_seconds: int = 3600) -> int:
+        """Remove idle user and conversation buckets and windows.
+
+        Args:
+            max_idle_seconds: Threshold of inactivity to purge entries
+
+        Returns:
+            Count of purged entries
+        """
+        cutoff = time.time() - max_idle_seconds
+        removed = 0
+
+        # Users
+        for uid in list(self.usage_stats.keys()):
+            last = self.usage_stats[uid].last_request_time or 0
+            if last and last < cutoff:
+                # Purge buckets and windows
+                if uid in self.user_buckets:
+                    del self.user_buckets[uid]
+                if uid in self.user_token_buckets:
+                    del self.user_token_buckets[uid]
+                if uid in self.request_windows:
+                    del self.request_windows[uid]
+                del self.usage_stats[uid]
+                removed += 1
+
+        # Conversations
+        # Remove conversation buckets with no recent activity based on any user's conversation counts
+        active_conversations = set()
+        for stats in self.usage_stats.values():
+            for cid, _cnt in stats.conversation_request_counts.items():
+                active_conversations.add(cid)
+        for cid in list(self.conversation_buckets.keys()):
+            if cid not in active_conversations:
+                del self.conversation_buckets[cid]
+                removed += 1
+
+        if removed:
+            logger.debug(f"ConversationRateLimiter cleanup removed {removed} idle entries")
+        return removed
 
 
 # Global rate limiter instance

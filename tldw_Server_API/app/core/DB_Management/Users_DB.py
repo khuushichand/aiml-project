@@ -111,7 +111,7 @@ class UsersDB:
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS users (
                             id SERIAL PRIMARY KEY,
-                            uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
+                            uuid UUID UNIQUE,
                             username VARCHAR(50) UNIQUE NOT NULL,
                             email VARCHAR(255) UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
@@ -517,42 +517,33 @@ class UsersDB:
         
         try:
             # Build update query
-            set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
-            values = list(updates.values())
-            values.append(user_id)
+            # Note: Build placeholder style per backend; keep deterministic field order
+            field_names = list(updates.keys())
             
             async with self.db_pool.transaction() as conn:
                 # Determine backend explicitly: asyncpg connections expose fetchval()
                 is_postgres = hasattr(conn, 'fetchval')
 
                 if is_postgres:
-                    # PostgreSQL - adjust placeholders to $1..$n
-                    set_clause = ", ".join([f"{k} = ${i+1}" for i, k in enumerate(updates.keys())])
-                    query = f"""
-                        UPDATE users 
-                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ${len(values)}
-                    """
-                else:
-                    # SQLite
-                    # Convert booleans to integers for SQLite
-                    for key in ['is_active', 'is_superuser', 'email_verified']:
-                        if key in updates:
-                            updates[key] = int(updates[key])
-
-                    values = list(updates.values())
-                    values.append(user_id)
-
-                    query = f"""
-                        UPDATE users 
-                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                    """
-
-                # Execute with appropriate parameter style
-                if is_postgres:
+                    # PostgreSQL - use $1..$n placeholders
+                    set_clause = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(field_names))
+                    values = [updates[k] for k in field_names] + [user_id]
+                    query = (
+                        f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
+                        f"WHERE id = ${len(values)}"
+                    )
                     await conn.execute(query, *values)
                 else:
+                    # SQLite - convert bools to ints and use '?' placeholders
+                    for key in ['is_active', 'is_superuser', 'email_verified']:
+                        if key in updates:
+                            updates[key] = int(bool(updates[key]))
+                    set_clause = ", ".join(f"{k} = ?" for k in field_names)
+                    values = [updates[k] for k in field_names] + [user_id]
+                    query = (
+                        f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?"
+                    )
                     await conn.execute(query, values)
 
                 # SQLite shim commits on transaction exit, but keep for compatibility

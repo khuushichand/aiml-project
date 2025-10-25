@@ -19,7 +19,7 @@ def register_executor(name: str, executor: Executor) -> None:
             return
         if existing and existing is not executor:
             logger.warning(
-                "Executor registry replacing existing executor for name='{name}'",
+                f"Executor registry replacing existing executor for name='{name}'",
                 name=name,
             )
         _executors[name] = executor
@@ -47,7 +47,7 @@ def _shutdown_executor_blocking(name: str, executor: Executor, wait: bool, cance
         # Logging during interpreter shutdown frequently hits pytest's closed
         # capture streams, so skip the informational log to avoid noisy errors.
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("Executor '{name}' shutdown raised: {exc}", name=name, exc=exc)
+        logger.warning(f"Executor '{name}' shutdown raised: {exc}", name=name, exc=exc)
     finally:
         unregister_executor(name)
 

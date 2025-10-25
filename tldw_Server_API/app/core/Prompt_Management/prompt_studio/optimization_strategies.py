@@ -339,8 +339,8 @@ class IterativeRefinementOptimizer:
         # Generate refinement
         refinement_prompt = f"""Analyze these errors and suggest how to refine the prompt to address them.
 
-Current prompt:
-{prompt.get('content', '')}
+Current prompt (user section):
+{prompt.get('user_prompt', '')}
 
 {error_summary}
 
@@ -363,8 +363,9 @@ Suggest specific refinements to fix these errors:"""
         # Get base prompt
         prompt = self._get_prompt(base_prompt_id)
         
-        # Apply refinement
-        refined_content = f"{prompt['content']}\n\n{refinement}"
+        # Apply refinement: augment system instructions; preserve user_prompt
+        base_system = prompt.get("system_prompt") or ""
+        new_system = (base_system + ("\n\n" if base_system and refinement else "") + (refinement or "")).strip()
         
         # Create new prompt
         conn = self.db.get_connection()
@@ -372,17 +373,17 @@ Suggest specific refinements to fix these errors:"""
         
         cursor.execute("""
             INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, name, content,
-                system_prompt, version, parent_version_id, client_id
+                uuid, project_id, signature_id, name, system_prompt,
+                user_prompt, version_number, parent_version_id, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             f"refined-{datetime.utcnow().timestamp()}",
             prompt["project_id"],
             prompt.get("signature_id"),
             f"{prompt['name']} (Refined)",
-            refined_content,
-            prompt.get("system_prompt"),
-            prompt["version"] + 1,
+            new_system,
+            prompt.get("user_prompt"),
+            (prompt.get("version_number") or 0) + 1,
             base_prompt_id,
             self.db.client_id
         ))
@@ -534,9 +535,9 @@ class GeneticOptimizer:
         prompt = self._get_prompt(prompt_id)
         population = []
         
-        # Add original
+        # Add original (use user_prompt field)
         population.append({
-            "content": prompt["content"],
+            "user_prompt": prompt.get("user_prompt", ""),
             "system_prompt": prompt.get("system_prompt", "")
         })
         
@@ -549,9 +550,9 @@ class GeneticOptimizer:
     
     async def _generate_variation(self, prompt: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a variation of the prompt."""
-        variation_prompt = f"""Create a variation of this prompt that maintains the same goal but uses different wording or structure:
+        variation_prompt = f"""Create a variation of this user prompt that maintains the same goal but uses different wording or structure:
 
-{prompt['content']}
+{prompt.get('user_prompt', '')}
 
 Variation:"""
         
@@ -564,13 +565,13 @@ Variation:"""
             )
             
             return {
-                "content": result["content"].strip(),
+                "user_prompt": result["content"].strip(),
                 "system_prompt": prompt.get("system_prompt", "")
             }
         except:
             # Fallback to original with minor changes
             return {
-                "content": prompt["content"] + "\nBe precise and clear.",
+                "user_prompt": (prompt.get("user_prompt", "") + "\nBe precise and clear.").strip(),
                 "system_prompt": prompt.get("system_prompt", "")
             }
     
@@ -606,15 +607,15 @@ Variation:"""
                         parent2: Dict[str, Any]) -> Dict[str, Any]:
         """Crossover two individuals."""
         # Simple approach: combine parts of prompts
-        crossover_prompt = f"""Combine the best aspects of these two prompts into a new one:
+        crossover_prompt = f"""Combine the best aspects of these two user prompts into a new one:
 
-Prompt 1:
-{parent1['content']}
+Prompt 1 (user):
+{parent1.get('user_prompt', '')}
 
-Prompt 2:
-{parent2['content']}
+Prompt 2 (user):
+{parent2.get('user_prompt', '')}
 
-Combined prompt:"""
+Combined user prompt:"""
         
         try:
             result = await self.executor._call_llm(
@@ -625,7 +626,7 @@ Combined prompt:"""
             )
             
             return {
-                "content": result["content"].strip(),
+                "user_prompt": result["content"].strip(),
                 "system_prompt": parent1.get("system_prompt", "")
             }
         except:
@@ -634,11 +635,11 @@ Combined prompt:"""
     
     async def _mutate(self, individual: Dict[str, Any]) -> Dict[str, Any]:
         """Mutate an individual."""
-        mutation_prompt = f"""Make a small random change to this prompt while keeping its core purpose:
+        mutation_prompt = f"""Make a small random change to this user prompt while keeping its core purpose:
 
-{individual['content']}
+{individual.get('user_prompt', '')}
 
-Mutated prompt:"""
+Mutated user prompt:"""
         
         try:
             result = await self.executor._call_llm(
@@ -649,7 +650,7 @@ Mutated prompt:"""
             )
             
             return {
-                "content": result["content"].strip(),
+                "user_prompt": result["content"].strip(),
                 "system_prompt": individual.get("system_prompt", "")
             }
         except:
@@ -662,7 +663,7 @@ Mutated prompt:"""
             ]
             
             return {
-                "content": individual["content"] + random.choice(mutations),
+                "user_prompt": (individual.get("user_prompt", "") + random.choice(mutations)).strip(),
                 "system_prompt": individual.get("system_prompt", "")
             }
     
@@ -695,15 +696,15 @@ Mutated prompt:"""
         # Create prompt
         cursor.execute("""
             INSERT INTO prompt_studio_prompts (
-                uuid, project_id, name, content, system_prompt,
-                version, parent_version_id, client_id
+                uuid, project_id, name, system_prompt,
+                user_prompt, version_number, parent_version_id, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             f"genetic-{datetime.utcnow().timestamp()}",
             project_id,
             "Genetic Prompt",
-            individual["content"],
             individual.get("system_prompt"),
+            individual.get("user_prompt", ""),
             1,
             base_prompt_id,
             self.db.client_id

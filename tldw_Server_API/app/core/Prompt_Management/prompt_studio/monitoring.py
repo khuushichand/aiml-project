@@ -190,6 +190,15 @@ class PromptStudioMetrics:
 
         self.metrics_manager.register_metric(
             MetricDefinition(
+                name="jobs.scheduled_total",
+                type=MetricType.COUNTER,
+                description="Total jobs scheduled",
+                labels=["job_type"]
+            )
+        )
+
+        self.metrics_manager.register_metric(
+            MetricDefinition(
                 name="jobs.failures_total",
                 type=MetricType.COUNTER,
                 description="Total job failures",

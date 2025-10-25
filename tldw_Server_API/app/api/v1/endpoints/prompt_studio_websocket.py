@@ -196,148 +196,15 @@ class ConnectionManager:
         """Get number of unique clients connected."""
         return len(self.active_connections)
 
-# Global connection manager instance
-manager = ConnectionManager()
+# NOTE: A single, shared connection manager is defined later as
+# `connection_manager` and imported by the job processor for broadcasts.
+# Avoid creating multiple manager instances to ensure events reach clients.
 
 ########################################################################################################################
 # WebSocket Endpoint
 
-async def websocket_endpoint(
-    websocket: WebSocket,
-    client_id: str = Query(..., description="Client ID"),
-    project_id: Optional[int] = Query(None, description="Project ID to subscribe to"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
-):
-    """
-    WebSocket endpoint for real-time Prompt Studio updates.
-    
-    Args:
-        websocket: WebSocket connection
-        client_id: Client identifier
-        project_id: Optional project to subscribe to
-        db: Database instance
-    """
-    # Accept connection
-    await manager.connect(websocket, client_id)
-    
-    # Create event broadcaster
-    broadcaster = EventBroadcaster(manager, db)
-    
-    # Send initial connection message
-    await websocket.send_json({
-        "type": "connection",
-        "status": "connected",
-        "client_id": client_id,
-        "timestamp": datetime.utcnow().isoformat()
-    })
-    
-    # If project specified, send current job status
-    if project_id:
-        job_manager = JobManager(db)
-        jobs = job_manager.list_jobs(limit=10)
-        
-        await websocket.send_json({
-            "type": "initial_state",
-            "project_id": project_id,
-            "jobs": jobs,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-    
-    try:
-        # Keep connection alive and handle incoming messages
-        while True:
-            # Receive message from client
-            data = await websocket.receive_text()
-            
-            try:
-                message = json.loads(data)
-                message_type = message.get("type")
-                
-                if message_type == "ping":
-                    # Respond to ping
-                    await websocket.send_json({
-                        "type": "pong",
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-                
-                elif message_type == "subscribe":
-                    # Subscribe to specific events
-                    entity_type = message.get("entity_type")
-                    entity_id = message.get("entity_id")
-                    
-                    await websocket.send_json({
-                        "type": "subscribed",
-                        "entity_type": entity_type,
-                        "entity_id": entity_id,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-                
-                elif message_type == "unsubscribe":
-                    # Unsubscribe from events
-                    entity_type = message.get("entity_type")
-                    entity_id = message.get("entity_id")
-                    
-                    await websocket.send_json({
-                        "type": "unsubscribed",
-                        "entity_type": entity_type,
-                        "entity_id": entity_id,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-                
-                elif message_type == "get_job_status":
-                    # Get status of specific job
-                    job_id = message.get("job_id")
-                    job_manager = JobManager(db)
-                    job = job_manager.get_job(job_id)
-                    
-                    await websocket.send_json({
-                        "type": "job_status",
-                        "job": job,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-                
-                elif message_type == "get_stats":
-                    # Get connection statistics
-                    stats = {
-                        "connections": manager.get_connection_count(),
-                        "clients": manager.get_client_count(),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                    
-                    await websocket.send_json({
-                        "type": "stats",
-                        "data": stats
-                    })
-                
-                else:
-                    # Unknown message type
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Unknown message type: {message_type}",
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-                    
-            except json.JSONDecodeError:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Invalid JSON message",
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-            except Exception as e:
-                logger.error(f"Error processing WebSocket message: {e}")
-                safe_error_msg = sanitize_error_message(e, "message processing")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": safe_error_msg,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-    
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info(f"Client {client_id} disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        manager.disconnect(websocket)
+# Removed an unused, undecorated WebSocket handler that instantiated its own
+# ConnectionManager. This ensures a single shared manager is used everywhere.
 
 ########################################################################################################################
 # SSE (Server-Sent Events) Fallback
@@ -463,7 +330,8 @@ async def websocket_endpoint_base(websocket: WebSocket):
                 await websocket.send_json(data)
                     
     except WebSocketDisconnect:
-        connection_manager.disconnect("global")
+        # Pass the actual websocket to ensure proper cleanup
+        connection_manager.disconnect(websocket)
 
 @router.websocket("/{project_id}")
 async def websocket_endpoint(
@@ -494,5 +362,6 @@ async def websocket_endpoint(
                 logger.debug(f"Received WebSocket message for project {project_id}: {data}")
                 
     except WebSocketDisconnect:
-        connection_manager.disconnect(str(project_id))
+        # Pass the actual websocket to ensure proper cleanup
+        connection_manager.disconnect(websocket)
         logger.info(f"WebSocket disconnected for project {project_id}")

@@ -62,6 +62,16 @@ class AudioConverter:
         try:
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Determine codec/sample format based on requested bit depth
+            if bit_depth == 16:
+                codec = 'pcm_s16le'
+                sample_fmt = 's16'
+            elif bit_depth == 24:
+                codec = 'pcm_s24le'
+                sample_fmt = 's24'
+            else:
+                raise AudioConversionError(f"Unsupported bit depth: {bit_depth}. Supported values: 16, 24.")
             
             # Build ffmpeg command
             cmd = [
@@ -69,8 +79,8 @@ class AudioConverter:
                 '-i', str(input_path),  # Input file
                 '-ar', str(sample_rate),  # Sample rate
                 '-ac', str(channels),  # Audio channels
-                '-sample_fmt', f's{bit_depth}',  # Bit depth
-                '-c:a', 'pcm_s16le',  # PCM codec for WAV
+                '-sample_fmt', sample_fmt,  # Bit depth
+                '-c:a', codec,  # PCM codec for WAV
                 str(output_path)  # Output file
             ]
             

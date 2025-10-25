@@ -273,22 +273,74 @@ def get_rate_limiter() -> UserRateLimiter:
     """Get or create the global rate limiter instance."""
     global _rate_limiter
     if _rate_limiter is None:
-        # Load config if available
+        # Prefer Embeddings-specific config and environment overrides; fall back gracefully
         try:
             from tldw_Server_API.app.core.config import load_comprehensive_config
-            config = load_comprehensive_config()
-            chat_config = config.get('Chat-Module', {})
-            
-            # Use config values if available
-            rate_limit = int(chat_config.get('rate_limit_per_minute', 60))
-            
+            cfg = load_comprehensive_config()
+            emb_cfg = {}
+            try:
+                if cfg and cfg.has_section('Embeddings-Module'):
+                    emb_cfg = dict(cfg.items('Embeddings-Module'))
+            except Exception:
+                emb_cfg = {}
+
+            # Environment overrides take precedence
+            import os
+            rate_limit = None
+            win_seconds = None
+            premium_limit = None
+
+            try:
+                env_rate = os.getenv('EMBEDDINGS_RATE_LIMIT_PER_MINUTE')
+                if env_rate is not None:
+                    rate_limit = max(1, int(env_rate))
+            except Exception:
+                pass
+            try:
+                env_win = os.getenv('EMBEDDINGS_WINDOW_SECONDS')
+                if env_win is not None:
+                    win_seconds = max(1, int(env_win))
+            except Exception:
+                pass
+            try:
+                env_pl = os.getenv('EMBEDDINGS_PREMIUM_LIMIT')
+                if env_pl is not None:
+                    premium_limit = max(1, int(env_pl))
+            except Exception:
+                pass
+
+            # Config fallbacks if envs are not set
+            if rate_limit is None:
+                if 'rate_limit_per_minute' in emb_cfg:
+                    rate_limit = max(1, int(emb_cfg.get('rate_limit_per_minute', 60)))
+                else:
+                    # Legacy fallback to Chat-Module if Embeddings not configured
+                    chat_cfg = {}
+                    try:
+                        if cfg and cfg.has_section('Chat-Module'):
+                            chat_cfg = dict(cfg.items('Chat-Module'))
+                    except Exception:
+                        chat_cfg = {}
+                    rate_limit = max(1, int(chat_cfg.get('rate_limit_per_minute', 60)))
+
+            if win_seconds is None:
+                win_seconds = int(emb_cfg.get('window_seconds', 60)) if emb_cfg else 60
+
+            if premium_limit is None:
+                # Allow premium multiplier or absolute limit
+                try:
+                    mult = emb_cfg.get('premium_multiplier') if emb_cfg else None
+                    premium_limit = int(float(mult) * rate_limit) if mult is not None else rate_limit * 3
+                except Exception:
+                    premium_limit = rate_limit * 3
+
             _rate_limiter = UserRateLimiter(
                 default_limit=rate_limit,
-                window_seconds=60,
-                premium_limit=rate_limit * 3  # Premium users get 3x limit
+                window_seconds=win_seconds,
+                premium_limit=premium_limit,
             )
         except Exception as e:
-            logger.warning(f"Could not load rate limit config: {e}. Using defaults.")
+            logger.warning(f"Could not load embeddings rate limit config: {e}. Using defaults.")
             _rate_limiter = UserRateLimiter()
     
     return _rate_limiter

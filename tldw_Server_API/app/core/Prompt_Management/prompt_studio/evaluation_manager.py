@@ -82,7 +82,7 @@ class EvaluationManager:
                 response = chat_api_call(
                     api_endpoint="openai",
                     model=model,
-                    messages=[
+                    messages_payload=[
                         {"role": "system", "content": prompt.get("system_prompt")},
                         {"role": "user", "content": formatted_user_prompt}
                     ],

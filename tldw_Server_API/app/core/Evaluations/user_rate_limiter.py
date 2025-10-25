@@ -19,7 +19,7 @@ import threading
 from tldw_Server_API.app.core.Evaluations.config_manager import get_rate_limit_config, get_config
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 # Import connection pool
-from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
+# from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection  # unused
 
 
 class UserTier(Enum):
@@ -265,8 +265,20 @@ class UserRateLimiter:
             row = cursor.fetchone()
             
             if row:
-                # Check if custom limits have expired
-                if row[8] and datetime.fromisoformat(row[8]) < datetime.now(timezone.utc):
+                # Check if custom limits have expired (tolerate naive or aware timestamps)
+                expired = False
+                if row[8]:
+                    try:
+                        _exp_raw = row[8]
+                        exp_dt = datetime.fromisoformat(_exp_raw)
+                        if exp_dt.tzinfo is None:
+                            # Compare naive timestamps in UTC
+                            expired = exp_dt < datetime.utcnow()
+                        else:
+                            expired = exp_dt < datetime.now(timezone.utc)
+                    except Exception:
+                        expired = False
+                if expired:
                     # Reset to default tier
                     tier = UserTier.FREE
                     config = RateLimitConfig.for_tier(tier)
@@ -339,8 +351,8 @@ class UserRateLimiter:
             
             # Count requests in last minute
             cursor.execute(
-                "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint LIKE ?",
-                (user_id, minute_ago.isoformat(), f"%{endpoint}%")
+                "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint = ?",
+                (user_id, minute_ago.isoformat(), endpoint)
             )
             
             request_count = cursor.fetchone()[0]
@@ -353,8 +365,8 @@ class UserRateLimiter:
                 # Check if within burst window
                 burst_window = now - timedelta(seconds=10)
                 cursor.execute(
-                    "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint LIKE ?",
-                    (user_id, burst_window.isoformat(), f"%{endpoint}%")
+                    "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint = ?",
+                    (user_id, burst_window.isoformat(), endpoint)
                 )
                 
                 burst_count = cursor.fetchone()[0]
@@ -481,7 +493,8 @@ class UserRateLimiter:
                 "X-RateLimit-Tier": config.tier.value,
                 "X-RateLimit-Limit": str(minute_metadata.get("limit", 0)),
                 "X-RateLimit-Remaining": str(minute_metadata.get("requests_remaining", 0)),
-                "X-RateLimit-Reset": str(int(time.time()) + 60),
+                # Align reset with computed remaining seconds in current window
+                "X-RateLimit-Reset": str(int(time.time()) + int(minute_metadata.get("reset_seconds", 60))),
                 "X-RateLimit-Daily-Limit": str(config.evaluations_per_day),
                 "X-RateLimit-Daily-Remaining": str(daily_metadata.get("evaluations_remaining", 0)),
                 "X-RateLimit-Tokens-Remaining": str(daily_metadata.get("tokens_remaining", 0)),

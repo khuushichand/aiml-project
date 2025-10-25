@@ -209,7 +209,6 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
         # Check for errors or invalid data
         if not isinstance(raw_results, dict) or raw_results.get("processing_error"):
             logging.error(f"Error or invalid data returned for query '{q}': {raw_results}")
-            print(f"Error or invalid data returned for query '{q}': {raw_results}")
             continue
 
         logging.info(f"Search results found for query '{q}': {len(raw_results.get('results', []))}")
@@ -599,9 +598,10 @@ def aggregate_results(
     logging.info("Aggregating and summarizing relevant results")
     if not relevant_results:
         return {
-            "Report": "No relevant results found. Unable to provide an answer.",
+            "text": "No relevant results found. Unable to provide an answer.",
             "evidence": [],
-            "confidence": 0.0
+            "confidence": 0.0,
+            "chunks": [],
         }
 
     # FIXME - Add summarization loop
@@ -763,18 +763,20 @@ def aggregate_results(
         if returned_response:
             # You could do further parsing or confidence estimation here
             return {
-                "Report": returned_response,
+                "text": returned_response,
                 "evidence": list(relevant_results.values()),
-                "confidence": 0.9  # Hardcoded or computed as needed
+                "confidence": 0.9,  # Placeholder or computed as needed
+                "chunks": [],
             }
     except Exception as e:
         logging.error(f"Error aggregating results: {e}")
 
     logging.error("Could not create the report due to an error.")
     return {
-        "summary": "Could not create the report due to an error.",
+        "text": "Could not create the report due to an error.",
         "evidence": list(relevant_results.values()),
-        "confidence": 0.0
+        "confidence": 0.0,
+        "chunks": [],
     }
 
 #
@@ -798,8 +800,16 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             raise ValueError("Bing provider is deprecated and not supported")
 
         elif search_engine.lower() == "brave":
-            web_search_results = search_web_brave(search_query, content_country, search_lang, output_lang, result_count, safesearch,
-                                    site_blacklist, date_range)
+            # Call using explicit keywords to avoid argument misalignment
+            web_search_results = search_web_brave(
+                search_term=search_query,
+                country=content_country,
+                search_lang=search_lang,
+                ui_lang=output_lang,
+                result_count=result_count,
+                safesearch=safesearch or "moderate",
+                date_range=date_range,
+            )
 
         elif search_engine.lower() == "duckduckgo":
             # Prepare the arguments for search_web_duckduckgo
@@ -865,7 +875,8 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             return web_search_results_dict
 
         elif search_engine.lower() == "kagi":
-            web_search_results = search_web_kagi(search_query, content_country)
+            # Limit uses result_count; content_country is not applicable
+            web_search_results = search_web_kagi(query=search_query, limit=result_count)
 
         elif search_engine.lower() == "serper":
             web_search_results = search_web_serper()
@@ -1114,7 +1125,16 @@ def parse_html_search_results_generic(soup):
 # https://cloud.baidu.com/doc/APIGUIDE/s/Xk1myz05f
 # https://oxylabs.io/blog/how-to-scrape-baidu-search-results
 def search_web_baidu(arg1, arg2, arg3):
-    pass
+    """Baidu provider stub with egress policy check."""
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        # Use canonical host for policy; actual API endpoint TBD
+        pol = evaluate_url_policy("https://www.baidu.com")
+        if not getattr(pol, 'allowed', False):
+            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise RequestException(f"Egress policy evaluation failed: {_e}")
+    return {"error": "Baidu provider not implemented"}
 
 
 def test_baidu_search(arg1, arg2, arg3):
@@ -1601,6 +1621,15 @@ def search_web_google(
 
         logging.info(f"Prepared parameters for Google Search: {params}")
 
+        # Enforce SSRF/egress policy
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(search_url)
+            if not getattr(pol, 'allowed', False):
+                raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+        except Exception as _e:
+            raise RequestException(f"Egress policy evaluation failed: {_e}")
+
         # Make the API call
         response = requests.get(search_url, params=params)
         response.raise_for_status()
@@ -1788,6 +1817,15 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
     endpoint = f"{search_url}/search"
     params = {"q": query, "limit": limit}
 
+    # Enforce SSRF/egress policy
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(endpoint)
+        if not getattr(pol, 'allowed', False):
+            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise RequestException(f"Egress policy evaluation failed: {_e}")
+
     response = requests.get(endpoint, headers=headers, params=params)
     response.raise_for_status()
     logging.debug(response.json())
@@ -1919,6 +1957,15 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
     # Perform the search request
     try:
+        # Enforce SSRF/egress policy for Searx endpoint
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(search_url)
+            if not getattr(pol, 'allowed', False):
+                raise requests.RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+        except Exception as _e:
+            raise requests.RequestException(f"Egress policy evaluation failed: {_e}")
+
         # Mimic browser headers
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
@@ -1973,7 +2020,35 @@ def test_search_searx():
     print(result)
 
 def parse_searx_results(searx_search_results, web_search_results_dict):
-    pass
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        items = searx_search_results.get("results", []) if isinstance(searx_search_results, dict) else []
+        for item in items:
+            title = item.get("title", "")
+            url = item.get("link") or item.get("url") or ""
+            snippet = item.get("snippet") or item.get("content") or ""
+            published = item.get("publishedDate") or item.get("published") or None
+
+            processed = {
+                "title": title,
+                "url": url,
+                "content": snippet,
+                "metadata": {
+                    "date_published": published,
+                    "author": None,
+                    "source": extract_domain(url) if url else None,
+                    "language": None,
+                    "relevance_score": None,
+                    "snippet": snippet,
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except Exception as e:
+        web_search_results_dict["processing_error"] = f"Error processing Searx results: {e}"
 
 def test_parse_searx_results():
     pass
@@ -1985,7 +2060,15 @@ def test_parse_searx_results():
 #
 # https://github.com/YassKhazzan/openperplex_backend_os/blob/main/sources_searcher.py
 def search_web_serper():
-    pass
+    """Serper.dev provider stub with egress policy check."""
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy("https://google.serper.dev/search")
+        if not getattr(pol, 'allowed', False):
+            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise RequestException(f"Egress policy evaluation failed: {_e}")
+    return {"error": "Serper provider not implemented"}
 
 
 def test_search_serper():
@@ -2019,6 +2102,16 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
     if site_blacklist:
         payload["exclude_domains"] = site_blacklist
 
+    # Enforce SSRF/egress policy
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(tavily_api_url)
+        if not getattr(pol, 'allowed', False):
+            raise requests.RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        # Surface policy evaluation failure in a consistent way
+        raise requests.RequestException(f"Egress policy evaluation failed: {_e}")
+
     # Perform the search request
     try:
         headers = {
@@ -2030,7 +2123,7 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        return f"There was an error searching for content. {str(e)}"
+        return {"error": f"There was an error searching for content. {str(e)}"}
 
 
 def test_search_tavily():
@@ -2039,7 +2132,36 @@ def test_search_tavily():
 
 
 def parse_tavily_results(tavily_search_results, web_search_results_dict):
-    pass
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        # Tavily returns dict with key 'results': list of dicts
+        items = tavily_search_results.get("results", []) if isinstance(tavily_search_results, dict) else []
+        for item in items:
+            title = item.get("title", "")
+            url = item.get("url", "")
+            content = item.get("content") or item.get("snippet") or ""
+            published = item.get("publishedDate") or item.get("published_date") or None
+
+            processed = {
+                "title": title,
+                "url": url,
+                "content": content,
+                "metadata": {
+                    "date_published": published,
+                    "author": item.get("author"),
+                    "source": extract_domain(url) if url else None,
+                    "language": item.get("language"),
+                    "relevance_score": item.get("score"),
+                    "snippet": content,
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except Exception as e:
+        web_search_results_dict["processing_error"] = f"Error processing Tavily results: {e}"
 
 
 def test_parse_tavily_results():
@@ -2055,7 +2177,15 @@ def test_parse_tavily_results():
 # https://yandex.cloud/en/docs/search-api/concepts/response
 # https://github.com/yandex-cloud/cloudapi/blob/master/yandex/cloud/searchapi/v2/search_query.proto
 def search_web_yandex():
-    pass
+    """Yandex provider stub with egress policy check."""
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy("https://yandex.cloud")
+        if not getattr(pol, 'allowed', False):
+            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise RequestException(f"Egress policy evaluation failed: {_e}")
+    return {"error": "Yandex provider not implemented"}
 
 
 def test_search_yandex():

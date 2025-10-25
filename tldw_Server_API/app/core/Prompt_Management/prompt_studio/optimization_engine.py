@@ -323,23 +323,23 @@ Follow these examples for consistency."""
         # Get base prompt
         prompt = self._get_prompt(base_prompt_id)
         
-        # Create new prompt
+        # Create new prompt variant: update system_prompt (instructions), preserve user_prompt
         conn = self.db.get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
             INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, name, content,
-                system_prompt, version, parent_version_id, client_id
+                uuid, project_id, signature_id, name, system_prompt,
+                user_prompt, version_number, parent_version_id, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             f"opt-{datetime.utcnow().timestamp()}",
             prompt["project_id"],
             prompt.get("signature_id"),
             f"{prompt['name']} (Optimized)",
-            prompt["content"],
             new_instruction,
-            prompt["version"] + 1,
+            prompt.get("user_prompt"),
+            (prompt.get("version_number") or 0) + 1,
             base_prompt_id,
             self.db.client_id
         ))
@@ -544,23 +544,24 @@ class BootstrapOptimizer:
             examples_text += f"Input: {json.dumps(example.get('inputs', {}), indent=2)}\n"
             examples_text += f"Output: {json.dumps(example.get('actual_output', {}), indent=2)}\n\n"
         
-        # Add examples to prompt
-        new_content = f"{examples_text}{prompt['content']}"
+        # Add examples to user prompt (preserve system_prompt)
+        base_user_prompt = prompt.get("user_prompt") or ""
+        new_user_prompt = f"{examples_text}{base_user_prompt}"
         
         # Create new prompt
         cursor.execute("""
             INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, name, content,
-                system_prompt, version, parent_version_id, client_id
+                uuid, project_id, signature_id, name, system_prompt,
+                user_prompt, version_number, parent_version_id, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             f"bootstrap-{datetime.utcnow().timestamp()}",
             prompt["project_id"],
             prompt.get("signature_id"),
             f"{prompt['name']} (Bootstrap)",
-            new_content,
             prompt.get("system_prompt"),
-            prompt["version"] + 1,
+            new_user_prompt,
+            (prompt.get("version_number") or 0) + 1,
             base_prompt_id,
             self.db.client_id
         ))

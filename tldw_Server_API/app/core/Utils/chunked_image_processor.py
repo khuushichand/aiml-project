@@ -124,20 +124,21 @@ async def decode_base64_image_chunked(
     
     for i in range(0, len(base64_str), b64_chunk_size):
         chunk = base64_str[i:i + b64_chunk_size]
-        
+
         # Ensure chunk is properly padded
         padding = 4 - (len(chunk) % 4)
         if padding != 4:
             chunk += '=' * padding
-        
+
         try:
-            decoded = base64.b64decode(chunk)
+            # Strict validation: reject invalid characters or incorrect padding
+            decoded = base64.b64decode(chunk, validate=True)
             yield decoded
         except Exception as e:
-            logger.error(f"Error decoding base64 chunk: {e}")
-            # Skip bad chunk
-            continue
-        
+            # Tightened policy: abort on invalid data rather than silently skipping
+            logger.error(f"Invalid base64 data encountered: {e}")
+            raise
+
         # Small delay to prevent blocking
         await asyncio.sleep(0)
 

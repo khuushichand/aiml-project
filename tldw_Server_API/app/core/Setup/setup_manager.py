@@ -138,7 +138,8 @@ def _build_comment_index() -> Tuple[Dict[Tuple[str, str], str], Dict[str, str]]:
                 pending_section_comments.clear()
             continue
 
-        if stripped.startswith('#'):
+        # Treat both '#' and ';' as comment markers (INI-style)
+        if stripped.startswith('#') or stripped.startswith(';'):
             comment_text = stripped.lstrip('#').strip()
             if comment_text:
                 pending_field_comments.append(comment_text)
@@ -160,10 +161,17 @@ def _build_comment_index() -> Tuple[Dict[Tuple[str, str], str], Dict[str, str]]:
         if '=' in raw and current_section:
             line_without_inline = raw
             inline_comment = ''
-            if '#' in raw:
-                before, after = raw.split('#', 1)
-                line_without_inline = before
-                inline_comment = after.strip()
+            # Support inline comments introduced by '#' or ';'
+            if '#' in raw or ';' in raw:
+                # Prefer the earliest occurring comment marker
+                hash_idx = raw.find('#') if '#' in raw else len(raw) + 1
+                semi_idx = raw.find(';') if ';' in raw else len(raw) + 1
+                cut_idx = min(hash_idx, semi_idx)
+                if cut_idx < len(raw):
+                    before = raw[:cut_idx]
+                    after = raw[cut_idx + 1 :]
+                    line_without_inline = before
+                    inline_comment = after.strip()
 
             key = line_without_inline.split('=', 1)[0].strip()
             comment_parts = list(pending_field_comments)
@@ -402,6 +410,7 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
     # Validate sections/keys and types against existing config
     _validate_updates(parser, updates)
 
+    # Stage updates into the in-memory parser so that downstream hooks can read booleans
     for section, items in updates.items():
         if not parser.has_section(section):
             parser.add_section(section)
@@ -415,10 +424,10 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
         shutil.copy2(config_path, backup_path)
         logger.info(f"Created backup of config.txt at {backup_path}")
 
-    with config_path.open("w", encoding="utf-8") as stream:
-        parser.write(stream, space_around_delimiters=True)
+    # Write changes back while preserving comments and unrelated formatting
+    _write_config_preserving_comments(config_path, updates)
 
-    logger.info("Configuration file updated via setup manager")
+    logger.info("Configuration file updated via setup manager (comments preserved)")
 
     if (
         _remote_access_hook
@@ -432,6 +441,88 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
             logger.exception("Failed to propagate remote setup access change")
 
     return backup_path
+
+
+def _write_config_preserving_comments(config_path: Path, updates: Dict[str, Dict[str, Any]]) -> None:
+    """Write updated key-values while preserving comments and unrelated formatting.
+
+    Strategy:
+      - Read original lines as text.
+      - Track current section.
+      - For each line containing a key in the active section, replace the value portion
+        before any inline comment marker ('#' or ';').
+      - Leave comments and spacing outside the key/value token intact where reasonable.
+    """
+    try:
+        original_lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except FileNotFoundError:
+        raise
+
+    # Prepare a mutable copy of updates: section -> key -> str(value)
+    pending: Dict[str, Dict[str, str]] = {
+        section: {k: _coerce_to_string(v) for k, v in items.items()} for section, items in updates.items()
+    }
+
+    current_section: Optional[str] = None
+    out_lines: list[str] = []
+
+    for raw in original_lines:
+        line = raw
+        stripped = line.strip()
+
+        # Section header detection: [Section]
+        if stripped.startswith("[") and stripped.endswith("]") and len(stripped) >= 2:
+            current_section = stripped[1:-1].strip()
+            out_lines.append(line)
+            continue
+
+        # If in a section that has updates, try to match a key line
+        items = pending.get(current_section or "", {})
+        if items and "=" in line:
+            # Separate inline comment if present (# or ;) taking the earliest marker
+            hash_idx = line.find("#") if "#" in line else len(line) + 1
+            semi_idx = line.find(";") if ";" in line else len(line) + 1
+            cut_idx = min(hash_idx, semi_idx)
+
+            code_part = line[:cut_idx]
+            comment_part = line[cut_idx:] if cut_idx < len(line) else ""
+
+            if "=" in code_part:
+                left, right = code_part.split("=", 1)
+                key = left.strip()
+                if key in items:
+                    # Preserve leading indentation from the original 'left'
+                    leading_ws_len = len(left) - len(left.lstrip(" \t"))
+                    leading_ws = left[:leading_ws_len]
+                    new_value = items.pop(key)
+                    # Build normalized key/value token; keep one space around '='
+                    new_code = f"{leading_ws}{key} = {new_value}"
+                    # Ensure a space before inline comment if it exists and doesn't already start with whitespace
+                    if comment_part and not comment_part.startswith((" ", "\t")):
+                        comment_part = " " + comment_part
+                    out_lines.append(new_code + comment_part)
+                    continue
+
+        out_lines.append(line)
+
+    # Sanity: Ensure all keys were applied; if not, fall back to parser write for missed keys
+    leftovers = sum(len(items) for items in pending.values())
+    if leftovers:
+        logger.warning("Some config updates were not applied via comment-preserving writer; falling back for %d keys.", leftovers)
+        # As a conservative fallback: append missing keys at end of their section
+        text = "".join(out_lines)
+        for section, items in pending.items():
+            if not items:
+                continue
+            # Append under a section header (create if missing)
+            header = f"[{section}]"
+            if header not in text:
+                text += f"\n{header}\n"
+            for k, v in items.items():
+                text += f"{k} = {v}\n"
+        out_lines = [text]
+
+    config_path.write_text("".join(out_lines), encoding="utf-8")
 
 
 def _validate_updates(parser: ConfigParser, updates: Dict[str, Dict[str, Any]]) -> None:

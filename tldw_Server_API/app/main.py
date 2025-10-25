@@ -1647,6 +1647,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down MCP Unified server: {e}")
 
+    # Shutdown MCP Unified rate limiter cleanup task (if any)
+    try:
+        from tldw_Server_API.app.core.MCP_unified.auth.rate_limiter import (
+            shutdown_rate_limiter as _mcp_shutdown_rl,
+        )
+        await _mcp_shutdown_rl()
+        logger.info("App Shutdown: MCP rate limiter cleanup task cancelled")
+    except Exception as e:
+        logger.debug(f"App Shutdown: MCP rate limiter shutdown skipped/failed: {e}")
+
     # Shutdown TTS Service
     try:
         from tldw_Server_API.app.core.TTS.tts_service_v2 import close_tts_service_v2

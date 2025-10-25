@@ -378,7 +378,10 @@ def _utc_now() -> str:
 def execute_install_plan(plan_payload: Dict[str, Any]) -> None:
     """Background entry point to execute an installation plan."""
     try:
-        plan = InstallPlan.parse_obj(plan_payload)
+        validate = getattr(InstallPlan, 'model_validate', None) or getattr(InstallPlan, 'parse_obj', None)
+        if not validate:
+            raise TypeError('No compatible Pydantic validation method found on InstallPlan')
+        plan = validate(plan_payload)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Received invalid install plan")
         return

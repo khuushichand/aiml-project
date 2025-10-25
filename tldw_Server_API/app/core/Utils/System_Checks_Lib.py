@@ -40,13 +40,13 @@ processing_choice: str = "cpu"
 def platform_check():
     global userOS
     if platform.system() == "Linux":
-        print("Linux OS detected \n Running Linux appropriate commands")
+        logging.info("Linux OS detected; running Linux-appropriate checks")
         userOS = "Linux"
     elif platform.system() == "Windows":
-        print("Windows OS detected \n Running Windows appropriate commands")
+        logging.info("Windows OS detected; running Windows-appropriate checks")
         userOS = "Windows"
     else:
-        print("Other OS detected \n Maybe try running things manually?")
+        logging.warning("Other/unknown OS detected; you may need to run steps manually")
         userOS = platform.system() or "Unknown"
         return False
     return True
@@ -64,28 +64,28 @@ def cuda_check():
             cuda_version = next(
                 (line.split(":")[-1].strip() for line in nvidia_smi_output.splitlines() if "CUDA Version" in line),
                 "Not found")
-            print(f"NVIDIA GPU with CUDA Version {cuda_version} is available.")
+            logging.info(f"NVIDIA GPU with CUDA Version {cuda_version} is available.")
             processing_choice = "cuda"
             return True #fix 'Asserion error: none is not true' in Tests\Summarization\test_summarize.py
         else:
-            print("CUDA is not installed or configured correctly.")
+            logging.warning("CUDA is not installed or configured correctly.")
             processing_choice = "cpu"
             return False
 
     except subprocess.CalledProcessError as e:
-        print(f"Failed to run 'nvidia-smi': {str(e)}")
+        logging.error(f"Failed to run 'nvidia-smi': {str(e)}")
         processing_choice = "cpu"
         return False
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        logging.error(f"An error occurred during CUDA detection: {str(e)}")
         processing_choice = "cpu"
         return False
 
     # Optionally, check for the CUDA_VISIBLE_DEVICES env variable as an additional check
     if "CUDA_VISIBLE_DEVICES" in os.environ:
-        print("CUDA_VISIBLE_DEVICES is set:", os.environ["CUDA_VISIBLE_DEVICES"])
+        logging.info(f"CUDA_VISIBLE_DEVICES is set: {os.environ['CUDA_VISIBLE_DEVICES']}")
     else:
-        print("CUDA_VISIBLE_DEVICES not set.")
+        logging.info("CUDA_VISIBLE_DEVICES not set.")
 
 
 # Ask user if they would like to use either their GPU or their CPU for transcription
@@ -101,15 +101,15 @@ def decide_cpugpu():
         return processing_choice
 
     if processing_choice == "cuda" and (processing_input.lower() == "cuda" or processing_input == "1"):
-        print("You've chosen to use the GPU.")
+        logging.info("User selected GPU for processing.")
         logging.debug("GPU is being used for processing")
         processing_choice = "cuda"
     elif processing_input.lower() == "cpu" or processing_input == "2":
-        print("You've chosen to use the CPU.")
+        logging.info("User selected CPU for processing.")
         logging.debug("CPU is being used for processing")
         processing_choice = "cpu"
     else:
-        print("Invalid choice. Please select either GPU or CPU.")
+        logging.warning("Invalid processing choice; please select GPU or CPU.")
     return processing_choice
 
 
@@ -123,9 +123,10 @@ def check_ffmpeg():
         return True
     else:
         logging.debug("ffmpeg not installed on the local system/in local PATH")
-        print(
-            "ffmpeg is not installed.\n\n You can either install it manually, or through your package manager of "
-            "choice.\n Windows users, builds are here: https://www.gyan.dev/ffmpeg/builds/")
+        logging.warning(
+            "ffmpeg is not installed. You can install it manually or via your package manager. "
+            "Windows builds: https://www.gyan.dev/ffmpeg/builds/"
+        )
         if userOS == "Unknown":
             userOS_guess = platform.system()
         else:
@@ -138,14 +139,13 @@ def check_ffmpeg():
                 return False
 
         elif userOS_guess == "Linux":
-            print(
-                "You should install ffmpeg using your platform's appropriate package manager, 'apt install ffmpeg',"
-                "'dnf install ffmpeg' or 'pacman', etc."
-                )
+            logging.info(
+                "Install ffmpeg using your platform's package manager (apt/dnf/pacman/etc.)."
+            )
             return False
         else:
             logging.debug("running an unsupported OS")
-            print("You're running an unsupported/Un-tested OS")
+            logging.warning("You're running an unsupported/un-tested OS")
             try:
                 exit_script = input("Let's exit the script, unless you're feeling lucky? (y/n)")
             except EOFError:
@@ -165,10 +165,10 @@ def download_ffmpeg():
         logging.debug("No interactive input available; skipping ffmpeg download prompt")
         return False
     if user_choice.lower() not in ['y', 'yes', '1']:  # Simplified input check
-        print("ffmpeg will not be downloaded.")
+        logging.info("ffmpeg will not be downloaded.")
         return False
 
-    print("Downloading ffmpeg...")
+    logging.info("Downloading ffmpeg...")
     try:
         response = requests.get(FFMPEG_DOWNLOAD_URL, stream=True)
         # Raise an exception for bad HTTP status codes (4xx or 5xx).
@@ -180,7 +180,7 @@ def download_ffmpeg():
             for chunk in response.iter_content(chunk_size=8192):
                 file.write(chunk)
 
-        print("Extracting ffmpeg.exe...")
+        logging.info("Extracting ffmpeg.exe...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             ffmpeg_path = None
             for file_info in zip_ref.infolist():
@@ -201,21 +201,18 @@ def download_ffmpeg():
             shutil.move(src_path, dst_path)  # Move to the correct location (./Bin/ffmpeg.exe).
 
         os.remove(zip_path)  # Clean up: Delete the downloaded zip file.
-        print("ffmpeg.exe has been successfully downloaded and extracted to the './Bin' folder.")
+        logging.info("ffmpeg.exe has been successfully downloaded and extracted to the './Bin' folder.")
         return True # returns if the process was succesful
 
     # Handle potential errors during the download and extraction process.
     except requests.exceptions.RequestException as e:
         logging.error(f"Error downloading ffmpeg: {e}")
-        print(f"Error downloading ffmpeg: {e}")
         return False
     except (FileNotFoundError, zipfile.BadZipFile, OSError) as e:
         logging.error(f"Error extracting or moving ffmpeg: {e}")
-        print(f"Error extracting or moving ffmpeg: {e}")
         return False
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
-        print(f"An unexpected error occurred: {e}")
         return False
 
 #

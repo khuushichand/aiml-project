@@ -416,5 +416,31 @@ class ToolCatalogEntryResponse(BaseModel):
 
 
 #
+# Rate Limit Admin Schemas
+
+class RateLimitResetRequest(BaseModel):
+    """Request to reset rate limit counters.
+
+    Provide either a raw identifier or one of ip/user_id/api_key_hash. Optionally include an endpoint
+    to limit the reset to one endpoint; omit to reset all endpoints for the identifier.
+    """
+    kind: Optional[str] = Field(None, pattern="^(ip|user|api|raw)$")
+    identifier: Optional[str] = None
+    ip: Optional[str] = None
+    user_id: Optional[int] = None
+    api_key_hash: Optional[str] = None
+    endpoint: Optional[str] = None
+    dry_run: Optional[bool] = False
+
+
+class RateLimitResetResponse(BaseModel):
+    ok: bool = True
+    identifier: str
+    endpoint: Optional[str] = None
+    note: Optional[str] = None
+    db_rows_deleted: int = 0
+    redis_keys_deleted: int = 0
+
+#
 ## End of admin_schemas.py
 #######################################################################################################################

@@ -43,7 +43,7 @@ class AssistantQuestion(BaseModel):
 
 
 @router.get("/status", openapi_extra={"security": []})
-async def get_setup_status() -> Dict[str, Any]:
+async def get_setup_status(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
     """Return setup availability and placeholder diagnostics."""
     return setup_manager.get_status_snapshot()
 
@@ -65,7 +65,7 @@ async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -
 
 
 @router.get("/install-status", openapi_extra={"security": []})
-async def get_install_status() -> Dict[str, Any]:
+async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
     """Return the current installation plan progress if available."""
 
     status_snapshot = setup_manager.get_status_snapshot()
@@ -211,14 +211,6 @@ async def setup_self_verify(
         module = getattr(conn.__class__, "__module__", "")
         return module or ""
 
-    async def _maybe_commit(conn: Any) -> None:
-        commit = getattr(conn, "commit", None)
-        if not commit:
-            return
-        result = commit()
-        if inspect.isawaitable(result):
-            await result
-
     try:
         module_name = _conn_module_name(raw_conn)
         is_asyncpg = module_name.startswith("asyncpg")
@@ -234,9 +226,18 @@ async def setup_self_verify(
                 "UPDATE users SET is_verified = ?, updated_at = datetime('now') WHERE id = ?",
                 (1, user_id),
             )
-            await _maybe_commit(db)
+            # SQLite-style adapters should commit; Postgres path above does not
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                result = commit()
+                if inspect.isawaitable(result):
+                    await result
             if raw_conn is not db:
-                await _maybe_commit(raw_conn)
+                commit2 = getattr(raw_conn, "commit", None)
+                if callable(commit2):
+                    result2 = commit2()
+                    if inspect.isawaitable(result2):
+                        await result2
         return {"success": True, "user_id": user_id, "message": "Account marked as verified."}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to self-verify during setup")

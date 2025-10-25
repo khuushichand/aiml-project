@@ -136,6 +136,23 @@ class TTSServiceV2:
     # ---------------------------------------------------------------------------------
     # Backwards-compatibility methods expected by older unit tests
     # ---------------------------------------------------------------------------------
+    async def _ensure_factory(self) -> TTSAdapterFactory:
+        """
+        Ensure a usable adapter factory is available.
+        Favors injected or legacy `_factory` references before creating the singleton.
+        """
+        if self.factory is not None:
+            return self.factory
+
+        if self._factory is not None:
+            self.factory = self._factory  # type: ignore[assignment]
+            return self.factory  # type: ignore[return-value]
+
+        factory = await get_tts_factory()
+        self.factory = factory
+        self._factory = factory
+        return factory
+
     async def shutdown(self) -> None:
         """Gracefully close any underlying factory/adapters (best-effort)."""
         try:
@@ -348,6 +365,7 @@ class TTSServiceV2:
         """
         # Convert OpenAI request to unified TTSRequest
         tts_request = self._convert_request(request)
+        factory = await self._ensure_factory()
         
         provider_hint: Optional[str] = None
         if provider:
@@ -355,8 +373,8 @@ class TTSServiceV2:
         else:
             try:
                 provider_source = None
-                if self.factory:
-                    provider_source = self.factory
+                if factory:
+                    provider_source = factory
                 elif self._factory and hasattr(self._factory, "get_provider_for_model"):
                     provider_source = self._factory  # type: ignore[assignment]
                 if provider_source and hasattr(provider_source, "get_provider_for_model"):
@@ -669,16 +687,17 @@ class TTSServiceV2:
         provider: Optional[str] = None
     ) -> Optional[TTSAdapter]:
         """Get appropriate adapter for the request"""
+        factory = await self._ensure_factory()
         if provider:
             # Specific provider requested
             try:
                 provider_enum = TTSProvider(provider.lower())
-                return await self.factory.registry.get_adapter(provider_enum)
+                return await factory.registry.get_adapter(provider_enum)
             except ValueError:
                 logger.warning(f"Unknown provider: {provider}")
         
         # Get adapter by model name
-        return await self.factory.get_adapter_by_model(model)
+        return await factory.get_adapter_by_model(model)
     
     def _provider_aliases(self, adapter: TTSAdapter) -> Set[str]:
         """Return a normalized alias set for a provider/adapter."""
@@ -743,6 +762,8 @@ class TTSServiceV2:
         exclude: Optional[List[str]] = None
     ) -> Optional[TTSAdapter]:
         """Get a fallback adapter that can handle the request"""
+        factory = await self._ensure_factory()
+        registry = getattr(factory, "registry", None)
         exclude_tokens = {token.lower() for token in (exclude or [])}
         # Normalize tokens to cover enum values (e.g., "OpenAIAdapter" -> "openai")
         normalized_tokens = set(exclude_tokens)
@@ -757,7 +778,7 @@ class TTSServiceV2:
         exclude_tokens = normalized_tokens
     
         # Find adapter that supports the requirements
-        adapter = await self.factory.get_best_adapter(
+        adapter = await factory.get_best_adapter(
             language=request.language,
             format=request.format,
             supports_streaming=request.stream
@@ -774,8 +795,25 @@ class TTSServiceV2:
         for provider in TTSProvider:
             if provider.value.lower() in exclude_tokens or provider.name.lower() in exclude_tokens:
                 continue
-            
-            adapter = await self.factory.registry.get_adapter(provider)
+            # Skip providers without registered adapters (e.g., TODO placeholders)
+            if registry and hasattr(registry, "_adapter_specs"):
+                specs = getattr(registry, "_adapter_specs")
+                try:
+                    if provider not in specs:
+                        continue
+                except TypeError:
+                    # If specs is not dict-like, fall back to attempting fetch
+                    pass
+
+            try:
+                adapter = await factory.registry.get_adapter(provider)
+            except TTSProviderNotConfiguredError:
+                logger.debug(f"Skipping provider {provider.value} - no adapter configured")
+                continue
+            except Exception as exc:
+                logger.debug(f"Skipping provider {provider.value} due to error: {exc}")
+                continue
+
             if adapter:
                 # Validate if it can handle the request
                 validation_result = await adapter.validate_request(request)
@@ -1014,12 +1052,13 @@ class TTSServiceV2:
             Dictionary mapping provider names to voice lists
         """
         voices = {}
+        factory = await self._ensure_factory()
         
         for provider in TTSProvider:
             # Defensive skip: if the registry doesn't have an adapter spec for this
             # provider (e.g., unimplemented like 'alltalk'), skip it early.
             try:
-                specs = getattr(self.factory.registry, "_adapter_specs", None)
+                specs = getattr(factory.registry, "_adapter_specs", None)
                 if specs is not None and provider not in specs:
                     logger.debug(f"Skipping provider {provider.value} - no adapter registered")
                     continue
@@ -1029,7 +1068,7 @@ class TTSServiceV2:
 
             # Try to get adapter; skip providers that are not configured/available
             try:
-                adapter = await self.factory.registry.get_adapter(provider)
+                adapter = await factory.registry.get_adapter(provider)
             except Exception as e:
                 # Specifically handle not-configured providers without failing the call
                 try:
@@ -1066,7 +1105,8 @@ class TTSServiceV2:
         Returns:
             Dictionary with capability information
         """
-        capabilities = await self.factory.registry.get_all_capabilities()
+        factory = await self._ensure_factory()
+        capabilities = await factory.registry.get_all_capabilities()
         
         result = {}
         for provider, caps in capabilities.items():
@@ -1086,7 +1126,10 @@ class TTSServiceV2:
     
     def get_status(self) -> Dict[str, Any]:
         """Get service status"""
-        status = self.factory.get_status()
+        factory = self.factory or self._factory
+        if not factory or not hasattr(factory, "get_status"):
+            return {"providers": {}, "initialized": False}
+        status = factory.get_status()
         
         # Add circuit breaker status if available
         if self.circuit_manager:

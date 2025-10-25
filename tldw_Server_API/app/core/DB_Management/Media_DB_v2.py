@@ -2253,31 +2253,21 @@ class MediaDatabase:
         except Exception as exc:
             logging.debug(f"Could not enable RLS for media: {exc}")
 
-        try:
-            backend.execute(
-                f"DROP POLICY IF EXISTS {backend.escape_identifier('media_scope_policy')} ON {ident('media')}",
-                connection=conn,
-            )
-        except Exception:
-            pass
-
+        # Create policies only if missing (idempotent)
         for policy_name, predicate in policy_sets['media']:
             try:
-                backend.execute(
-                    f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
-                    connection=conn,
-                )
-            except Exception:
-                pass
-            backend.execute(
-                f"""
-                CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
-                FOR ALL
-                USING ({predicate})
-                WITH CHECK ({predicate})
-                """,
-                connection=conn,
-            )
+                if not self._postgres_policy_exists(conn, 'media', policy_name):
+                    backend.execute(
+                        f"""
+                        CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
+                        FOR ALL
+                        USING ({predicate})
+                        WITH CHECK ({predicate})
+                        """,
+                        connection=conn,
+                    )
+            except Exception as exc:
+                logging.debug(f"Skipping media policy {policy_name}: {exc}")
 
         try:
             backend.execute(f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY", connection=conn)
@@ -2285,31 +2275,21 @@ class MediaDatabase:
         except Exception as exc:
             logging.debug(f"Could not enable RLS for sync_log: {exc}")
 
-        try:
-            backend.execute(
-                f"DROP POLICY IF EXISTS {backend.escape_identifier('sync_log_scope_policy')} ON {ident('sync_log')}",
-                connection=conn,
-            )
-        except Exception:
-            pass
-
+        # Create policies only if missing (idempotent)
         for policy_name, predicate in policy_sets['sync_log']:
             try:
-                backend.execute(
-                    f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('sync_log')}",
-                    connection=conn,
-                )
-            except Exception:
-                pass
-            backend.execute(
-                f"""
-                CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('sync_log')}
-                FOR ALL
-                USING ({predicate})
-                WITH CHECK ({predicate})
-                """,
-                connection=conn,
-            )
+                if not self._postgres_policy_exists(conn, 'sync_log', policy_name):
+                    backend.execute(
+                        f"""
+                        CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('sync_log')}
+                        FOR ALL
+                        USING ({predicate})
+                        WITH CHECK ({predicate})
+                        """,
+                        connection=conn,
+                    )
+            except Exception as exc:
+                logging.debug(f"Skipping sync_log policy {policy_name}: {exc}")
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:

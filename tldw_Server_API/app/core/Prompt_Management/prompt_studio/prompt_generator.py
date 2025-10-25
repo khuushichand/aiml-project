@@ -435,6 +435,7 @@ INSTRUCTIONS:
     
     # New methods for test compatibility
     def generate(self, type: PromptType = PromptType.BASIC, 
+                 prompt_type: Optional[PromptType] = None,
                  task_description: str = "",
                  variables: Dict[str, str] = None,
                  strategy: GenerationStrategy = GenerationStrategy.AUTO,
@@ -449,18 +450,21 @@ INSTRUCTIONS:
                  dynamic_selection: bool = False,
                  max_examples: int = None) -> Dict[str, str]:
         """Generate a prompt with various options."""
+        # Determine effective prompt type (avoid builtin shadowing downstream)
+        effective_type = prompt_type if prompt_type is not None else type
+
         # Validate inputs
-        if isinstance(type, str):
+        if isinstance(effective_type, str):
             # Try to convert string to PromptType
             try:
-                type = PromptType(type)
+                effective_type = PromptType(effective_type)
             except ValueError:
                 # Check if it's a valid enum name
                 valid_types = [pt.value for pt in PromptType]
-                if type not in valid_types:
-                    raise ValueError(f"Invalid prompt type: {type}. Valid types are: {valid_types}")
-        elif not isinstance(type, PromptType):
-            raise ValueError(f"Invalid prompt type: {type}")
+                if effective_type not in valid_types:
+                    raise ValueError(f"Invalid prompt type: {effective_type}. Valid types are: {valid_types}")
+        elif not isinstance(effective_type, PromptType):
+            raise ValueError(f"Invalid prompt type: {effective_type}")
         
         # Validate template name if provided
         if template_name and template_name not in self.templates and template_name != "nonexistent":
@@ -485,7 +489,7 @@ INSTRUCTIONS:
             user = template.user_template
         else:
             # Handle different prompt types
-            if type == PromptType.CHAIN_OF_THOUGHT:
+            if effective_type == PromptType.CHAIN_OF_THOUGHT:
                 system = "You are a helpful AI assistant that reasons step by step."
                 base_task = task_description or 'Solve this problem'
                 # Ensure "step by step" is in the prompt if policy allows
@@ -493,10 +497,10 @@ INSTRUCTIONS:
                     user = f"{base_task}\n\nLet's think step by step:"
                 else:
                     user = base_task
-            elif type == PromptType.FEW_SHOT:
+            elif effective_type == PromptType.FEW_SHOT:
                 system = "You are a helpful AI assistant that learns from examples."
                 user = task_description or "{input}"
-            elif type == PromptType.REACT:
+            elif effective_type == PromptType.REACT:
                 system = "You are a helpful AI assistant that uses the ReAct framework: Thought, Action, Observation."
                 base_task = task_description or 'Complete this task'
                 user = f"""Task: {base_task}
@@ -512,10 +516,10 @@ Answer: [Final answer]
 
 Begin:
 Thought:"""
-            elif type == PromptType.CREATIVE:
+            elif effective_type == PromptType.CREATIVE:
                 system = "You are a creative and imaginative AI assistant."
                 user = task_description or "{input}"
-            elif type == PromptType.ANALYTICAL:
+            elif effective_type == PromptType.ANALYTICAL:
                 system = "You are an analytical AI assistant that provides data-driven insights."
                 user = task_description or "{input}"
             else:
@@ -550,6 +554,7 @@ Thought:"""
             user += "\n\nConstraints:\n" + "\n".join(f"- {c}" for c in constraints)
         
         # Add few-shot examples
+        examples_str = ""
         if few_shot_examples:
             # Apply max_examples limit if specified
             examples_to_use = few_shot_examples
@@ -594,7 +599,7 @@ Thought:"""
             user += "\n\nAnalyze systematically and provide data-driven insights."
         
         # Handle template composition (for test_template_composition)
-        if type == PromptType.CHAIN_OF_THOUGHT and few_shot_examples:
+        if effective_type == PromptType.CHAIN_OF_THOUGHT and few_shot_examples:
             if self.enable_chain_of_thought:
                 user = f"{examples_str}\n\n{task_description}\n\nLet's think step by step:"
             else:

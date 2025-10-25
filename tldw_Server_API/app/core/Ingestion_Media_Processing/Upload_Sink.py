@@ -623,6 +623,16 @@ class FileValidator:
                                 issues.append(f"Archive contains path traversal attempt: {member_filename}")
                                 continue
 
+                            # Per-member uncompressed size cap (ZIP reports uncompressed size as file_size)
+                            try:
+                                if max_member_uncompressed_size is not None and member.file_size > max_member_uncompressed_size:
+                                    issues.append(
+                                        f"Archive member exceeds per-file size cap: {member_filename} ({member.file_size} bytes)"
+                                    )
+                                    continue
+                            except Exception:
+                                pass
+
                             extracted_count += 1
                             if extracted_count > max_internal_files:  # Double check during extraction
                                 issues.append(
@@ -1002,12 +1012,3 @@ def process_and_validate_file(
 # #     print(f"File '{original_name_from_upload}' is invalid. Issues:")
 # #     for issue in result.issues:
 # #         print(f"  - {issue}")
-                            # Per-member uncompressed size cap
-                            try:
-                                if max_member_uncompressed_size is not None and member.file_size > max_member_uncompressed_size:
-                                    issues.append(
-                                        f"Archive member exceeds per-file size cap: {member_filename} ({member.file_size} bytes)"
-                                    )
-                                    continue
-                            except Exception:
-                                pass

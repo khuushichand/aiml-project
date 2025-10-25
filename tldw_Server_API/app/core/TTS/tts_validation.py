@@ -443,9 +443,9 @@ class TTSInputValidator:
         """Validate TTS parameters"""
         raw_speed = getattr(request, "_original_speed", request.speed)
         # Speed validation
-        if raw_speed < 0.1 or raw_speed > 3.0:
+        if raw_speed < 0.25 or raw_speed > 4.0:
             raise TTSInvalidInputError(
-                f"Speed must be between 0.1 and 3.0, got {raw_speed}"
+                f"Speed must be between 0.25 and 4.0, got {raw_speed}"
             )
         
         # Pitch validation

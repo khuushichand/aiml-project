@@ -104,9 +104,9 @@ def cleanup_downloads():
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"Cleaned up file: {file_path}")
+                logging.info(f"Cleaned up file: {file_path}")
         except Exception as e:
-            print(f"Error cleaning up file {file_path}: {e}")
+            logging.error(f"Error cleaning up file {file_path}: {e}")
 
 #
 #
@@ -215,7 +215,7 @@ def format_api_name(api):
         "llama": "Llama.cpp",
         "ooba": "Ooba",
         "kobold": "Kobold",
-        "tabby": "Tabbyapi",
+        "tabby": "TabbyAPI",
         "vllm": "VLLM",
         "ollama": "Ollama",
         "aphrodite": "Aphrodite"
@@ -349,7 +349,7 @@ def truncate_content(content: Optional[str], max_length: int = 200) -> Optional[
 def save_to_file(video_urls, filename):
     with open(filename, 'w') as file:
         file.write('\n'.join(video_urls))
-    print(f"Video URLs saved to {filename}")
+    logging.info(f"Video URLs saved to {filename}")
 
 
 def save_segments_to_json(segments, file_name="transcription_segments.json"):
@@ -473,16 +473,16 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
                 raise ValueError("Downloaded file's checksum does not match the expected checksum")
 
             os.rename(temp_path, dest_path)
-            print("Download complete and verified!")
+            logging.info("Download complete and verified!")
             return dest_path
 
         except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
+            logging.warning(f"Attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
-                print(f"Retrying in {delay} seconds...")
+                logging.warning(f"Retrying in {delay} seconds...")
                 time.sleep(delay)
             else:
-                print("Max retries reached. Download failed.")
+                logging.error("Max retries reached. Download failed.")
                 raise
 
 def download_file_if_missing(url: str, local_path: str) -> None:
@@ -759,27 +759,30 @@ def format_file_path(file_path, fallback_path=None):
 
 
 def get_db_config():
-    # Get the directory of the current script
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    # Go up two levels to the project root directory (tldw)
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    # Construct the path to the config file
-    config_path = os.path.join(project_root, 'Config_Files', 'config.txt')
-    # Read the config file
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    # Return the database configuration
+    """DEPRECATED: Use tldw_Server_API.app.core.DB_Management.DB_Manager.get_db_config instead.
+
+    This thin wrapper forwards to the canonical DB manager to avoid drift.
+    """
+    logging.warning(
+        "Utils.get_db_config() is deprecated; use DB_Management.DB_Manager.get_db_config() instead."
+    )
     try:
-        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-        default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-    except Exception:
-        default_sqlite = './Databases/Media_DB_v2.db'
-    return {
-        'type': config['Database']['type'],
-        'sqlite_path': config.get('Database', 'sqlite_path', fallback=default_sqlite),
-        'elasticsearch_host': config.get('Database', 'elasticsearch_host', fallback='localhost'),
-        'elasticsearch_port': config.getint('Database', 'elasticsearch_port', fallback=9200)
-    }
+        from tldw_Server_API.app.core.DB_Management.DB_Manager import get_db_config as _dbm_get
+        return _dbm_get()
+    except Exception as e:
+        logging.error(f"Failed to delegate to DB_Manager.get_db_config: {e}")
+        # Preserve a minimal, safe default
+        try:
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+            default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+        except Exception:
+            default_sqlite = str(Path(__file__).resolve().parents[3] / 'Databases' / 'Media_DB_v2.db')
+        return {
+            'type': 'sqlite',
+            'sqlite_path': default_sqlite,
+            'elasticsearch_host': 'localhost',
+            'elasticsearch_port': 9200,
+        }
 
 #
 # End of DB Config Loading
