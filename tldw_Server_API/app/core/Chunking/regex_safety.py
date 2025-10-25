@@ -123,8 +123,8 @@ def safe_search(compiled_pat: "re.Pattern", text: str, *, timeout_env: str = "CH
         timeout_s = float(os.getenv(timeout_env, "0") or 0.0)
     except Exception:
         timeout_s = 0.0
-    # Fast path: optional RE2 search
-    if _re2 is not None:
+    # Fast path: optional RE2 search (only when flags are zero to preserve semantics)
+    if _re2 is not None and getattr(compiled_pat, 'flags', 0) == 0:
         try:
             rp = _re2.compile(compiled_pat.pattern)
             return rp.search(text) is not None

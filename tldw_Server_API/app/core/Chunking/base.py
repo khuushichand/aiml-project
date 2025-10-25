@@ -113,6 +113,92 @@ class BaseChunkingStrategy(ABC):
         self.language = language
         self._cache = {}
         logger.debug(f"Initialized {self.__class__.__name__} for language: {language}")
+
+    # ---------------- Common helpers: config + grapheme boundaries ----------------
+    @staticmethod
+    def _get_chunking_bool(key: str, default: bool) -> bool:
+        try:
+            import os
+            v = os.getenv(key.upper())
+            if v is None:
+                from tldw_Server_API.app.core.config import load_comprehensive_config
+                cp = load_comprehensive_config()
+                if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
+                    v = cp.get('Chunking', key, fallback=str(default))
+            s = str(v).strip().lower() if v is not None else str(default).lower()
+            return s in ("1", "true", "yes", "on", "y")
+        except Exception:
+            return default
+
+    def _strict_grapheme_mode(self, options: dict | None = None) -> bool:
+        if options and 'strict_grapheme_end_expansion' in options:
+            try:
+                return bool(options.get('strict_grapheme_end_expansion'))
+            except Exception:
+                pass
+        return self._get_chunking_bool('strict_grapheme_end_expansion', False)
+
+    def _expand_end_to_grapheme_boundary(self, text: str, end: int, *, options: dict | None = None) -> int:
+        """Expand end index so that we don't split grapheme clusters.
+
+        Default mode (strict=False):
+        - Includes trailing combining marks (Mn/Me), variation selectors, and
+          other zero-width non-joiners (Cf except ZWJ).
+        Strict mode (strict=True):
+        - Additionally includes Zero Width Joiner (ZWJ) sequences (ZWJ + next
+          base and trailing marks) and emoji skin tone modifiers.
+        """
+        import unicodedata as _ud
+
+        strict = self._strict_grapheme_mode(options)
+        n = len(text)
+        i = min(max(0, end), n)
+
+        def _is_vs(cp: int) -> bool:
+            return (0xFE00 <= cp <= 0xFE0F) or (0xE0100 <= cp <= 0xE01EF)
+
+        def _is_combining(ch: str) -> bool:
+            cat = _ud.category(ch)
+            return cat in ("Mn", "Me")
+
+        def _is_skin_tone(cp: int) -> bool:
+            return 0x1F3FB <= cp <= 0x1F3FF
+
+        while i < n:
+            ch = text[i]
+            cp = ord(ch)
+            cat = _ud.category(ch)
+            if _is_combining(ch) or _is_vs(cp) or (cat == 'Cf' and (cp != 0x200D)):
+                i += 1
+                continue
+            if strict and _is_skin_tone(cp):
+                i += 1
+                # include any following marks after modifier
+                while i < n:
+                    ch2 = text[i]
+                    cp2 = ord(ch2)
+                    cat2 = _ud.category(ch2)
+                    if _is_combining(ch2) or _is_vs(cp2) or (cat2 == 'Cf' and cp2 != 0x200D):
+                        i += 1
+                    else:
+                        break
+                continue
+            if (cp == 0x200D) and strict:
+                # Include ZWJ and next codepoint + trailing marks
+                i += 1
+                if i < n:
+                    i += 1
+                    while i < n:
+                        ch2 = text[i]
+                        cp2 = ord(ch2)
+                        cat2 = _ud.category(ch2)
+                        if _is_combining(ch2) or _is_vs(cp2) or (cat2 == 'Cf' and cp2 != 0x200D):
+                            i += 1
+                        else:
+                            break
+                continue
+            break
+        return i
     
     @abstractmethod
     def chunk(self, 
@@ -161,6 +247,11 @@ class BaseChunkingStrategy(ABC):
             if chunk_start == -1:
                 chunk_start = current_pos
             chunk_end = chunk_start + len(chunk)
+            # Expand to avoid splitting grapheme clusters in metadata
+            try:
+                chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end, options=options)
+            except Exception:
+                pass
             
             metadata = ChunkMetadata(
                 index=i,
@@ -188,6 +279,12 @@ class BaseChunkingStrategy(ABC):
             
         Raises:
             ValueError: If parameters are invalid
+        
+        Notes:
+            This method performs validation only. Implementations must re‑clamp
+            `overlap` at the strategy level to ensure forward progress, i.e.,
+            when `overlap >= max_size` set `overlap = max_size - 1` before
+            windowing. Do not rely on this helper to mutate caller state.
         """
         if not isinstance(text, str):
             raise ValueError(f"Text must be a string, got {type(text).__name__}")
@@ -244,7 +341,10 @@ class ChunkerConfig:
                  min_text_length_to_cache: int = 0,
                  max_text_length_to_cache: int = 2_000_000,
                  max_text_size: int = 100_000_000,  # 100MB
-                 enable_metrics: bool = True):
+                 enable_metrics: bool = True,
+                 # Execution/concurrency knobs (used by AsyncChunker; optional here)
+                 max_workers: int = 4,
+                 max_concurrent: int = 10):
         """
         Initialize chunker configuration.
         
@@ -257,6 +357,8 @@ class ChunkerConfig:
             cache_size: Maximum cache size
             max_text_size: Maximum text size to process
             enable_metrics: Whether to collect metrics
+            max_workers: Default worker threads for async execution helpers
+            max_concurrent: Default concurrency semaphore for async helpers
         """
         # Convert string to enum if needed
         if isinstance(default_method, str):
@@ -281,6 +383,10 @@ class ChunkerConfig:
             raise ValueError(f"min_text_length_to_cache must be a non-negative integer, got {min_text_length_to_cache}")
         if not isinstance(max_text_length_to_cache, int) or max_text_length_to_cache <= 0:
             raise ValueError(f"max_text_length_to_cache must be a positive integer, got {max_text_length_to_cache}")
+        if not isinstance(max_workers, int) or max_workers <= 0:
+            raise ValueError(f"max_workers must be a positive integer, got {max_workers}")
+        if not isinstance(max_concurrent, int) or max_concurrent <= 0:
+            raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
         self.default_method = default_method
         self.default_max_size = default_max_size
@@ -294,6 +400,9 @@ class ChunkerConfig:
         self.max_text_length_to_cache = max_text_length_to_cache
         self.max_text_size = max_text_size
         self.enable_metrics = enable_metrics
+        # Execution/concurrency knobs (used by AsyncChunker)
+        self.max_workers = max_workers
+        self.max_concurrent = max_concurrent
         
         logger.info(f"ChunkerConfig initialized with method={self.default_method.value if hasattr(self.default_method, 'value') else self.default_method}, "
                    f"max_size={default_max_size}, overlap={default_overlap}")

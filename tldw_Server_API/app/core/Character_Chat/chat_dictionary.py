@@ -26,6 +26,7 @@ Features:
 """
 
 import json
+import sqlite3
 from loguru import logger
 import random
 import re
@@ -34,7 +35,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any, Set, Tuple
 from pathlib import Path
 
-from loguru import logger
 try:
     from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens  # Case-sensitive envs
 except Exception:  # fallback for alternate casing
@@ -1738,7 +1738,6 @@ class _ProcessedTextResult(str):
 
 
 # Import handling to prevent breaking changes
-import sqlite3
 __all__ = [
     'ChatDictionaryEntry',
     'ChatDictionaryService',

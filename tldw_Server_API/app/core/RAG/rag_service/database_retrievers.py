@@ -157,9 +157,11 @@ class BaseRetriever(ABC):
             logger.error("No database path available for direct query execution.")
             return []
         try:
-            logger.debug(f"Executing query: {query[:100]}...")
-            logger.debug(f"With params: {params}")
-            logger.debug(f"Database path: {self.db_path}")
+            # Avoid logging raw SQL and params in production to reduce leakage risk
+            if not getattr(self, "_production_mode", False):
+                logger.debug(f"Executing query: {query[:100]}...")
+                logger.debug(f"With params: {params}")
+                logger.debug(f"Database path: {self.db_path}")
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -169,9 +171,10 @@ class BaseRetriever(ABC):
                 return [dict(row) for row in results]
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Database query error: {exc}")
-            logger.error(f"Query was: {query}")
-            logger.error(f"Params were: {params}")
-            logger.error(f"Database path: {self.db_path}")
+            if not getattr(self, "_production_mode", False):
+                logger.error(f"Query was: {query}")
+                logger.error(f"Params were: {params}")
+                logger.error(f"Database path: {self.db_path}")
             return []
 
 
@@ -1055,20 +1058,22 @@ class MediaDBRetriever(BaseRetriever):
         return {}
     
     def _build_fts_query(self, query: str) -> str:
-        """Build FTS5 query with proper escaping."""
+        """Build FTS5 query with proper escaping and hyphen/unicode handling.
+
+        - If multiple tokens or hyphens present, use a quoted phrase to preserve order.
+        - Otherwise, apply prefix match (token*).
+        - Escape embedded quotes for FTS5.
+        """
         text = (query or "").strip()
         if not text:
             return "*"
-        safe_query = text.replace('"', '""')
-        terms = safe_query.split()
-        
-        # Quote phrases
-        if len(terms) > 1:
-            # Use phrase search for multi-word queries
-            return f'"{safe_query}"'
-        else:
-            # Single term with prefix matching
-            return f'{safe_query}*'
+        # Normalize quotes
+        safe = text.replace('"', '""')
+        # Heuristic: phrase if contains whitespace, hyphens, or parentheses/quotes
+        if any(ch in safe for ch in [" ", "-", "(", ")", "'", "\u2013", "\u2014"]):
+            return f'"{safe}"'
+        # Single token: prefix
+        return f"{safe}*"
 
 
 class NotesDBRetriever(BaseRetriever):

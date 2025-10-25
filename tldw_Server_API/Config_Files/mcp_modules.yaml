@@ -15,7 +15,8 @@ modules:
     circuit_breaker_max_timeout: 180       # cap the backoff window (seconds)
     # Module-specific settings
     settings:
-      db_path: ./Databases/Media_DB_v2.db
+      # Per-user default example; change '1' if SINGLE_USER_FIXED_ID differs
+      db_path: Databases/user_databases/1/Media_DB_v2.db
       cache_ttl: 300
   - id: template
     class: tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule

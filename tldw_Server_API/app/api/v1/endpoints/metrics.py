@@ -155,10 +155,11 @@ async def health_check_with_metrics() -> Dict[str, Any]:
         
         # Determine health status based on active operations
         status = "healthy"
-        if active["active_requests"] > 100:
-            status = "degraded"
-        elif active["active_requests"] > 200:
+        # Check higher threshold first so we can actually reach "unhealthy"
+        if active["active_requests"] > 200:
             status = "unhealthy"
+        elif active["active_requests"] > 100:
+            status = "degraded"
         
         return {
             "status": status,

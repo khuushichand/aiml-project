@@ -102,6 +102,8 @@ def chat_api_call(
     # Provider-specific extensions (e.g., Bedrock guardrails)
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
+    # Optional preloaded config to reduce repeated IO in hot paths
+    app_config: Optional[Dict[str, Any]] = None,
     ):
     """
     Acts as a unified dispatcher to call various LLM API providers.
@@ -199,6 +201,7 @@ def chat_api_call(
         'user_identifier': user_identifier,
         'extra_headers': extra_headers,
         'extra_body': extra_body,
+        'app_config': app_config,
     }
 
     for generic_param_name, provider_param_name in params_map.items():
@@ -327,6 +330,7 @@ async def chat_api_call_async(
     user_identifier: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
 ):
     """Async dispatcher that prefers async handlers when available; otherwise falls back to thread exec.
 
@@ -362,6 +366,7 @@ async def chat_api_call_async(
         'user_identifier': user_identifier,
         'extra_headers': extra_headers,
         'extra_body': extra_body,
+        'app_config': app_config,
     }
     call_kwargs: Dict[str, Any] = {}
     for generic_param_name, provider_param_name in params_map.items():
@@ -643,10 +648,17 @@ def chat(
             logging.debug(f"  Msg {i}: Role: {msg_p['role']}, Content: [{', '.join(content_log)}]")
 
         logging.debug(f"Debug - Chat Function - Temperature: {temperature}")
-        logging.debug(f"Debug - Chat Function - API Key: {api_key[:10]}")
+        # Avoid logging secrets unless explicitly enabled
+        try:
+            if api_key and os.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}:
+                logging.debug("Debug - Chat Function - API Key (masked): %s...%s", api_key[:4], api_key[-4:])
+        except Exception:
+            pass
         logging.debug(f"Debug - Chat Function - Prompt: {custom_prompt}")
 
         # --- Call the LLM via the updated chat_api_call ---
+        # Preload config once and pass down to provider to avoid repeated loads
+        preloaded_cfg = load_and_log_configs()
         response = chat_api_call(
             api_endpoint=api_endpoint,
             api_key=api_key,
@@ -668,7 +680,8 @@ def chat(
             presence_penalty=llm_presence_penalty,
             frequency_penalty=llm_frequency_penalty,
             tools=llm_tools,
-            tool_choice=llm_tool_choice
+            tool_choice=llm_tool_choice,
+            app_config=preloaded_cfg,
         )
 
         if streaming:
@@ -680,7 +693,7 @@ def chat(
             log_counter("chat_success_multimodal", labels={"api_endpoint": api_endpoint})
             logging.debug(f"Chat Function - Response (first 500 chars): {str(response)[:500]}")
 
-            loaded_config_data = load_and_log_configs()
+            loaded_config_data = preloaded_cfg or load_and_log_configs()
             post_gen_replacement_config = loaded_config_data.get('chat_dictionaries', {}).get('post_gen_replacement')
             if post_gen_replacement_config and isinstance(response, str):
                 post_gen_replacement_dict_path = loaded_config_data.get('chat_dictionaries', {}).get('post_gen_replacement_dict')

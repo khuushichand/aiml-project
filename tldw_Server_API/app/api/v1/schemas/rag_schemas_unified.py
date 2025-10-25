@@ -13,6 +13,11 @@ try:
 except Exception:
     model_validator = None  # type: ignore
     from pydantic import validator as field_validator  # type: ignore
+    # Pydantic v1 compatibility: ensure root_validator symbol exists for conditional use below
+    try:  # type: ignore
+        from pydantic import root_validator  # type: ignore
+    except Exception:  # pragma: no cover - defensive fallback
+        root_validator = None  # type: ignore
 try:
     # Pydantic v2
     from pydantic import model_validator  # type: ignore

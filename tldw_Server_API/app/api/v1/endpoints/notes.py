@@ -1001,9 +1001,20 @@ async def search_keywords_endpoint(  # Renamed
 async def link_note_to_keyword_endpoint(
         note_id: str,
         keyword_id: int,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.link_keyword")),
 ):
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.link_keyword")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.link_keyword",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(f"User (DB client_id: {db.client_id}) linking note '{note_id}' to keyword '{keyword_id}'")
         # Check if note and keyword exist in the user's DB
         note_data = db.get_note_by_id(note_id)
@@ -1032,9 +1043,20 @@ async def link_note_to_keyword_endpoint(
 async def unlink_note_from_keyword_endpoint(
         note_id: str,
         keyword_id: int,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.unlink_keyword")),
 ):
     try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.unlink_keyword")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.unlink_keyword",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.info(f"User (DB client_id: {db.client_id}) unlinking note '{note_id}' from keyword '{keyword_id}'")
         success = db.unlink_note_from_keyword(note_id=note_id, keyword_id=keyword_id)
         msg = "Note unlinked from keyword successfully." if success else "Link not found or no action taken."

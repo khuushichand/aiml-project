@@ -3,6 +3,7 @@
 #
 # Import necessary libraries
 import re
+import json
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
@@ -113,7 +114,7 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
     """
     Converts various document formats to plain text and extracts basic metadata.
 
-    Supported input formats: .txt, .md, .html, .htm, .xml, .docx, .rtf
+    Supported input formats: .txt, .md, .html, .htm, .xml, .json, .docx, .rtf
     Output format: Plain text (Markdown for HTML/XML for structure).
 
     Returns:
@@ -137,6 +138,20 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
             try:
                 content = convert_file(str(file_path), 'plain', format='rtf')
                 log_counter("rtf_conversion_success", labels={"file_path": str(file_path)})
+            except FileNotFoundError as e_fnf:
+                # pypandoc may raise FileNotFoundError when pandoc is missing on PATH
+                if 'pandoc' in str(e_fnf).lower():
+                    logging.error(f"Pandoc binary not found for RTF conversion: {e_fnf}")
+                    raise PandocMissing("Pandoc binary not found. Cannot convert .rtf") from e_fnf
+                logging.error(f"File not found during RTF conversion: {e_fnf}")
+                raise ValueError(f"Cannot convert {extension}: File not found.") from e_fnf
+            except OSError as e_os:
+                # Common pypandoc message: "No pandoc was found"
+                if 'pandoc' in str(e_os).lower() or 'no pandoc' in str(e_os).lower():
+                    logging.error(f"Pandoc binary not found for RTF conversion: {e_os}")
+                    raise PandocMissing("Pandoc binary not found. Cannot convert .rtf") from e_os
+                logging.error(f"OS error during RTF conversion: {e_os}")
+                raise ValueError(f"RTF conversion failed: {e_os}") from e_os
             except Exception as e_rtf:
                 # Now check the type of the caught exception 'e_rtf'
                 if isinstance(e_rtf, PandocMissing):  # Use the imported PandocMissing here
@@ -154,6 +169,24 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
                     raise ValueError(f"Unexpected RTF conversion error: {str(e_rtf)}") from e_rtf
         elif extension in ['.txt', '.md']:
             content = _read_text(file_path) # Use robust reader
+        elif extension == '.json':
+            source_format_used = 'json'
+            raw_text = _read_text(file_path)
+            try:
+                obj = json.loads(raw_text)
+                content = json.dumps(obj, ensure_ascii=False, indent=2)
+                # Basic JSON metadata summary
+                top_type = 'object' if isinstance(obj, dict) else ('array' if isinstance(obj, list) else type(obj).__name__)
+                top_keys = list(obj.keys())[:50] if isinstance(obj, dict) else None
+                raw_metadata = {'json_top_type': top_type}
+                if top_keys is not None:
+                    raw_metadata['json_top_keys_preview'] = top_keys
+                log_counter("json_conversion_success", labels={"file_path": str(file_path)})
+            except json.JSONDecodeError as e_json:
+                # Fall back to raw content while marking parse error
+                content = raw_text
+                raw_metadata = {'json_parse_error': str(e_json)}
+                log_counter("json_conversion_error", labels={"file_path": str(file_path), "error": "JSONDecodeError"})
         elif extension in ['.html', '.htm']:
             source_format_used = 'html'
             h = html2text.HTML2Text()

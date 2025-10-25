@@ -11,6 +11,34 @@ from typing import List, Dict, Any, Optional, Tuple, Generator
 from loguru import logger
 
 from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+
+# Local helpers to read optional configuration from config.txt / env
+def _get_chunking_bool(key: str, default: bool) -> bool:
+    try:
+        import os
+        v = os.getenv(key.upper())
+        if v is None:
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            cp = load_comprehensive_config()
+            if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
+                v = cp.get('Chunking', key, fallback=str(default))
+        s = str(v).strip().lower() if v is not None else str(default).lower()
+        return s in ("1", "true", "yes", "on", "y")
+    except Exception:
+        return default
+
+def _get_chunking_str(key: str, default: str) -> str:
+    try:
+        import os
+        v = os.getenv(key.upper())
+        if v is None:
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            cp = load_comprehensive_config()
+            if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
+                v = cp.get('Chunking', key, fallback=default)
+        return str(v) if v is not None else default
+    except Exception:
+        return default
 from ..exceptions import InvalidInputError, ChunkingError
 from ..security_logger import get_security_logger, SecurityEventType
 
@@ -177,6 +205,9 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
         """
         chunkable_key = options.get('chunkable_key', 'data')
         preserve_metadata = options.get('preserve_metadata', True)
+        # Global toggle to emit a single metadata reference instead of repeating
+        single_ref = bool(options.get('single_metadata_reference', _get_chunking_bool('json_single_metadata_reference', False)))
+        ref_key = str(options.get('metadata_reference_key', _get_chunking_str('json_metadata_reference_key', '__meta_ref__')))
         
         # Check if chunkable key exists and is dict or list
         if chunkable_key not in json_dict:
@@ -190,11 +221,25 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             chunked_lists = self._chunk_json_list(chunkable_data, max_size, overlap)
             
             chunks = []
+            meta_payload = {k: v for k, v in json_dict.items() if k != chunkable_key}
+            meta_ref_id = None
+            if preserve_metadata and single_ref and meta_payload:
+                # Stable reference id based on metadata payload
+                try:
+                    import hashlib as _hash
+                    meta_ref_id = _hash.sha1(json.dumps(meta_payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]
+                except Exception:
+                    meta_ref_id = 'meta'
+                # Emit a leading metadata chunk
+                chunks.append({ref_key: meta_ref_id, 'metadata': meta_payload})
             for chunk_list in chunked_lists:
                 if preserve_metadata:
-                    # Keep other keys
-                    new_chunk = json_dict.copy()
-                    new_chunk[chunkable_key] = chunk_list
+                    if single_ref and meta_ref_id is not None:
+                        new_chunk = {chunkable_key: chunk_list, ref_key: meta_ref_id}
+                    else:
+                        # Keep other keys
+                        new_chunk = json_dict.copy()
+                        new_chunk[chunkable_key] = chunk_list
                 else:
                     new_chunk = {chunkable_key: chunk_list}
                 chunks.append(new_chunk)
@@ -206,11 +251,22 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             chunked_dicts = self._chunk_dict_by_keys(chunkable_data, max_size, overlap)
             
             chunks = []
+            meta_payload = {k: v for k, v in json_dict.items() if k != chunkable_key}
+            meta_ref_id = None
+            if preserve_metadata and single_ref and meta_payload:
+                try:
+                    import hashlib as _hash
+                    meta_ref_id = _hash.sha1(json.dumps(meta_payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]
+                except Exception:
+                    meta_ref_id = 'meta'
+                chunks.append({ref_key: meta_ref_id, 'metadata': meta_payload})
             for chunk_dict in chunked_dicts:
                 if preserve_metadata:
-                    # Keep other keys
-                    new_chunk = json_dict.copy()
-                    new_chunk[chunkable_key] = chunk_dict
+                    if single_ref and meta_ref_id is not None:
+                        new_chunk = {chunkable_key: chunk_dict, ref_key: meta_ref_id}
+                    else:
+                        new_chunk = json_dict.copy()
+                        new_chunk[chunkable_key] = chunk_dict
                 else:
                     new_chunk = {chunkable_key: chunk_dict}
                 chunks.append(new_chunk)
@@ -220,6 +276,7 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             # Can't chunk this key's value
             logger.warning(f"Chunkable key '{chunkable_key}' is not a list or dict")
             return [json_dict]
+
     
     def _chunk_dict_by_keys(self,
                            data_dict: Dict[str, Any],
@@ -331,7 +388,8 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             # Try to use defusedxml if available (most secure)
             try:
                 import defusedxml.ElementTree as DefusedET
-                import defusedxml.common
+                # Import the common submodule explicitly to reference exception types
+                from defusedxml import common as defused_common
                 
                 # Additional pre-check for DOCTYPE SYSTEM which might not always be caught
                 if 'DOCTYPE' in text and 'SYSTEM' in text:
@@ -342,10 +400,10 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                 try:
                     root = DefusedET.fromstring(text)
                     logger.debug("Using defusedxml for secure XML parsing")
-                except (defusedxml.common.EntitiesForbidden, 
-                        defusedxml.common.ExternalReferenceForbidden,
-                        defusedxml.common.DTDForbidden,
-                        defusedxml.common.NotSupportedError) as e:
+                except (defused_common.EntitiesForbidden,
+                        defused_common.ExternalReferenceForbidden,
+                        defused_common.DTDForbidden,
+                        defused_common.NotSupportedError) as e:
                     logger.error(f"Blocked potential XXE attack: {e}")
                     raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}")
             except ImportError:

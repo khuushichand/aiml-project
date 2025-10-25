@@ -229,7 +229,9 @@ modules:
     enabled: true
     name: Media
     settings:
-      db_path: ./Databases/Media_DB_v2.db
+      # Per-user default (single-user mode example): Databases/user_databases/1/Media_DB_v2.db
+      # For multi-user setups, run a module instance per user or pass user-specific db_path at runtime.
+      db_path: Databases/user_databases/1/Media_DB_v2.db
     # Optional runtime controls
     # Limit concurrent operations per module instance
     max_concurrent: 16

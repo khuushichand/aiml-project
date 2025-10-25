@@ -370,9 +370,6 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         if overlap >= max_size:
             overlap = max_size - 1
         
-        # Process text in blocks for memory efficiency
-        BLOCK_SIZE = 10000  # Process 10k words at a time
-        
         words = self._tokenize_text(text)
         step = max(1, max_size - overlap)
         
@@ -416,6 +413,10 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             start_idx = token_indices[0]
             end_idx = token_indices[-1]
             start_char, end_char = spans[start_idx][0], spans[end_idx][1]
+            try:
+                end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
+            except Exception:
+                pass
             chunk_text = record.get('text', '')
             word_count = len(token_indices)
             metadata = ChunkMetadata(

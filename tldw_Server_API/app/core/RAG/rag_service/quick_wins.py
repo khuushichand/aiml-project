@@ -723,7 +723,12 @@ async def spell_check_query(context: Any, **kwargs) -> Any:
             context.metadata["original_query_before_correction"] = context.query
             context.query = result["corrected"]
             context.metadata["spell_corrections"] = result["corrections"]
-            logger.info(f"Auto-corrected query: {context.query}")
+            try:
+                import hashlib as _hl
+                _qh = _hl.md5((getattr(context, 'query', '') or '').encode('utf-8')).hexdigest()[:8]
+                logger.info(f"Auto-corrected query hash={_qh}")
+            except Exception:
+                logger.info("Auto-corrected query")
     
     return context
 

@@ -829,9 +829,16 @@ async def check_rate_limit(
     endpoint = f"{request.method}:{request.url.path}"
     
     # Check rate limit
-    allowed, retry_after = await rate_limiter.check_rate_limit(client_ip, endpoint)
+    allowed, metadata = await rate_limiter.check_rate_limit(client_ip, endpoint)
     
     if not allowed:
+        retry_after = 60
+        try:
+            if isinstance(metadata, dict):
+                retry_after = int(metadata.get("retry_after", retry_after))
+        except Exception:
+            # Fallback to default if parsing fails
+            retry_after = 60
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit exceeded. Retry after {retry_after} seconds",

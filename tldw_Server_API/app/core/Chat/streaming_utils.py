@@ -304,7 +304,7 @@ class StreamingResponseHandler:
                 outputs: List[str] = []
                 stripped_leading = raw_line.lstrip("\ufeff\u200b\u200c\u200d\u2060")
                 candidate = stripped_leading.strip()
-                if not candidate:
+                if not candidate and not stripped_leading:
                     return outputs, False
                 if candidate.startswith(":") or candidate.startswith("event:"):
                     return outputs, False
@@ -372,8 +372,8 @@ class StreamingResponseHandler:
                     outputs.append(f"data: {json.dumps(data)}\n\n")
                     self.update_activity()
                     return outputs, False
-                # Non-SSE chunk
-                text_piece = candidate
+                # Non-SSE chunk: preserve spaces (avoid stripping)
+                text_piece = stripped_leading
                 try:
                     text_piece = str(text_piece)
                 except Exception:
@@ -539,11 +539,18 @@ class StreamingResponseHandler:
                     aggregated_tool_calls = self.get_accumulated_tool_calls()
                     aggregated_function_call = self.get_accumulated_function_call()
                     try:
-                        await save_callback(
-                            full_text,
-                            aggregated_tool_calls,
-                            aggregated_function_call,
-                        )
+                        # Support flexible callback signatures (text only or extended)
+                        maybe_result = None
+                        try:
+                            maybe_result = save_callback(
+                                full_text,
+                                aggregated_tool_calls,
+                                aggregated_function_call,
+                            )
+                        except TypeError:
+                            maybe_result = save_callback(full_text)
+                        if hasattr(maybe_result, "__await__"):
+                            await maybe_result
                         logger.info(
                             "Saved streaming response for %s (text_len=%d, tool_calls=%d, function_call=%s)",
                             self.conversation_id,

@@ -6,6 +6,7 @@ All features are accessible through explicit parameters.
 """
 
 import time
+import hashlib
 from typing import Optional, Dict, Any
 from uuid import uuid4
 
@@ -53,22 +54,12 @@ from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFee
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
-# Basic rate limiting using SlowAPI (consistent with other endpoints)
-try:
-    from slowapi import Limiter
-    from slowapi.util import get_remote_address
-    limiter = Limiter(key_func=get_remote_address)
-    limit_search = limiter.limit("30/minute")
-    limit_read = limiter.limit("60/minute")
-    limit_batch = limiter.limit("10/minute")
-except Exception:
-    limiter = None
-    def limit_search(func):
-        return func
-    def limit_read(func):
-        return func
-    def limit_batch(func):
-        return func
+# Use central limiter instance for consistency across the app
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
+
+limit_search = limiter.limit("30/minute")
+limit_read = limiter.limit("60/minute")
+limit_batch = limiter.limit("10/minute")
 
 
 def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGResponse:
@@ -412,7 +403,7 @@ async def get_capabilities(request: Request):
         },
         "citation_generation": {
             "supported": True,
-            "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
+            "styles": ["apa", "mla", "chicago", "harvard", "ieee"],
             "include_page_numbers": True
         },
         "guardrails": {
@@ -1119,7 +1110,11 @@ async def simple_search_endpoint(
     Simple search for basic use cases.
     """
     try:
-        logger.info(f"Simple search: query='{query}'")
+        try:
+            _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
+            logger.info(f"Simple search: query_hash={_qh} len={len(query or '')}")
+        except Exception:
+            logger.info("Simple search request received")
         # Topic monitoring (non-blocking)
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service

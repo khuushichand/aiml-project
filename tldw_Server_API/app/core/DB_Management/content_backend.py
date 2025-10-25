@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 
-_DEFAULT_SQLITE_PATH = "Databases/server_media_summary.db"
+_DEFAULT_SQLITE_PATH = ""
 _DEFAULT_BACKUP_PATH = "./tldw_DB_Backups/"
 
 
@@ -154,14 +154,27 @@ def load_content_db_settings(config: ConfigParser) -> ContentDatabaseSettings:
 
 _cached_backend = None
 _cached_backend_signature: Optional[tuple] = None
+try:
+    from threading import RLock
+    _cache_lock = RLock()
+except Exception:  # pragma: no cover
+    _cache_lock = None  # type: ignore
 
 
 def get_content_backend(config: ConfigParser):
-    """Return a DatabaseBackend instance for content storage if supported."""
+    """Return a DatabaseBackend instance for content storage if supported.
+
+    Thread-safe around cache check and creation to handle concurrent reloads.
+    """
     global _cached_backend, _cached_backend_signature
 
     settings = load_content_db_settings(config)
     if not settings.database_config:
+        return None
+
+    # Only create a backend for PostgreSQL content mode. For SQLite, return None
+    # so callers resolve per-user file paths instead of a root-level DB.
+    if settings.backend_type != BackendType.POSTGRESQL:
         return None
 
     signature = (
@@ -174,9 +187,18 @@ def get_content_backend(config: ConfigParser):
         settings.database_config.pg_user,
     )
 
+    if _cache_lock is not None:
+        with _cache_lock:
+            if _cached_backend and _cached_backend_signature == signature:
+                return _cached_backend
+            backend = DatabaseBackendFactory.create_backend(settings.database_config)
+            _cached_backend = backend
+            _cached_backend_signature = signature
+            return backend
+
+    # Fallback without lock (environments without threading)
     if _cached_backend and _cached_backend_signature == signature:
         return _cached_backend
-
     backend = DatabaseBackendFactory.create_backend(settings.database_config)
     _cached_backend = backend
     _cached_backend_signature = signature

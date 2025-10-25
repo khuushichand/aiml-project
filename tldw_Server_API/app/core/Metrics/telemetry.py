@@ -25,6 +25,17 @@ try:
     # SDK components
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.metrics import MeterProvider
+    # Views for configuring histogram boundaries
+    try:
+        from opentelemetry.sdk.metrics.view import (
+            View,
+            ExplicitBucketHistogramAggregation,
+            InstrumentSelector,
+        )
+    except Exception:  # pragma: no cover - optional depending on OTel version
+        View = None  # type: ignore
+        ExplicitBucketHistogramAggregation = None  # type: ignore
+        InstrumentSelector = None  # type: ignore
     from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
     from opentelemetry.sdk.metrics.export import (
@@ -167,6 +178,8 @@ class TelemetryManager:
         self.tracer: Optional[Tracer] = None
         self.meter: Optional[Meter] = None
         self.initialized = False
+        # Hold pending views if provider not yet available
+        self._pending_views = []  # list[tuple[str, list[float]]]
         
         if not OTEL_AVAILABLE:
             logger.info("OpenTelemetry not available, using fallback implementations")
@@ -242,9 +255,10 @@ class TelemetryManager:
                 readers.append(reader)
         
         if readers:
+            # If Views are supported, apply after provider construction via register_view
             self.meter_provider = MeterProvider(
                 resource=resource,
-                metric_readers=readers
+                metric_readers=readers,
             )
             
             # Set as global meter provider
@@ -253,6 +267,23 @@ class TelemetryManager:
                 self.config.service_name,
                 self.config.service_version
             )
+
+            # Apply any views queued prior to initialization
+            try:
+                if hasattr(self.meter_provider, "register_view") and View and ExplicitBucketHistogramAggregation and InstrumentSelector:
+                    for name, boundaries in list(self._pending_views):
+                        try:
+                            self.meter_provider.register_view(
+                                View(
+                                    instrument_selector=InstrumentSelector(name=name),
+                                    aggregation=ExplicitBucketHistogramAggregation(boundaries=boundaries),
+                                )
+                            )
+                        except Exception:
+                            pass
+                    self._pending_views.clear()
+            except Exception:
+                pass
     
     def _create_trace_exporter(self, exporter_name: str):
         """Create a trace exporter based on name."""
@@ -402,6 +433,29 @@ class TelemetryManager:
         if name:
             return metrics.get_meter(name, self.config.service_version)
         return self.meter
+
+    def register_histogram_view(self, instrument_name: str, boundaries: List[float]) -> None:
+        """Register a histogram view for custom bucket boundaries.
+
+        If the provider supports dynamic view registration, apply immediately;
+        otherwise, queue it to be applied after initialization.
+        """
+        if not OTEL_AVAILABLE or not instrument_name or not boundaries:
+            return
+        try:
+            if hasattr(self, "meter_provider") and self.meter_provider and hasattr(self.meter_provider, "register_view") \
+               and View and ExplicitBucketHistogramAggregation and InstrumentSelector:
+                self.meter_provider.register_view(
+                    View(
+                        instrument_selector=InstrumentSelector(name=instrument_name),
+                        aggregation=ExplicitBucketHistogramAggregation(boundaries=boundaries),
+                    )
+                )
+            else:
+                # Queue for later application
+                self._pending_views.append((instrument_name, list(boundaries)))
+        except Exception as e:
+            logger.debug(f"Failed to register histogram view for {instrument_name}: {e}")
     
     @contextmanager
     def trace_context(self, operation_name: str, attributes: Optional[Dict[str, Any]] = None):

@@ -880,3 +880,36 @@ async def create_scheduler(config: Optional[SchedulerConfig] = None,
     scheduler = Scheduler(config)
     await scheduler.start(start_workers)
     return scheduler
+
+
+# Global scheduler singleton helper
+_GLOBAL_SCHEDULER: Optional[Scheduler] = None
+_GLOBAL_SCHEDULER_LOCK = asyncio.Lock()
+
+
+async def get_global_scheduler(config: Optional[SchedulerConfig] = None,
+                               start_workers: bool = True) -> Scheduler:
+    """Return a process-global Scheduler instance, starting it if needed.
+
+    Ensures only one Scheduler instance is created per process and that
+    callers reuse the same worker pool and backend connections.
+    """
+    global _GLOBAL_SCHEDULER
+    async with _GLOBAL_SCHEDULER_LOCK:
+        if _GLOBAL_SCHEDULER is None:
+            _GLOBAL_SCHEDULER = Scheduler(config or get_config())
+            await _GLOBAL_SCHEDULER.start(start_workers)
+        elif not getattr(_GLOBAL_SCHEDULER, "_started", False):
+            await _GLOBAL_SCHEDULER.start(start_workers)
+        return _GLOBAL_SCHEDULER
+
+
+async def stop_global_scheduler() -> None:
+    """Stop and clear the process-global Scheduler instance (primarily for tests)."""
+    global _GLOBAL_SCHEDULER
+    async with _GLOBAL_SCHEDULER_LOCK:
+        if _GLOBAL_SCHEDULER is not None:
+            try:
+                await _GLOBAL_SCHEDULER.stop()
+            finally:
+                _GLOBAL_SCHEDULER = None

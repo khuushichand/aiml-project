@@ -57,6 +57,15 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
     from tldw_Server_API.app.core.config import settings as global_settings
     from tldw_Server_API.tests.test_config import TestConfig
 
+    # Ensure auth env is set so SINGLE_USER_API_KEY matches headers
+    try:
+        TestConfig.setup_test_environment()
+        # Reset settings to pick up env change if necessary
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        reset_settings()
+    except Exception:
+        pass
+
     def override_get_db_for_test():
         logger.info("<<<<< OVERRIDE override_get_db_for_test CALLED >>>>>")
         try:
@@ -76,6 +85,10 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
     
     # Restore original settings
     fastapi_app.dependency_overrides.clear()
+    try:
+        TestConfig.reset_settings()
+    except Exception:
+        pass
     if original_csrf_setting is None:
         global_settings.pop('CSRF_ENABLED', None)
     else:

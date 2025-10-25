@@ -57,6 +57,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptSt
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from loguru import logger
 #
 # End of imports
 ############################################################################################################
@@ -74,10 +75,18 @@ content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_u
 _CONTENT_DB_BACKEND: Optional[DatabaseBackend] = get_content_backend(single_user_config)
 _POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
 
-single_user_db_path: str = content_db_settings.sqlite_path or './Databases/server_media_summary.db'
+# Default Media DB is per-user. For single-user mode, resolve the fixed user's path.
+single_user_db_path: str = (
+    content_db_settings.sqlite_path
+    or str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+)
 single_user_backup_path: str = content_db_settings.backup_path or 'database_backups'
 single_user_backup_dir: Union[str, bytes] = os.environ.get('DB_BACKUP_DIR', single_user_backup_path)
-single_user_chacha_path: str = single_user_config.get('Database', 'chacha_path', fallback='Databases/ChaChaNotes.db')
+single_user_chacha_path: str = single_user_config.get(
+    'Database',
+    'chacha_path',
+    fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
+)
 single_user_workflows_path: str = single_user_config.get(
     'Database',
     'workflows_path',
@@ -90,6 +99,28 @@ def get_content_backend_instance() -> Optional[DatabaseBackend]:
     if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
         raise RuntimeError("PostgreSQL content backend is required but was not initialized. Check TLDW_CONTENT_DB_BACKEND configuration.")
     return _CONTENT_DB_BACKEND
+
+
+def shutdown_content_backend() -> None:
+    """Gracefully close pooled connections for the shared content backend.
+
+    Call this from application shutdown hooks to ensure database connections
+    are returned/closed for long-lived processes (e.g., FastAPI on_shutdown).
+    Safe to call when no backend is configured or when using SQLite per-user
+    files without a shared backend.
+    """
+    try:
+        backend = get_content_backend_instance()
+    except Exception:
+        backend = None
+    if backend is None:
+        return
+    try:
+        pool = backend.get_pool()
+        pool.close_all()
+        logger.info("Content backend connection pool closed")
+    except Exception as exc:  # pragma: no cover - defensive shutdown
+        logger.warning(f"Failed to close content backend pool: {exc}")
 
 
 def create_media_database(
@@ -119,10 +150,12 @@ def create_media_database(
             config=cfg,
         )
 
+    # For SQLite/per-user mode, do not pass the shared backend; let the instance
+    # bind to the specific per-user file path to avoid root-level DBs.
     return MediaDatabase(
         db_path=str(target_path),
         client_id=client_id,
-        backend=backend_to_use,
+        backend=None,
         config=cfg,
     )
 
@@ -295,26 +328,31 @@ def get_db_config():
         config = load_comprehensive_config()
 
         if 'Database' not in config:
-            print("Warning: 'Database' section not found in config. Using default values.")
+            logger.warning("'Database' section not found in config. Using default values.")
             return default_db_config()
 
         return {
             'type': config.get('Database', 'type', fallback='sqlite'),
-            'sqlite_path': config.get('Database', 'sqlite_path', fallback='Databases/server_media_summary.db'),
+            'sqlite_path': config.get(
+                'Database',
+                'sqlite_path',
+                fallback=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())),
+            ),
             'elasticsearch_host': config.get('Database', 'elasticsearch_host', fallback='localhost'),
             'elasticsearch_port': config.getint('Database', 'elasticsearch_port', fallback=9200)
         }
     except FileNotFoundError:
-        print("Warning: Config file not found. Using default database configuration.")
+        logger.warning("Config file not found. Using default database configuration.")
         return default_db_config()
     except Exception as e:
-        print(f"Error reading config: {str(e)}. Using default database configuration.")
+        logger.error(f"Error reading config: {str(e)}. Using default database configuration.")
         return default_db_config()
 
 def default_db_config():
     return {
         'type': 'sqlite',
-        'sqlite_path': get_database_path('server_media_summary.db'),
+        # Per-user default: single-user fixed ID
+        'sqlite_path': str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())),
         'elasticsearch_host': 'localhost',
         'elasticsearch_port': 9200
     }
@@ -325,7 +363,7 @@ def ensure_directory_exists(file_path):
         return
     if not os.path.exists(directory):
         os.makedirs(directory)
-        print(f"Created directory: {directory}")
+        logger.info(f"Created directory: {directory}")
 
 BIGSEARCH = single_user_config.getboolean('Database', 'bigsearch', fallback=False)
 
@@ -754,7 +792,7 @@ def get_specific_prompt(*args, **kwargs) -> Dict:
     elif db_type == 'elasticsearch':
         raise NotImplementedError("Elasticsearch version of get_specific_prompt not yet implemented")
     else:
-        return {'error': f"Unsupported database type: {db_type}"}
+        raise ValueError(f"Unsupported database type: {db_type}")
 
 
 #
@@ -776,8 +814,6 @@ def add_keyword(*args, **kwargs):
         return db_instance.add_keyword(keyword)
     elif db_type == 'elasticsearch':
         raise NotImplementedError("Elasticsearch version of add_keyword not yet implemented")
-    elif db_type == 'postgres':
-        raise NotImplementedError("Postgres version of add_keyword not yet implemented")
 
 def fetch_keywords_for_media(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
@@ -1107,6 +1143,9 @@ def fetch_keywords_for_media(*args, **kwargs):
 #
 def empty_trash(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
+        # Provide a sensible default threshold when not specified by caller
+        if 'days_threshold' not in kwargs:
+            kwargs['days_threshold'] = 0
         return sqlite_empty_trash(*args, **kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version

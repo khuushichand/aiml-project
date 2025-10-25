@@ -101,6 +101,7 @@ def chat_api_call(
     user_identifier: Optional[str] = None,  # Renamed from 'user' to avoid conflict with 'user' role in messages
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
     ):
     """
     Deprecated shim.
@@ -138,6 +139,7 @@ def chat_api_call(
         user_identifier=user_identifier,
         extra_headers=extra_headers,
         extra_body=extra_body,
+        app_config=app_config,
         )
 
 

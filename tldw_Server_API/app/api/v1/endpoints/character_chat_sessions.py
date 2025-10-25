@@ -4,25 +4,24 @@ API endpoints for character chat session management.
 Provides CRUD operations for chat sessions and character-specific completions.
 """
 
-import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from fastapi import (
     APIRouter, 
     Depends, 
     HTTPException, 
     Query, 
     Path,
-    BackgroundTasks,
     status,
-    Request
+    
 )
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from collections import defaultdict, deque
 import time
+import random
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -40,11 +39,14 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     ChatSessionResponse,
     ChatSessionUpdate,
     ChatSessionListResponse,
-    MessageCreate,
     MessageResponse,
-    MessageListResponse,
-    ChatHistoryExport,
-    ChatErrorResponse
+    
+    CharacterChatCompletionPrepRequest,
+    CharacterChatCompletionPrepResponse,
+    CharacterChatCompletionV2Request,
+    CharacterChatCompletionV2Response,
+    CharacterChatStreamPersistRequest,
+    CharacterChatStreamPersistResponse,
 )
 
 # Character chat helpers
@@ -54,6 +56,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     retrieve_conversation_messages_for_ui,
     load_chat_and_character,
     map_sender_to_role,
+    replace_placeholders,
 )
 
 # Chat helpers and utilities
@@ -65,7 +68,6 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 # Rate limiting
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
     get_character_rate_limiter,
-    CharacterRateLimiter
 )
 
 # For chat completions
@@ -73,52 +75,7 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call
 )
 
-# Simple schema for preparing completions
-from pydantic import BaseModel, Field
-
-
-class CharacterChatCompletionPrepRequest(BaseModel):
-    include_character_context: bool = Field(True, description="Include character system context")
-    limit: int = Field(100, ge=1, le=1000, description="Max messages to include")
-    offset: int = Field(0, ge=0, description="Messages offset")
-    append_user_message: Optional[str] = Field(None, description="Optional user message to append to the end")
-
-
-class CharacterChatCompletionPrepResponse(BaseModel):
-    chat_id: str
-    character_id: int
-    character_name: Optional[str] = None
-    messages: List[Dict[str, Any]]
-    total: int
-    usage_instructions: str = "Use these messages with POST /api/v1/chat/completions"
-
-
-class CharacterChatCompletionRequest(BaseModel):
-    # Character/context controls
-    include_character_context: bool = Field(True, description="Include character system context")
-    limit: int = Field(100, ge=1, le=1000, description="Max messages to include")
-    offset: int = Field(0, ge=0, description="Messages offset")
-    append_user_message: Optional[str] = Field(None, description="Optional user message to append and (optionally) persist")
-    save_to_db: Optional[bool] = Field(None, description="Persist appended user and assistant messages to this chat")
-    # LLM controls
-    provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
-    model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
-    temperature: Optional[float] = Field(None, description="Sampling temperature")
-    max_tokens: Optional[int] = Field(None, description="Max tokens in the completion")
-    tools: Optional[List[Dict[str, Any]]] = Field(None, description="Tool definitions")
-    tool_choice: Optional[Dict[str, Any]] = Field(None, description="Tool choice specification")
-    stream: Optional[bool] = Field(False, description="If true, stream the assistant response (SSE)")
-
-
-class CharacterChatCompletionResponse(BaseModel):
-    chat_id: str
-    character_id: int
-    provider: str
-    model: Optional[str] = None
-    saved: bool = False
-    user_message_id: Optional[str] = None
-    assistant_message_id: Optional[str] = None
-    assistant_content: str
+# Completion schemas centralized in schemas/chat_session_schemas.py
 
 
 def _extract_sse_data_lines(chunk: Any) -> List[str]:
@@ -196,7 +153,9 @@ async def create_chat_session(
     session_data: ChatSessionCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+    seed_first_message: bool = Query(False, description="If true, seed the chat with an initial assistant greeting"),
+    greeting_strategy: Literal["default", "alternate_random", "alternate_index"] = Query("default", description="How to choose the initial assistant greeting when seeding"),
+    alternate_index: Optional[int] = Query(None, ge=0, description="Index for alternate greeting when greeting_strategy=alternate_index"),
 ):
     """
     Create a new chat session with a character.
@@ -205,6 +164,11 @@ async def create_chat_session(
         session_data: Chat session creation data
         db: Database instance
         current_user: Authenticated user
+        
+    Notes:
+        This API does not automatically create a first assistant message. Clients
+        should POST a first user/assistant message after chat creation. The library
+        helper `start_new_chat_session` can seed a first message when used directly.
         
     Returns:
         Created chat session details
@@ -267,6 +231,41 @@ async def create_chat_session(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve created chat session"
             )
+        
+        # Optionally seed the chat with a greeting (first_message or alternate)
+        if seed_first_message:
+            try:
+                char_name = character.get('name') or 'Assistant'
+                choice_text: Optional[str] = None
+                if greeting_strategy in {"alternate_random", "alternate_index"}:
+                    ag = character.get('alternate_greetings')
+                    if isinstance(ag, list) and ag:
+                        if greeting_strategy == "alternate_random":
+                            choice_text = random.choice(ag)
+                        elif greeting_strategy == "alternate_index" and isinstance(alternate_index, int) and 0 <= alternate_index < len(ag):
+                            choice_text = ag[alternate_index]
+                if not choice_text:
+                    fm = character.get('first_message')
+                    if isinstance(fm, str) and fm.strip():
+                        choice_text = fm
+                if isinstance(choice_text, str) and choice_text.strip():
+                    content = replace_placeholders(choice_text, char_name, 'User')
+                    db.add_message({
+                        'conversation_id': created_id,
+                        'sender': char_name,
+                        'content': content,
+                        'client_id': str(current_user.id),
+                        'version': 1
+                    })
+                    # Bump conversation metadata (best-effort)
+                    try:
+                        refreshed = db.get_conversation_by_id(created_id) or {}
+                        db.update_conversation(created_id, {}, refreshed.get('version', 1))
+                        created_conv['message_count'] = (created_conv.get('message_count') or 0) + 1
+                    except Exception:
+                        pass
+            except Exception as _seed_err:
+                logger.debug(f"Non-fatal: failed to seed first message for chat {created_id}: {_seed_err}")
         
         # Log creation
         logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
@@ -367,9 +366,13 @@ async def get_chat_context(
             content = m.get('content') or ''
             formatted.append({"role": role, "content": content})
 
-        # If no messages, include first_message as system message
+        # If no messages, include first_message as an initial assistant message (with placeholders resolved)
         if not formatted and character.get('first_message'):
-            formatted.append({"role": "assistant", "content": character['first_message']})
+            try:
+                fm = replace_placeholders(character['first_message'], char_name, 'User')
+            except Exception:
+                fm = character['first_message']
+            formatted.append({"role": "assistant", "content": fm})
 
         return {"character_name": char_name, "messages": formatted}
 
@@ -405,8 +408,6 @@ async def complete_chat_legacy(
         await rate_limiter.check_chat_completion_rate(current_user.id)
 
         # Test-mode throttle: 5 requests per second per (user, chat)
-        if (str(payload or {}),):
-            pass  # payload accepted but unused
         key = f"{current_user.id}:{chat_id}"
         now = time.time()
         window = _complete_windows[key]
@@ -504,11 +505,20 @@ async def prepare_chat_completion(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion")
 
 
-@router.post("/{chat_id}/complete-v2", response_model=CharacterChatCompletionResponse,
-             summary="Character Chat completion (operational, rate-limited)", tags=["Chat Sessions"])
+@router.post(
+    "/{chat_id}/complete-v2",
+    response_model=CharacterChatCompletionV2Response,
+    summary="Character Chat completion (operational, rate-limited)",
+    description=(
+        "Builds context from the chat and calls a provider.\n\n"
+        "Streaming: when stream=true, response is sent as SSE and assistant content is NOT persisted,"
+        " even if save_to_db=true. Use non-streaming to persist, or persist manually after streaming."
+    ),
+    tags=["Chat Sessions"],
+)
 async def character_chat_completion(
     chat_id: str = Path(..., description="Chat session ID"),
-    body: CharacterChatCompletionRequest = None,
+    body: CharacterChatCompletionV2Request = None,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -519,10 +529,15 @@ async def character_chat_completion(
     - Builds message context from the chat (and optional appended user message)
     - Calls provider via unified chat function
     - Persists appended user message and assistant reply when save_to_db is true
+
+    Streaming behavior:
+    - When `stream=True`, the response is returned as SSE and the assistant
+      content is not persisted even if `save_to_db=True`. Use non-streaming
+      mode to persist or persist separately after streaming completes.
     """
     try:
         import os
-        body = body or CharacterChatCompletionRequest()
+        body = body or CharacterChatCompletionV2Request()
 
         # Validate and ownership
         conversation = db.get_conversation_by_id(chat_id)
@@ -576,7 +591,8 @@ async def character_chat_completion(
         will_add = 1 if body.append_user_message else 0
         will_add += 1  # assistant reply
         try:
-            current_count = len(db.get_messages_for_conversation(chat_id, limit=10000) or [])
+            # Use efficient counter to avoid loading large message lists into memory
+            current_count = db.count_messages_for_conversation(chat_id)
             await rate_limiter.check_message_limit(chat_id, current_count + will_add)
         except HTTPException:
             raise
@@ -592,7 +608,14 @@ async def character_chat_completion(
             api_key = None
 
         # Attempt provider call; allow offline simulation for local-llm in test/dev
-        offline_sim = provider == "local-llm" and os.getenv("ALLOW_LOCAL_LLM_CALLS", "").lower() not in {"1", "true", "yes", "on"}
+        # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)
+        def _truthy(env_val: Optional[str]) -> bool:
+            return isinstance(env_val, str) and env_val.lower() in {"1", "true", "yes", "on"}
+
+        enable_local_llm = _truthy(os.getenv("ENABLE_LOCAL_LLM_PROVIDER"))
+        disable_offline_sim = _truthy(os.getenv("DISABLE_OFFLINE_SIM"))
+        legacy_allow_local = _truthy(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
+        offline_sim = provider == "local-llm" and not (enable_local_llm or disable_offline_sim or legacy_allow_local)
         llm_resp = None
         if not offline_sim:
             # Enforce per-minute completion rate only for real provider calls
@@ -640,6 +663,62 @@ async def character_chat_completion(
                     break
             assistant_text = (last_user or "OK").strip()
             assistant_tool_calls = []
+            # Streaming stub for offline-sim: emit SSE with plain text chunks and [DONE]
+            if bool(body.stream):
+                async def _offline_sse():
+                    try:
+                        import time as _time
+                        created_ts = int(_time.time())
+                        stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+                        model_id = model or "local-test"
+
+                        # Initial role chunk (OpenAI-style)
+                        head = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": model_id,
+                            "choices": [
+                                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                            ],
+                        }
+                        yield f"data: {json.dumps(head)}\n\n"
+
+                        # Content chunks
+                        text = assistant_text or "OK"
+                        words = text.split()
+                        step = 20
+                        if not words:
+                            words = ["OK"]
+                        for i in range(0, len(words), step):
+                            chunk = " ".join(words[i : i + step])
+                            data = {
+                                "id": stream_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_ts,
+                                "model": model_id,
+                                "choices": [
+                                    {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
+                                ],
+                            }
+                            yield f"data: {json.dumps(data)}\n\n"
+
+                        # Finish chunk
+                        tail = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": model_id,
+                            "choices": [
+                                {"index": 0, "delta": {}, "finish_reason": "stop"}
+                            ],
+                        }
+                        yield f"data: {json.dumps(tail)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as e:
+                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                        yield "data: [DONE]\n\n"
+                return StreamingResponse(_offline_sse(), media_type="text/event-stream")
         else:
             assistant_text = _extract_text(llm_resp).strip()
             # Try to extract tool calls if present (OpenAI-like shape)
@@ -652,7 +731,7 @@ async def character_chat_completion(
             except Exception:
                 pass
 
-        # If streaming requested and we have a generator, stream SSE
+        # If streaming requested and we have a generator, stream SSE (real providers)
         if not offline_sim and bool(body.stream):
             try:
                 # Support async generators
@@ -674,6 +753,7 @@ async def character_chat_completion(
                         finally:
                             if not done_sent:
                                 yield "data: [DONE]\n\n"
+                    # Note: streaming mode does not persist assistant content
                     return StreamingResponse(_sse_async(), media_type="text/event-stream")
                 # Support sync generators/iterables that are not plain containers
                 if hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list)):
@@ -691,6 +771,7 @@ async def character_chat_completion(
                         finally:
                             if not done_sent:
                                 yield "data: [DONE]\n\n"
+                    # Note: streaming mode does not persist assistant content
                     return StreamingResponse(_sse_gen(), media_type="text/event-stream")
             except Exception:
                 # Fall through to non-streaming response
@@ -762,7 +843,7 @@ async def character_chat_completion(
             except Exception as e:
                 logger.warning(f"Failed to persist assistant message: {e}")
 
-        return CharacterChatCompletionResponse(
+        return CharacterChatCompletionV2Response(
             chat_id=chat_id,
             character_id=conversation['character_id'],
             provider=provider,
@@ -977,20 +1058,26 @@ async def delete_chat_session(
                 detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"
             )
         
-        # Collect current non-deleted messages prior to conversation soft-delete
-        existing_messages = db.get_messages_for_conversation(chat_id, limit=10000, offset=0)
+        # Collect all current non-deleted messages prior to conversation soft-delete (page through to cover large chats)
+        page_size = 10000
+        existing_messages: List[Dict[str, Any]] = []
+        while True:
+            batch = db.get_messages_for_conversation(chat_id, limit=page_size, offset=0)
+            if not batch:
+                break
+            existing_messages.extend(batch)
+            # Soft-delete in batches to avoid large in-memory accumulation
+            for msg in batch:
+                try:
+                    db.soft_delete_message(msg.get("id"), msg.get("version", 1))
+                except Exception:
+                    logger.warning(f"Failed to soft-delete message {msg.get('id')} during conversation delete.")
+            # After deleting current batch, loop again to fetch next set of non-deleted messages (offset stays 0)
 
         # Soft delete conversation via DB abstraction (optimistic locking)
         exp_ver = expected_version if expected_version is not None else conversation.get('version', 1)
+        # Finally soft delete the conversation
         db.soft_delete_conversation(chat_id, exp_ver)
-
-        # Also soft delete messages individually to keep data consistent
-        for msg in existing_messages:
-            try:
-                db.soft_delete_message(msg.get("id"), msg.get("version", 1))
-            except Exception:
-                # Best-effort; continue even if a specific message fails due to version mismatch etc.
-                logger.warning(f"Failed to soft-delete message {msg.get('id')} during conversation delete.")
         
         logger.info(f"Soft deleted chat session {chat_id} by user {current_user.id}")
         
@@ -1180,6 +1267,86 @@ async def export_chat_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while exporting chat history"
         )
+
+
+# ========================================================================
+# Persist streamed assistant content
+# ========================================================================
+
+@router.post(
+    "/{chat_id}/completions/persist",
+    response_model=CharacterChatStreamPersistResponse,
+    summary="Persist streamed assistant content",
+    description=(
+        "Persist an assistant message after a streamed completion. "
+        "Optionally links to a prior user_message_id and stores tool_calls metadata."
+    ),
+    tags=["Chat Sessions"],
+)
+async def persist_streamed_assistant_message(
+    chat_id: str = Path(..., description="Chat session ID"),
+    body: CharacterChatStreamPersistRequest = None,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        body = body or CharacterChatStreamPersistRequest(assistant_content="")
+
+        conversation = db.get_conversation_by_id(chat_id)
+        if not conversation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
+        if conversation.get('client_id') != str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this chat session")
+
+        # Enforce message cap (+1 assistant)
+        try:
+            current_count = db.count_messages_for_conversation(chat_id)
+            limiter = get_character_rate_limiter()
+            await limiter.check_message_limit(chat_id, current_count + 1)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.debug("Non-fatal: message cap check skipped in persist endpoint")
+
+        assistant_msg_id = str(uuid.uuid4())
+        db.add_message({
+            'id': assistant_msg_id,
+            'conversation_id': chat_id,
+            'parent_message_id': body.user_message_id,
+            'sender': 'assistant',
+            'content': body.assistant_content,
+            'ranking': body.ranking if getattr(body, 'ranking', None) is not None else None,
+            'client_id': str(current_user.id),
+            'version': 1,
+        })
+        # Persist metadata: tool_calls and usage
+        try:
+            extra = None
+            if getattr(body, 'usage', None) is not None:
+                extra = {"usage": body.usage}
+            if getattr(body, 'tool_calls', None) is not None or extra is not None:
+                db.add_message_metadata(assistant_msg_id, tool_calls=body.tool_calls, extra=extra)
+        except Exception:
+            pass
+
+        # Touch conversation metadata
+        try:
+            conv_for_update = db.get_conversation_by_id(chat_id)
+            if conv_for_update:
+                # Optionally update chat rating alongside metadata bump
+                update_fields = {}
+                if getattr(body, 'chat_rating', None) is not None:
+                    update_fields['rating'] = body.chat_rating
+                db.update_conversation(chat_id, update_fields, conv_for_update.get('version', 1))
+        except Exception:
+            pass
+
+        return CharacterChatStreamPersistResponse(chat_id=chat_id, assistant_message_id=assistant_msg_id, saved=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")
 
 
 #

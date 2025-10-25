@@ -157,8 +157,12 @@ def migrate_existing_data(user_db: UserDatabase) -> None:
     print("DATA MIGRATION")
     print("="*60)
     
-    # Check for existing Media database
-    media_db_path = Path("../Databases/Media_DB_v2.db")
+    # Check for existing Media database (per-user default)
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+        media_db_path = Path(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+    except Exception:
+        media_db_path = Path("../Databases/Media_DB_v2.db")
     
     if media_db_path.exists():
         print(f"\n📁 Found existing Media database at: {media_db_path}")

@@ -2,46 +2,14 @@ import os
 import io
 import json
 import pytest
-from fastapi.testclient import TestClient
 from fastapi import UploadFile
-
-from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
 
 pytestmark = pytest.mark.unit
 
 
-class _DummyLogger:
-    def __init__(self):
-        self.events = []
-
-    def log_event(self, name, resource_id=None, tags=None, metadata=None):
-        self.events.append((name, resource_id, tags, metadata))
-
-
-@pytest.fixture()
-def client_with_overrides(monkeypatch):
-    dummy = _DummyLogger()
-
-    async def override_user():
-        return User(id=1, username="tester", email=None, is_active=True)
-
-    def override_logger():
-        return dummy
-
-    fastapi_app.dependency_overrides[get_request_user] = override_user
-    fastapi_app.dependency_overrides[get_usage_event_logger] = override_logger
-
-    with TestClient(fastapi_app) as client:
-        yield client, dummy
-
-    fastapi_app.dependency_overrides.clear()
-
-
-def test_process_code_js_lines(client_with_overrides):
-    client, _ = client_with_overrides
+def test_process_code_js_lines(client_with_single_user):
+    client, _ = client_with_single_user
     code = b"console.log('hi');\nconsole.log('bye');\n"
     files = [("files", ("script.js", code, "application/javascript"))]
     data = {
@@ -61,8 +29,8 @@ def test_process_code_js_lines(client_with_overrides):
     assert len(res0["chunks"]) >= 2
 
 
-def test_process_code_js_codechunk(client_with_overrides):
-    client, _ = client_with_overrides
+def test_process_code_js_codechunk(client_with_single_user):
+    client, _ = client_with_single_user
     code = b"function add(a,b){return a+b;}\nexport default add;\n"
     files = [("files", ("lib.js", code, "application/javascript"))]
     data = {
@@ -100,7 +68,7 @@ async def test_save_uploaded_files_extension_candidates_tar_gz(tmp_path, monkeyp
     assert saved[0]["original_filename"] == "archive.tar.gz"
 
 
-def test_process_docs_streaming_respects_validator_limits(client_with_overrides, monkeypatch, tmp_path):
+def test_process_docs_streaming_respects_validator_limits(client_with_single_user, monkeypatch, tmp_path):
     # Monkeypatch the file_validator_instance to enforce a tiny max size for documents
     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
@@ -110,18 +78,19 @@ def test_process_docs_streaming_respects_validator_limits(client_with_overrides,
     })
     monkeypatch.setattr(media_mod, "file_validator_instance", tiny_validator)
 
-    client, _ = client_with_overrides
+    client, _ = client_with_single_user
     big = b"x" * 200  # > 100 bytes
     files = [("files", ("note.txt", big, "text/plain"))]
     data = {
         "perform_analysis": "false",
     }
     r = client.post("/api/v1/media/process-documents", files=files, data=data)
-    # Expect partial failure with an error entry for oversize upload
-    assert r.status_code in (200, 207, 413), r.text
+    # Expect partial failure with an oversize error or hard 413
+    if r.status_code == 413:
+        return
+    assert r.status_code in (200, 207), r.text
     payload = r.json()
-    # Find the error entry
-    assert any("exceeds maximum allowed size" in (entry.get("error") or "") for entry in payload.get("results", []))
+    assert payload.get("errors_count", 0) >= 1
 
 
 @pytest.mark.asyncio

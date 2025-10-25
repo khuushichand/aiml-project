@@ -22,7 +22,7 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
 import random
 
-from tldw_Server_API.app.core.Scheduler import create_scheduler, Scheduler
+from tldw_Server_API.app.core.Scheduler import get_global_scheduler, Scheduler
 from tldw_Server_API.app.core.Scheduler.handlers import workflows as _ensure_handlers  # noqa: F401  # register workflow_run
 from tldw_Server_API.app.core.Scheduler.handlers import watchlists as _ensure_watchlists  # noqa: F401  # register watchlist_run
 from tldw_Server_API.app.core.Scheduler.base.registry import get_registry
@@ -50,8 +50,8 @@ class _WFRecurringScheduler:
         async with self._lock:
             if self._started:
                 return
-            # Start core job scheduler (workers)
-            self._core_scheduler = await create_scheduler()
+            # Start or reuse the global core job scheduler (workers)
+            self._core_scheduler = await get_global_scheduler()
             # Start APScheduler for cron
             tz = os.getenv("WORKFLOWS_SCHEDULER_TZ", "UTC")
             self._aps = AsyncIOScheduler(timezone=tz)
@@ -288,7 +288,8 @@ class _WFRecurringScheduler:
             return
         # Record last_run_at and pending status
         try:
-            db.set_history(schedule_id, last_run_at=datetime.utcnow().isoformat(), last_status="pending")
+            from datetime import timezone
+            db.set_history(schedule_id, last_run_at=datetime.now(timezone.utc).isoformat(), last_status="pending")
         except Exception:
             pass
         payload = {

@@ -1136,5 +1136,95 @@ class TestAsyncChunkerConcurrency:
                 assert ' ' not in ''.join(japanese_chunks), "Japanese chunks should not contain inserted spaces"
 
 
+def test_paragraph_chunk_with_metadata_offsets_match_source():
+    """Paragraphs strategy should produce offsets that slice the original text exactly."""
+    chunker = Chunker()
+    # Leading/trailing/multiple blank lines and indents
+    text = (
+        "\n\n   First paragraph, with  leading spaces.  \n"
+        "\n   \n\nSecond paragraph.\n\n\n"
+        "  Third paragraph with trailing spaces.   \n   "
+    )
+    results = chunker.chunk_text_with_metadata(text, method='paragraphs', max_size=2, overlap=1)
+    assert results, "Expected paragraph chunks"
+    for res in results:
+        md = res.metadata
+        assert isinstance(md.start_char, int) and isinstance(md.end_char, int)
+        assert 0 <= md.start_char <= md.end_char <= len(text)
+        # chunker aligns emitted text to original span
+        assert res.text == text[md.start_char:md.end_char]
+
+
+def test_hierarchical_tokens_offsets_map_to_source():
+    """Hierarchical tokens path must map local spans to global offsets and preserve exact source slices."""
+    chunker = Chunker()
+    text = (
+        "Header\n\n"
+        "First block with tokens. Another line here.\n"
+        "\n\n"
+        "Second block content 123 and more words here.\n"
+    )
+    rows = chunker.chunk_text_hierarchical_flat(
+        text,
+        method='tokens',
+        max_size=8,
+        overlap=2,
+        language='en',
+    )
+    assert rows, "Expected hierarchical tokens output"
+    for row in rows:
+        md = row.get('metadata', {})
+        s = md.get('start_offset')
+        e = md.get('end_offset')
+        assert isinstance(s, int) and isinstance(e, int)
+        assert 0 <= s <= e <= len(text)
+        assert row.get('text') == text[s:e]
+
+
+def test_paragraph_chunk_with_crlf_offsets_match_source():
+    """Paragraphs with Windows CRLF line endings should produce accurate offsets."""
+    chunker = Chunker()
+    text = (
+        "\r\n\r\n  Para A line 1\r\nline 2  \r\n\r\n\r\n"
+        "   Para B\r\n\r\n"
+        "Para C with trailing spaces   \r\n"
+    )
+    results = chunker.chunk_text_with_metadata(text, method='paragraphs', max_size=2, overlap=1)
+    assert results, "Expected paragraph chunks with CRLF input"
+    for res in results:
+        md = res.metadata
+        assert isinstance(md.start_char, int) and isinstance(md.end_char, int)
+        assert 0 <= md.start_char <= md.end_char <= len(text)
+        assert res.text == text[md.start_char:md.end_char]
+
+
+def test_words_chunk_with_metadata_preserves_offsets_japanese():
+    """Japanese word chunking with metadata should slice exact source spans (no spaces inserted)."""
+    chunker = Chunker()
+    text = "猫は可愛いです。犬も可愛いです。ありがとうございます。"
+    chunks = chunker.chunk_text_with_metadata(text, method='words', max_size=6, overlap=2, language='ja')
+    assert chunks, "Expected Japanese word chunks"
+    for ch in chunks:
+        s = ch.metadata.start_char
+        e = ch.metadata.end_char
+        assert 0 <= s <= e <= len(text)
+        assert ch.text == text[s:e]
+
+
+def test_sentences_chunk_with_metadata_no_space_thai():
+    """Thai sentence chunking should not introduce spaces and should preserve offsets."""
+    chunker = Chunker()
+    text = "นี่คือการทดสอบ!ขอบคุณ?สวัสดี!"
+    chunks = chunker.chunk_text_with_metadata(text, method='sentences', max_size=1, overlap=0, language='th')
+    assert chunks, "Expected Thai sentence chunks"
+    for ch in chunks:
+        s = ch.metadata.start_char
+        e = ch.metadata.end_char
+        assert 0 <= s <= e <= len(text)
+        assert ch.text == text[s:e]
+        # Ensure no spaces are introduced by joining
+        assert ' ' not in ch.text
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

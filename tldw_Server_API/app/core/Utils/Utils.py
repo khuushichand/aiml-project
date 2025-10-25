@@ -656,19 +656,45 @@ def clean_youtube_url(url):
     cleaned_url = urlunparse(parsed_url._replace(query=cleaned_query))
     return cleaned_url
 
-def sanitize_filename(filename):
+def sanitize_filename(filename, *, max_total_length: int | None = None, extension: str | None = None):
     """
-    Sanitizes the filename by:
-      1) Removing forbidden characters entirely (rather than replacing them with '-')
-      2) Collapsing consecutive whitespace into a single space
-      3) Collapsing consecutive dashes into a single dash
+    Sanitizes a user-provided filename component.
+
+    Behavior:
+    - Removes forbidden characters entirely
+    - Collapses whitespace and repeated dashes
+    - Optionally enforces a total length cap (base + extension) preserving the extension
+
+    Args:
+        filename: The filename or base name to sanitize (callers often pass a stem w/o extension).
+        max_total_length: If provided, ensures (sanitized_base + extension) length <= this cap.
+        extension: Optional extension (including leading dot), used when enforcing the cap.
+
+    Returns:
+        A sanitized (and possibly truncated) filename or base component.
     """
     # 1) Remove forbidden characters
-    sanitized = re.sub(r'[<>:"/\\|?*]', '', filename)
+    sanitized = re.sub(r'[<>:"/\\|?*]', '', str(filename))
     # 2) Replace runs of whitespace with a single space
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     # 3) Replace consecutive dashes with a single dash
     sanitized = re.sub(r'-{2,}', '-', sanitized)
+
+    # Optional capping: preserve extension if provided and cap overall length conservatively
+    if max_total_length is not None and max_total_length > 0:
+        ext = extension or ''
+        # Ensure extension starts with a dot if it looks like one; otherwise treat as raw suffix
+        if ext and not ext.startswith('.') and len(ext) <= 6:  # small guard; callers should pass with dot
+            ext = f'.{ext}'
+        reserved = len(ext)
+        available = max_total_length - reserved
+        if available < 1:
+            # Degenerate case: if cap is smaller than extension, drop extension consideration
+            available = max_total_length
+            ext = ''
+        if len(sanitized) > available:
+            sanitized = sanitized[:available]
+
     return sanitized
 
 
@@ -743,9 +769,14 @@ def get_db_config():
     config = configparser.ConfigParser()
     config.read(config_path)
     # Return the database configuration
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+        default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+    except Exception:
+        default_sqlite = './Databases/Media_DB_v2.db'
     return {
         'type': config['Database']['type'],
-        'sqlite_path': config.get('Database', 'sqlite_path', fallback='./Databases/server_media_summary.db'),
+        'sqlite_path': config.get('Database', 'sqlite_path', fallback=default_sqlite),
         'elasticsearch_host': config.get('Database', 'elasticsearch_host', fallback='localhost'),
         'elasticsearch_port': config.getint('Database', 'elasticsearch_port', fallback=9200)
     }

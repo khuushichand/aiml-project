@@ -149,7 +149,7 @@ api_key = your-secure-random-key-here
 
 [Database]
 database_path = /var/lib/tldw/databases/
-media_db_name = Media_DB_v2.db
+media_db_name = <user_id>/Media_DB_v2.db
 
 [API]
 # Add your API keys for LLM providers
@@ -180,7 +180,7 @@ JWT_SECRET=your-jwt-secret
 SESSION_ENCRYPTION_KEY=your-32-byte-key
 
 # Database
-DATABASE_PATH=/var/lib/tldw/databases
+DATABASE_PATH=/var/lib/tldw/user_databases
 
 # Logging
 LOG_PATH=/var/log/tldw
@@ -206,7 +206,7 @@ migrations.apply_all_migrations('/var/lib/tldw/databases/')
 "
 
 # Verify databases created
-ls -la /var/lib/tldw/databases/
+ls -la /var/lib/tldw/user_databases/
 ```
 
 #### 4.2 Set database permissions
@@ -566,7 +566,7 @@ python -m tldw_Server_API.app.main
 
 ```bash
 # Check database integrity
-sqlite3 /var/lib/tldw/databases/Media_DB_v2.db "PRAGMA integrity_check;"
+sqlite3 /var/lib/tldw/user_databases/<user_id>/Media_DB_v2.db "PRAGMA integrity_check;"
 
 # Reset database (WARNING: Data loss)
 rm /var/lib/tldw/databases/*.db
@@ -627,7 +627,7 @@ DATE=$(date +%Y%m%d_%H%M%S)
 
 # Create backup
 mkdir -p $BACKUP_DIR
-sqlite3 /var/lib/tldw/databases/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
+sqlite3 /var/lib/tldw/user_databases/<user_id>/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
 tar -czf $BACKUP_DIR/config_$DATE.tar.gz /etc/tldw/
 
 # Clean old backups
@@ -657,7 +657,7 @@ For high load, deploy multiple instances:
 ```python
 # Migrate from SQLite to PostgreSQL
 python scripts/migrate_to_postgres.py \
-    --source /var/lib/tldw/databases/Media_DB_v2.db \
+    --source /var/lib/tldw/user_databases/<user_id>/Media_DB_v2.db \
     --dest postgresql://user:pass@localhost/tldw
 ```
 

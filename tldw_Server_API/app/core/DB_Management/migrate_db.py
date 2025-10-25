@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 from tldw_Server_API.app.core.DB_Management.db_migration import (
     DatabaseMigrator, MigrationError
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def get_default_db_path() -> str:
@@ -32,8 +33,12 @@ def get_default_db_path() -> str:
     if db_path:
         return db_path
     
-    # Default to standard location
-    return str(Path(__file__).parent.parent.parent.parent.parent / "Databases" / "media_db.sqlite")
+    # Default to per-user Media DB v2 path using centralized utils
+    try:
+        return str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+    except Exception:
+        # Fallback to legacy path if settings unavailable
+        return str(Path(__file__).parent.parent.parent.parent.parent / "Databases" / "Media_DB_v2.db")
 
 
 def show_status(db_path: str):

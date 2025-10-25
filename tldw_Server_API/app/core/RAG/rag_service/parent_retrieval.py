@@ -489,7 +489,12 @@ class SmartParentRetriever(ParentDocumentRetriever):
         # Analyze query to determine best strategy
         strategy = self._select_strategy(query, initial_documents, query_type)
         
-        logger.info(f"Selected strategy: {strategy.value} for query: {query[:50]}...")
+        try:
+            import hashlib as _hl
+            _qh = _hl.md5((query or '').encode('utf-8')).hexdigest()[:8]
+            logger.info(f"Selected strategy: {strategy.value} for query_hash={_qh}")
+        except Exception:
+            logger.info(f"Selected strategy: {strategy.value}")
         
         # Apply selected strategy
         return await self.retrieve_with_parents(

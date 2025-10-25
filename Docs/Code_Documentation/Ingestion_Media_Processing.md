@@ -160,7 +160,14 @@ From `app/api/v1/endpoints/media.py`:
 
 ## Configuration & Dependencies
 
-- Config keys (via `loaded_config_data['media_processing']` where applicable): size limits (`max_*_file_size_mb`), archive limits (`max_archive_internal_files`, `max_archive_uncompressed_size_mb`), `pdf_conversion_timeout_seconds`.
+- Config keys (via `loaded_config_data['media_processing']` where applicable):
+  - Size limits by type: `max_*_file_size_mb` (e.g., `max_pdf_file_size_mb`).
+  - Archive limits:
+    - `max_archive_internal_files`: maximum number of members scanned.
+    - `max_archive_uncompressed_size_mb`: aggregate uncompressed size of all members (enforced in `validate_archive_contents`).
+    - `max_archive_member_uncompressed_size_mb`: optional per‑member uncompressed size cap (enforced in `validate_archive_contents`).
+    - `max_archive_file_size_mb` (aka `archive_file_size_mb` default): compressed archive file size limit (applies to the uploaded `.zip`/`.tar*` file, enforced in `validate_file`).
+  - PDF conversion: `pdf_conversion_timeout_seconds`.
 - External tooling: `ffmpeg` and `yt-dlp` required for A/V; optional `yara`, `puremagic` (MIME detection), `docling` (PDF), `pypandoc` (RTF), and system `tesseract` for OCR.
 
 ## Usage Examples

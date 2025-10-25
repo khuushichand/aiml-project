@@ -59,6 +59,7 @@ from tldw_Server_API.app.core.Embeddings.messages import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     VectorStoreFactory,
@@ -135,8 +136,10 @@ def _get_media_db_for_user(user_id: str) -> MediaDatabase:
         # Even if present, Embeddings primarily use the global Media DB by default.
     except Exception:
         pass
-    # Default Media DB path from helpers
-    db_path = os.getenv("MEDIA_DB_PATH", "Databases/Media_DB_v2.db")
+    # Default Media DB path per user unless overridden by MEDIA_DB_PATH
+    env_override = os.getenv("MEDIA_DB_PATH")
+    default_path = str(DatabasePaths.get_media_db_path(uid_int))
+    db_path = env_override or default_path
     return create_media_database(client_id=str(user_id), db_path=db_path)
 
 

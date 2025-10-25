@@ -11,7 +11,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
 from tldw_Server_API.app.core.Scheduler import Scheduler
-from tldw_Server_API.app.core.Scheduler import create_scheduler
+from tldw_Server_API.app.core.Scheduler import get_global_scheduler
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 
@@ -22,7 +22,13 @@ class ScheduleCreateRequest(BaseModel):
     workflow_id: Optional[int] = Field(None, description="Saved workflow ID; optional if definition snapshot is used")
     name: Optional[str] = None
     cron: str = Field(..., description="Cron expression, e.g., '*/15 * * * *'")
-    timezone: Optional[str] = None
+    timezone: Optional[str] = Field(
+        None,
+        description=(
+            "IANA timezone name (e.g., 'UTC', 'America/New_York'). "
+            "See tz database list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+        ),
+    )
     inputs: Dict[str, Any] = Field(default_factory=dict)
     run_mode: str = Field("async", pattern="^(async|sync)$")
     validation_mode: str = Field("block", pattern="^(block|non-block)$")
@@ -36,7 +42,13 @@ class ScheduleCreateRequest(BaseModel):
 class ScheduleUpdateRequest(BaseModel):
     name: Optional[str] = None
     cron: Optional[str] = None
-    timezone: Optional[str] = None
+    timezone: Optional[str] = Field(
+        None,
+        description=(
+            "IANA timezone name (e.g., 'UTC', 'America/New_York'). "
+            "See tz database list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+        ),
+    )
     inputs: Optional[Dict[str, Any]] = None
     run_mode: Optional[str] = Field(None, pattern="^(async|sync)$")
     validation_mode: Optional[str] = Field(None, pattern="^(block|non-block)$")
@@ -334,14 +346,21 @@ async def run_now(
         "mode": s.run_mode,
         "validation_mode": s.validation_mode,
     }
-    core = await create_scheduler()  # fast path; returns existing instance if already started
+    # Use the global scheduler instance to avoid duplicate worker pools
+    core = await get_global_scheduler()
     task_id = await core.submit("workflow_run", payload=payload, queue_name="workflows", metadata={"user_id": s.user_id})
     return {"task_id": task_id}
 
 
 class DryRunRequest(BaseModel):
     cron: str
-    timezone: Optional[str] = None
+    timezone: Optional[str] = Field(
+        None,
+        description=(
+            "IANA timezone name (e.g., 'UTC', 'America/New_York'). "
+            "See tz database list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+        ),
+    )
     inputs: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -353,7 +372,10 @@ class DryRunRequest(BaseModel):
 async def dry_run_schedule(body: DryRunRequest, current_user: User = Depends(get_request_user)):
     """Validate cron/timezone and return next run time and echo inputs.
 
-    Does not persist a schedule or submit a run.
+    Notes:
+    - Timezone must be an IANA tz name (e.g., 'UTC', 'America/New_York').
+      See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+    - Does not persist a schedule or submit a run.
     """
     _validate_cron_or_422(body.cron, body.timezone)
     from apscheduler.triggers.cron import CronTrigger
@@ -372,4 +394,9 @@ def _validate_cron_or_422(cron: str, timezone: Optional[str]) -> None:
         from apscheduler.triggers.cron import CronTrigger
         CronTrigger.from_crontab(cron, timezone=timezone or "UTC")
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Invalid cron expression: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid cron or timezone. Timezone must be an IANA name. Details: {e}"
+            ),
+        )

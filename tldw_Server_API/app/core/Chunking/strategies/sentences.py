@@ -46,8 +46,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             'ar': ['.', '!', '?', '؟', '۔'],
             'hi': ['।', '|', '.', '!', '?'],
             # Thai has no explicit spaces between sentences; avoid space as a delimiter.
-            # Prefer PyThaiNLP when available; fallback uses punctuation only.
-            'th': ['!', '?'],
+            # Prefer PyThaiNLP when available; fallback uses a conservative set of marks.
+            # Include '…' (ellipsis) and 'ฯ' (paiyannoi) commonly seen at sentence/clause ends.
+            'th': ['!', '?', '…', 'ฯ'],
             'default': ['.', '!', '?']
         }
         
@@ -423,6 +424,10 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 continue
             start_char = window[0][1]
             end_char = window[-1][2]
+            try:
+                end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
+            except Exception:
+                pass
             sentences_only = [item[0] for item in window]
             if self.language in no_space_languages:
                 chunk_text = ''.join(sentences_only).strip()

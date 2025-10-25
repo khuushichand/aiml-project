@@ -429,46 +429,71 @@ def monitor_resource(
         base_metric = metric_name or f"resource_{resource_name}"
         count_metric = f"{base_metric}_active"
         usage_metric = f"{base_metric}_usage_seconds"
-        
+
+        # Ensure a gauge exists for active count so we never emit negative increments
+        try:
+            registry = get_metrics_registry()
+            if count_metric not in registry.metrics:
+                registry.register_metric(
+                    MetricDefinition(
+                        name=count_metric,
+                        type=MetricType.GAUGE,
+                        description=f"Active count for resource {resource_name}",
+                        labels=["resource"],
+                    )
+                )
+        except Exception:
+            # Never break call paths due to metrics
+            pass
+
+        # Maintain a local active counter per-decorated function to set the gauge robustly
+        active_count = 0
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
+                nonlocal active_count
                 if track_count:
-                    increment_counter(count_metric, 1, labels={"resource": resource_name})
-                
+                    active_count += 1
+                    set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+
                 start_time = time.time() if track_usage else None
-                
+
                 try:
                     return await func(*args, **kwargs)
                 finally:
                     if track_count:
-                        increment_counter(count_metric, -1, labels={"resource": resource_name})
-                    
+                        active_count = max(0, active_count - 1)
+                        set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+
                     if track_usage and start_time:
                         usage = time.time() - start_time
                         observe_histogram(usage_metric, usage, labels={"resource": resource_name})
-            
+
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
+                nonlocal active_count
                 if track_count:
-                    increment_counter(count_metric, 1, labels={"resource": resource_name})
-                
+                    active_count += 1
+                    set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+
                 start_time = time.time() if track_usage else None
-                
+
                 try:
                     return func(*args, **kwargs)
                 finally:
                     if track_count:
-                        increment_counter(count_metric, -1, labels={"resource": resource_name})
-                    
+                        active_count = max(0, active_count - 1)
+                        set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+
                     if track_usage and start_time:
                         usage = time.time() - start_time
                         observe_histogram(usage_metric, usage, labels={"resource": resource_name})
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 

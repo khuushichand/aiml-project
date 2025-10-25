@@ -631,6 +631,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
             async def _wrapped_stream():
                 buffer = ""
                 last_emit = 0
+                last_emit_time = 0.0
                 sentence_re = re.compile(r"(?<=[\.!?])\s+")
                 async for chunk in base_stream:
                     buffer += chunk
@@ -639,6 +640,10 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
                     # When buffer has at least two sentences, run lightweight claim extraction
                     parts = sentence_re.split(buffer)
                     if len(parts) >= 2 and len(buffer) - last_emit > 200:
+                        # Debounce: limit overlay extraction rate
+                        now = time.time()
+                        if now - last_emit_time < 0.4:
+                            continue
                         tail = " ".join(parts[-2:])
                         try:
                             claims_out = await engine.run(
@@ -655,6 +660,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
                             )
                             context.metadata["claims_overlay"] = claims_out
                             last_emit = len(buffer)
+                            last_emit_time = now
                         except Exception:
                             pass
                 # done

@@ -281,6 +281,7 @@
             'Toggle Moderation.enabled on to enforce guardrails.',
             'Choose input_action and output_action (block, redact, warn).',
             'Set redact_replacement and point to your blocklist file.',
+            'Blocklist supports /regex/flags (i, m, s, x); use \\# to include a literal #; categories suffix requires a space before # (e.g., "... -> redact:[X] #pii").',
           ],
           focus: [
             { section: 'Moderation', key: 'enabled' },

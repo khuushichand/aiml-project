@@ -1,20 +1,7 @@
 import pytest
-from fastapi.testclient import TestClient
-
-from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
 
 pytestmark = pytest.mark.unit
-
-
-class _DummyLogger:
-    def __init__(self):
-        self.events = []
-
-    def log_event(self, name, resource_id=None, tags=None, metadata=None):
-        self.events.append((name, resource_id, tags, metadata))
 
 
 class _StubQuotaService:
@@ -29,31 +16,15 @@ class _StubQuotaService:
 
 
 @pytest.fixture()
-def client_with_overrides(monkeypatch):
-    dummy = _DummyLogger()
-
-    async def override_user():
-        return User(id=1, username="tester", email=None, is_active=True)
-
-    def override_logger():
-        return dummy
-
-    # Patch quota service to avoid DB access in tests
+def quota_service_stub(monkeypatch):
+    # Patch quota service globally to avoid DB access in tests
     import tldw_Server_API.app.services.storage_quota_service as quota_mod
-
     monkeypatch.setattr(quota_mod, "get_storage_quota_service", lambda: _StubQuotaService())
-
-    fastapi_app.dependency_overrides[get_request_user] = override_user
-    fastapi_app.dependency_overrides[get_usage_event_logger] = override_logger
-
-    with TestClient(fastapi_app) as client:
-        yield client, dummy
-
-    fastapi_app.dependency_overrides.clear()
+    yield
 
 
-def test_ebooks_process_usage_event_logged(client_with_overrides, monkeypatch):
-    client, dummy = client_with_overrides
+def test_ebooks_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
+    client, usage_logger = client_with_single_user
 
     # Stub heavy processing to return immediately
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
@@ -73,11 +44,11 @@ def test_ebooks_process_usage_event_logged(client_with_overrides, monkeypatch):
 
     r = client.post("/api/v1/media/process-ebooks", files=files)
     assert r.status_code == 200, r.text
-    assert any(e[0] == "media.process.ebook" for e in dummy.events)
+    assert any(e[0] == "media.process.ebook" for e in usage_logger.events)
 
 
-def test_documents_process_usage_event_logged(client_with_overrides, monkeypatch):
-    client, dummy = client_with_overrides
+def test_documents_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
+    client, usage_logger = client_with_single_user
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
@@ -96,11 +67,11 @@ def test_documents_process_usage_event_logged(client_with_overrides, monkeypatch
 
     r = client.post("/api/v1/media/process-documents", files=files)
     assert r.status_code == 200, r.text
-    assert any(e[0] == "media.process.document" for e in dummy.events)
+    assert any(e[0] == "media.process.document" for e in usage_logger.events)
 
 
-def test_pdfs_process_usage_event_logged(client_with_overrides, monkeypatch):
-    client, dummy = client_with_overrides
+def test_pdfs_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
+    client, usage_logger = client_with_single_user
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
@@ -119,5 +90,4 @@ def test_pdfs_process_usage_event_logged(client_with_overrides, monkeypatch):
 
     r = client.post("/api/v1/media/process-pdfs", files=files)
     assert r.status_code == 200, r.text
-    assert any(e[0] == "media.process.pdf" for e in dummy.events)
-
+    assert any(e[0] == "media.process.pdf" for e in usage_logger.events)

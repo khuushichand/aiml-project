@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+import os
 
 ########################################################################################################################
 # Enums and Data Classes
@@ -136,7 +137,7 @@ IMPROVEMENT_STRATEGIES = {
 class PromptImprover:
     """Improves and optimizes prompts for Prompt Studio projects."""
     
-    def __init__(self, db: PromptStudioDatabase, enable_cache: bool = False):
+    def __init__(self, db: PromptStudioDatabase, enable_cache: bool = False, enable_chain_of_thought: Optional[bool] = None):
         """
         Initialize PromptImprover.
         
@@ -151,6 +152,12 @@ class PromptImprover:
         self.strategies = list(ImprovementStrategy)
         self.analyzers = {}
         self.llm_client = None  # Mock LLM client
+        # Policy switch for chain-of-thought additions (default enabled unless env says otherwise)
+        if enable_chain_of_thought is None:
+            env_val = os.getenv("PROMPT_STUDIO_ENABLE_CHAIN_OF_THOUGHT", "true").strip().lower()
+            self.enable_chain_of_thought = env_val not in {"0", "false", "no"}
+        else:
+            self.enable_chain_of_thought = bool(enable_chain_of_thought)
     
     ####################################################################################################################
     # Core Analysis and Improvement Methods
@@ -464,7 +471,9 @@ class PromptImprover:
         return improved
     
     def _add_chain_of_thought(self, prompt: str) -> str:
-        """Add chain-of-thought."""
+        """Add chain-of-thought if enabled by policy."""
+        if not self.enable_chain_of_thought:
+            return prompt
         return prompt + "\n\nLet's think step by step:"
     
     def _simplify(self, prompt: str) -> str:

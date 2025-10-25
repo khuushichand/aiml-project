@@ -11,7 +11,6 @@ from enum import Enum
 from loguru import logger
 
 from ..Metrics.telemetry import get_telemetry_manager
-from ..Metrics.metrics_manager import MetricsRegistry, MetricDefinition, MetricType
 
 
 class ChatMetricLabels(Enum):
@@ -108,7 +107,7 @@ class ChatMetricsCollector:
         self.telemetry = get_telemetry_manager()
         self.meter = self.telemetry.get_meter("tldw_server.chat")
         self.tracer = self.telemetry.get_tracer("tldw_server.chat")
-        self.registry = MetricsRegistry()
+        # Metrics are recorded via OTel instruments; no separate JSON registry needed
         
         # Initialize metrics
         self.metrics = self._initialize_metrics()
@@ -475,7 +474,9 @@ class ChatMetricsCollector:
             operation_type: Type of operation (e.g., "save_message", "create_conversation")
         """
         start_time = time.time()
-        
+        # Mark a transaction active while this context is open
+        self.active_transactions += 1
+
         with self.tracer.start_as_current_span(
             f"db_{operation_type}",
             attributes={"operation": operation_type}
@@ -489,6 +490,8 @@ class ChatMetricsCollector:
                     {"operation": operation_type}
                 )
                 span.set_attribute("duration", duration)
+                # Decrement active transaction count
+                self.active_transactions = max(0, self.active_transactions - 1)
     
     def track_validation_failure(self, validation_type: str, error_message: str):
         """

@@ -1624,20 +1624,20 @@ UPDATE db_schema_version
         try:
             pool = self.backend.get_pool()
             conn = pool.get_connection()
-            # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.user_id'))
+            # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.current_user_id'))
             try:
                 if self.backend_type == BackendType.POSTGRESQL and self.client_id:
                     cur = conn.cursor()
                     # Use SESSION scope so it persists for pooled connection lifecycle
                     user_value = str(self.client_id)
                     if psycopg_sql is not None:  # type: ignore[name-defined]
-                        statement = psycopg_sql.SQL("SET SESSION app.user_id = {}").format(
+                        statement = psycopg_sql.SQL("SET SESSION app.current_user_id = {}").format(
                             psycopg_sql.Literal(user_value)
                         )
                         cur.execute(statement)
                     else:
                         safe_value = user_value.replace("'", "''")
-                        cur.execute(f"SET SESSION app.user_id = '{safe_value}'")
+                        cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
                     try:
                         conn.commit()
                     except Exception:
@@ -1706,12 +1706,12 @@ UPDATE db_schema_version
                         conn.close()
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Failed to close database connection: %s", exc)
-                    thread_id = threading.get_ident()
                     try:
-                        pool._connections[thread_id] = None  # type: ignore[attr-defined]
-                        if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
-                            pool._local.connection = None  # type: ignore[attr-defined]
-                    except AttributeError:
+                        # Prefer public helper to clear thread-local connection state
+                        if hasattr(pool, 'clear_thread_local_connection'):
+                            pool.clear_thread_local_connection()  # type: ignore[attr-defined]
+                    except Exception:
+                        # Best-effort; ignore if pool doesn't expose the helper
                         pass
                     conn = None
                     self._local.conn = None
@@ -1818,13 +1818,11 @@ UPDATE db_schema_version
             if hasattr(self._local, 'conn'):
                 self._local.conn = None
             if self.backend_type == BackendType.SQLITE:
-                thread_id = threading.get_ident()
                 try:
                     pool = self.backend.get_pool()
-                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
-                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
-                        pool._local.connection = None  # type: ignore[attr-defined]
-                except AttributeError:
+                    if hasattr(pool, 'clear_thread_local_connection'):
+                        pool.clear_thread_local_connection()  # type: ignore[attr-defined]
+                except Exception:
                     pass
 
     def close_all_connections(self) -> None:
@@ -2382,6 +2380,8 @@ UPDATE db_schema_version
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
                     except sqlite3.Error:
                         pass
+                    # Verify core FTS tables exist to avoid silent search failures
+                    self._verify_required_fts_tables_sqlite(conn)
                     return
                 if current_db_version > target_version:
                     raise SchemaError(
@@ -2463,6 +2463,8 @@ UPDATE db_schema_version
                 if final_version_check != target_version:
                     raise SchemaError(
                         f"Schema migration process completed, but final DB version is {final_version_check}, expected {target_version}. Manual check required.")
+                # Verify core FTS tables after migrations complete
+                self._verify_required_fts_tables_sqlite(conn)
                 logger.info(
                     f"Database schema '{self._SCHEMA_NAME}' successfully initialized/migrated to version {final_version_check}.")
 
@@ -2472,6 +2474,31 @@ UPDATE db_schema_version
         except Exception as e:
             logger.error(f"Unexpected error during schema initialization for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise CharactersRAGDBError(f"Unexpected error applying schema for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _verify_required_fts_tables_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure required FTS tables exist in SQLite deployments.
+
+        Uses the configured `_FTS_CONFIG` list to assert the presence of the
+        matching virtual tables. Raises SchemaError with a helpful message on
+        missing tables to prevent confusing search errors later.
+        """
+        try:
+            required = {name for name, _, _ in self._FTS_CONFIG}
+            if not required:
+                return
+            placeholders = ",".join(["?"] * len(required))
+            cur = conn.execute(
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+                tuple(sorted(required)),
+            )
+            existing = {row[0] for row in cur.fetchall()}
+            missing = required - existing
+            if missing:
+                raise SchemaError(
+                    f"Missing required FTS tables for '{self._SCHEMA_NAME}': {', '.join(sorted(missing))}"
+                )
+        except sqlite3.Error as e:
+            raise SchemaError(f"Failed verifying FTS tables for '{self._SCHEMA_NAME}': {e}") from e
 
     def _initialize_schema_postgres(self):
         """Bootstrap or migrate the ChaCha schema on PostgreSQL."""
@@ -5694,6 +5721,17 @@ UPDATE db_schema_version
             A list of keyword dictionaries.
         """
         return self._list_generic_items("keywords", "keyword COLLATE NOCASE", limit, offset)
+
+    def count_keywords(self) -> int:
+        """Return count of active (non-deleted) keywords."""
+        query = "SELECT COUNT(*) AS cnt FROM keywords WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Error counting keywords: {exc}")
+            raise
 
     def soft_delete_keyword(self, keyword_id: int, expected_version: int) -> bool:
         """

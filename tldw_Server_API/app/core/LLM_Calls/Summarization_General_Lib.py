@@ -25,7 +25,7 @@ from typing import Optional, Union, Generator, Any, Dict, List, Callable
 # 3rd-Party Imports
 import requests
 from requests.adapters import HTTPAdapter
-from urllib3 import Retry
+from urllib3.util.retry import Retry
 #
 # Import Local
 from tldw_Server_API.app.core.Chunking import (

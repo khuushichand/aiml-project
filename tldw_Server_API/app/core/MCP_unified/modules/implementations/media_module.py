@@ -20,6 +20,7 @@ from loguru import logger
 
 from ..base import BaseModule, ModuleConfig, create_tool_definition, create_resource_definition
 from ....DB_Management.Media_DB_v2 import MediaDatabase
+from ....DB_Management.db_path_utils import DatabasePaths
 
 
 class MediaModule(BaseModule):
@@ -38,10 +39,8 @@ class MediaModule(BaseModule):
         """Initialize media module with connection pooling"""
         try:
             # Get database path from config
-            db_path = self.config.settings.get(
-                "db_path",
-                "./Databases/Media_DB_v2.db"
-            )
+            default_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+            db_path = self.config.settings.get("db_path") or default_db_path
             
             # Ensure database directory exists
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -133,7 +132,8 @@ class MediaModule(BaseModule):
                 checks["database_writable"] = False
             
             # Check disk space
-            db_path = self.config.settings.get("db_path", "./Databases/Media_DB_v2.db")
+            default_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+            db_path = self.config.settings.get("db_path", default_db_path)
             stat = os.statvfs(os.path.dirname(db_path))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1  # At least 1GB free

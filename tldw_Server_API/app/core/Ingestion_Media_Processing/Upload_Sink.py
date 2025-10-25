@@ -14,8 +14,12 @@ from typing import List, Optional, Dict, Set, Union, Tuple
 # 3rd-party Libraries
 try:
     import puremagic  # type: ignore
-except ImportError:  # puremagic is optional; fall back to extension checks only
+except ImportError:  # puremagic is optional; fall back to alternate MIME detection
     puremagic = None
+try:
+    import magic as _python_magic  # type: ignore
+except ImportError:
+    _python_magic = None
 try:
     import yara  # type: ignore
 except ImportError:  # yara rules are optional; disable malware scanning if missing
@@ -25,7 +29,7 @@ import tarfile
 import re
 #
 # Local Imports (adjust path as per your project structure)
-from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.config import loaded_config_data, MAGIC_FILE_PATH
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 
@@ -73,14 +77,14 @@ media_config = loaded_config_data.get('media_processing', {}) if loaded_config_d
 CODE_FILE_EXTENSIONS: Set[str] = {
     '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
     '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
-    '.rb', '.php', '.pl', '.lua', '.sql', '.json', '.yaml',
+    '.rb', '.php', '.pl', '.lua', '.sql', '.yaml',
     '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js',
 }
 CODE_MIME_TYPES: Set[str] = {
     'text/plain', 'text/x-python', 'application/x-python-code', 'text/x-c', 'text/x-c++src',
     'text/javascript', 'application/javascript', 'application/x-javascript',
     'application/ecmascript', 'text/ecmascript',
-    'application/json', 'text/x-java-source',
+    'text/x-java-source',
     'text/x-kotlin', 'text/x-rust', 'text/x-go', 'text/x-ruby', 'text/x-php',
     'text/x-perl', 'text/x-sql', 'text/yaml', 'application/x-yaml',
     'application/x-toml', 'text/markdown', 'text/x-typescript',
@@ -102,13 +106,13 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "max_size_mb": media_config.get('max_video_file_size_mb', 1000),
     },
     "image": {
-        "allowed_extensions": {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'},
-        "allowed_mimetypes": {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml'},
+        "allowed_extensions": {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'},
+        # SVG is treated as XML to enable sanitization; see 'xml' config
+        "allowed_mimetypes": {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'},
         "max_size_mb": 20,
     },
-    "document": {  # Generic documents
-        "allowed_extensions": {'.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.txt', '.md', '.rtf',
-                               '.csv'},
+    "document": {  # Generic documents (JSON supported as document)
+        "allowed_extensions": {'.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.txt', '.md', '.rtf', '.json'},
         "allowed_mimetypes": {
             'application/pdf', 'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -116,7 +120,7 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
             'application/vnd.openxmlformats-officedocument.presentationml.presentation',
             'application/vnd.ms-excel',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'text/plain', 'text/markdown', 'text/rtf', 'text/csv', 'application/rtf', 'application/x-rtf',
+            'text/plain', 'text/markdown', 'text/rtf', 'application/rtf', 'application/x-rtf', 'application/json',
         },
         "max_size_mb": media_config.get('max_document_file_size_mb', 50),
     },
@@ -146,8 +150,9 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "sanitize": True,  # Flag to indicate sanitization should be applied
     },
     "xml": {
-        "allowed_extensions": {'.xml', '.opml'},
-        "allowed_mimetypes": {'text/xml', 'application/xml'},
+        # Include SVG as XML for safer handling
+        "allowed_extensions": {'.xml', '.opml', '.svg'},
+        "allowed_mimetypes": {'text/xml', 'application/xml', 'image/svg+xml'},
         "max_size_mb": 10,
         "sanitize": True,  # Flag to indicate sanitization should be applied
     },
@@ -158,10 +163,14 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
             'application/x-tar', 'application/gzip', 'application/x-gzip',
             'application/x-bzip2', 'application/x-xz'
         },
-        "max_size_mb": media_config.get('max_archive_uncompressed_size_mb', 200),
-        "scan_contents": True,  # Flag to indicate archive contents should be scanned
+        # Compressed archive file size limit (applies to the .zip/.tar* file itself)
+        "archive_file_size_mb": media_config.get('max_archive_file_size_mb', 200),
+        "scan_contents": True,  # Scan archive members
         "max_internal_files": media_config.get('max_archive_internal_files', 100),
+        # Uncompressed aggregate size limit of all members
         "max_internal_uncompressed_size_mb": media_config.get('max_archive_uncompressed_size_mb', 200),
+        # Optional per-member uncompressed size cap for defense-in-depth
+        "max_member_uncompressed_size_mb": media_config.get('max_archive_member_uncompressed_size_mb', 100),
         "max_depth": media_config.get('max_archive_nesting_depth', 2),
     },
     "code": {
@@ -172,16 +181,21 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
 }
 
 # Mapping from extension to a media_type_key (used by the dispatcher)
+# Note: Endpoints may override classification contextually. For example, the
+#       code processing endpoint accepts certain structured text types like
+#       '.json' as code for chunking purposes, even though the default here
+#       categorizes '.json' under 'document'.
 # This can be auto-generated or manually maintained for clarity.
 EXT_TO_MEDIA_TYPE_KEY = {
     '.mp3': 'audio', '.wav': 'audio', '.flac': 'audio', '.aac': 'audio', '.ogg': 'audio', '.m4a': 'audio',
     '.mp4': 'video', '.avi': 'video', '.mov': 'video', '.mkv': 'video', '.webm': 'video', '.flv': 'video',
     '.jpg': 'image', '.jpeg': 'image', '.png': 'image', '.gif': 'image', '.webp': 'image', '.bmp': 'image',
-    '.svg': 'image',
+    # Route SVG to XML pipeline so sanitizer applies
+    '.svg': 'xml',
     '.pdf': 'pdf',
     '.doc': 'document', '.docx': 'document', '.ppt': 'document', '.pptx': 'document', '.xls': 'document',
     '.xlsx': 'document',
-    '.txt': 'document', '.md': 'document', '.rtf': 'document', '.csv': 'document',
+    '.txt': 'document', '.md': 'document', '.rtf': 'document',
     '.epub': 'ebook', '.mobi': 'ebook', '.azw': 'ebook',
     '.html': 'html', '.htm': 'html',
     '.xml': 'xml', '.opml': 'xml',
@@ -191,7 +205,7 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.py': 'code', '.c': 'code', '.h': 'code', '.cpp': 'code', '.hpp': 'code', '.cc': 'code',
     '.cxx': 'code', '.cs': 'code', '.java': 'code', '.kt': 'code', '.kts': 'code', '.swift': 'code',
     '.rs': 'code', '.go': 'code', '.rb': 'code', '.php': 'code', '.pl': 'code', '.lua': 'code',
-    '.sql': 'code', '.json': 'code', '.yaml': 'code', '.yml': 'code', '.toml': 'code', '.ini': 'code',
+    '.sql': 'code', '.json': 'document', '.yaml': 'code', '.yml': 'code', '.toml': 'code', '.ini': 'code',
     '.cfg': 'code', '.conf': 'code', '.ts': 'code', '.tsx': 'code', '.jsx': 'code',
 }
 
@@ -218,19 +232,43 @@ def _resolve_media_type_key(filename: Union[str, Path]) -> Optional[str]:
 class FileValidator:
     def __init__(self, yara_rules_path: Optional[str] = None, custom_media_configs: Optional[Dict] = None):
         self.magic_available = bool(puremagic)
+        # Optional python-magic fallback when puremagic is unavailable
+        self.python_magic_available = False
+        self._python_magic_mime = None
+        if not self.magic_available and _python_magic is not None:
+            try:
+                # Respect configured magic file if provided
+                if MAGIC_FILE_PATH:
+                    self._python_magic_mime = _python_magic.Magic(mime=True, magic_file=MAGIC_FILE_PATH)
+                else:
+                    self._python_magic_mime = _python_magic.Magic(mime=True)
+                self.python_magic_available = True
+                logging.info("python-magic is available and will be used for MIME detection fallback.")
+            except Exception as e:
+                self._python_magic_mime = None
+                self.python_magic_available = False
+                logging.warning(f"Failed to initialize python-magic fallback: {e}")
         self.yara_available = bool(yara)
-        self.zipfile_available = bool(zipfile)
+        # Prefer a neutral name; both zipfile and tarfile are stdlib
+        self.archive_scanning_available = bool(zipfile or tarfile)
+        # Back-compat alias to avoid breaking any external references
+        self.zipfile_available = self.archive_scanning_available
 
         self.compiled_yara_rules = None
+        # Allow environments to opt into fail-open on YARA scanner errors
+        try:
+            self._yara_fail_open = bool(media_config.get('yara_fail_open', False))
+        except Exception:
+            self._yara_fail_open = False
         if self.yara_available and yara_rules_path:
             self._initialize_yara_scanner(yara_rules_path)
         elif yara_rules_path and not self.yara_available:
             logging.warning("Yara rules path provided, but yara-python is not installed. Yara scanning disabled.")
 
-        if not self.magic_available:
+        if not self.magic_available and not self.python_magic_available:
             logging.warning(
-                "puremagic is not available. MIME type detection will be limited/skipped. "
-                "Install with: pip install puremagic"
+                "puremagic/python-magic unavailable. MIME detection will rely on extension guesses. "
+                "Install 'puremagic' or 'python-magic' for stronger detection."
             )
 
         self._custom_media_configs: Dict[str, Dict] = {}
@@ -271,6 +309,9 @@ class FileValidator:
                 return False, match_details
             return True, []
         except Exception as e:
+            if getattr(self, '_yara_fail_open', False):
+                logging.warning(f"Yara scanning error for {file_path}: {e}. Treating as pass due to configuration.")
+                return True, []
             logging.error(f"Unexpected error scanning file {file_path} with Yara: {e}")
             return False, [f"Unexpected Yara scanning error: {e}"]
 
@@ -312,11 +353,42 @@ class FileValidator:
             issues.append(f"Path is not a file: {current_file_path}")
             return ValidationResult(False, issues, current_file_path, detected_extension=disk_file_ext)
 
+        # 1a. Centralized blocked extensions guard (defense-in-depth)
+        BLOCKED_EXTENSIONS: Set[str] = {
+            '.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.vbe',
+            '.ws', '.wsf', '.wsc', '.wsh', '.ps1', '.ps1xml', '.ps2', '.ps2xml',
+            '.psc1', '.psc2', '.msh', '.msh1', '.msh2', '.mshxml', '.msh1xml',
+            '.msh2xml', '.scf', '.lnk', '.inf', '.reg', '.dll', '.app', '.sh',
+            '.csh', '.ksh', '.bash', '.zsh', '.fish', '.jar',
+            '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage', '.snap'
+        }
+
+        def _first_blocked(candidates: List[str]) -> Optional[str]:
+            for c in candidates:
+                # Allow .js when explicitly validating as code
+                if media_type_key == 'code' and c == '.js':
+                    continue
+                if c in BLOCKED_EXTENSIONS:
+                    return c
+            return None
+
+        blocked_claimed = _first_blocked(_extension_candidates(_original_filename))
+        blocked_disk = _first_blocked(disk_candidates)
+        first_blocked = blocked_claimed or blocked_disk
+        if first_blocked:
+            issues.append(f"File type '{first_blocked}' is not allowed for security reasons")
+            return ValidationResult(False, issues, current_file_path, detected_extension=disk_file_ext)
+
         # Determine configuration
         config = self.get_media_config(media_type_key)
         cfg_allowed_extensions = config.get("allowed_extensions") if config else None
         cfg_allowed_mimetypes = config.get("allowed_mimetypes") if config else None
-        cfg_max_size_mb = config.get("max_size_mb") if config else None
+        # Size limit: for archives use compressed file cap; others use generic max_size_mb
+        cfg_max_size_mb = None
+        if media_type_key == 'archive':
+            cfg_max_size_mb = config.get("archive_file_size_mb") if config else None
+        else:
+            cfg_max_size_mb = config.get("max_size_mb") if config else None
 
         final_allowed_extensions = (
             allowed_extensions_override if allowed_extensions_override is not None else cfg_allowed_extensions
@@ -350,8 +422,11 @@ class FileValidator:
             return ValidationResult(False, issues, current_file_path, detected_extension=disk_file_ext)
 
         if final_max_size_bytes is not None and file_size > final_max_size_bytes:
-            issues.append(f"File size {file_size / (1024 * 1024):.2f}MB "
-                          f"exceeds limit of {final_max_size_bytes / (1024 * 1024):.2f}MB.")
+            issues.append(
+                f"File size {file_size / (1024 * 1024):.2f}MB exceeds limit of {final_max_size_bytes / (1024 * 1024):.2f}MB."
+            )
+            # Short-circuit early for efficiency once size limit exceeded
+            return ValidationResult(False, issues, current_file_path, detected_extension=disk_file_ext)
 
         # 3. Validate extension (based on original_filename provided by user/client)
         claimed_candidates = _extension_candidates(_original_filename)
@@ -393,6 +468,20 @@ class FileValidator:
                 )
                 detected_mime_type = None
                 mime_detection_source = "fallback"
+        elif self.python_magic_available and self._python_magic_mime is not None:
+            try:
+                detected_mime_type = self._python_magic_mime.from_file(str(current_file_path))
+                if detected_mime_type:
+                    detected_mime_type = str(detected_mime_type).strip()
+                    mime_detection_source = "python-magic"
+            except Exception as e:
+                logging.warning(
+                    "python-magic MIME detection failed for '%s': %s. Falling back to extension guesses.",
+                    _original_filename,
+                    e,
+                )
+                detected_mime_type = None
+                mime_detection_source = "fallback"
 
         if not detected_mime_type and fallback_mime_type:
             detected_mime_type = fallback_mime_type
@@ -400,30 +489,23 @@ class FileValidator:
                 mime_detection_source = "fallback"
 
         if normalized_allowed_mimetypes:
-            fallback_lower = None
-            if fallback_mime_type:
-                fallback_lower = fallback_mime_type.lower()
+            fallback_lower = (fallback_mime_type or '').lower() or None
             if detected_mime_type:
                 detected_lower = detected_mime_type.lower()
                 if detected_lower not in normalized_allowed_mimetypes:
-                    if fallback_lower and fallback_lower in normalized_allowed_mimetypes:
-                        logging.warning(
-                            "Detected MIME '%s' for '%s' not in allowed list; falling back to extension-based MIME '%s'.",
-                            detected_mime_type,
-                            _original_filename,
-                            fallback_mime_type,
-                        )
-                        detected_mime_type = fallback_mime_type
-                    else:
-                        issues.append(
-                            f"Detected MIME type '{detected_mime_type}' for file '{_original_filename}' is not allowed. "
-                            f"Allowed: {final_allowed_mimetypes}"
-                        )
+                    # Hard-fail if we have a detected MIME and it is not allowed.
+                    # Do NOT fall back to extension-derived MIME in this case.
+                    issues.append(
+                        f"Detected MIME type '{detected_mime_type}' for file '{_original_filename}' is not allowed. "
+                        f"Allowed: {final_allowed_mimetypes}"
+                    )
             else:
-                logging.warning(
-                    "Unable to determine MIME type for '%s'; proceeding with extension-based validation only.",
-                    _original_filename,
-                )
+                # No detected MIME available; rely on extension guess if present
+                if fallback_lower is None or fallback_lower not in normalized_allowed_mimetypes:
+                    issues.append(
+                        f"Unable to determine MIME for '{_original_filename}', and extension-based MIME "
+                        f"'{fallback_mime_type or '<unknown>'}' is not allowed. Allowed: {final_allowed_mimetypes}"
+                    )
 
         # 5. Malware Scan (Yara)
         is_safe_yara, yara_match_details = self._scan_file_with_yara(current_file_path)
@@ -477,17 +559,18 @@ class FileValidator:
             logging.info(f"Content scanning for archive '{archive_path_obj.name}' is disabled by config.")
             return archive_file_validation_result  # Return result of archive file validation
 
-        if not self.zipfile_available:
-            issues.append("zipfile module not available. Cannot scan archive contents.")
-            logging.warning("zipfile module not found. Archive content scanning skipped.")
-            # Return the validation of the archive file itself, but add this issue.
-            archive_file_validation_result.is_valid = False  # Mark as invalid due to inability to scan
-            archive_file_validation_result.issues.append("Cannot scan archive contents: zipfile module missing.")
+        if not self.archive_scanning_available:
+            # Best-effort: treat the archive file itself as valid, but attach a warning
+            issues.append("Archive content scanning not available. Skipping internal file validation.")
+            logging.warning("Archive content scanning unavailable; returning archive file validation result with warning.")
+            archive_file_validation_result.issues.extend(issues)
             return archive_file_validation_result
 
         # Step 2: Securely extract and validate contents
         max_internal_files = archive_config.get("max_internal_files", 100)
         max_uncompressed_size = archive_config.get("max_internal_uncompressed_size_mb", 200) * 1024 * 1024
+        per_member_uncompressed_cap = archive_config.get("max_member_uncompressed_size_mb", 0)
+        max_member_uncompressed_size = int(per_member_uncompressed_cap) * 1024 * 1024 if per_member_uncompressed_cap else None
         extracted_count = 0
         total_extracted_size = 0
 
@@ -545,6 +628,16 @@ class FileValidator:
                                 issues.append(
                                     f"Exceeded max internal file limit ({max_internal_files}) during extraction.")
                                 break  # Stop extraction
+
+                            # Reject encrypted ZIP members explicitly
+                            try:
+                                if getattr(member, 'flag_bits', 0) & 0x1:
+                                    logging.warning(f"Encrypted ZIP member detected and rejected: {member_filename}")
+                                    issues.append(f"Archive contains encrypted member: {member_filename}")
+                                    continue
+                            except Exception:
+                                # If flag_bits is absent or unexpected, continue with other checks
+                                pass
 
                             external_type = (member.external_attr >> 16) & 0xFFFF
                             if external_type:
@@ -616,6 +709,7 @@ class FileValidator:
 
                 elif is_tar:
                     try:
+                        from pathlib import PurePosixPath
                         with tarfile.open(archive_path_obj, 'r:*') as tar:
                             members = list(tar.getmembers())
                             if len(members) > max_internal_files:
@@ -643,11 +737,21 @@ class FileValidator:
                                     issues.append(
                                         f"Archive contains unsupported member type ({member.type}): {member.name}")
                                     continue
-                                member_filename = member.name
+                                # Normalize member path to POSIX-like separators for consistent checks
+                                member_filename = str(PurePosixPath(member.name))
                                 if '..' in member_filename or member_filename.startswith('/') or ':' in member_filename:
                                     logging.warning(f"Skipping potentially malicious archive member: {member_filename}")
                                     issues.append(f"Archive contains potentially malicious path: {member_filename}")
                                     continue
+                                # Per-member uncompressed size cap
+                                try:
+                                    if max_member_uncompressed_size is not None and member.size > max_member_uncompressed_size:
+                                        issues.append(
+                                            f"Archive member exceeds per-file size cap: {member.name} ({member.size} bytes)"
+                                        )
+                                        continue
+                                except Exception:
+                                    pass
                                 intended_path = (extract_dir / member_filename).resolve()
                                 if not str(intended_path).startswith(str(extract_dir.resolve())):
                                     logging.warning(f"Path traversal attempt detected: {member_filename}")
@@ -668,9 +772,11 @@ class FileValidator:
 
                                 try:
                                     try:
+                                        # Use safe extraction filter when available (Python >= 3.12)
                                         tar.extract(member, path=extract_dir, filter='data')
                                     except TypeError:
-                                        # Older Python versions without 'filter'
+                                        # Older Python versions without 'filter' support: we validated member type
+                                        # and path above; continue extracting with the safer prerequisites enforced.
                                         tar.extract(member, path=extract_dir)
                                     internal_file_path = extract_dir / member.name
                                     internal_media_type_key = _resolve_media_type_key(internal_file_path)
@@ -731,7 +837,7 @@ class FileValidator:
         return ValidationResult(True, file_path=archive_path_obj)
 
     def sanitize_html_content(self, html_content: str, config: Optional[Dict] = None) -> str:
-        # Simple sanitizer using bleach if available; otherwise strip tags.
+        # Sanitizer using bleach with restricted protocols; otherwise strip tags.
         try:
             import bleach  # type: ignore
             allowed_tags = (config or {}).get("allowed_tags") or [
@@ -742,7 +848,25 @@ class FileValidator:
                 'a': ['href', 'title', 'rel', 'target'],
             }
             strip = bool((config or {}).get("strip", True))
-            cleaned_html = bleach.clean(html_content, tags=allowed_tags, attributes=allowed_attrs, strip=strip)
+            allowed_protocols = (config or {}).get("allowed_protocols") or ['http', 'https', 'mailto']
+            cleaner = bleach.Cleaner(tags=allowed_tags, attributes=allowed_attrs, protocols=allowed_protocols, strip=strip)
+            cleaned_html = cleaner.clean(html_content)
+            # Enforce rel="noopener noreferrer" on anchors with target attribute to prevent tab-nabbing
+            try:
+                from bs4 import BeautifulSoup  # type: ignore
+                soup = BeautifulSoup(cleaned_html, 'html.parser')
+                for a in soup.find_all('a'):
+                    if a.has_attr('target'):
+                        rel_vals = a.get('rel') or []
+                        if isinstance(rel_vals, str):
+                            rel_vals = rel_vals.split()
+                        rel_set = set(rel_vals)
+                        rel_set.update({'noopener', 'noreferrer'})
+                        a['rel'] = ' '.join(sorted(rel_set))
+                cleaned_html = str(soup)
+            except Exception:
+                # If BeautifulSoup is unavailable, keep cleaned_html as-is.
+                pass
             logging.info("HTML content sanitized with bleach.")
             return cleaned_html
         except Exception as e:
@@ -878,3 +1002,12 @@ def process_and_validate_file(
 # #     print(f"File '{original_name_from_upload}' is invalid. Issues:")
 # #     for issue in result.issues:
 # #         print(f"  - {issue}")
+                            # Per-member uncompressed size cap
+                            try:
+                                if max_member_uncompressed_size is not None and member.file_size > max_member_uncompressed_size:
+                                    issues.append(
+                                        f"Archive member exceeds per-file size cap: {member_filename} ({member.file_size} bytes)"
+                                    )
+                                    continue
+                            except Exception:
+                                pass

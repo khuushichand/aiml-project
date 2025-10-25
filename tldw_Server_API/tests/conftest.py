@@ -1,392 +1,50 @@
-"""
-Global test configuration: environment toggles and robust session cleanup.
-
-This file is loaded by pytest before any test modules. It sets environment
-variables to prevent background services from starting during tests and ensures
-that, regardless of failures or early termination, long‑lived background tasks
-are shut down to avoid hanging the Python interpreter on exit.
-"""
-
-from __future__ import annotations
-
 import os
-import sys
-import asyncio
-import threading
-from typing import Iterable
-
 import pytest
-from loguru import logger
-from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Utils.executor_registry import (
-    shutdown_all_registered_executors,
-)
-# Register optional pgvector fixtures globally so any test can request them.
-from tldw_Server_API.tests.helpers.pgvector import (  # noqa: F401
-    pgvector_dsn,
-    pgvector_temp_table,
-)
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
 
-class _TestSafeStream:
-    """Wrap a stream to swallow write/flush failures during pytest teardown."""
+class _TestUsageLogger:
+    def __init__(self):
+        self.events = []
 
-    def __init__(self, stream):
-        self._stream = stream
-
-    def write(self, message: str):
-        try:
-            self._stream.write(message)
-        except Exception:
-            pass
-
-    def flush(self):
-        try:
-            self._stream.flush()
-        except Exception:
-            pass
-
-    def isatty(self):
-        try:
-            return bool(getattr(self._stream, "isatty", lambda: False)())
-        except Exception:
-            return False
+    def log_event(self, name, resource_id=None, tags=None, metadata=None):
+        self.events.append((name, resource_id, tags, metadata))
 
 
-def _unwrap_logger_add(func):
-    seen = set()
-    candidate = func
-    while True:
-        next_candidate = getattr(candidate, "_tldw_safe_original", None) or getattr(candidate, "__wrapped__", None)
-        if not next_candidate or next_candidate is candidate or next_candidate in seen:
-            return candidate
-        seen.add(candidate)
-        candidate = next_candidate
+@pytest.fixture()
+def client_with_single_user(monkeypatch):
+    """Provide a TestClient for the full FastAPI app with a single-user auth override.
 
-
-if not getattr(logger, "_pytest_safe_add_installed", False):
-    _orig_add = _unwrap_logger_add(logger.add)
-
-    def _safe_add(sink, *args, **kwargs):
-        try:
-            if hasattr(sink, "write") and not isinstance(sink, _TestSafeStream):
-                sink = _TestSafeStream(sink)
-        except Exception:
-            pass
-        return _orig_add(sink, *args, **kwargs)
-
-    _safe_add._tldw_safe_original = _orig_add  # type: ignore[attr-defined]
-    _safe_add.__wrapped__ = _orig_add  # type: ignore[attr-defined]
-    logger.add = _safe_add  # type: ignore[assignment]
-    setattr(logger, "_pytest_safe_add_installed", True)
-
-try:
-    logger.remove()
-except Exception:
-    pass
-logger.add(
-    _TestSafeStream(sys.stderr),
-    level=os.getenv("LOGURU_LEVEL", "INFO"),
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {message}",
-    enqueue=False,
-)
-
-
-@pytest.fixture
-def admin_user():
-    """Provide an authenticated admin context for tests that hit protected endpoints."""
-
-    async def _admin():
-        return User(
-            id=42,
-            username="admin",
-            email="admin@example.com",
-            is_active=True,
-            is_admin=True,
-        )
-
-    app.dependency_overrides[get_request_user] = _admin
-    try:
-        yield
-    finally:
-        app.dependency_overrides.pop(get_request_user, None)
-
-# ----------------------------------------------------------------------------
-# Environment toggles (set at import time so they apply before module imports)
-# ----------------------------------------------------------------------------
-
-# Enable general test mode
-os.environ.setdefault("TEST_MODE", "1")
-
-# Disable optional background services started by the app
-os.environ.setdefault("WORKFLOWS_SCHEDULER_ENABLED", "false")
-os.environ.setdefault("DISABLE_AUTHNZ_SCHEDULER", "1")
-os.environ.setdefault("LLM_USAGE_AGGREGATOR_ENABLED", "false")
-os.environ.setdefault("OUTPUTS_PURGE_ENABLED", "false")
-os.environ.setdefault("DISABLE_PERSONALIZATION_CONSOLIDATION", "1")
-os.environ.setdefault("RAG_QUALITY_EVAL_ENABLED", "false")
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _session_env_and_cleanup():
-    """Session-wide autouse fixture (sync to avoid event loop scope issues).
-
-    - Ensures env toggles above are applied for the whole session.
-    - On teardown, performs robust async cleanup of background services to
-      prevent pytest from hanging at interpreter shutdown.
+    Returns a tuple of (client, usage_logger) for tests that also need to inspect usage events.
     """
+    # Ensure tests run in non-production behavior
+    os.environ.setdefault("TESTING", "true")
 
-    yield
+    usage_logger = _TestUsageLogger()
 
-    # Run async cleanup on a dedicated loop to prevent scope conflicts with
-    # pytest-asyncio's function-scoped event loop runner.
-    try:
-        import asyncio as _asyncio
-        try:
-            _asyncio.run(_shutdown_all())
-        except RuntimeError:
-            # If an event loop is already running, use a fresh loop explicitly
-            loop = _asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(_shutdown_all())
-            finally:
-                loop.close()
-    except Exception as _e:
-        logger.debug(f"Session async cleanup encountered an error: {_e}")
+    async def _override_user():
+        return User(id=1, username="tester", email=None, is_active=True)
 
+    def _override_logger():
+        return usage_logger
 
-async def _shutdown_all() -> None:
-    """Stop background services and cancel lingering async tasks."""
+    fastapi_app.dependency_overrides[get_request_user] = _override_user
+    fastapi_app.dependency_overrides[get_usage_event_logger] = _override_logger
 
-    # Workflows scheduler (_noop task + APScheduler)
-    try:
-        from tldw_Server_API.app.services.workflows_scheduler import (
-            stop_workflows_scheduler,
-        )
+    with TestClient(fastapi_app) as client:
+        yield client, usage_logger
 
-        await stop_workflows_scheduler(None)
-    except Exception as e:
-        logger.debug(f"Workflows scheduler stop skipped: {e}")
-
-    # AuthNZ session manager and scheduler
-    try:
-        from tldw_Server_API.app.core.AuthNZ.session_manager import (
-            reset_session_manager,
-        )
-
-        await reset_session_manager()
-    except Exception as e:
-        logger.debug(f"SessionManager shutdown skipped: {e}")
-
-    try:
-        from tldw_Server_API.app.core.AuthNZ.scheduler import (
-            stop_authnz_scheduler,
-            reset_authnz_scheduler,
-        )
-
-        try:
-            await stop_authnz_scheduler()
-        finally:
-            await reset_authnz_scheduler()
-    except Exception as e:
-        logger.debug(f"AuthNZ scheduler shutdown skipped: {e}")
-
-    # Unified audit services (per-user background tasks)
-    try:
-        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
-            shutdown_all_audit_services,
-        )
-
-        await shutdown_all_audit_services()
-    except Exception as e:
-        logger.debug(f"Audit services shutdown skipped: {e}")
-
-    # Registration service ThreadPoolExecutor
-    try:
-        from tldw_Server_API.app.services.registration_service import (
-            reset_registration_service,
-        )
-
-        await reset_registration_service()
-    except Exception as e:
-        logger.debug(f"RegistrationService reset skipped: {e}")
-
-    # Storage quota service executor (if instantiated)
-    try:
-        import tldw_Server_API.app.services.storage_quota_service as storage_mod
-
-        svc = getattr(storage_mod, "_storage_service", None)
-        if svc is not None:
-            await svc.shutdown()
-            storage_mod._storage_service = None
-        quota = getattr(storage_mod, "_quota_service", None)
-        if quota is not None:
-            try:
-                quota.executor.shutdown(wait=False)
-            except Exception:
-                pass
-            storage_mod._quota_service = None
-    except Exception as e:
-        logger.debug(f"StorageQuotaService cleanup skipped: {e}")
-
-    # Personalization consolidation loop (async task)
-    try:
-        import tldw_Server_API.app.services.personalization_consolidation as pc_mod
-
-        svc = getattr(pc_mod, "_singleton", None)
-        if svc is not None:
-            await svc.stop()
-            pc_mod._singleton = None
-    except Exception as e:
-        logger.debug(f"Personalization consolidation cleanup skipped: {e}")
-
-    # Chat request queue workers
-    try:
-        import tldw_Server_API.app.core.Chat.request_queue as _rq_mod
-
-        queue = _rq_mod.get_request_queue()
-        if queue is not None and hasattr(queue, "stop"):
-            try:
-                running = False
-                try:
-                    is_running = getattr(queue, "is_running", None)
-                    if callable(is_running):
-                        running = bool(is_running())
-                    elif hasattr(queue, "_running"):
-                        running = bool(getattr(queue, "_running"))
-                    else:
-                        running = True
-                except Exception:
-                    running = True
-                if running:
-                    await queue.stop()
-            finally:
-                try:
-                    _rq_mod._request_queue = None  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.debug(f"Chat request queue cleanup skipped: {e}")
-
-    # Registered executors (CPU/db pools, async helpers)
-    try:
-        await shutdown_all_registered_executors(wait=True, cancel_futures=True)
-    except Exception as e:
-        logger.debug(f"Executor registry shutdown skipped: {e}")
-
-    # Async embeddings service (owns ThreadPoolExecutors for providers)
-    try:
-        from tldw_Server_API.app.core.Embeddings import async_embeddings as _async_embed_mod
-
-        service = getattr(_async_embed_mod, "_async_service", None)
-        if service is not None:
-            await service.shutdown()
-            _async_embed_mod._async_service = None
-    except Exception as e:
-        logger.debug(f"Async embedding service cleanup skipped: {e}")
-
-    # Loaded embedding model cache (ensures timers/threads release promptly)
-    try:
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Create as _embed_create
-
-        with _embed_create.embedding_models_lock:
-            for _model_id, _embedder in list(_embed_create.embedding_models.items()):
-                try:
-                    unload = getattr(_embedder, "unload_model", None)
-                    if callable(unload):
-                        unload()
-                except Exception:
-                    pass
-            _embed_create.embedding_models.clear()
-    except Exception as e:
-        logger.debug(f"Embedding model cache cleanup skipped: {e}")
-
-    # CPU-bound helper pools hold additional globals that need explicit reset
-    try:
-        from tldw_Server_API.app.core.Utils import cpu_bound_handler
-
-        await asyncio.to_thread(cpu_bound_handler.cleanup_pools)
-    except Exception as e:
-        logger.debug(f"CPU pool cleanup skipped: {e}")
-
-    # Cancel any lingering async tasks on this loop
-    await _cancel_pending_tasks()
-
-    # Best-effort join for any non-daemon worker threads started during tests
-    _join_non_daemon_threads()
+    fastapi_app.dependency_overrides.pop(get_request_user, None)
+    fastapi_app.dependency_overrides.pop(get_usage_event_logger, None)
 
 
-# -----------------------------------------------------------------------------
-# Guard against leaking Loguru sinks between tests
-# -----------------------------------------------------------------------------
+@pytest.fixture()
+def client_user_only(client_with_single_user):
+    """Shorthand fixture that returns only the TestClient from client_with_single_user."""
+    client, _ = client_with_single_user
+    return client
 
-@pytest.fixture(autouse=True)
-def _no_leaking_loguru_sinks():
-    """
-    Ensure tests don't leak extra Loguru sinks.
-
-    Some tests add temporary sinks (including ones that forward Loguru -> stdlib).
-    If a test forgets to remove them, it can cause recursion/noise with the
-    stdlib→Loguru intercept configured by the app.
-
-    We snapshot the current sink IDs before the test, and remove any new sinks
-    added during the test at teardown.
-    """
-    try:
-        # Private API access is acceptable in tests for cleanup purposes.
-        from loguru import logger as _lg
-        initial_sinks = set(getattr(_lg, "_core").handlers.keys())  # type: ignore[attr-defined]
-    except Exception:
-        initial_sinks = None
-
-    yield
-
-    if initial_sinks is None:
-        return
-    try:
-        from loguru import logger as _lg
-        current_sinks = set(getattr(_lg, "_core").handlers.keys())  # type: ignore[attr-defined]
-        leaked = current_sinks - initial_sinks
-        for sink_id in list(leaked):
-            try:
-                _lg.remove(sink_id)
-            except Exception:
-                pass
-    except Exception:
-        # Best-effort cleanup; never fail tests due to logger internals
-        pass
-
-
-async def _cancel_pending_tasks() -> None:
-    current = asyncio.current_task()
-    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
-    if not pending:
-        return
-
-    pending_names = ", ".join(sorted({t.get_name() for t in pending if t.get_name()}))
-    logger.debug(f"Cancelling lingering async tasks: {pending_names or len(pending)}")
-
-    for task in pending:
-        task.cancel()
-
-    for task, result in zip(pending, await asyncio.gather(*pending, return_exceptions=True)):
-        if isinstance(result, asyncio.CancelledError):
-            continue
-        if isinstance(result, Exception):
-            logger.debug(f"Task {task.get_name()!r} raised during cancel: {result}")
-
-
-def _join_non_daemon_threads(timeout: float = 0.1) -> None:
-    threads: Iterable[threading.Thread] = [
-        t for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon
-    ]
-    for t in threads:
-        t.join(timeout=timeout)
-    if threads:
-        names = ", ".join(t.name for t in threads)
-        logger.debug(f"Non-daemon threads joined during cleanup: {names}")
-    stuck = [t for t in threads if t.is_alive()]
-    if stuck:
-        stuck_names = ", ".join(f"{t.name} (daemon={t.daemon})" for t in stuck)
-        logger.warning(f"Non-daemon threads still running after join attempt: {stuck_names}")

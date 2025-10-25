@@ -100,10 +100,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
 )
-from tldw_Server_API.app.core.Chat.streaming_utils import (
-    StreamingResponseHandler,
-    create_streaming_response_with_timeout,
-)
+# Note: streaming utilities are handled inside chat_service. No direct import needed here.
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
     get_or_create_character_context,
@@ -1122,7 +1119,9 @@ async def create_chat_completion(
                     queue = queue_candidate
             if queue is not None and not queue_is_active(queue):
                 queue = None
-            if queue is not None and QUEUED_EXECUTION:
+            # Admission-only gating: even when background queue execution is disabled,
+            # perform an admission check to apply backpressure/fairness.
+            if queue is not None:
                 try:
                     # Estimate tokens for queue gating (reuse serialized JSON size)
                     est_tokens_for_queue = max(1, len(request_json) // 4)
@@ -1309,41 +1308,6 @@ async def create_chat_completion(
                 return JSONResponse(content=encoded_payload)
 
         # --- Exception Handling --- Improved with structured error handling
-        except HTTPException as e_http:
-            # Log with request context
-            if e_http.status_code >= 500:
-                logger.error(
-                    f"HTTPException (Server Error): {e_http.status_code} - {e_http.detail}",
-                    extra={"request_id": request_id, "status_code": e_http.status_code},
-                    exc_info=True
-                )
-            else:
-                logger.warning(
-                    f"HTTPException (Client Error): {e_http.status_code} - {e_http.detail}",
-                    extra={"request_id": request_id, "status_code": e_http.status_code}
-                )
-            # Allow-list expected HTTP errors raised intentionally by the endpoint
-            allowed_statuses = {
-                status.HTTP_400_BAD_REQUEST,
-                status.HTTP_401_UNAUTHORIZED,
-                status.HTTP_403_FORBIDDEN,
-                status.HTTP_404_NOT_FOUND,
-                status.HTTP_409_CONFLICT,
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                status.HTTP_502_BAD_GATEWAY,
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                status.HTTP_504_GATEWAY_TIMEOUT,
-            }
-            if e_http.status_code in allowed_statuses:
-                # Re-raise expected/intentional HTTP errors
-                raise e_http
-            # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected internal server error occurred."
-            )
 
         except ChatModuleException as e_chat:
             # Our custom exceptions with structured error handling
@@ -1479,9 +1443,42 @@ async def create_chat_completion(
 
         
 
-        # Preserve intentionally raised HTTP errors (e.g., 400/401/429/503) from earlier logic
-        except HTTPException as http_exc:
-            raise http_exc
+        # Preserve and standardize HTTP errors from any stage (including within except blocks)
+        except HTTPException as e_http:
+            # Log with request context
+            if e_http.status_code >= 500:
+                logger.error(
+                    f"HTTPException (Server Error): {e_http.status_code} - {e_http.detail}",
+                    extra={"request_id": request_id, "status_code": e_http.status_code},
+                    exc_info=True
+                )
+            else:
+                logger.warning(
+                    f"HTTPException (Client Error): {e_http.status_code} - {e_http.detail}",
+                    extra={"request_id": request_id, "status_code": e_http.status_code}
+                )
+            # Allow-list expected HTTP errors raised intentionally by the endpoint
+            allowed_statuses = {
+                status.HTTP_400_BAD_REQUEST,
+                status.HTTP_401_UNAUTHORIZED,
+                status.HTTP_403_FORBIDDEN,
+                status.HTTP_404_NOT_FOUND,
+                status.HTTP_409_CONFLICT,
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status.HTTP_502_BAD_GATEWAY,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                status.HTTP_504_GATEWAY_TIMEOUT,
+            }
+            if e_http.status_code in allowed_statuses:
+                # Re-raise expected/intentional HTTP errors
+                raise e_http
+            # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected internal server error occurred."
+            )
 
         except Exception as e_final:
             # Log the full traceback for debugging
@@ -2046,9 +2043,9 @@ async def process_text_with_dictionaries(
                 dictionary_id=request.dictionary_id,
                 group=request.group,
                 max_iterations=request.max_iterations,
-            token_budget=request.token_budget,
-            return_stats=True,
-        )
+                token_budget=request.token_budget,
+                return_stats=True,
+            )
             
             # Check if token budget was exceeded
             token_budget_exceeded = any(

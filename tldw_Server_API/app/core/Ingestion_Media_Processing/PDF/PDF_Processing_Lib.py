@@ -26,7 +26,6 @@ from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Utils.Utils import logging as logger
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
 try:
     # Optional VLM module (vision backends)
@@ -320,7 +319,7 @@ def process_pdf(
                 # Cleanup directory if creation failed partially
                 if temp_dir_for_pdf and os.path.isdir(temp_dir_for_pdf):
                     try: shutil.rmtree(temp_dir_for_pdf)
-                    except Exception: logger.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
+                    except Exception: logging.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
                 raise IOError(f"Failed to create or write temporary file/dir: {temp_err}") from temp_err
 
         elif isinstance(file_input, Path):
@@ -812,21 +811,15 @@ def process_pdf(
         # --- Step 5: Determine Final Status (Based on content and warnings) ---
         # Check if critical step (text extraction) failed. Check warnings for specific errors.
         extraction_failed = not content and any("Text extraction failed" in w for w in result["warnings"])
-        # Also consider specific metadata errors as potential critical failures
-        metadata_failed_critically = any("PDF Error:" in w for w in result["warnings"] if "Metadata extraction failed" in w)
+        # Treat metadata failures as warnings unless text extraction also failed
+        metadata_failed_critically = False
 
-        if extraction_failed or metadata_failed_critically:
+        if extraction_failed:
             result["status"] = "Error"
             # Set a primary error message if not already set by a later exception
             primary_error_msg = "PDF Extraction Error."
-            if metadata_failed_critically and not extraction_failed:
-                # Find the specific PDF Error from metadata warnings
-                 for w in result["warnings"]:
-                     if "Metadata extraction failed: PDF Error:" in w:
-                         primary_error_msg = w.split("Metadata extraction failed: ")[1]
-                         break
             result["error"] = result["error"] or primary_error_msg
-            logging.warning(f"Setting status to Error for {filename} due to critical extraction/metadata failure.")
+            logging.warning(f"Setting status to Error for {filename} due to critical extraction failure.")
         elif result["warnings"]:
              # If there were warnings but text was extracted, status is Warning
              result["status"] = "Warning"
@@ -919,39 +912,39 @@ def process_pdf(
 
              for attempt in range(max_retries):
                  try:
-                     logger.debug(f"Attempting to remove temporary directory (Attempt {attempt + 1}/{max_retries}): {temp_dir_for_pdf}")
+                     logging.debug(f"Attempting to remove temporary directory (Attempt {attempt + 1}/{max_retries}): {temp_dir_for_pdf}")
                      shutil.rmtree(temp_dir_for_pdf)
-                     logger.debug(f"Successfully removed temporary directory: {temp_dir_for_pdf}")
+                     logging.debug(f"Successfully removed temporary directory: {temp_dir_for_pdf}")
                      break # Exit loop if successful
 
                  except OSError as rm_err:
-                     logger.warning(f"OSError removing temporary directory (Attempt {attempt + 1}/{max_retries}) {temp_dir_for_pdf}: {rm_err}")
+                     logging.warning(f"OSError removing temporary directory (Attempt {attempt + 1}/{max_retries}) {temp_dir_for_pdf}: {rm_err}")
                      if attempt == max_retries - 1:
-                         logger.error(f"Final attempt failed to remove {temp_dir_for_pdf}: {rm_err}", exc_info=False)
+                         logging.error(f"Final attempt failed to remove {temp_dir_for_pdf}: {rm_err}", exc_info=False)
                          # --- Modify status handling ---
                          warning_msg = f"Failed to cleanup temp dir after {max_retries} attempts: {rm_err}"
                          result["warnings"].append(warning_msg)
                          # Use the correctly initialized variable here
                          if current_status_before_cleanup == "Success":
-                            logger.warning(f"Downgrading status to Warning due to failed temp dir cleanup for {temp_dir_for_pdf}")
+                            logging.warning(f"Downgrading status to Warning due to failed temp dir cleanup for {temp_dir_for_pdf}")
                             result["status"] = "Warning"
                          else:
-                            logger.warning(f"Temp dir cleanup failed, but original status was already {current_status_before_cleanup}. Keeping status.")
+                            logging.warning(f"Temp dir cleanup failed, but original status was already {current_status_before_cleanup}. Keeping status.")
                          # --- End modify status handling ---
                      else:
-                         logger.info(f"Retrying temp dir removal after delay...")
+                         logging.info(f"Retrying temp dir removal after delay...")
                          time.sleep(retry_delay * (attempt + 1))
 
                  except Exception as rm_exc:
-                      logger.error(f"Unexpected error removing temporary directory {temp_dir_for_pdf} (Attempt {attempt + 1}): {rm_exc}", exc_info=True)
+                      logging.error(f"Unexpected error removing temporary directory {temp_dir_for_pdf} (Attempt {attempt + 1}): {rm_exc}", exc_info=True)
                       warning_msg = f"Unexpected error cleaning up temp dir: {rm_exc}"
                       result["warnings"] = (result["warnings"] or []) + [warning_msg]
                       # Only downgrade if original status was Success
                       if current_status_before_cleanup == "Success":
-                         logger.warning(f"Downgrading status to Warning due to unexpected cleanup error for {temp_dir_for_pdf}")
+                         logging.warning(f"Downgrading status to Warning due to unexpected cleanup error for {temp_dir_for_pdf}")
                          result["status"] = "Warning"
                       else:
-                         logger.warning(f"Temp dir cleanup failed unexpectedly, but original status was already {current_status_before_cleanup}. Keeping status.")
+                         logging.warning(f"Temp dir cleanup failed unexpectedly, but original status was already {current_status_before_cleanup}. Keeping status.")
                       break # Don't retry on unexpected errors
         elif temp_dir_for_pdf:
              # Log if dir path exists but isn't a dir (shouldn't happen often)
@@ -960,7 +953,7 @@ def process_pdf(
              else:
                  logging.warning(f"Temporary directory path {temp_dir_for_pdf} exists but is not a directory.")
         else:
-             logger.debug("No specific temporary directory was created by process_pdf, no cleanup needed by process_pdf.")
+             logging.debug("No specific temporary directory was created by process_pdf, no cleanup needed by process_pdf.")
 
     # --- Final Logging and Return ---
     end_time = datetime.now()

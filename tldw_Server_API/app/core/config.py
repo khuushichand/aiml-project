@@ -990,6 +990,8 @@ def load_settings():
                 os.getenv("LOCAL_LLM_API_RETRY_DELAY"),
                 _parse_int(llm_defaults.get("local_api_retry_delay"), 1) or 1,
             ),
+            # When True, drop non-OpenAI fields from chat payload for strict servers
+            "strict_openai_compat": _parse_bool(os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT"), False),
         }
 
     # --- Warnings ---

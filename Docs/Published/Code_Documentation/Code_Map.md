@@ -79,8 +79,8 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
 ## Databases & Stores
 
 - Media DB (content):
-  - Default dev path via manager: `Databases/server_media_summary.db` (SQLite, FTS5)
-  - Optional per-user path available via utils: `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`
+  - Default dev path via manager: `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db` (SQLite, FTS5)
+  - Root-level path `Databases/Media_DB_v2.db` is deprecated
   - Backends layer wired for PostgreSQL but SQLite is default
 - AuthNZ (Users):
   - `DATABASE_URL` (env) — default in single-user mode resolves to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`

@@ -156,7 +156,12 @@ def _replace_json_extract_calls(query: str) -> str:
 
 
 def _ensure_returning_id(query: str) -> str:
-    """Append a RETURNING id clause to INSERT statements when missing."""
+    """Append a RETURNING clause to INSERT statements when missing.
+
+    Defaults to ``RETURNING id`` for general-purpose tables. For known tables
+    that do not use a numeric ``id`` primary key (e.g., workflows tables that
+    rely on natural keys), this falls back to ``RETURNING *``.
+    """
 
     if _RETURNING_PATTERN.search(query):
         return query
@@ -171,6 +176,21 @@ def _ensure_returning_id(query: str) -> str:
         trailing_semicolon = ';'
         stripped = stripped[:-1].rstrip()
 
+    # Try to detect table name for special-case handling
+    target = stripped
+    try:
+        m = re.match(r'\s*INSERT\s+INTO\s+([\w\."]+)', stripped, flags=re.IGNORECASE)
+        table_token = (m.group(1) if m else "")
+        # Unquote simple identifiers
+        table_name = table_token.strip('"').split('.')[-1].lower() if table_token else ""
+    except Exception:
+        table_name = ""
+
+    special_tables = {
+        'workflow_runs', 'workflow_step_runs', 'workflow_events', 'workflow_artifacts'
+    }
+    if table_name in special_tables:
+        return f"{stripped} RETURNING *{trailing_semicolon}"
     return f"{stripped} RETURNING id{trailing_semicolon}"
 
 

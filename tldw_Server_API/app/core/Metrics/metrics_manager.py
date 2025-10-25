@@ -890,6 +890,12 @@ class MetricsRegistry:
                 )
             
             elif definition.type == MetricType.HISTOGRAM:
+                # If custom buckets were defined, register a view before creating the instrument
+                try:
+                    if definition.buckets:
+                        self.telemetry.register_histogram_view(definition.name, definition.buckets)
+                except Exception:
+                    pass
                 return self.meter.create_histogram(
                     name=definition.name,
                     description=definition.description,
@@ -908,21 +914,27 @@ class MetricsRegistry:
             return None
     
     def _gauge_callback(self, metric_name: str, options: 'CallbackOptions'):
-        """Callback for observable gauge metrics."""
+        """Callback for observable gauge metrics.
+
+        Emits one Observation per distinct label set using the latest value
+        recorded for that label set. This preserves label cardinality in OTel.
+        """
         observations = []
-        
-        # Get latest values for this metric
-        if metric_name in self.values:
-            values = list(self.values[metric_name])
-            if values:
-                latest = values[-1]
-                observations.append(
-                    Observation(
-                        value=latest.value,
-                        attributes=latest.labels
-                    )
-                )
-        
+
+        try:
+            # Group latest value by label set
+            latest_by_labels: Dict[str, MetricValue] = {}
+            if metric_name in self.values:
+                for mv in self.values[metric_name]:
+                    # Build a stable key from sorted labels
+                    label_key = ",".join(f"{k}={v}" for k, v in sorted(mv.labels.items()))
+                    latest_by_labels[label_key] = mv
+
+            for mv in latest_by_labels.values():
+                observations.append(Observation(value=mv.value, attributes=mv.labels))
+        except Exception as e:
+            # Gauges must never break scrapes; return empty to avoid exporter errors
+            logger.debug(f"Gauge callback error for {metric_name}: {e}")
         return observations
     
     def record(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):

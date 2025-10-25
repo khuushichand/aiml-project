@@ -6,14 +6,7 @@ from tldw_Server_API.app.core.Utils.Utils import logging # Your logger
 ########################################################################################################################
 #
 #
-# Configure python-magic if a custom magic file path is provided
-if MAGIC_FILE_PATH:
-    try:
-        import magic
-        magic.Magic(magic_file=settings.MAGIC_FILE_PATH) # This call might affect global state for magic
-        logging.info(f"Configured python-magic with custom magic file: {settings.MAGIC_FILE_PATH}")
-    except Exception as e:
-        logging.error(f"Failed to configure python-magic with {settings.MAGIC_FILE_PATH}: {e}")
+# Rely on FileValidator to configure python-magic when available; avoid global side effects
 
 
 file_validator_instance = FileValidator(

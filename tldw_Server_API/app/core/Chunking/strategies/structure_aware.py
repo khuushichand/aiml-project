@@ -211,6 +211,10 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         """
         if not self.validate_parameters(text, max_size, overlap):
             return []
+        # Align overlap semantics with other strategies to ensure progress
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
+            overlap = max_size - 1
         
         # Parse document structure
         elements = self._parse_document_structure(text, **options)
@@ -422,6 +426,10 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                         try:
                             start_char = line_starts[i] if i < len(line_starts) else 0
                             end_char = line_starts[j] if j < len(line_starts) else len(text)
+                            try:
+                                end_char = self._expand_end_to_grapheme_boundary(text, end_char)
+                            except Exception:
+                                pass
                             if end_char < start_char:
                                 end_char = start_char
                         except Exception:

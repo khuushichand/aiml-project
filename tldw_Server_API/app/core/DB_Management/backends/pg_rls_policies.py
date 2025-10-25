@@ -33,7 +33,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     add(
         """
         CREATE POLICY ps_projects_tenant_isolation ON prompt_studio_projects
-          USING (user_id = current_setting('app.user_id', true));
+          USING (user_id = current_setting('app.current_user_id', true));
         """
     )
     # Prompts
@@ -47,7 +47,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
             EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_prompts.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -63,7 +63,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
             EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_signatures.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -79,7 +79,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
             EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_test_cases.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -95,7 +95,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
             EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_test_runs.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -111,7 +111,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
             EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_evaluations.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -127,7 +127,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
             EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_optimizations.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -145,7 +145,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
               FROM prompt_studio_optimizations o
               JOIN prompt_studio_projects p ON p.id = o.project_id
               WHERE o.id = prompt_studio_optimization_iterations.optimization_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -158,11 +158,11 @@ def build_prompt_studio_rls_sql() -> List[str]:
         """
         CREATE POLICY ps_jobq_tenant_isolation ON prompt_studio_job_queue
           USING (
-            (client_id = current_setting('app.user_id', true))
+            (client_id = current_setting('app.current_user_id', true))
             OR EXISTS (
               SELECT 1 FROM prompt_studio_projects p
               WHERE p.id = prompt_studio_job_queue.project_id
-                AND p.user_id = current_setting('app.user_id', true)
+                AND p.user_id = current_setting('app.current_user_id', true)
             )
           );
         """
@@ -175,7 +175,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
         """
         CREATE POLICY ps_idem_tenant_isolation ON prompt_studio_idempotency
           USING (
-            user_id = current_setting('app.user_id', true)
+            user_id = current_setting('app.current_user_id', true)
             OR user_id IS NULL
           );
         """
@@ -197,7 +197,7 @@ def build_chacha_rls_sql() -> List[str]:
     add(
         """
         CREATE POLICY notes_tenant_isolation ON notes
-          USING (client_id = current_setting('app.user_id', true));
+          USING (client_id = current_setting('app.current_user_id', true));
         """
     )
 
@@ -208,7 +208,7 @@ def build_chacha_rls_sql() -> List[str]:
     add(
         """
         CREATE POLICY chars_tenant_isolation ON character_cards
-          USING (client_id = current_setting('app.user_id', true));
+          USING (client_id = current_setting('app.current_user_id', true));
         """
     )
     return stmts

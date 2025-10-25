@@ -10,9 +10,8 @@ the import path stable for existing callers.
 # Import all functions from the refactored modules
 from .modules import *
 
-# Compatibility wrapper: enrich message with placeholder substitution
+# Compatibility wrapper: expose retrieve_message_details and role mapping
 from .modules.character_chat import retrieve_message_details as _retrieve_msg_basic
-from .modules.character_utils import replace_placeholders as _replace_placeholders
 from .modules.character_utils import map_sender_to_role as map_sender_to_role
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from typing import Optional, Dict, Any
@@ -24,27 +23,17 @@ def retrieve_message_details(
     character_name_for_placeholders: Optional[str] = None,
     user_name_for_placeholders: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Backwards-compatible wrapper that applies placeholder replacement.
+    """Wrapper that delegates to modules implementation.
 
-    Endpoints historically passed character/user names to have placeholders
-    resolved in returned message content. Delegate to modules for DB reads
-    and apply placeholder substitution here to maintain behavior.
+    The modules implementation already performs placeholder replacement.
+    This wrapper keeps the import path stable without duplicating work.
     """
-    msg = _retrieve_msg_basic(
+    return _retrieve_msg_basic(
         db,
         message_id,
         character_name_for_placeholders or "Character",
         user_name_for_placeholders,
     )
-    if not msg or not isinstance(msg.get("content"), str):
-        return msg
-    # For legacy callers that expect double replacement semantics (idempotent)
-    msg["content"] = _replace_placeholders(
-        msg["content"],
-        character_name_for_placeholders,
-        user_name_for_placeholders,
-    )
-    return msg
 
 # Future structure (when refactoring is complete):
 """

@@ -13,7 +13,6 @@ import os
 import sqlite3
 from datetime import datetime
 import uuid
-from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
 from loguru import logger
@@ -27,6 +26,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     prepare_backend_statement,
+    prepare_backend_many_statement,
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
 from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -216,9 +216,14 @@ class EvaluationsDatabase:
     def _prepare_backend_many_statement(self, query: str, params_list: List[Any]) -> Tuple[str, List[Any]]:
         if self.backend_type != BackendType.POSTGRESQL:
             return query, params_list
-        # Transform the statement, params are passed through (placeholders converted once)
-        converted_query, _ = prepare_backend_statement(self.backend_type, query, None, apply_default_transform=True)
-        return converted_query, params_list
+        # Use shared utility to convert placeholders and normalize parameter lists consistently
+        converted_query, converted_params = prepare_backend_many_statement(
+            self.backend_type,
+            query,
+            params_list,
+            apply_default_transform=True,
+        )
+        return converted_query, converted_params
     
     def _initialize_database(self):
         """Create database tables if they don't exist"""

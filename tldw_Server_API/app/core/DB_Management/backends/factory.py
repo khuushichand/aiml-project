@@ -10,6 +10,7 @@ from typing import Dict, Optional, Type
 from loguru import logger
 
 from .base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from .sqlite_backend import SQLiteBackend
 
 # Try to import PostgreSQL backend if available
@@ -112,7 +113,7 @@ class BackendFactory:
         if backend_enum == BackendType.SQLITE:
             config.sqlite_path = os.getenv(
                 "TLDW_SQLITE_PATH",
-                "./Databases/Media_DB_v2.db"
+                str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
             )
             config.sqlite_wal_mode = os.getenv(
                 "TLDW_SQLITE_WAL_MODE", "true"
@@ -178,7 +179,9 @@ class BackendFactory:
         # Load backend-specific configuration
         if backend_type == BackendType.SQLITE:
             sqlite_config = db_config.get('sqlite', {})
-            config.sqlite_path = sqlite_config.get('path', './Databases/Media_DB_v2.db')
+            config.sqlite_path = sqlite_config.get(
+                'path', str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+            )
             config.sqlite_wal_mode = sqlite_config.get('wal_mode', True)
             config.sqlite_foreign_keys = sqlite_config.get('foreign_keys', True)
         

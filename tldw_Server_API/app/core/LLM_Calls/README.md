@@ -74,3 +74,25 @@ Current Improvement Backlog (low-risk, incremental)
 - Expand unit tests for remaining providers (DeepSeek, Google, Groq, etc.).
 - Convert synchronous HTTP calls to `httpx` async where endpoints support non-blocking usage.
 
+Strict OpenAI-Compatible Mode (Local Providers)
+- Some OpenAI-compatible local servers reject unknown/non-standard fields (e.g., `top_k`).
+- A strict filtering option is available per local provider to drop non-standard keys from the payload.
+  - Config key: `strict_openai_compat` (boolean)
+  - When `true`, only standard OpenAI Chat Completions keys are sent:
+    `messages, model, temperature, top_p, max_tokens, n, stop, presence_penalty, frequency_penalty, logit_bias,
+     seed, response_format, tools, tool_choice, logprobs, top_logprobs, user, stream`.
+- Supported sections:
+  - `local_llm`, `llama_api`, `ooba_api`, `tabby_api`, `vllm_api`, `aphrodite_api`, `ollama_api`.
+- Environment variable for `local_llm`:
+  - `LOCAL_LLM_STRICT_OPENAI_COMPAT=1|true|yes|on`
+
+Example (local_llm excerpt):
+```ini
+[Local-API]
+; ...
+strict_openai_compat = true
+```
+
+See tests for usage examples:
+- `tests/LLM_Calls/test_local_llm_strict_filter.py`
+- `tests/LLM_Calls/test_vllm_strict_filter.py`

@@ -475,8 +475,14 @@ class StorageWorker(BaseWorker):
         """
         try:
             from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database  # lazy import
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-            db_path = os.getenv("MEDIA_DB_PATH", "Databases/Media_DB_v2.db")
+            try:
+                uid = int(str(self.user_id)) if getattr(self, 'user_id', None) is not None else DatabasePaths.get_single_user_id()
+            except Exception:
+                uid = DatabasePaths.get_single_user_id()
+            default_path = str(DatabasePaths.get_media_db_path(uid))
+            db_path = os.getenv("MEDIA_DB_PATH", default_path)
             db = create_media_database(client_id="embeddings_storage_worker", db_path=db_path)
             row = db.execute_query("SELECT deleted FROM Media WHERE id = ?", (int(media_id),)).fetchone()
             try:

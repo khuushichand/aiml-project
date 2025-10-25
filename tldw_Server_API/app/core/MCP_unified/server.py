@@ -25,6 +25,7 @@ from .monitoring.metrics import get_metrics_collector
 from .security.ip_filter import get_ip_access_controller
 from .security.request_guards import enforce_client_certificate_headers
 import ipaddress
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 class WebSocketConnection:
@@ -314,6 +315,7 @@ class MCPServer:
             enable_media_flag = os.getenv("MCP_ENABLE_MEDIA_MODULE", "false").lower() in {"1", "true", "yes"}
             test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
             if enable_media_flag and not modules_to_load:
+                default_media_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                 modules_to_load.append({
                     "id": "media",
                     "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule",
@@ -322,7 +324,7 @@ class MCPServer:
                     "version": "1.0.0",
                     "department": "media",
                     "settings": {
-                        "db_path": "./Databases/Media_DB_v2.db",
+                        "db_path": default_media_path,
                         "cache_ttl": 300,
                     },
                 })
@@ -331,6 +333,7 @@ class MCPServer:
             # 4) Test convenience: default-enable media module when TEST_MODE unless explicitly disabled
             if test_mode and not any(m.get("id") == "media" for m in modules_to_load):
                 if os.getenv("MCP_ENABLE_MEDIA_MODULE", "").lower() not in {"0", "false", "off"}:
+                    default_media_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                     modules_to_load.append({
                         "id": "media",
                         "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule",
@@ -339,7 +342,7 @@ class MCPServer:
                         "version": "1.0.0",
                         "department": "media",
                         "settings": {
-                            "db_path": "./Databases/Media_DB_v2.db",
+                            "db_path": default_media_path,
                             "cache_ttl": 300,
                         },
                     })

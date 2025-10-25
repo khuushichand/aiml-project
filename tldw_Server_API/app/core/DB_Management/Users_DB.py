@@ -8,8 +8,32 @@ import hashlib
 import uuid
 import sqlite3
 
-import asyncpg
-import aiosqlite
+# Guarded optional imports for async drivers. Users_DB relies on the
+# unified DatabasePool abstraction and should not hard-depend on these
+# modules at import time to support SQLite-only deployments.
+try:  # pragma: no cover - presence depends on environment
+    import asyncpg  # type: ignore
+    _ASYNC_PG_AVAILABLE = True
+    try:
+        _PG_UniqueViolationError = asyncpg.exceptions.UniqueViolationError  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover
+        class _PG_UniqueViolationError(Exception):  # type: ignore
+            pass
+except Exception:  # pragma: no cover
+    _ASYNC_PG_AVAILABLE = False
+    class _PG_UniqueViolationError(Exception):  # type: ignore
+        pass
+
+try:  # pragma: no cover - optional in SQLite-only deployments
+    import aiosqlite  # type: ignore
+    _AIOSQLITE_AVAILABLE = True
+    # Provide a safe alias for IntegrityError so except clauses don't NameError
+    _AIOSQLITE_IntegrityError = aiosqlite.IntegrityError  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    _AIOSQLITE_AVAILABLE = False
+    # Fallback placeholder so tuple excepts remain valid even when aiosqlite is absent
+    class _AIOSQLITE_IntegrityError(Exception):  # type: ignore
+        pass
 #
 # 3rd-party imports
 from loguru import logger
@@ -75,7 +99,15 @@ class UsersDB:
                 is_postgres = getattr(self.db_pool, "pool", None) is not None
                 if is_postgres:
                     # PostgreSQL
-                    await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                    # Prefer pgcrypto (gen_random_uuid); gracefully fall back to uuid-ossp if unavailable.
+                    try:
+                        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                    except Exception as ext_err:  # pragma: no cover - env dependent
+                        logger.warning(f"pgcrypto extension not available: {ext_err}. Trying uuid-ossp as fallback.")
+                        try:
+                            await conn.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+                        except Exception as ext2_err:
+                            logger.warning(f"uuid-ossp extension also unavailable: {ext2_err}. Proceeding without extension; UUID defaults may be set separately if functions exist.")
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS users (
                             id SERIAL PRIMARY KEY,
@@ -103,15 +135,22 @@ class UsersDB:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
                     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
                     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
+                    # Populate missing UUIDs using available function
                     try:
                         await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
                     except Exception:
-                        await conn.execute("UPDATE users SET uuid = gen_random_uuid()::text WHERE uuid IS NULL")
+                        try:
+                            await conn.execute("UPDATE users SET uuid = uuid_generate_v4() WHERE uuid IS NULL")
+                        except Exception as uuid_err:
+                            logger.warning(f"Unable to populate UUIDs with gen_random_uuid or uuid_generate_v4: {uuid_err}")
                     await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
                     try:
                         await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
                     except Exception:
-                        await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT (gen_random_uuid()::text)")
+                        try:
+                            await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT uuid_generate_v4()")
+                        except Exception as def_err:
+                            logger.warning(f"Could not set UUID default via pgcrypto/uuid-ossp: {def_err}")
                     
                 else:
                     # SQLite
@@ -373,6 +412,27 @@ class UsersDB:
                     )
                 else:
                     # SQLite
+                    # Defensive: ensure legacy schemas have required columns
+                    try:
+                        cur = await conn.execute("PRAGMA table_info(users)")
+                        cols = {row[1] for row in await cur.fetchall()}
+                        # Add commonly-missing columns for older installs
+                        async def _add_col(name: str, decl: str):
+                            nonlocal cols
+                            if name not in cols:
+                                await conn.execute(f"ALTER TABLE users ADD COLUMN {decl}")
+                                cols.add(name)
+
+                        await _add_col('uuid', "uuid TEXT UNIQUE")
+                        await _add_col('is_active', "is_active INTEGER DEFAULT 1")
+                        await _add_col('is_superuser', "is_superuser INTEGER DEFAULT 0")
+                        await _add_col('email_verified', "email_verified INTEGER DEFAULT 0")
+                        await _add_col('is_verified', "is_verified INTEGER DEFAULT 0")
+                        await _add_col('storage_quota_mb', "storage_quota_mb INTEGER DEFAULT 5120")
+                        await _add_col('storage_used_mb', "storage_used_mb INTEGER DEFAULT 0")
+                    except Exception:
+                        # Best-effort; insertion may still succeed if columns already present
+                        pass
                     cursor = await conn.execute(
                         """
                         INSERT INTO users (
@@ -402,10 +462,10 @@ class UsersDB:
                 
         except DuplicateUserError:
             raise
-        except asyncpg.exceptions.UniqueViolationError as e:
+        except _PG_UniqueViolationError as e:
             logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
             raise DuplicateUserError("Username or email already exists")
-        except (aiosqlite.IntegrityError, sqlite3.IntegrityError) as e:
+        except (_AIOSQLITE_IntegrityError, sqlite3.IntegrityError) as e:
             message = str(e).lower()
             if "unique constraint failed" in message or "unique constraint violation" in message:
                 logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
@@ -413,6 +473,10 @@ class UsersDB:
             logger.error(f"Failed to create user {username}: {e}")
             raise DatabaseError(f"Failed to create user: {e}") from e
         except Exception as e:
+            msg = str(e)
+            if "UNIQUE constraint failed" in msg and "users" in msg:
+                logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
+                raise DuplicateUserError("Username or email already exists")
             logger.error(f"Failed to create user {username}: {e}")
             raise DatabaseError(f"Failed to create user: {e}")
     
@@ -458,8 +522,11 @@ class UsersDB:
             values.append(user_id)
             
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
-                    # PostgreSQL - adjust placeholders
+                # Determine backend explicitly: asyncpg connections expose fetchval()
+                is_postgres = hasattr(conn, 'fetchval')
+
+                if is_postgres:
+                    # PostgreSQL - adjust placeholders to $1..$n
                     set_clause = ", ".join([f"{k} = ${i+1}" for i, k in enumerate(updates.keys())])
                     query = f"""
                         UPDATE users 
@@ -472,19 +539,24 @@ class UsersDB:
                     for key in ['is_active', 'is_superuser', 'email_verified']:
                         if key in updates:
                             updates[key] = int(updates[key])
-                    
+
                     values = list(updates.values())
                     values.append(user_id)
-                    
+
                     query = f"""
                         UPDATE users 
                         SET {set_clause}, updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
                     """
-                    
-                await conn.execute(query, *values if hasattr(conn, 'execute') else values)
-                
-                if not hasattr(conn, 'execute'):
+
+                # Execute with appropriate parameter style
+                if is_postgres:
+                    await conn.execute(query, *values)
+                else:
+                    await conn.execute(query, values)
+
+                # SQLite shim commits on transaction exit, but keep for compatibility
+                if not is_postgres:
                     await conn.commit()
                 
                 logger.info(f"Updated user {user_id}: {list(updates.keys())}")

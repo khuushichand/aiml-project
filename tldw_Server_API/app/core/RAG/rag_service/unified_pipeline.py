@@ -14,6 +14,7 @@ Design Philosophy:
 """
 
 import asyncio
+import hashlib
 import time
 import uuid
 import re
@@ -22,6 +23,8 @@ import calendar
 from typing import Dict, List, Any, Optional, Union, Literal
 from dataclasses import dataclass, field
 from loguru import logger
+import asyncio
+from functools import partial
 try:
     # OpenTelemetry telemetry manager (metrics + tracing)
     from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager, OTEL_AVAILABLE  # type: ignore
@@ -197,6 +200,15 @@ try:
     from .observability import Tracer
 except ImportError:
     Tracer = None
+
+# Resilience helpers
+try:
+    from .resilience import get_coordinator, CircuitBreakerConfig, RetryConfig, RetryPolicy
+except Exception:
+    get_coordinator = None  # type: ignore
+    CircuitBreakerConfig = None  # type: ignore
+    RetryConfig = None  # type: ignore
+    RetryPolicy = None  # type: ignore
 
 try:
     from .performance_monitor import PerformanceMonitor
@@ -489,36 +501,21 @@ async def unified_rag_pipeline(
         result.generated_answer = msg
         result.errors.append(msg)
         result.timings["total"] = 0.0
-        # Return Pydantic response model for consistency
-        try:
-            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
-            return UnifiedRAGResponse(
-                documents=[],
-                query=query if isinstance(query, str) else "",
-                expanded_queries=[],
-                metadata=result.metadata,
-                timings=result.timings,
-                citations=[],
-                generated_answer=msg,
-                cache_hit=False,
-                errors=result.errors,
-                security_report=None,
-                total_time=0.0,
-            )
-        except Exception:
-            return {
-                "documents": [],
-                "query": query if isinstance(query, str) else "",
-                "expanded_queries": [],
-                "metadata": result.metadata,
-                "timings": result.timings,
-                "citations": [],
-                "generated_answer": msg,
-                "cache_hit": False,
-                "errors": result.errors,
-                "security_report": None,
-                "total_time": 0.0,
-            }
+        # Always return the unified result type for consistency
+        return UnifiedSearchResult(
+            documents=[],
+            query=query if isinstance(query, str) else "",
+            expanded_queries=[],
+            metadata=result.metadata,
+            timings=result.timings,
+            citations=[],
+            feedback_id=None,
+            generated_answer=msg,
+            cache_hit=False,
+            errors=result.errors,
+            security_report=None,
+            total_time=0.0,
+        )
     
     # Initialize monitoring if requested
     metrics = None
@@ -990,14 +987,18 @@ async def unified_rag_pipeline(
                     rh = getattr(retriever, 'retrieve_hybrid', None)
                     hybrid_supported = rh is not None and asyncio.iscoroutinefunction(rh)
                     if search_mode == "hybrid" and hybrid_supported:
-                        documents = await rh(
+                        documents = await _resilient_call(
+                            "retrieval",
+                            rh,
                             query=query,
                             alpha=hybrid_alpha,
                             index_namespace=index_namespace,
                             allowed_media_ids=include_media_ids,
                         )
                     else:
-                        documents = await retriever.retrieve(
+                        documents = await _resilient_call(
+                            "retrieval",
+                            retriever.retrieve,
                             query=query,
                             sources=data_sources,
                             config=config,
@@ -1619,7 +1620,7 @@ async def unified_rag_pipeline(
                         sentinel_margin=rerank_sentinel_margin,
                     )
                     reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
-                    reranked = await reranker.rerank(query, result.documents)
+                    reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
                     if reranked and hasattr(reranked[0], 'document'):
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
@@ -1971,7 +1972,9 @@ async def unified_rag_pipeline(
                             result.metadata["synthesis"].update({"enabled": True, "aborted": False, "durations": {"draft": d_dt, "critique": c_dt, "refine": r_dt}})
                     else:
                         # Single-pass generation
-                        answer = await generator.generate(
+                        answer = await _resilient_call(
+                            "generation",
+                            generator.generate,
                             query=query,
                             context=context,
                             prompt_template=generation_prompt,
@@ -2814,7 +2817,11 @@ async def unified_rag_pipeline(
         
         # Debug output if requested
         if debug_mode:
-            logger.debug(f"Query: {query}")
+            try:
+                _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
+                logger.debug(f"Query hash={_qh} len={len(query or '')}")
+            except Exception:
+                logger.debug("Received query (hash unavailable)")
             logger.debug(f"Documents found: {len(result.documents)}")
             logger.debug(f"Cache hit: {result.cache_hit}")
             logger.debug(f"Timings: {result.timings}")
@@ -3145,3 +3152,40 @@ def compute_temporal_range_from_query(query: str) -> Optional[Dict[str, str]]:
         return {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
     except Exception:
         return None
+    # Internal helpers: timeout + resilience wrappers
+    async def _with_timeout(coro, timeout: Optional[float]):
+        if timeout and timeout > 0:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        return await coro
+
+    async def _resilient_call(component: str, func, *args, **kwargs):
+        """Apply circuit breaker, retries, and timeout around async operations when enabled."""
+        # Circuit breaker setup
+        breaker = None
+        if enable_resilience and circuit_breaker and get_coordinator and CircuitBreakerConfig:
+            try:
+                coord = get_coordinator()
+                if component not in coord.circuit_breakers:
+                    coord.register_circuit_breaker(component, CircuitBreakerConfig())
+                breaker = coord.circuit_breakers[component]
+            except Exception:
+                breaker = None
+
+        # Single attempt
+        async def _attempt():
+            if breaker is not None:
+                return await breaker.call(func, *args, **kwargs)
+            # direct
+            if asyncio.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            return func(*args, **kwargs)
+
+        # Retries
+        if enable_resilience and (retry_attempts or 0) > 1 and RetryPolicy and RetryConfig:
+            policy = RetryPolicy(RetryConfig(max_attempts=int(retry_attempts or 1)))
+            call_coro = policy.execute(_attempt)
+        else:
+            call_coro = _attempt()
+
+        # Timeout
+        return await _with_timeout(call_coro, timeout_seconds)

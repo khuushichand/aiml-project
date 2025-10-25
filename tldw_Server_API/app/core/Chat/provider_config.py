@@ -72,6 +72,7 @@ ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
 # Maps generic chat_api_call param name to provider-specific param name
 PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
     'bedrock': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -97,6 +98,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'extra_body': 'extra_body',
     },
     'openai': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -120,6 +122,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'user_identifier': 'user',
     },
     'anthropic': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -135,6 +138,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'stop': 'stop_sequences',  # Anthropic uses stop_sequences
     },
     'cohere': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -153,6 +157,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
     },
     'groq': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -176,6 +181,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'top_logprobs': 'top_logprobs',
     },
     'qwen': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -199,6 +205,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'user_identifier': 'user',
     },
     'openrouter': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -221,6 +228,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'n': 'n',
     },
     'moonshot': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -241,6 +249,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
     },
     'zai': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -255,6 +264,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'response_format': 'response_format',
     },
     'deepseek': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -272,6 +282,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
     },
     'mistral': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -287,6 +298,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'topk': 'top_k',  # Mistral uses top_k
     },
     'google': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -303,6 +315,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'n': 'candidate_count',
     },
     'huggingface': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -317,6 +330,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'stop': 'stop',  # often 'stop_sequences'
     },
     'llama.cpp': { # Has api_url as a positional argument which needs special handling if not None
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt',
@@ -338,6 +352,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
     },
     'kobold': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_input',
@@ -353,6 +368,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'seed': 'seed',
     },
     'ooba': { # api_url also a consideration like llama.cpp
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt',
@@ -374,6 +390,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
     },
     'tabbyapi': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_input',
@@ -389,6 +406,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'stop': 'stop',
     },
     'vllm': { # vllm_api_url consideration
+                'app_config': 'app_config',
                 'api_key': 'api_key', 'messages_payload': 'input_data', 'prompt': 'custom_prompt_input',
         'temp': 'temperature', 'system_message': 'system_prompt', 'streaming': 'stream',
         'topp': 'top_p', 'topk': 'top_k', 'minp': 'min_p', 'model': 'model',
@@ -401,9 +419,17 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
+        # vLLM supports OpenAI-style tool calling
+        'tools': 'tools',
+        'tool_choice': 'tool_choice',
         'user_identifier': 'user',
     },
+    # Note: Local OpenAI-compatible providers support a strict filtering mode enabled via
+    # `strict_openai_compat` in their config sections. When enabled, the request payload is
+    # filtered to standard OpenAI Chat Completions keys. See:
+    # Docs/Deployment/OpenAI_Compat_Strict_Mode.md
     'local-llm': {
+        'app_config': 'app_config',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
         'temp': 'temperature',
@@ -416,8 +442,20 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'max_tokens': 'max_tokens',
         'seed': 'seed',
         'stop': 'stop',
+        # Support full OpenAI-compatible options where local servers accept them
+        'response_format': 'response_format',
+        'n': 'n',
+        'user_identifier': 'user_identifier',
+        'logit_bias': 'logit_bias',
+        'presence_penalty': 'presence_penalty',
+        'frequency_penalty': 'frequency_penalty',
+        'logprobs': 'logprobs',
+        'top_logprobs': 'top_logprobs',
+        'tools': 'tools',
+        'tool_choice': 'tool_choice',
     },
     'ollama': { # api_url consideration
+        'app_config': 'app_config',
         'api_key': 'api_key', # api_key is not used by ollama directly, url is more important
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt', # This is 'prompt' for generate, 'messages' for chat
@@ -435,6 +473,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
     },
     'aphrodite': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt',
@@ -457,6 +496,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'user_identifier': 'user',
     },
     'custom-openai-api': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',
@@ -480,6 +520,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'top_logprobs': 'top_logprobs',
     },
     'custom-openai-api-2': {
+        'app_config': 'app_config',
         'api_key': 'api_key',
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt_arg',

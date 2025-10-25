@@ -91,7 +91,8 @@ export TLDW_CONTENT_PG_SSLMODE=prefer
 Then instantiate normally (backend is auto‑resolved):
 ```python
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="pg_client")
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())), client_id="pg_client")
 ```
 
 3) Programmatic backend (explicit override)
@@ -107,7 +108,8 @@ cfg = DatabaseConfig(
     pg_password="secret", pg_sslmode="prefer",
 )
 backend = DatabaseBackendFactory.create_backend(cfg)
-db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="pg_client", backend=backend)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())), client_id="pg_client", backend=backend)
 ```
 
 4) Configure via config.txt ([Database] section)
@@ -134,7 +136,7 @@ pg_pool_timeout = 30.0
 
 # If using SQLite instead
 # type = sqlite
-# sqlite_path = Databases/Media_DB_v2.db
+# sqlite_path = Databases/user_databases/<user_id>/Media_DB_v2.db
 # sqlite_wal_mode = true
 # sqlite_foreign_keys = true
 # backup_path = ./tldw_DB_Backups/
@@ -361,7 +363,8 @@ Example (Claims):
 ```python
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
-db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="example")
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())), client_id="example")
 
 # Upsert a single claim
 claims_written = db.upsert_claims([
@@ -415,7 +418,8 @@ Example (Chunking Templates):
 ```python
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
-db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="example")
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())), client_id="example")
 
 # Create a custom template
 tmpl = db.create_chunking_template(
@@ -584,7 +588,8 @@ from pathlib import Path
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError, ConflictError
 
 # Initialize a MediaDatabase instance for a specific user/DB file
-db_file = Path("./Databases/Media_DB_v2.db")
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+db_file = DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())
 client_1 = "my_desktop_app_instance_123"
 try:
     db = MediaDatabase(db_path=db_file, client_id=client_1)
@@ -664,7 +669,7 @@ finally:
 - Verify schema version and bootstrap
   - Back up the DB file first.
   - Instantiate `MediaDatabase` once to run schema checks/migrations. Verify with:
-    - SQLite: `sqlite3 Databases/Media_DB_v2.db "SELECT version FROM schema_version;"` → should be `5`.
+    - SQLite: `sqlite3 Databases/user_databases/<user_id>/Media_DB_v2.db "SELECT version FROM schema_version;"` → should be `5`.
 
 - Add `safe_metadata` to older databases (manual)
   - If you cannot run the app to migrate, add the column manually:

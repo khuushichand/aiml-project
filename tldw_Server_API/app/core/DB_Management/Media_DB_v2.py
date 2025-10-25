@@ -29,7 +29,6 @@ from __future__ import annotations
 # - Transaction Management: Provides a context manager for atomic operations.
 # - Standalone Functions: Offers utility functions that operate on a `Database`
 #   instance (e.g., searching, fetching related data, maintenance).
-####f
 import hashlib
 import json
 import os
@@ -60,6 +59,8 @@ from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQu
 # Logging: prefer loguru's logger; fall back to stdlib logging
 try:
     from loguru import logger
+    # Note: alias for loguru logger; not the stdlib 'logging' module.
+    # Kept for backward compatibility with existing references to 'logging'.
     logging = logger  # alias used throughout this module
 except Exception:  # pragma: no cover - defensive fallback
     import logging as _stdlib_logging
@@ -946,15 +947,14 @@ class MediaDatabase:
                         conn.close()
                     except sqlite3.Error:
                         pass
-                    thread_id = threading.get_ident()
                     try:
-                        pool._connections[thread_id] = None  # type: ignore[attr-defined]
-                    except AttributeError:
-                        pass
-                    try:
-                        if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
-                            pool._local.connection = None  # type: ignore[attr-defined]
-                    except AttributeError:
+                        # Prefer public helper if exposed by the pool
+                        if hasattr(pool, 'clear_thread_local_connection'):
+                            pool.clear_thread_local_connection()  # type: ignore[attr-defined]
+                        else:
+                            # Fallback: best-effort clear via connection.close() below
+                            pass
+                    except Exception:
                         pass
                     conn = None
                     self._local.conn = None
@@ -966,10 +966,8 @@ class MediaDatabase:
                 else:
                     try:
                         # Reapply scope for pooled PostgreSQL connections when context changes
-                        self.backend._apply_scope_settings(conn)  # type: ignore[attr-defined]
-                    except AttributeError:
-                        # Backend does not expose scope application (likely SQLite)
-                        pass
+                        if hasattr(self.backend, 'apply_scope'):
+                            self.backend.apply_scope(conn)  # type: ignore[attr-defined]
                     except Exception as scope_exc:
                         logging.debug(f"Unable to refresh scope settings: {scope_exc}")
                     return conn
@@ -989,13 +987,11 @@ class MediaDatabase:
     def _release_connection(self, connection) -> None:
         try:
             if self.backend_type == BackendType.SQLITE:
-                thread_id = threading.get_ident()
                 try:
                     pool = self.backend.get_pool()
-                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
-                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
-                        pool._local.connection = None  # type: ignore[attr-defined]
-                except AttributeError:
+                    if hasattr(pool, 'clear_thread_local_connection'):
+                        pool.clear_thread_local_connection()  # type: ignore[attr-defined]
+                except Exception:
                     pass
                 try:
                     connection.close()
@@ -2169,7 +2165,20 @@ class MediaDatabase:
     def _ensure_sqlite_fts(self, conn: sqlite3.Connection) -> None:
         conn.executescript(self._FTS_TABLES_SQL)
         conn.executescript(self._CLAIMS_FTS_TRIGGERS_SQL)
-        conn.commit()
+        # Verify core FTS tables exist to avoid silent search failures
+        try:
+            cur = conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name IN ('media_fts','keyword_fts')
+                """
+            )
+            existing = {row[0] for row in cur.fetchall()}
+            missing = {"media_fts", "keyword_fts"} - existing
+            if missing:
+                raise DatabaseError(f"Missing required FTS tables: {', '.join(sorted(missing))}")
+        finally:
+            conn.commit()
 
     def _ensure_postgres_fts(self, conn) -> None:
         backend = self.backend
@@ -3016,6 +3025,21 @@ class MediaDatabase:
 
         valid_text_search_fields = {"title", "content", "author", "type"}
         sanitized_text_search_fields = [f for f in search_fields if f in valid_text_search_fields]
+
+        # Optional hardening: clamp very long FTS inputs to avoid pathological queries
+        if search_query:
+            try:
+                import os as _os
+                max_chars = int((_os.getenv("FTS_QUERY_MAX_CHARS") or "1000").strip() or 1000)
+            except Exception:
+                max_chars = 1000
+            if isinstance(search_query, str) and len(search_query) > max_chars:
+                logging.warning(
+                    "Clamping search_query from %s to %s chars for FTS hardening",
+                    len(search_query),
+                    max_chars,
+                )
+                search_query = search_query[:max_chars]
 
         offset = (page - 1) * results_per_page
         # Define base SELECT, FROM clauses
@@ -6757,8 +6781,8 @@ def _backup_non_sqlite_database(self, backup_file_path: str) -> bool:
     """Best-effort handler for backends without native SQLite backup support."""
     if self.backend_type == BackendType.POSTGRESQL:
         logging.warning(
-            "Automatic backups are not implemented for PostgreSQL backends. "
-            "Use pg_dump or managed snapshots. Requested target: %s",
+            "Automatic backups are not implemented inside MediaDatabase for PostgreSQL. "
+            "Use DB_Backups.create_postgres_backup(backend, backup_dir) to invoke pg_dump. Target requested: %s",
             backup_file_path,
         )
         return False
@@ -7423,18 +7447,58 @@ def get_document_version(db_instance: MediaDatabase, media_id: int, version_numb
 
 # Backup functions remain placeholders or need proper implementation
 def create_incremental_backup(db_path, backup_dir):
-    logger.warning("create_incremental_backup not implemented.")
-    pass
+    """Create an incremental backup using the DB_Backups helper.
+
+    Returns a status message string.
+    """
+    try:
+        from tldw_Server_API.app.core.DB_Management.DB_Backups import (
+            create_incremental_backup as _inc,
+        )
+        return _inc(db_path, backup_dir, "media")
+    except Exception as e:
+        logger.error(f"create_incremental_backup failed: {e}")
+        return f"Failed to create incremental backup: {e}"
 
 
 def create_automated_backup(db_path, backup_dir):
-    logger.warning("create_automated_backup not implemented.")
-    pass
+    """Create a full backup using the DB_Backups helper.
+
+    Returns a status message string.
+    """
+    try:
+        from tldw_Server_API.app.core.DB_Management.DB_Backups import create_backup as _full
+        return _full(db_path, backup_dir, "media")
+    except Exception as e:
+        logger.error(f"create_automated_backup failed: {e}")
+        return f"Failed to create backup: {e}"
 
 
 def rotate_backups(backup_dir, max_backups=10):
-    logger.warning("rotate_backups not implemented.")
-    pass
+    """Rotate backup files in a directory, keeping the newest max_backups entries.
+
+    Considers files ending with .db or .sqlib. Returns a status message string.
+    """
+    try:
+        p = Path(backup_dir)
+        if not p.exists():
+            return "No rotation needed."
+        files = [f for f in p.iterdir() if f.is_file() and f.suffix in {".db", ".sqlib"}]
+        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        if len(files) <= max_backups:
+            return "No rotation needed."
+        to_remove = files[max_backups:]
+        removed = 0
+        for f in to_remove:
+            try:
+                f.unlink()
+                removed += 1
+            except Exception:
+                pass
+        return f"Removed {removed} old backups."
+    except Exception as e:
+        logger.error(f"rotate_backups failed: {e}")
+        return f"Failed to rotate backups: {e}"
 
 
 def check_database_integrity(db_path): # Standalone check is fine

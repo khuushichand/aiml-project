@@ -20,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     NoteKeywordLinkResponse, KeywordsForNoteResponse, NotesForKeywordResponse
 )
 from tldw_Server_API.app.api.v1.endpoints import notes as notes_router_module
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError as Actual_CharactersRAGDBError,
     InputError as Actual_InputError,
@@ -108,6 +109,10 @@ def test_app():
     app.include_router(notes_router_module.router, prefix="/api/v1/notes", tags=["Notes"])
     app.dependency_overrides[notes_router_module.get_chacha_db_for_user] = override_get_chacha_db_for_user
     app.dependency_overrides[notes_router_module.get_rate_limiter_dep] = override_get_rate_limiter_dep
+    
+    async def _override_user():
+        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+    app.dependency_overrides[notes_router_module.get_request_user] = _override_user
     return app
 
 

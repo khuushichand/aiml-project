@@ -72,13 +72,7 @@ call time to avoid import-order issues.
 """
 import os
 import functools
-try:
-    from slowapi import Limiter  # type: ignore
-    from slowapi.util import get_remote_address  # type: ignore
-    _limiter: Optional[Limiter]
-    _limiter = Limiter(key_func=get_remote_address)
-except Exception:
-    _limiter = None  # type: ignore
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
 
 def _limits_disabled_now() -> bool:
     try:

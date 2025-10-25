@@ -597,10 +597,14 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                         chunk_words = words[j:end_idx]
                         chunk_text = ' '.join(chunk_words)
                         
+                        try:
+                            end_adj = self._expand_end_to_grapheme_boundary(text, chapter_start + len(chunk_text))
+                        except Exception:
+                            end_adj = chapter_start + len(chunk_text)
                         metadata = ChunkMetadata(
                             index=chunk_index,
                             start_char=chapter_start,
-                            end_char=chapter_start + len(chunk_text),
+                            end_char=end_adj,
                             word_count=len(chunk_words),
                             language=self.language,
                             method='ebook_chapters',
@@ -617,6 +621,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                         j += max_size - overlap if overlap > 0 else max_size
                 else:
                     # Keep chapter as single chunk
+                    try:
+                        chapter_end = self._expand_end_to_grapheme_boundary(text, chapter_end)
+                    except Exception:
+                        pass
                     metadata = ChunkMetadata(
                         index=chunk_index,
                         start_char=chapter_start,

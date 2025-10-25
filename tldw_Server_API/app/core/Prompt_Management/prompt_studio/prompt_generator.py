@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
 )
 # Import chat completion function
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+import os
 
 ########################################################################################################################
 # Enums and Data Classes
@@ -106,7 +107,7 @@ GENERATION_TEMPLATES = {
 class PromptGenerator:
     """Generates prompts for Prompt Studio projects."""
     
-    def __init__(self, db: Optional[PromptStudioDatabase] = None):
+    def __init__(self, db: Optional[PromptStudioDatabase] = None, enable_chain_of_thought: Optional[bool] = None):
         """
         Initialize PromptGenerator.
         
@@ -118,6 +119,12 @@ class PromptGenerator:
         self.templates: Dict[str, PromptTemplate] = {}
         self.strategies: List[GenerationStrategy] = list(GenerationStrategy)
         self._init_builtin_templates()
+        # Policy switch for chain-of-thought helpers (default enabled unless env says otherwise)
+        if enable_chain_of_thought is None:
+            env_val = os.getenv("PROMPT_STUDIO_ENABLE_CHAIN_OF_THOUGHT", "true").strip().lower()
+            self.enable_chain_of_thought = env_val not in {"0", "false", "no"}
+        else:
+            self.enable_chain_of_thought = bool(enable_chain_of_thought)
     
     ####################################################################################################################
     # Prompt Generation Methods
@@ -164,7 +171,7 @@ INSTRUCTIONS:
 [Any additional instructions]
 """
             
-            # Generate with LLM
+            # Generate with LLM (single call)
             response = chat_with_openai(
                 input_data=[{"role": "user", "content": generation_prompt}],
                 system_message="You are an expert prompt engineer.",
@@ -262,22 +269,7 @@ INSTRUCTIONS:
         Returns:
             Generated CoT prompt
         """
-        cot_prompt = f"""Create a Chain-of-Thought prompt for this task:
-{task}
-
-Include:
-1. Clear reasoning steps
-2. Intermediate checkpoints
-3. Self-verification steps
-"""
-        
-        chat_with_openai(
-            input_data=[{"role": "user", "content": cot_prompt}],
-            system_message="You are an expert in Chain-of-Thought prompting.",
-            model=model_name,
-            temp=0.7,
-        )
-        
+        # Removed unused preliminary LLM call to save tokens
         return self.generate_prompt(
             project_id=project_id,
             task_description=task,
@@ -302,22 +294,7 @@ Include:
         """
         tools_str = "\n".join(tools) if tools else "No specific tools"
         
-        react_prompt = f"""Create a ReAct (Reasoning and Acting) prompt for this task:
-{task}
-
-Available tools:
-{tools_str}
-
-Include the Thought-Action-Observation loop structure.
-"""
-        
-        chat_with_openai(
-            input_data=[{"role": "user", "content": react_prompt}],
-            system_message="You are an expert in ReAct framework prompting.",
-            model=model_name,
-            temp=0.7,
-        )
-        
+        # Removed unused preliminary LLM call to save tokens
         return self.generate_prompt(
             project_id=project_id,
             task_description=task,
@@ -511,8 +488,8 @@ Include the Thought-Action-Observation loop structure.
             if type == PromptType.CHAIN_OF_THOUGHT:
                 system = "You are a helpful AI assistant that reasons step by step."
                 base_task = task_description or 'Solve this problem'
-                # Ensure "step by step" is in the prompt
-                if "step by step" not in base_task.lower():
+                # Ensure "step by step" is in the prompt if policy allows
+                if self.enable_chain_of_thought and "step by step" not in base_task.lower():
                     user = f"{base_task}\n\nLet's think step by step:"
                 else:
                     user = base_task
@@ -618,7 +595,10 @@ Thought:"""
         
         # Handle template composition (for test_template_composition)
         if type == PromptType.CHAIN_OF_THOUGHT and few_shot_examples:
-            user = f"{examples_str}\n\n{task_description}\n\nLet's think step by step:"
+            if self.enable_chain_of_thought:
+                user = f"{examples_str}\n\n{task_description}\n\nLet's think step by step:"
+            else:
+                user = f"{examples_str}\n\n{task_description}"
         
         # Add modules
         if modules:

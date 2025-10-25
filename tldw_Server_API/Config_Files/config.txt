@@ -109,6 +109,13 @@ chunk_overlap = 200
 adaptive_chunking = false
 chunking_multi_level = false
 language = english
+; Optional chunking-wide settings
+; Maximum character cap for streaming flush threshold. 0 disables the cap.
+max_streaming_flush_threshold_chars = 0
+; Emit a single metadata chunk for JSON chunking and reference it from others
+json_single_metadata_reference = false
+; Reference key included in JSON chunks when single metadata reference is enabled
+json_metadata_reference_key = __meta_ref__
 enable_contextual_retrieval = false
 context_window_size = 500
 include_parent_context = false
@@ -238,6 +245,7 @@ parent_max_tokens = 1200
 default_llm_provider = openai
 default_llm_model = gpt-4o-mini
 hyde_provider = openai
+
 hyde_model = gpt-4o-mini
 semantic_cache_enabled = true
 cache_similarity_threshold = 0.85

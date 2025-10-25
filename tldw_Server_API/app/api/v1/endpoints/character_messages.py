@@ -17,6 +17,7 @@ from fastapi import (
     status
 )
 from loguru import logger
+from tldw_Server_API.app.core.config import settings
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -25,6 +26,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
+    InputError,
 )
 
 # Schemas
@@ -37,9 +39,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
 
 # Character chat helpers  
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
-    post_message_to_conversation,
     retrieve_message_details,
-    retrieve_conversation_messages_for_ui,
     edit_message_content,
     remove_message_from_conversation,
     find_messages_in_conversation,
@@ -214,6 +214,16 @@ async def send_message(
             try:
                 import base64
                 img_data = base64.b64decode(message_data.image_base64)
+                # Preflight size check before DB layer
+                try:
+                    _max_img_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
+                except Exception:
+                    _max_img_bytes = 5 * 1024 * 1024
+                if isinstance(img_data, (bytes, bytearray)) and len(img_data) > _max_img_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Image too large. Max {_max_img_bytes} bytes allowed."
+                    )
                 msg_data['image_data'] = img_data
                 msg_data['image_mime_type'] = 'image/png'  # Default, could detect
             except Exception as e:
@@ -255,6 +265,14 @@ async def send_message(
         # Optimistic lock or state conflict during creation
         logger.warning(f"Conflict sending message to chat {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except InputError as e:
+        # Map DB validation errors to appropriate HTTP codes
+        msg = str(e)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if "exceeds maximum size" in msg.lower():
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+        logger.warning(f"Input error sending message to chat {chat_id}: {e}")
+        raise HTTPException(status_code=status_code, detail=msg)
     except CharactersRAGDBError as e:
         logger.error(f"DB error sending message to chat {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -305,13 +323,6 @@ async def get_chat_messages(
         
         # Get messages (honor include_deleted and DB pagination)
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset, include_deleted=include_deleted)
-        # Enforce per-chat message cap via limiter (use current count before appending new)
-        try:
-            await get_character_rate_limiter().check_message_limit(chat_id, len(messages))
-        except HTTPException:
-            raise
-        except Exception:
-            logger.debug("Non-fatal: message limit check skipped")
         
         if not messages:
             messages = []
@@ -371,10 +382,10 @@ async def get_chat_messages(
                         else:
                             # Fallback: parse inline suffix if present
                             try:
-                                m = _suffix_re.search(content or '')
-                                if m:
+                                match = _suffix_re.search(content or '')
+                                if match:
                                     import json as _json
-                                    parsed = _json.loads(m.group(1).strip())
+                                    parsed = _json.loads(match.group(1).strip())
                                     if isinstance(parsed, dict) and 'tool_calls' in parsed:
                                         tool_calls_list = parsed.get('tool_calls')
                                     else:

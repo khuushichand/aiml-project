@@ -149,7 +149,7 @@ v1
 
 ## 10. Data Model (Conceptual)
 
-Persist in `Databases/Media_DB_v2.db` via DB abstractions.
+Persist in per-user `Databases/user_databases/<user_id>/Media_DB_v2.db` via DB abstractions.
 
 Entities
 - content_items

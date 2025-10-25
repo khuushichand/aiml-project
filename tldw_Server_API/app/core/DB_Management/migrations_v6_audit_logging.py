@@ -3,6 +3,13 @@ Database migration v6: Audit Logging Enhancement
 
 Adds comprehensive audit logging tables and indexes for security monitoring
 and compliance tracking in the Evaluations module.
+
+Note on migration tracking: this module records progress in a `migrations`
+table for its own bookkeeping, while the general SQLite migrator in
+db_migration.py uses `schema_migrations`. Keeping both is intentional to avoid
+surprising downgrades where environments don’t load the unified migrator.
+If you prefer a single registry, adapt this module to upsert into
+`schema_migrations` instead, but coordinate with existing backups/testing.
 """
 
 import sqlite3

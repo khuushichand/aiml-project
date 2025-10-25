@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError
 )
+from tldw_Server_API.app.core.DB_Management.async_db_wrapper import AsyncDatabaseWrapper
 
 #######################################################################################################################
 #
@@ -29,6 +30,11 @@ T = TypeVar('T')
 async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
     """
     Async context manager for database transactions with automatic retry logic.
+
+    Note: This wraps the synchronous transaction manager on the calling thread.
+    Use with care in async code: execute blocking DB work via run_in_executor
+    or prefer `run_transaction` below to execute a function inside a single
+    executor thread that holds the transaction for its entire duration.
     
     Args:
         db: Database instance
@@ -83,6 +89,65 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
         raise last_error
     else:
         raise CharactersRAGDBError(f"Transaction failed after {max_retries} retries")
+
+
+async def run_transaction(
+    adb: AsyncDatabaseWrapper,
+    fn: Callable[[CharactersRAGDB], T],
+    *,
+    max_retries: int = 3,
+) -> T:
+    """
+    Execute a synchronous function within a single-threaded transaction safely.
+
+    This ensures that the transaction, and all DB calls inside `fn`, run on the
+    same worker thread (using the wrapper's executor). This is the recommended
+    pattern for multi-step operations from async code when you need true
+    transactional guarantees.
+
+    Args:
+        adb: AsyncDatabaseWrapper for a CharactersRAGDB instance
+        fn: A callable that receives the underlying CharactersRAGDB and returns a value
+        max_retries: Number of retries on ConflictError
+
+    Returns:
+        The value returned by `fn`.
+    """
+    loop = asyncio.get_running_loop()
+    retries = 0
+    last_err: Optional[Exception] = None
+
+    def _run_once() -> T:  # type: ignore[override]
+        with adb.db.transaction():
+            return fn(adb.db)
+
+    while retries < max_retries:
+        try:
+            return await loop.run_in_executor(adb._executor, _run_once)  # type: ignore[attr-defined]
+        except ConflictError as ce:
+            last_err = ce
+            retries += 1
+            if retries < max_retries:
+                wait_time = 0.1 * (2 ** retries)
+                logger.warning(
+                    f"Transaction conflict in run_transaction, retrying in {wait_time}s (attempt {retries}/{max_retries})"
+                )
+                await asyncio.sleep(wait_time)
+            else:
+                raise
+        except InputError:
+            raise
+        except CharactersRAGDBError as e:
+            # Non-conflict DB errors: surface to caller
+            raise e
+        except Exception as e:  # noqa: BLE001
+            # Unexpected error
+            raise CharactersRAGDBError(f"Transaction failed: {e}")
+
+    # Exhausted retries
+    if last_err:
+        raise last_err
+    raise CharactersRAGDBError("Transaction failed after retries")
 
 
 def transactional(max_retries: int = 3):

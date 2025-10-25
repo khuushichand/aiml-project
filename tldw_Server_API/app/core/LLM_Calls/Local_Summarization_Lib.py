@@ -25,7 +25,8 @@ from typing import Optional
 import httpx
 import requests
 from requests.adapters import HTTPAdapter
-from urllib3 import Retry
+from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries
 #
 # Import Local Libraries
 from tldw_Server_API.app.core.Utils.Utils import extract_text_from_segments, logging
@@ -347,7 +348,7 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
                     logging.info("Kobold: Using API key from config file")
                 else:
                     logging.warning("Kobold: No API key found in config file")
-            # Get the Streaming API IP from the config
+            # OpenAI-compatible streaming endpoint for Kobold (vs. native endpoint below)
             kobold_openai_api_IP = loaded_config_data['local_api_ip']['kobold_openai']
 
         logging.debug("Kobold: Using configured API key")
@@ -397,6 +398,7 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
         }
 
         logging.debug("Kobold Summarization: Submitting request to API endpoint")
+        # Native Kobold generation endpoint (non-OpenAI-compatible)
         kobold_api_ip = loaded_config_data['local_api_ip']['kobold']
 
         if streaming:
@@ -409,19 +411,13 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
                 retry_count = loaded_config_data['kobold_api']['api_retries']
                 retry_delay = loaded_config_data['kobold_api']['api_retry_delay']
 
-                # Configure the retry strategy
-                retry_strategy = Retry(
-                    total=retry_count,  # Total number of retries
-                    backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                    status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
+                # Configure the retry strategy using the shared helper
+                session = create_session_with_retries(
+                    total=int(retry_count),
+                    backoff_factor=float(retry_delay),
+                    status_forcelist=[429, 502, 503, 504],
+                    allowed_methods=["POST"],
                 )
-
-                # Create the adapter
-                adapter = HTTPAdapter(max_retries=retry_strategy)
-
-                # Mount adapters for both HTTP and HTTPS
-                session.mount("http://", adapter)
-                session.mount("https://", adapter)
                 # Send the request with streaming enabled
                 response = session.post(
                     kobold_openai_api_IP, headers=headers, json=data_payload, stream=True

@@ -5,7 +5,7 @@ Pydantic schemas for character chat sessions and messages.
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
 
 
@@ -69,7 +69,11 @@ class ChatSessionListResponse(BaseModel):
 class MessageCreate(BaseModel):
     """Schema for creating a new message."""
     role: Literal["user", "assistant", "system"] = Field(..., description="Message sender role")
-    content: str = Field(..., description="Message content", min_length=1)
+    content: Optional[str] = Field(
+        None,
+        description="Message content (required unless image_base64 is provided)",
+        min_length=1,
+    )
     parent_message_id: Optional[str] = Field(None, description="Parent message ID for branching")
     image_base64: Optional[str] = Field(None, description="Optional base64 encoded image")
     
@@ -79,6 +83,18 @@ class MessageCreate(BaseModel):
             "content": "Hello, how are you today?"
         }
     }}
+
+    @model_validator(mode="after")
+    def _validate_content_or_image(self) -> "MessageCreate":
+        """Ensure at least one of content or image_base64 is provided.
+
+        Allows image-only messages and enforces content non-empty when provided.
+        """
+        content_ok = bool(self.content and str(self.content).strip())
+        image_ok = bool(self.image_base64 and str(self.image_base64).strip())
+        if not content_ok and not image_ok:
+            raise ValueError("Provide either non-empty content or image_base64.")
+        return self
 
 
 class MessageUpdate(BaseModel):
@@ -121,7 +137,7 @@ class MessageListResponse(BaseModel):
 # Chat Completion Schemas
 # ========================================================================
 
-class CharacterChatCompletionRequest(BaseModel):
+class CharacterChatCompletionV1Request(BaseModel):
     """Schema for character-specific chat completion requests."""
     message: str = Field(..., description="User message to respond to", min_length=1)
     max_tokens: Optional[int] = Field(500, ge=1, le=4096, description="Maximum tokens in response")
@@ -140,7 +156,7 @@ class CharacterChatCompletionRequest(BaseModel):
     }}
 
 
-class CharacterChatCompletionResponse(BaseModel):
+class CharacterChatCompletionV1Response(BaseModel):
     """Schema for chat completion responses."""
     response: str = Field(..., description="AI response")
     message_id: str = Field(..., description="ID of the created message")
@@ -157,6 +173,83 @@ class CharacterChatCompletionResponse(BaseModel):
             }
         }
     }}
+
+
+# ========================================================================
+# Character Chat v2 + Prep Schemas (centralized)
+# ========================================================================
+
+class CharacterChatCompletionPrepRequest(BaseModel):
+    """Prepare chat messages for use with the main Chat API.
+
+    Controls pagination and optional user message appending for preparation.
+    """
+    include_character_context: bool = Field(True, description="Include character system context")
+    limit: int = Field(100, ge=1, le=1000, description="Max messages to include")
+    offset: int = Field(0, ge=0, description="Messages offset")
+    append_user_message: Optional[str] = Field(None, description="Optional user message to append to the end")
+
+
+class CharacterChatCompletionPrepResponse(BaseModel):
+    chat_id: str
+    character_id: int
+    character_name: Optional[str] = None
+    messages: List[Dict[str, Any]]
+    total: int
+    usage_instructions: str = "Use these messages with POST /api/v1/chat/completions"
+
+
+class CharacterChatCompletionV2Request(BaseModel):
+    """Character Chat completion (v2) – builds context and calls a provider.
+
+    Includes provider/model controls, optional appended user message,
+    persistence toggle, and streaming control.
+    """
+    # Character/context controls
+    include_character_context: bool = Field(True, description="Include character system context")
+    limit: int = Field(100, ge=1, le=1000, description="Max messages to include")
+    offset: int = Field(0, ge=0, description="Messages offset")
+    append_user_message: Optional[str] = Field(None, description="Optional user message to append and (optionally) persist")
+    save_to_db: Optional[bool] = Field(None, description="Persist appended user and assistant messages to this chat")
+    # LLM controls
+    provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
+    model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
+    temperature: Optional[float] = Field(None, description="Sampling temperature")
+    max_tokens: Optional[int] = Field(None, description="Max tokens in the completion")
+    tools: Optional[List[Dict[str, Any]]] = Field(None, description="Tool definitions")
+    tool_choice: Optional[Dict[str, Any]] = Field(None, description="Tool choice specification")
+    stream: Optional[bool] = Field(False, description="If true, stream the assistant response (SSE)")
+
+
+class CharacterChatCompletionV2Response(BaseModel):
+    chat_id: str
+    character_id: int
+    provider: str
+    model: Optional[str] = None
+    saved: bool = False
+    user_message_id: Optional[str] = None
+    assistant_message_id: Optional[str] = None
+    assistant_content: str
+
+
+# New: Persist streamed assistant content after SSE
+class CharacterChatStreamPersistRequest(BaseModel):
+    """Persist assistant content produced via streaming.
+
+    Use after a streamed completion where the assistant content was not persisted.
+    """
+    assistant_content: str = Field(..., min_length=1, description="Assistant text to persist")
+    user_message_id: Optional[str] = Field(None, description="Optional parent user message id to link threading")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
+    usage: Optional[Dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")
+    chat_rating: Optional[int] = Field(None, ge=1, le=5, description="Optional conversation rating to set (1-5)")
+    ranking: Optional[int] = Field(None, description="Optional ranking for the assistant message")
+
+
+class CharacterChatStreamPersistResponse(BaseModel):
+    chat_id: str
+    assistant_message_id: Optional[str] = None
+    saved: bool = False
 
 
 # ========================================================================

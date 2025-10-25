@@ -69,8 +69,7 @@ from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
 )
 
 # Rate limiting
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
@@ -839,7 +838,6 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
 
 embedding_cache = TTLCache()
 connection_manager = ConnectionPoolManager()
-limiter = Limiter(key_func=get_remote_address)
 
 # Helper to conditionally apply rate limiting
 def apply_rate_limit(limit_string: str):

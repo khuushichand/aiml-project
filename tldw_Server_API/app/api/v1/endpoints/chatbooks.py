@@ -17,7 +17,6 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from loguru import logger
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 # Unified audit service
@@ -50,8 +49,8 @@ from ..schemas.chatbook_schemas import (
 
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
 
-# Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address)
+# Use central limiter instance
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 
 
 def get_chatbook_service(

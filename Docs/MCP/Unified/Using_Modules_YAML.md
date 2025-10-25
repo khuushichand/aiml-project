@@ -23,7 +23,8 @@ modules:
     circuit_breaker_max_timeout: 180
     # Module-specific settings
     settings:
-      db_path: ./Databases/Media_DB_v2.db
+      # Per-user example path
+      db_path: Databases/user_databases/1/Media_DB_v2.db
       cache_ttl: 300
 ```
 
@@ -45,4 +46,3 @@ Tips
 - Start small: enable a single module and verify health at `GET /api/v1/mcp/modules/health`.
 - For multi-node deployments, set Redis limiter and adjust security knobs (see README).
 - Prefer YAML for ops; `MCP_MODULES` env is a quick, single-line alternative for development.
-

@@ -168,7 +168,7 @@ class AsyncChunker:
                           **options) -> AsyncGenerator[str, None]:
         """
         Stream chunks from an async text generator.
-        
+
         Args:
             text_stream: Async generator yielding text
             method: Chunking method
@@ -176,9 +176,16 @@ class AsyncChunker:
             overlap: Overlap between chunks
             buffer_size: Size of text buffer
             **options: Additional options
-            
+
         Yields:
             Text chunks as they are generated
+
+        Notes:
+            Streaming overlap and boundary behavior is method-aware (e.g.,
+            `words` vs `sentences`) and may withhold the final chunk per
+            buffer. See “Streaming Overlap Semantics” in
+            tldw_Server_API/app/core/Chunking/README.md for reassembly and
+            deduplication guidance.
         """
         buffer = ""
         overlap_buffer = ""

@@ -7,7 +7,7 @@
 profanity_word_example
 
 # Regex (case-insensitive by default when using /.../):
-/offensive\s+phrase/i
+/offensive\s+phrase/
 /\bnsfw\b/
 
 # Per-pattern actions:

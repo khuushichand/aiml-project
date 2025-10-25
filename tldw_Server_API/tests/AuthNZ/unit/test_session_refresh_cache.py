@@ -508,3 +508,84 @@ async def test_refresh_session_survives_hmac_rotation(tmp_path, monkeypatch):
             await manager_rotated.shutdown()
         await manager_old.shutdown()
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_validate_session_persists_last_activity_sqlite(tmp_path):
+    reset_settings()
+    db_path = tmp_path / "session_last_activity.sqlite"
+    settings = Settings(
+        AUTH_MODE="multi_user",
+        DATABASE_URL=f"sqlite:///{db_path}",
+        JWT_SECRET_KEY="session-last-activity-secret-1234567890abcd",
+        ENABLE_REGISTRATION=True,
+        REQUIRE_REGISTRATION_CODE=False,
+        RATE_LIMIT_ENABLED=False,
+    )
+
+    pool = DatabasePool(settings)
+    await pool.initialize()
+
+    session_columns = await pool.fetchall("PRAGMA table_info(sessions)")
+    column_names = {
+        row["name"] if isinstance(row, dict) else row[1] for row in session_columns or []
+    }
+    if "last_activity" not in column_names:
+        async with pool.transaction() as conn:
+            await conn.execute("ALTER TABLE sessions ADD COLUMN last_activity TIMESTAMP")
+
+    async with pool.transaction() as conn:
+        await conn.execute(
+            """
+            INSERT INTO users (id, username, email, password_hash, is_active)
+            VALUES (?, ?, ?, ?, 1)
+            """,
+            (1, "bob", "bob@example.com", "hashed-password"),
+        )
+
+    manager = SessionManager(db_pool=pool, settings=settings)
+    await manager.initialize()
+
+    jwt_service = JWTService(settings=settings)
+    access_token = jwt_service.create_access_token(user_id=1, username="bob", role="user")
+    refresh_token = jwt_service.create_refresh_token(user_id=1, username="bob")
+
+    session_info = await manager.create_session(
+        user_id=1,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        ip_address="127.0.0.1",
+        user_agent="pytest-suite",
+    )
+
+    row_before = await pool.fetchone(
+        "SELECT last_activity FROM sessions WHERE id = ?",
+        session_info["session_id"],
+    )
+    before_value = None
+    if row_before is not None:
+        try:
+            before_value = row_before["last_activity"]
+        except Exception:
+            before_value = row_before[0]
+
+    result = await manager.validate_session(access_token)
+    assert result is not None
+
+    row_after = await pool.fetchone(
+        "SELECT last_activity FROM sessions WHERE id = ?",
+        session_info["session_id"],
+    )
+    assert row_after is not None
+    try:
+        after_value = row_after["last_activity"]
+    except Exception:
+        after_value = row_after[0]
+
+    assert after_value is not None
+    if before_value is not None:
+        assert after_value != before_value
+
+    await manager.shutdown()
+    await pool.close()
+    reset_settings()

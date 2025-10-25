@@ -168,9 +168,12 @@ class WorkflowsSchedulerDB:
                 sqlite_path_str = (cfg.sqlite_path or "").strip()
                 default_candidates = {
                     "",
-                    "./Databases/Media_DB_v2.db",
-                    "Databases/Media_DB_v2.db",
-                    "Media_DB_v2.db",
+                    "./Databases/workflows_scheduler.db",
+                    "Databases/workflows_scheduler.db",
+                    "workflows_scheduler.db",
+                    "./Databases/workflows.db",
+                    "Databases/workflows.db",
+                    "workflows.db",
                 }
                 if sqlite_path_str in default_candidates:
                     sqlite_path = default_path

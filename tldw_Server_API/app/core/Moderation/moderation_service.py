@@ -10,7 +10,7 @@ Features:
 
 Notes:
 - No network calls; designed to function offline by default
-- For streaming responses, only redaction is applied (blocking mid-stream is avoided)
+- Streaming supports redaction and, if a block is triggered mid-stream, an SSE error is emitted followed by a [DONE] sentinel for graceful termination.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ import os
 import re
 import hashlib
 import threading
+import time
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple, Set
 
@@ -105,6 +107,9 @@ class ModerationService:
         # Safety/performance limits (overridable via config or env)
         self._max_scan_chars = int(os.getenv("MODERATION_MAX_SCAN_CHARS", "200000"))
         self._max_replacements_per_pattern = int(os.getenv("MODERATION_MAX_REPLACEMENTS_PER_PATTERN", "1000"))
+        # Optional debounce for blocklist writes (ms); default disabled
+        self._write_debounce_ms = int(os.getenv("MODERATION_BLOCKLIST_WRITE_DEBOUNCE_MS", "0") or 0)
+        self._last_blocklist_write: float = 0.0
         self._runtime_override: Dict[str, object] = {}
         self._runtime_overrides_path: Optional[str] = None
         self._global_policy = self._load_global_policy()
@@ -134,9 +139,17 @@ class ModerationService:
             val = str(mod_cfg.get(key, default)).strip().lower()
             return val in {"1", "true", "yes", "y", "on"}
 
-        # Paths
-        blocklist_path = mod_cfg.get("blocklist_file") or os.getenv("MODERATION_BLOCKLIST_FILE")
-        user_overrides_path = mod_cfg.get("user_overrides_file") or os.getenv("MODERATION_USER_OVERRIDES_FILE")
+        # Paths (defaults set when unset)
+        blocklist_path = (
+            mod_cfg.get("blocklist_file")
+            or os.getenv("MODERATION_BLOCKLIST_FILE")
+            or "tldw_Server_API/Config_Files/moderation_blocklist.txt"
+        )
+        user_overrides_path = (
+            mod_cfg.get("user_overrides_file")
+            or os.getenv("MODERATION_USER_OVERRIDES_FILE")
+            or "tldw_Server_API/Config_Files/moderation_user_overrides.json"
+        )
         runtime_overrides_path = mod_cfg.get("runtime_overrides_file") or os.getenv("MODERATION_RUNTIME_OVERRIDES_FILE")
         # Optional safety/perf overrides
         try:
@@ -145,6 +158,12 @@ class ModerationService:
             pass
         try:
             self._max_replacements_per_pattern = int(mod_cfg.get("max_replacements_per_pattern", self._max_replacements_per_pattern))
+        except Exception:
+            pass
+        # Optional debounce for blocklist writes (ms)
+        try:
+            if "blocklist_write_debounce_ms" in mod_cfg:
+                self._write_debounce_ms = int(mod_cfg.get("blocklist_write_debounce_ms", self._write_debounce_ms) or 0)
         except Exception:
             pass
         # Categories
@@ -210,14 +229,29 @@ class ModerationService:
         action = None
         repl = None
         categories: Optional[Set[str]] = None
-        # Extract categories suffix if present (e.g., "... #pii,confidential")
+        # Extract categories suffix if present (requires preceding whitespace; '\#' escapes a literal '#')
         if '#' in text:
-            # Split on last '#'
-            before, after = text.rsplit('#', 1)
-            cats = {c.strip().lower() for c in after.split(',') if c.strip()}
-            if cats:
-                categories = cats
-                text = before.strip()
+            cut_index = -1
+            for i in range(len(text) - 1, -1, -1):
+                if text[i] == '#':
+                    # Determine if this '#' is escaped by an odd number of backslashes
+                    bs = 0
+                    j = i - 1
+                    while j >= 0 and text[j] == '\\':
+                        bs += 1
+                        j -= 1
+                    escaped = (bs % 2 == 1)
+                    prev_char = text[i - 1] if i > 0 else ''
+                    if (not escaped) and (i == 0 or prev_char.isspace()):
+                        cut_index = i
+                        break
+            if cut_index != -1:
+                before = text[:cut_index]
+                after = text[cut_index + 1:]
+                cats = {c.strip().lower() for c in after.split(',') if c.strip()}
+                if cats:
+                    categories = cats
+                    text = before.strip()
         # Parse action/replacement from the (categories-trimmed) text
         if '->' in text:
             parts = text.split('->', 1)
@@ -252,15 +286,32 @@ class ModerationService:
                         expr, action, repl, cats = self._parse_rule_line(s)
                         if expr is None:
                             continue
-                        # Treat lines starting and ending with / as regex; otherwise escape for literal match
-                        if len(expr) >= 2 and expr.startswith("/") and expr.endswith("/"):
-                            raw = expr[1:-1]
-                            if self._is_regex_dangerous(raw):
-                                logger.warning(f"Skipped dangerous regex in blocklist: {raw}")
-                                continue
-                            pat = re.compile(raw, flags=re.IGNORECASE)
+                        # Treat lines starting with '/' as regex with optional trailing flags (e.g., /.../i)
+                        if len(expr) >= 2 and expr.startswith("/"):
+                            last_slash = expr.rfind("/")
+                            if last_slash > 0:
+                                raw = expr[1:last_slash]
+                                flags_str = expr[last_slash + 1:]
+                                if self._is_regex_dangerous(raw):
+                                    logger.warning(f"Skipped dangerous regex in blocklist: {raw}")
+                                    continue
+                                flags = re.IGNORECASE  # default remains case-insensitive
+                                fs = (flags_str or "").lower()
+                                if 'i' in fs:
+                                    flags |= re.IGNORECASE
+                                if 'm' in fs:
+                                    flags |= re.MULTILINE
+                                if 's' in fs:
+                                    flags |= re.DOTALL
+                                if 'x' in fs:
+                                    flags |= re.VERBOSE
+                                pat = re.compile(raw, flags=flags)
+                            else:
+                                pat = re.compile(re.escape(expr), flags=re.IGNORECASE)
                         else:
-                            pat = re.compile(re.escape(expr), flags=re.IGNORECASE)
+                            # Literal pattern: allow escaped '#'
+                            literal = expr.replace("\\#", "#")
+                            pat = re.compile(re.escape(literal), flags=re.IGNORECASE)
                         patterns.append(PatternRule(regex=pat, action=(action or None), replacement=(repl or None), categories=(cats or None)))
                     except re.error as e:
                         logger.warning(f"Invalid blocklist pattern '{s}': {e}")
@@ -399,7 +450,9 @@ class ModerationService:
         if not path:
             return
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            dirpath = os.path.dirname(path)
+            if dirpath:
+                os.makedirs(dirpath, exist_ok=True)
             out: Dict[str, object] = {}
             if "pii_enabled" in self._runtime_override:
                 out["pii_enabled"] = bool(self._runtime_override.get("pii_enabled"))
@@ -473,9 +526,29 @@ class ModerationService:
             return False, None
         scan_text = text[: self._max_scan_chars]
         for rule in policy.block_patterns:
+            # Category gating mirrors evaluate_action() behavior
+            if isinstance(rule, PatternRule) and policy.categories_enabled:
+                rcats = rule.categories or set()
+                if not (rcats & policy.categories_enabled):
+                    continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
-            if pat.search(scan_text):
-                snippet = pat.pattern
+            m = pat.search(scan_text)
+            if m:
+                # Build a sanitized snippet with context that does not expose matched content
+                start, end = m.span()
+                left_start = max(0, start - 16)
+                right_end = min(len(scan_text), end + 16)
+                left = scan_text[left_start:start]
+                right = scan_text[end:right_end]
+                mask = None
+                if isinstance(rule, PatternRule) and rule.replacement:
+                    mask = rule.replacement
+                else:
+                    mask = policy.redact_replacement
+                snippet = (left + (mask or "[REDACTED]") + right).strip()
+                # Bound snippet length
+                if len(snippet) > 80:
+                    snippet = snippet[:77] + "..."
                 return True, snippet
         return False, None
 
@@ -487,6 +560,11 @@ class ModerationService:
         tail = text[self._max_scan_chars:]
         redacted = head
         for rule in policy.block_patterns:
+            # Respect category gating similar to evaluate_action/check_text
+            if isinstance(rule, PatternRule) and policy.categories_enabled:
+                rcats = rule.categories or set()
+                if not (rcats & policy.categories_enabled):
+                    continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             repl = None
             if isinstance(rule, PatternRule) and rule.replacement:
@@ -568,28 +646,36 @@ class ModerationService:
         """Return a shallow copy of all user overrides."""
         return dict(self._user_overrides or {})
 
-    def set_user_override(self, user_id: str, override: Dict[str, str]) -> bool:
-        """Create or update a user override and persist to file if configured."""
+    def set_user_override(self, user_id: str, override: Dict[str, str]) -> Dict[str, object]:
+        """Create or update a user override and persist to file if configured.
+
+        Returns a dict {ok: bool, persisted: bool, error?: str}
+        """
         if not user_id:
-            return False
+            return {"ok": False, "persisted": False, "error": "user_id required"}
         with self._lock:
             self._user_overrides[str(user_id)] = {k: str(v) for k, v in override.items()}
             path = getattr(self, "_user_overrides_path", None)
             if not path:
                 logger.warning("User override path not configured; changes will not persist across restarts")
-                return True
+                return {"ok": True, "persisted": False}
             try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
+                dirpath = os.path.dirname(path)
+                if dirpath:
+                    os.makedirs(dirpath, exist_ok=True)
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(self._user_overrides, f, indent=2, ensure_ascii=False)
                 logger.info(f"Saved moderation user overrides to {path}")
-                return True
+                return {"ok": True, "persisted": True}
             except Exception as e:
                 logger.error(f"Failed to save user overrides: {e}")
-                return False
+                return {"ok": False, "persisted": False, "error": str(e)}
 
-    def delete_user_override(self, user_id: str) -> bool:
-        """Delete a user override and persist to file if configured."""
+    def delete_user_override(self, user_id: str) -> Dict[str, object]:
+        """Delete a user override and persist to file if configured.
+
+        Returns a dict {ok: bool, persisted: bool, error?: str}
+        """
         with self._lock:
             if str(user_id) in self._user_overrides:
                 self._user_overrides.pop(str(user_id), None)
@@ -598,11 +684,13 @@ class ModerationService:
                     if path:
                         with open(path, "w", encoding="utf-8") as f:
                             json.dump(self._user_overrides, f, indent=2, ensure_ascii=False)
-                    return True
+                        return {"ok": True, "persisted": True}
+                    else:
+                        return {"ok": True, "persisted": False}
                 except Exception as e:
                     logger.error(f"Failed to persist user override deletion: {e}")
-                    return False
-            return False
+                    return {"ok": False, "persisted": False, "error": str(e)}
+            return {"ok": False, "persisted": False, "error": "not found"}
 
     def get_blocklist_lines(self) -> List[str]:
         """Read current blocklist file lines (without trailing newlines)."""
@@ -624,7 +712,16 @@ class ModerationService:
             return False
         try:
             with self._lock:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
+                # Optional debounce to coalesce bursts of writes
+                if self._write_debounce_ms and self._write_debounce_ms > 0:
+                    now = time.monotonic()
+                    min_interval = float(self._write_debounce_ms) / 1000.0
+                    elapsed = now - (self._last_blocklist_write or 0.0)
+                    if elapsed < min_interval:
+                        time.sleep(max(0.0, min_interval - elapsed))
+                dirpath = os.path.dirname(path)
+                if dirpath:
+                    os.makedirs(dirpath, exist_ok=True)
                 # Normalize line endings; ensure trailing newline for POSIX friendliness
                 text = "\n".join(lines).rstrip("\n") + "\n"
                 with open(path, "w", encoding="utf-8") as f:
@@ -632,6 +729,9 @@ class ModerationService:
                 # Reload patterns
                 self._global_policy.block_patterns = self._load_block_patterns(path)
                 logger.info(f"Updated moderation blocklist at {path} ({len(lines)} lines)")
+                # Record write time after successful write
+                if self._write_debounce_ms and self._write_debounce_ms > 0:
+                    self._last_blocklist_write = time.monotonic()
                 return True
         except Exception as e:
             logger.error(f"Failed to write blocklist: {e}")
@@ -714,21 +814,33 @@ class ModerationService:
                     results.append(item)
                     invalid_count += 1
                     continue
-                is_regex = len(expr) >= 2 and expr.startswith("/") and expr.endswith("/")
+                # Recognize /regex/flags form as regex
+                is_regex = len(expr) >= 2 and expr.startswith("/") and (expr.rfind("/") > 0)
                 item.update({
                     "action": action,
                     "replacement": repl,
                     "categories": sorted(list(cats)) if cats else [],
                 })
                 if is_regex:
-                    raw_pat = expr[1:-1]
+                    last_slash = expr.rfind("/")
+                    raw_pat = expr[1:last_slash]
                     if self._is_regex_dangerous(raw_pat):
                         item.update({"ok": False, "pattern_type": "regex", "error": "dangerous regex (nested quantifiers/too complex)"})
                         results.append(item)
                         invalid_count += 1
                         continue
                     try:
-                        re.compile(raw_pat, flags=re.IGNORECASE)
+                        flags = re.IGNORECASE
+                        flags_str = expr[last_slash + 1:].lower()
+                        if 'i' in flags_str:
+                            flags |= re.IGNORECASE
+                        if 'm' in flags_str:
+                            flags |= re.MULTILINE
+                        if 's' in flags_str:
+                            flags |= re.DOTALL
+                        if 'x' in flags_str:
+                            flags |= re.VERBOSE
+                        re.compile(raw_pat, flags=flags)
                     except re.error as e:
                         item.update({"ok": False, "pattern_type": "regex", "error": f"invalid regex: {e}"})
                         results.append(item)
@@ -737,7 +849,8 @@ class ModerationService:
                     item.update({"ok": True, "pattern_type": "regex", "sample": raw_pat})
                     valid_count += 1
                 else:
-                    item.update({"ok": True, "pattern_type": "literal", "sample": expr})
+                    # For literal samples, present unescaped '#'
+                    item.update({"ok": True, "pattern_type": "literal", "sample": expr.replace("\\#", "#")})
                     valid_count += 1
                 results.append(item)
             except Exception as e:

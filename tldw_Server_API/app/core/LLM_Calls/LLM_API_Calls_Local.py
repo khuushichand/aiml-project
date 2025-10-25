@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     normalize_provider_line,
     sse_data,
 )
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import _sanitize_payload_for_logging
+from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import _sanitize_payload_for_logging, _apply_tool_choice
 
 
 ####################
@@ -114,7 +114,8 @@ def _chat_with_openai_compatible_local_server(
         provider_name: str = "Local OpenAI-Compatible Server",
         timeout: int = 120,
         api_retries: int = 1,
-        api_retry_delay: int = 1
+        api_retry_delay: int = 1,
+        filter_unknown_params: bool = False,
 ):
     logging.debug(f"{provider_name}: Chat request starting. API Base: {api_base_url}, Model: {model_name}")
 
@@ -158,7 +159,7 @@ def _chat_with_openai_compatible_local_server(
     if seed is not None: payload["seed"] = seed
     if response_format is not None: payload["response_format"] = response_format
     if tools is not None: payload["tools"] = tools
-    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    _apply_tool_choice(payload, tools, tool_choice)
     if logprobs is not None: payload["logprobs"] = logprobs
     if top_logprobs is not None: # Can only be used if logprobs is true
         if logprobs:
@@ -166,6 +167,30 @@ def _chat_with_openai_compatible_local_server(
         else:
             logging.warning(f"{provider_name}: top_logprobs provided without logprobs=True. Ignoring top_logprobs.")
     if user_identifier is not None: payload["user"] = user_identifier
+
+    # Optionally filter unknown/non-standard keys for strict OpenAI-compatible servers
+    if filter_unknown_params:
+        allowed_keys = {
+            "messages",
+            "model",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "n",
+            "stop",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "seed",
+            "response_format",
+            "tools",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs",
+            "user",
+            "stream",
+        }
+        payload = {k: v for k, v in payload.items() if k in allowed_keys}
 
 
     # Construct full API URL for chat completions
@@ -328,6 +353,7 @@ def chat_with_local_llm(
         top_logprobs: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -339,7 +365,7 @@ def chat_with_local_llm(
             logging.warning("local_llm: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg_section = 'local_llm' # Generic section for "local-llm" type
     cfg = loaded_config_data.get(cfg_section, {})
 
@@ -404,7 +430,8 @@ def chat_with_local_llm(
         provider_name=cfg_section.capitalize(),
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
     )
 
 
@@ -433,7 +460,8 @@ def chat_with_llama(
         # api_url is tricky. Your notes say "positional argument".
         # If chat_api_call is the sole entry, this needs to be passed via kwargs if mapped,
         # or loaded from config if not passed. Let's assume it's primarily from config for now.
-        api_url: Optional[str] = None # This is specific to this function's call from API_CALL_HANDLERS if special handling exists
+        api_url: Optional[str] = None, # This is specific to this function's call from API_CALL_HANDLERS if special handling exists
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -445,7 +473,7 @@ def chat_with_llama(
             logging.warning("Llama.cpp: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('llama_api', {})
 
     current_api_base_url = api_url or cfg.get('api_ip')
@@ -503,7 +531,8 @@ def chat_with_llama(
         provider_name="Llama.cpp",
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
     )
 
 
@@ -523,11 +552,12 @@ def chat_with_kobold(
         max_length: Optional[int] = None, # Mapped from 'max_tokens'
         stop_sequence: Optional[Union[str, List[str]]] = None, # Mapped from 'stop'
         num_responses: Optional[int] = None, # Mapped from 'n'
-        seed: Optional[int] = None # Mapped from 'seed'
+        seed: Optional[int] = None, # Mapped from 'seed'
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     logging.debug("KoboldAI (Native): Chat request starting...")
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('kobold_api', {})
 
     current_api_key = api_key or cfg.get('api_key')
@@ -678,7 +708,8 @@ def chat_with_oobabooga(
     logit_bias: Optional[Dict[str, float]] = None, # from map
     presence_penalty: Optional[float] = None, # from map
     frequency_penalty: Optional[float] = None, # from map
-    api_url: Optional[str] = None # Specific, not from generic map unless handled
+    api_url: Optional[str] = None, # Specific, not from generic map unless handled
+    app_config: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -690,7 +721,7 @@ def chat_with_oobabooga(
             logging.warning("Oobabooga: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ooba_api', {})
 
     current_api_base_url = api_url or cfg.get('api_ip')
@@ -749,7 +780,8 @@ def chat_with_oobabooga(
         provider_name="Oobabooga (OpenAI Extension)",
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
     )
 
 
@@ -769,11 +801,19 @@ def chat_with_tabbyapi(
     min_p: Optional[float] = None, # from map
     max_tokens: Optional[int] = None, # from map
     seed: Optional[int] = None, # from map
-    stop: Optional[Union[str, List[str]]] = None # from map
-    # TabbyAPI PROVIDER_PARAM_MAP is missing:
-    # response_format, n, user_identifier, logit_bias, presence_penalty, frequency_penalty,
-    # logprobs, top_logprobs, tools, tool_choice.
-    # Add them to signature if TabbyAPI (OpenAI compatible) supports them.
+    stop: Optional[Union[str, List[str]]] = None, # from map
+    app_config: Optional[Dict[str, Any]] = None,
+    # Additional OpenAI-compatible params (pass-through if supported by server)
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -785,7 +825,7 @@ def chat_with_tabbyapi(
             logging.warning("TabbyAPI: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('tabby_api', {})
 
     api_base_url = cfg.get('api_ip')
@@ -814,6 +854,16 @@ def chat_with_tabbyapi(
     current_max_tokens = max_tokens if max_tokens is not None else int(cfg.get('max_tokens', 4096))
     current_seed = seed if seed is not None else cfg.get('seed')
     current_stop = stop if stop is not None else cfg.get('stop')
+    current_response_format = response_format if response_format is not None else cfg.get('response_format')
+    current_n = n if n is not None else cfg.get('n')
+    current_user_identifier = user_identifier if user_identifier is not None else cfg.get('user_identifier', cfg.get('user'))
+    current_logit_bias = logit_bias if logit_bias is not None else cfg.get('logit_bias')
+    current_presence_penalty = presence_penalty if presence_penalty is not None else cfg.get('presence_penalty')
+    current_frequency_penalty = frequency_penalty if frequency_penalty is not None else cfg.get('frequency_penalty')
+    current_logprobs = logprobs if logprobs is not None else cfg.get('logprobs')
+    current_top_logprobs = top_logprobs if top_logprobs is not None else cfg.get('top_logprobs')
+    current_tools = tools if tools is not None else cfg.get('tools')
+    current_tool_choice = tool_choice if tool_choice is not None else cfg.get('tool_choice')
 
     timeout = int(cfg.get('api_timeout', 120))
     api_retries = int(cfg.get('api_retries', 1))
@@ -837,10 +887,21 @@ def chat_with_tabbyapi(
         min_p=current_min_p,
         seed=current_seed,
         stop=current_stop,
+        response_format=current_response_format,
+        n=current_n,
+        user_identifier=current_user_identifier,
+        logit_bias=current_logit_bias,
+        presence_penalty=current_presence_penalty,
+        frequency_penalty=current_frequency_penalty,
+        logprobs=current_logprobs,
+        top_logprobs=current_top_logprobs,
+        tools=current_tools,
+        tool_choice=current_tool_choice,
         provider_name="TabbyAPI",
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         # Add other OpenAI params here if TabbyAPI supports them
     )
 
@@ -871,7 +932,11 @@ def chat_with_vllm(
     frequency_penalty: Optional[float] = None, # from map
     logprobs: Optional[bool] = None,     # from map
     user_identifier: Optional[str] = None, # from map
-    vllm_api_url: Optional[str] = None # Specific config, not from generic map typically
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    top_logprobs: Optional[int] = None,
+    vllm_api_url: Optional[str] = None, # Specific config, not from generic map typically
+    app_config: Optional[Dict[str, Any]] = None,
                                        # Could be loaded from cfg or passed if chat_api_call handles it
 ):
     if temp is not None:
@@ -883,7 +948,7 @@ def chat_with_vllm(
             logging.warning("vLLM: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('vllm_api', {})
 
     # vllm_api_url is a specific argument for this function if it's set up in API_CALL_HANDLERS call
@@ -909,6 +974,9 @@ def chat_with_vllm(
     current_presence_penalty = presence_penalty if presence_penalty is not None else cfg.get('presence_penalty')
     current_frequency_penalty = frequency_penalty if frequency_penalty is not None else cfg.get('frequency_penalty')
     current_logprobs = logprobs if logprobs is not None else cfg.get('logprobs')
+    current_top_logprobs = top_logprobs if top_logprobs is not None else cfg.get('top_logprobs')
+    current_tools = tools if tools is not None else cfg.get('tools')
+    current_tool_choice = tool_choice if tool_choice is not None else cfg.get('tool_choice')
     # top_logprobs: vLLM PROVIDER_PARAM_MAP has 'logprobs' but not 'top_logprobs'.
     # If vLLM supports top_logprobs, it should be added to the map and this func's signature.
     # Assuming for now it's not explicitly mapped for vLLM.
@@ -944,12 +1012,15 @@ def chat_with_vllm(
         seed=current_seed,
         response_format=current_response_format,
         logprobs=current_logprobs,
-        # top_logprobs=current_top_logprobs, # Add if vLLM supports and mapped
+        top_logprobs=current_top_logprobs,
+        tools=current_tools,
+        tool_choice=current_tool_choice,
         user_identifier=current_user_identifier,
         provider_name="vLLM",
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         # tools, tool_choice for vLLM? If supported, add to map and pass.
     )
 
@@ -978,7 +1049,11 @@ def chat_with_aphrodite(
     presence_penalty: Optional[float] = None, # from map
     frequency_penalty: Optional[float] = None, # from map
     logprobs: Optional[bool] = None,     # from map
-    user_identifier: Optional[str] = None # from map
+    user_identifier: Optional[str] = None, # from map
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
     # top_logprobs, tools, tool_choice not in Aphrodite's map currently
 ):
     if temp is not None:
@@ -990,7 +1065,7 @@ def chat_with_aphrodite(
             logging.warning("Aphrodite: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('aphrodite_api', {})
 
     api_base_url = cfg.get('api_ip')
@@ -1053,11 +1128,15 @@ def chat_with_aphrodite(
         seed=current_seed,
         response_format=current_response_format,
         logprobs=current_logprobs,
+        top_logprobs=top_logprobs,
+        tools=tools,
+        tool_choice=tool_choice,
         user_identifier=current_user_identifier,
         provider_name="Aphrodite Engine",
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
     )
 
 
@@ -1085,6 +1164,12 @@ def chat_with_ollama(
     frequency_penalty: Optional[float] = None, # from map
     # api_url is specific for Ollama if passed directly, else from config
     api_url: Optional[str] = None,
+    user_identifier: Optional[str] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
     # Missing from Ollama PROVIDER_PARAM_MAP that _openai_compatible_server handles:
     # logit_bias, n (num_choices), user_identifier, logprobs, top_logprobs, tools, tool_choice, min_p
     # Add to signature and pass if Ollama supports them.
@@ -1098,7 +1183,7 @@ def chat_with_ollama(
             logging.warning("Ollama: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ollama_api', {})
 
     current_api_base_url = api_url or cfg.get('api_url') # api_url from args takes precedence
@@ -1117,6 +1202,11 @@ def chat_with_ollama(
     current_max_tokens = num_predict if num_predict is not None else int(cfg.get('num_predict', cfg.get('max_tokens', 4096))) # Ollama uses 'num_predict'
     current_seed = seed if seed is not None else cfg.get('seed') # Ollama uses 'seed'
     current_stop = stop if stop is not None else cfg.get('stop') # Ollama uses 'stop' (list of strings)
+    current_user_identifier = user_identifier if user_identifier is not None else cfg.get('user_identifier', cfg.get('user'))
+    current_logprobs = logprobs if logprobs is not None else cfg.get('logprobs')
+    current_top_logprobs = top_logprobs if top_logprobs is not None else cfg.get('top_logprobs')
+    current_tools = tools if tools is not None else cfg.get('tools')
+    current_tool_choice = tool_choice if tool_choice is not None else cfg.get('tool_choice')
 
     # Handle response_format for Ollama:
     # PROVIDER_PARAM_MAP has 'response_format': 'format' (e.g., "json")
@@ -1165,13 +1255,16 @@ def chat_with_ollama(
         seed=current_seed,
         response_format=ollama_response_format_dict, # Pass translated format
         # n (num_choices) not in Ollama's map, pass if supported
-        # user_identifier not in Ollama's map, pass if supported
-        # logprobs, top_logprobs not in Ollama's map, pass if supported
-        # tools, tool_choice not in Ollama's map, pass if supported by Ollama's OpenAI endpoint
+        user_identifier=current_user_identifier,
+        logprobs=current_logprobs,
+        top_logprobs=current_top_logprobs,
+        tools=current_tools,
+        tool_choice=current_tool_choice,
         provider_name="Ollama",
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
     )
 
 
@@ -1201,10 +1294,11 @@ def chat_with_custom_openai(
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
 ):
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg_section = 'custom_openai_api'
     cfg = loaded_config_data.get(cfg_section, {})
 
@@ -1308,12 +1402,13 @@ def chat_with_custom_openai_2(
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
     # This custom API 2 map is missing top_k, min_p, max_p (top_p) compared to custom 1.
     # Assuming it doesn't support them or they are set server-side.
 ):
     if model and (model.lower() == "none" or model.strip() == ""): model = None
-    loaded_config_data = load_settings()
+    loaded_config_data = app_config or load_settings()
     cfg_section = 'custom_openai_api_2'
     cfg = loaded_config_data.get(cfg_section, {})
 
@@ -1355,9 +1450,8 @@ def chat_with_custom_openai_2(
 
 
     timeout = int(cfg.get('api_timeout', 120))
-    # Original code referenced 'custom_openai_2_api' for retry config for this one.
-    # Let's try to be consistent with section name 'custom_openai_api_2' for all its configs.
-    retry_cfg = loaded_config_data.get('custom_openai_2_api', cfg) # Fallback to main cfg if specific retry section missing
+    # Use the same section name for retries to stay consistent with other config lookups
+    retry_cfg = loaded_config_data.get('custom_openai_api_2', cfg)  # Fallback to main cfg if specific retry section missing
     api_retries = int(retry_cfg.get('api_retries', cfg.get('api_retries', 1)))
     api_retry_delay = int(retry_cfg.get('api_retry_delay', cfg.get('api_retry_delay', 1)))
 
@@ -1399,19 +1493,22 @@ def chat_with_custom_openai_2(
 
 
 
-def save_summary_to_file(summary: str, file_path: str): # Type hinting
+def save_summary_to_file(summary: str, file_path: str):  # Type hinting
     logging.debug("Now saving summary to file...")
+    summary_file_path: Optional[str] = None
     try:
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         # Ensure the path is safe and within an expected directory if necessary
         summary_file_path = os.path.join(os.path.dirname(file_path), base_name + '_summary.txt')
         os.makedirs(os.path.dirname(summary_file_path), exist_ok=True)
         logging.debug(f"Opening summary file for writing: {summary_file_path}")
-        with open(summary_file_path, 'w', encoding='utf-8') as file: # Added encoding
+        with open(summary_file_path, 'w', encoding='utf-8') as file:  # Added encoding
             file.write(summary)
         logging.info(f"Summary saved to file: {summary_file_path}")
     except Exception as e:
-        logging.error(f"Error saving summary to file '{summary_file_path}': {e}", exc_info=True)
+        # Guard against UnboundLocalError if failure occurs before summary_file_path assignment
+        target = summary_file_path or file_path
+        logging.error(f"Error saving summary to file '{target}': {e}", exc_info=True)
         # Depending on context, might want to re-raise or handle
 
 #

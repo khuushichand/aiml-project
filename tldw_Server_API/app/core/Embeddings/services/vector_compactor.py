@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover
     aioredis = None  # type: ignore
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
@@ -55,7 +56,8 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
         logger.error(f"Compactor initialization failed: {e}")
         return 0
 
-    dbp = db_path or os.getenv("MEDIA_DB_PATH", "Databases/Media_DB_v2.db")
+    default_path = str(DatabasePaths.get_media_db_path(int(user_id) if str(user_id).isdigit() else DatabasePaths.get_single_user_id()))
+    dbp = db_path or os.getenv("MEDIA_DB_PATH", default_path)
     ids = await _get_media_ids_marked_deleted(dbp)
     if not ids:
         return 0

@@ -111,6 +111,24 @@ class SQLiteConnectionPool(ConnectionPool):
     def return_connection(self, connection: sqlite3.Connection) -> None:
         """SQLite connections are thread-local, no action needed."""
         pass
+
+    def clear_thread_local_connection(self) -> None:
+        """Clear the current thread's connection reference from the pool.
+
+        This provides a safe way for higher layers to invalidate a broken
+        connection without reaching into private attributes.
+        """
+        thread_id = threading.get_ident()
+        with self._lock:
+            try:
+                self._connections[thread_id] = None
+            except Exception:
+                pass
+            try:
+                if hasattr(self._local, 'connection'):
+                    self._local.connection = None
+            except Exception:
+                pass
     
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -137,11 +155,14 @@ class SQLiteConnectionPool(ConnectionPool):
     def get_stats(self) -> Dict[str, Any]:
         """Get pool statistics."""
         with self._lock:
+            active = len([c for c in self._connections.values() if c])
+            # Keep "active_threads" for backward compatibility; prefer "active_connections"
             return {
                 "total_connections": len(self._connections),
-                "active_threads": len([c for c in self._connections.values() if c]),
+                "active_connections": active,
+                "active_threads": active,  # deprecated alias
                 "closed": self._closed,
-                "db_path": self.db_path
+                "db_path": self.db_path,
             }
 
 
@@ -263,10 +284,12 @@ class SQLiteBackend(DatabaseBackend):
             else:
                 cursor.execute(query)
             
-            # Fetch results if it's a SELECT query
-            if query.strip().upper().startswith("SELECT"):
+            # Determine whether to fetch rows: SELECT or statements with RETURNING
+            upper = query.strip().upper()
+            is_select = upper.startswith("SELECT")
+            has_returning = " RETURNING " in upper or upper.endswith(" RETURNING")
+            if is_select or has_returning:
                 rows = cursor.fetchall()
-                # Convert Row objects to dicts
                 result_rows = [dict(row) for row in rows]
             else:
                 result_rows = []
@@ -373,7 +396,7 @@ class SQLiteBackend(DatabaseBackend):
         self.features.require("full_text_search")
         
         # Build FTS5 table creation query
-        columns_str = ", ".join(columns)
+        columns_str = ", ".join([self.escape_identifier(c) for c in columns])
         query = f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS {self.escape_identifier(table_name)}
             USING fts5({columns_str}, content='{source_table}')

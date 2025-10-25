@@ -1660,6 +1660,11 @@ class SessionManager:
                     "UPDATE sessions SET last_activity = datetime('now') WHERE id = ?",
                     (session_id,)
                 )
+                try:
+                    await conn.commit()
+                except Exception:
+                    # Best effort for SQLite acquire() contexts where autocommit is disabled
+                    pass
         except Exception:
             # Don't fail on activity update
             pass

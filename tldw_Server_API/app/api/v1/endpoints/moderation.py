@@ -49,19 +49,25 @@ async def get_user_override(user_id: str, _: Any = Depends(require_admin)):
 @router.put("/moderation/users/{user_id}", response_model=dict, summary="Set per-user moderation override", tags=["moderation"])
 async def set_user_override(user_id: str, override: ModerationUserOverride, _: Any = Depends(require_admin)):
     svc = get_moderation_service()
-    ok = svc.set_user_override(user_id, override.model_dump(exclude_none=True))
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist override")
-    return svc.list_user_overrides().get(str(user_id), {})
+    status_info = svc.set_user_override(user_id, override.model_dump(exclude_none=True))
+    if not status_info or not status_info.get("ok"):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=status_info.get("error", "Failed to persist override"))
+    data = svc.list_user_overrides().get(str(user_id), {})
+    # Surface whether the change was persisted
+    if isinstance(data, dict):
+        data = {**data, "persisted": bool(status_info.get("persisted", False))}
+    return data
 
 
 @router.delete("/moderation/users/{user_id}", summary="Delete per-user moderation override", tags=["moderation"])
 async def delete_user_override(user_id: str, _: Any = Depends(require_admin)):
     svc = get_moderation_service()
-    ok = svc.delete_user_override(user_id)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override not found or failed to delete")
-    return {"status": "deleted"}
+    status_info = svc.delete_user_override(user_id)
+    if not status_info or not status_info.get("ok"):
+        detail = status_info.get("error", "Override not found or failed to delete")
+        code = status.HTTP_404_NOT_FOUND if status_info.get("error") == "not found" else status.HTTP_500_INTERNAL_SERVER_ERROR
+        raise HTTPException(status_code=code, detail=detail)
+    return {"status": "deleted", "persisted": bool(status_info.get("persisted", False))}
 
 
 @router.get("/moderation/blocklist", response_model=list, summary="Get current blocklist lines", tags=["moderation"])

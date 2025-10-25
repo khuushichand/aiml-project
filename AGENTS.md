@@ -35,7 +35,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
 ├── mock_openai_server/           # Mock server for OpenAI-compatible API tests
 ├── tldw-frontend/                # Next.js WebUI (current client)
-├── Databases/                    # Top-level DBs for local dev (e.g., Media_DB_v2.db, users.db)
+├── Databases/                    # DBs (AuthNZ defaults here; Media DB is per-user under user_databases/)
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration
 ├── README.md                     # Project README
@@ -96,10 +96,10 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 
 ### Database Design
 - **SQLite Databases (default)**:
-  - `Databases/Media_DB_v2.db`: Main content DB with FTS5
-  - `Databases/users.db`: AuthNZ users (SQLite by default; PostgreSQL supported)
-  - `Databases/evaluations.db`: Evaluation metadata
-  - Per-user: `Databases/user_databases/<user_id>/ChaChaNotes.db` for notes, chat, characters
+  - Content (Media DB v2): per-user `Databases/user_databases/<user_id>/Media_DB_v2.db` (root-level path deprecated)
+  - AuthNZ users: `Databases/users.db` (SQLite by default; PostgreSQL supported)
+  - Evaluations: `Databases/evaluations.db`
+  - Notes/Chats: per-user `Databases/user_databases/<user_id>/ChaChaNotes.db`
   - Implements soft deletes, versioning, and sync logging
 
 - **Vector Storage**:

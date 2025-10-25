@@ -66,7 +66,7 @@ The RAG module uses SQLite by default with optimized settings:
 # config.txt
 [Database]
 database_path = /path/to/secure/location/Databases/
-media_db_name = Media_DB_v2.db
+media_db_name = user_databases/<user_id>/Media_DB_v2.db
 rag_audit_db = rag_audit.db
 
 # Connection pool settings
@@ -365,7 +365,7 @@ BACKUP_DIR="/backup/tldw"
 DATE=$(date +%Y%m%d_%H%M%S)
 
 # Backup SQLite databases
-sqlite3 /var/lib/tldw/databases/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
+sqlite3 /var/lib/tldw/user_databases/<user_id>/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
 sqlite3 /var/lib/tldw/databases/rag_audit.db ".backup $BACKUP_DIR/audit_$DATE.db"
 
 # Compress and encrypt

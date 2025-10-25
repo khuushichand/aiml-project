@@ -139,7 +139,14 @@ class DatabaseConfig:
                 elif raw_path.startswith("/") and raw_path != "/:memory:":
                     cfg.sqlite_path = raw_path
                 else:
-                    cfg.sqlite_path = raw_path or "./Databases/Media_DB_v2.db"
+                    if raw_path:
+                        cfg.sqlite_path = raw_path
+                    else:
+                        try:
+                            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+                            cfg.sqlite_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+                        except Exception:
+                            cfg.sqlite_path = "./Databases/Media_DB_v2.db"
                 return cfg
             # Fallback to TLDW_* handling if unknown scheme
 
@@ -163,7 +170,14 @@ class DatabaseConfig:
         cfg.echo = os.getenv("TLDW_DB_ECHO", "false").lower() in {"1", "true", "yes", "on"}
 
         if backend_type == BackendType.SQLITE:
-            cfg.sqlite_path = os.getenv("TLDW_SQLITE_PATH", "./Databases/Media_DB_v2.db")
+            if os.getenv("TLDW_SQLITE_PATH"):
+                cfg.sqlite_path = os.getenv("TLDW_SQLITE_PATH")
+            else:
+                try:
+                    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+                    cfg.sqlite_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+                except Exception:
+                    cfg.sqlite_path = "./Databases/Media_DB_v2.db"
             cfg.sqlite_wal_mode = os.getenv("TLDW_SQLITE_WAL_MODE", "true").lower() in {"1", "true", "yes", "on"}
             cfg.sqlite_foreign_keys = os.getenv("TLDW_SQLITE_FOREIGN_KEYS", "true").lower() in {"1", "true", "yes", "on"}
         elif backend_type == BackendType.POSTGRESQL:
@@ -529,6 +543,16 @@ class DatabaseBackend(ABC):
             Database size in bytes
         """
         pass
+
+    # Scope/Session helpers
+    def apply_scope(self, connection: Optional[Any] = None) -> None:
+        """Apply backend-specific session scope settings (no-op by default).
+
+        Backends that support row-level security or session-scoped settings
+        can override this to (re)apply the current request/user scope to a
+        borrowed connection. SQLite backends typically do nothing.
+        """
+        return None
     
     # Migration Support
     

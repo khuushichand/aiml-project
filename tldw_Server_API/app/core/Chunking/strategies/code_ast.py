@@ -210,6 +210,10 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                 if buf_s is None or buf_e is None:
                     return
                 ch_text = text[buf_s:buf_e]
+                try:
+                    buf_e = self._expand_end_to_grapheme_boundary(text, buf_e)
+                except Exception:
+                    pass
                 md = ChunkMetadata(
                     index=len(results),
                     start_char=buf_s,
@@ -242,6 +246,10 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                         while start < e_char:
                             end = min(e_char, start + max_size)
                             piece = text[start:end]
+                            try:
+                                end = self._expand_end_to_grapheme_boundary(text, end)
+                            except Exception:
+                                pass
                             md = ChunkMetadata(
                                 index=len(results),
                                 start_char=start,
@@ -271,6 +279,10 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                             while start < e_char:
                                 end = min(e_char, start + max_size)
                                 piece = text[start:end]
+                                try:
+                                    end = self._expand_end_to_grapheme_boundary(text, end)
+                                except Exception:
+                                    pass
                                 md = ChunkMetadata(
                                     index=len(results),
                                     start_char=start,
@@ -302,4 +314,3 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                 options={'mode': 'ast', 'fallback': True}
             )
             return [ChunkResult(text=text, metadata=md)]
-

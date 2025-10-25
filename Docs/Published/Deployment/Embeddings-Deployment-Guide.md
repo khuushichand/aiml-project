@@ -497,7 +497,7 @@ You can enable two optional maintenance features to harden indexing integrity an
     - `EMBEDDINGS_COMPACTOR_ENABLED` = `true|false` (default: false)
     - `EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS` (default: 1800)
     - `COMPACTOR_USER_ID` (default: `SINGLE_USER_FIXED_ID`; in multi-user deployments, run one compactor instance per user, or extend to iterate users as needed)
-    - `MEDIA_DB_PATH` (optional path to `Media_DB_v2.db`; default: `Databases/Media_DB_v2.db`)
+    - `MEDIA_DB_PATH` (optional; default: per-user `Databases/user_databases/<user_id>/Media_DB_v2.db`)
 
 Example (single-user):
 ```bash

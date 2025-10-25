@@ -1745,6 +1745,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down telemetry: {e}")
 
+    # Close shared content database backend pool (PostgreSQL content mode)
+    try:
+        from tldw_Server_API.app.core.DB_Management.DB_Manager import shutdown_content_backend as _shutdown_content_backend
+        _shutdown_content_backend()
+        logger.info("App Shutdown: Content DB backend pool closed")
+    except Exception as e:
+        logger.debug(f"App Shutdown: Content backend pool close skipped/failed: {e}")
+
     # Original test DB cleanup
     global test_db_instance_ref
     if test_db_instance_ref and hasattr(test_db_instance_ref, 'close_all_connections'):
@@ -2049,11 +2057,12 @@ import os as _os_mod
 # Skip global rate limiter when running tests: honor either TESTING=true or TEST_MODE=true
 if _os_mod.getenv("TESTING", "").lower() != "true" and _os_mod.getenv("TEST_MODE", "").lower() != "true":
     try:
-        from slowapi import Limiter, _rate_limit_exceeded_handler
-        from slowapi.util import get_remote_address
+        from slowapi import _rate_limit_exceeded_handler
         from slowapi.errors import RateLimitExceeded
         from slowapi.middleware import SlowAPIMiddleware
-        app.state.limiter = Limiter(key_func=get_remote_address)
+        # Use the central limiter instance so decorators and middleware share the same limiter
+        from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
+        app.state.limiter = _global_limiter
         app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
         app.add_middleware(SlowAPIMiddleware)
         logger.info("Global rate limiter initialized (SlowAPI)")

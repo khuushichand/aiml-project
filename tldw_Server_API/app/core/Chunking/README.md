@@ -3,7 +3,7 @@
 This module provides robust, extensible text chunking for ingestion, RAG, embeddings, analytics, and downstream tasks. It includes a strategy registry, hierarchical chunking, and a template system that now supports learning rules from a “seed” document.
 
 ## Overview
-- Entry point: `Chunker` in `chunker.py` with unified APIs: `process_text`, `chunk_text`, `chunk_text_with_metadata`, `chunk_file_stream`, `chunk_text_hierarchical_tree`, `flatten_hierarchical`, `chunk_text_hierarchical_flat`. Built-in methods include: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `fixed_size`, `structure_aware`, and `code` (Python AST or heuristic).
+- Entry point: `Chunker` in `chunker.py` with unified APIs: `process_text`, `chunk_text`, `chunk_text_with_metadata`, `chunk_file_stream`, `chunk_text_hierarchical_tree`, `flatten_hierarchical`, `chunk_text_hierarchical_flat`. Built-in methods include: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `fixed_size`, `structure_aware`, `code` (Python AST or heuristic), and `code_ast` (explicit AST routing).
 - Template pipeline: `TemplateProcessor` and `TemplateManager` in `templates.py`.
 - Built-in templates: JSON files under `template_library/`, seeded into DB by `template_initialization.py`.
 - Seed-driven templates: boundary rules learned from example (“seed/template”) documents via `TemplateLearner`.
@@ -23,6 +23,7 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
   - Supports `options` keys (see “Options” below). Handles adaptive sizing, hierarchical paragraph detection, timecode mapping, and content hashing.
 - `chunk_text(text, method=None, max_size=None, overlap=None, language=None, **options) -> List[str]`
   - Thin wrapper around a single strategy. Returns plain strings.
+  - Note: For some strategies (e.g., `words`), this path reconstructs output by joining tokens; spacing around punctuation may differ from the original source. When you require exact source fidelity and offsets, prefer `chunk_text_with_metadata` (or `process_text`) which returns spans and is normalized back to original slices.
 - `chunk_text_with_metadata(...) -> List[ChunkResult]`
   - Strategy-level chunking with `ChunkResult` metadata (indices/offsets, counts).
 - `chunk_text_hierarchical_tree(text, method=None, max_size=None, overlap=None, language=None, template=None) -> Dict`
@@ -164,8 +165,72 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Use `structure_aware` for code/docs when possible; otherwise seed headers/fences with `hierarchical_template`.
 - Keep templates JSON-only; put operational notes in `metadata` (never secrets).
 
+## Strategy Requirements
+- Overlap re-clamp: Each strategy must re-clamp `overlap < max_size` to guarantee forward progress. The base `validate_parameters` helper does not mutate caller state; strategies should set `overlap = max(0, min(overlap, max_size - 1))` before windowing.
+- Offsets: When returning `ChunkResult`, prefer exact `start_char`/`end_char` spans taken from the source text; avoid naïve `.find()` when feasible.
+  - Paragraphs strategy uses paragraph separators to compute per-paragraph spans directly from the source; chunk windows union these spans to produce precise `start_char`/`end_char` values.
+  - In hierarchical mode, the `tokens` method uses strategy metadata to map local spans to global offsets; if metadata is unavailable, a bounded fallback is used.
+  - Grapheme safety: All strategies clamp `end_char` to a grapheme boundary. In non‑strict mode, only non‑visible trailing marks/selectors are absorbed. In strict mode (`strict_grapheme_end_expansion = true`), ZWJ sequences and emoji modifiers are also absorbed to preserve visual stability at chunk boundaries.
+
+## Tokens Strategy Notes
+- `TokenChunkingStrategy.chunk_with_metadata(...)` now emits precise character offsets when possible:
+  - Transformers fast tokenizers: uses `offset_mapping` for exact spans.
+  - tiktoken: decodes each token and maps via a monotonic, rolling pointer.
+  - Fallback tokenizer: approximates tokens via word windows, with precise char spans and approximate `token_count`.
+
+## Streaming Overlap Semantics
+
+The streaming helpers emit chunks incrementally and carry context across read buffers:
+
+- `chunk_file_stream(file_path, method=None, max_size=None, overlap=None, ...) -> Generator[str]`
+- `AsyncChunker.chunk_stream(text_stream, method=None, max_size=None, overlap=None, ...) -> AsyncGenerator[str]`
+
+Behavior by method and overlap:
+- words
+  - overlap > 0: emits all chunks for each buffer, then carries the trailing `overlap` tokens from the last chunk forward. The first chunk of the next buffer may repeat those tokens. When reconstructing, drop a matching prefix (up to `overlap` tokens) from the first chunk after each boundary.
+  - overlap == 0: emits all chunks except the last during a buffer read and carries the full last chunk into the next buffer.
+- sentences and other methods
+  - overlap > 0: emits all but the last chunk for each buffer and carries that last chunk forward so the overlap happens at the buffer boundary (deduplicate by removing a matching prefix on boundary).
+  - overlap == 0: same withholding of the final chunk per buffer as above.
+
+In both cases, the boundary join uses a method‑aware separator to avoid token fragmentation (a space for `words`, newlines for structure‑heavy kinds). If you need exact source fidelity, prefer `chunk_text_with_metadata` or `process_text`, which normalize returned text to original spans by `start_offset`/`end_offset`.
+
+## Language Autodetection
+
+`process_text(..., options={"language": "auto"})` triggers lightweight script‑based detection when the language is not supplied (also the default). Detected codes include:
+- zh (CJK), ja (Hiragana/Katakana), th (Thai), hi (Devanagari/Hindi), ru (Cyrillic/Russian), ko (Hangul/Korean), ar (Arabic).
+
+These hints choose sensible tokenizers/splitters for strategies. You can always set `language` explicitly per call.
+
+## Configuration (config.txt)
+Add these optional keys under a new `[Chunking]` section. Environment variables with the same names in UPPERCASE override file values.
+
+- max_streaming_flush_threshold_chars: Cap for streaming buffer size when chunking very large files.
+  - Default: no cap beyond internal heuristic; minimum enforced is 2048 chars.
+  - Env: `CHUNKING_MAX_STREAMING_FLUSH_CHARS`
+  - Example: `max_streaming_flush_threshold_chars = 1000000`
+
+- json_single_metadata_reference: Emit a single metadata chunk and reference it from subsequent JSON chunks (avoids repeating metadata).
+  - Default: `false`
+  - Env: `JSON_SINGLE_METADATA_REFERENCE`
+
+- json_metadata_reference_key: Key name used for the metadata reference in JSON chunks.
+  - Default: `__meta_ref__`
+  - Env: `JSON_METADATA_REFERENCE_KEY`
+
+- strict_grapheme_end_expansion: Expand `end_char` to the next grapheme boundary, including ZWJ sequences and emoji skin-tone modifiers.
+  - Default: `false` (non-strict mode only expands trailing combining marks, variation selectors, and zero-width non-joiners except ZWJ).
+  - Env: `STRICT_GRAPHEME_END_EXPANSION`
+  - Per-call override: pass `strict_grapheme_end_expansion=True` in strategy `**options`.
+
+Behavior (JSON):
+- With `json_single_metadata_reference = true` and `preserve_metadata = true`, JSON output begins with a metadata-only chunk:
+  - `{ "__meta_ref__": "<id>", "metadata": { ... } }`
+  - Subsequent chunks include `{ "data": [...], "__meta_ref__": "<id>" }` (for a list) or the analogous dict form.
+  - When `output_format = 'text'`, these objects are rendered via `_json_to_text`.
+
 ## Strategies (Built-in)
-- `words`, `sentences`, `paragraphs`, `fixed_size`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `structure_aware`, `code` (Python AST / heuristic based on `code_mode`).
+- `words`, `sentences`, `paragraphs`, `fixed_size`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `structure_aware`, `code` (Python AST / heuristic based on `code_mode`), `code_ast` (force AST).
   - See `strategies/` submodules for implementation and method-specific options.
 
 ## Caching and Metrics
@@ -236,6 +301,7 @@ These environment variables harden regex-based detection used by the eBook chapt
   - `code_mode=auto` (default): If `language` starts with `py`, uses AST-based Python chunking; otherwise uses heuristic chunking.
   - `code_mode=ast`: Force AST-based Python chunking (for `.py`).
   - `code_mode=heuristic`: Force heuristic chunking (works across JS/TS, C-like languages, etc.).
+  - Note: You can also specify `method='code_ast'` directly to route to the AST strategy regardless of `language` or `code_mode`.
 
 - Python (AST-based) produces chunks aligned to import block, top-level classes, and top-level functions with accurate character offsets.
 - JavaScript/TypeScript (heuristic) recognizes:

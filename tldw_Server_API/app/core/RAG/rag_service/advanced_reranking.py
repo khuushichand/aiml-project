@@ -325,6 +325,8 @@ class LlamaCppReranker(BaseReranker):
         if not documents:
             return []
 
+        # Do not cap input candidates here: must score all supplied docs and return top_k
+
         # Build prompt: query first, then candidate passages
         # Format query/documents (instruct-style prefixes when configured)
         def _fmt_q(txt: str) -> str:

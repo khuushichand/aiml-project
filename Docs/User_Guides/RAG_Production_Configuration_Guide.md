@@ -66,7 +66,7 @@ The RAG module uses SQLite by default with optimized settings:
 # config.txt
 [Database]
 database_path = /path/to/secure/location/Databases/
-media_db_name = Media_DB_v2.db
+media_db_name = user_databases/<user_id>/Media_DB_v2.db
 rag_audit_db = rag_audit.db
 
 # Connection pool settings
@@ -94,10 +94,10 @@ max_overflow = 10
 Ensure database directories have proper permissions:
 
 ```bash
-# Create secure database directory
-sudo mkdir -p /var/lib/tldw/databases
+# Create secure database directories (per-user)
+sudo mkdir -p /var/lib/tldw/user_databases/<user_id>
 sudo chown -R tldw:tldw /var/lib/tldw
-sudo chmod 750 /var/lib/tldw/databases
+sudo chmod 750 /var/lib/tldw/user_databases
 ```
 
 ## Performance Tuning
@@ -365,7 +365,7 @@ BACKUP_DIR="/backup/tldw"
 DATE=$(date +%Y%m%d_%H%M%S)
 
 # Backup SQLite databases
-sqlite3 /var/lib/tldw/databases/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
+sqlite3 /var/lib/tldw/user_databases/<user_id>/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
 sqlite3 /var/lib/tldw/databases/rag_audit.db ".backup $BACKUP_DIR/audit_$DATE.db"
 
 # Compress and encrypt

@@ -26,22 +26,34 @@ Configuration ([Moderation] in `tldw_Server_API/Config_Files/config.txt`)
 - Performance/Safety (optional):
   - `max_scan_chars` (int): max chars to scan/redact per text (default 200000).
   - `max_replacements_per_pattern` (int): replacement limit per pattern (default 1000).
+  - `blocklist_write_debounce_ms` (int): debounce window for blocklist writes in milliseconds (default 0=disabled). Useful to coalesce rapid edits from the Web UI.
 - ENV overrides: `MODERATION_*` keys mirror the above.
 
 Blocklist Grammar
 - Literal: `confidential project`
 - Regex: `/secret\s+token/` (case-insensitive by default)
+- Regex with flags: `/secret\s+token/imsx` (supported flags:
+  - `i` case-insensitive (default already applied)
+  - `m` multiline
+  - `s` dot matches newline
+  - `x` verbose)
 - With action:
   - `forbidden term -> block`
   - `/leak(\d+)/ -> redact:[MASK]`
   - `/minor issue/ -> warn`
-- With categories (comma-separated suffix):
+- With categories (comma-separated suffix; requires whitespace before `#`):
   - `/ssn\b\d{3}-\d{2}-\d{4}/ -> redact:[SSN] #pii`
   - `internal code name #confidential`
+  - To include a literal `#` in a pattern or literal term, escape it as `\#`.
 
 Per-user Overrides (user_overrides_file)
 - Keys mirror [Moderation] defaults: `enabled`, `input_enabled`, `output_enabled`, `input_action`, `output_action`, `redact_replacement`.
 - `categories_enabled`: comma-separated string or list of category names. If set, only rules with intersecting category are active.
+
+Categories Behavior
+- When `categories_enabled` is provided (globally or per-user), only rules whose `categories` intersect with the enabled set will apply.
+- Rules without any categories are ignored when a `categories_enabled` set is present. This applies uniformly to input checks, output redaction, and action evaluation.
+- Built-in PII rules are tagged with `{"pii", <pii_subtype>}`; enabling either `pii` or a specific subtype (e.g., `pii_email`) will activate those rules.
 
 Runtime Overrides (Admin)
 - Endpoints:
@@ -70,6 +82,8 @@ Admin API Endpoints
   - `DELETE /api/v1/moderation/users/{user_id}` → delete.
 - Tester:
   - `POST /api/v1/moderation/test` → `{flagged, action, sample, redacted_text?, effective, category?}`.
+  - Note: `sample` is a sanitized snippet (not the raw match or regex pattern). It redacts the matched portion using the effective redaction replacement to avoid exposing sensitive content.
+  - Regex tester honors `/regex/flags` and category gating.
 
 Web UI
 - Tab: Admin → Moderation

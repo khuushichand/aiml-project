@@ -4,6 +4,7 @@
 import os
 import shutil
 import sqlite3
+import subprocess
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -12,6 +13,7 @@ from loguru import logger
 # Local Imports:
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
 #
 # End of Imports
 #######################################################################################################################
@@ -28,6 +30,10 @@ def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
 def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
     """Create a full backup of the database."""
     try:
+        # Guard: in-memory databases cannot be backed up to disk
+        mem = str(db_path).strip()
+        if mem == ":memory:" or mem.startswith("file::memory:"):
+            return "Cannot create backup for in-memory database"
         db_path = os.path.abspath(db_path)
         backup_dir = os.path.abspath(backup_dir)
         if not os.path.exists(db_path):
@@ -69,6 +75,9 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
 def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> str:
     """Create an incremental backup using VACUUM INTO."""
     try:
+        mem = str(db_path).strip()
+        if mem == ":memory:" or mem.startswith("file::memory:"):
+            return "Cannot create incremental backup for in-memory database"
         db_path = os.path.abspath(db_path)
         backup_dir = os.path.abspath(backup_dir)
         if not os.path.exists(db_path):
@@ -196,3 +205,165 @@ def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, st
         }
 
     return configs
+
+
+def _pg_dump_path() -> Optional[str]:
+    """Return path to pg_dump binary if available, otherwise None."""
+    path = shutil.which("pg_dump")
+    if not path:
+        logger.error("pg_dump not found on PATH. Install PostgreSQL client tools to enable backups.")
+        return None
+    return path
+
+
+def create_postgres_backup(
+    backend: DatabaseBackend,
+    backup_dir: str,
+    *,
+    label: str = "content",
+) -> str:
+    """Create a PostgreSQL backup using pg_dump.
+
+    Args:
+        backend: A DatabaseBackend configured for PostgreSQL
+        backup_dir: Target directory for the backup artifact
+        label: Logical label to include in the backup filename
+
+    Returns:
+        str: Path to the backup file on success, or an error message on failure.
+    """
+    if backend.backend_type != BackendType.POSTGRESQL:
+        msg = "create_postgres_backup requires a PostgreSQL backend"
+        logger.error(msg)
+        return msg
+
+    pg_dump = _pg_dump_path()
+    if not pg_dump:
+        return "pg_dump not found on PATH"
+
+    # Extract connection parameters from the backend configuration
+    config = getattr(backend, "config", None)
+    if not config:
+        msg = "PostgreSQL backend missing configuration; cannot perform backup"
+        logger.error(msg)
+        return msg
+
+    host = config.pg_host or "localhost"
+    port = str(config.pg_port or 5432)
+    dbname = config.pg_database or "tldw"
+    user = config.pg_user or "postgres"
+    password = config.pg_password or None
+
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = os.path.join(backup_dir, f"{label}_pgdump_{timestamp}.dump")
+
+    # Build pg_dump command
+    cmd = [
+        pg_dump,
+        "-h", host,
+        "-p", port,
+        "-U", user,
+        "-F", "c",            # custom format (compressed, pg_restore-compatible)
+        "--no-owner",
+        "--no-privileges",
+        "-f", out_file,
+        dbname,
+    ]
+
+    env = os.environ.copy()
+    if password:
+        env["PGPASSWORD"] = str(password)
+
+    try:
+        logger.info(f"Running pg_dump → {out_file}")
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if proc.returncode != 0:
+            logger.error(f"pg_dump failed ({proc.returncode}): {proc.stderr.strip()}")
+            return f"pg_dump failed: {proc.stderr.strip()}"
+        logger.info(f"PostgreSQL backup created: {out_file}")
+        return out_file
+    except FileNotFoundError:
+        msg = "pg_dump executable not found; ensure PostgreSQL client tools are installed"
+        logger.error(msg)
+        return msg
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"pg_dump error: {exc}")
+        return f"pg_dump error: {exc}"
+
+
+def restore_postgres_backup(
+    backend: DatabaseBackend,
+    dump_file: str,
+    *,
+    drop_first: bool = True,
+) -> str:
+    """Restore a PostgreSQL backup created with pg_dump (custom format).
+
+    Args:
+        backend: A DatabaseBackend configured for PostgreSQL
+        dump_file: Path to a pg_dump custom-format .dump file
+        drop_first: If True, use pg_restore -c to drop objects before restore
+
+    Returns:
+        str: "ok" on success or an error message on failure.
+    """
+    if backend.backend_type != BackendType.POSTGRESQL:
+        msg = "restore_postgres_backup requires a PostgreSQL backend"
+        logger.error(msg)
+        return msg
+
+    pg_restore = shutil.which("pg_restore")
+    if not pg_restore:
+        msg = "pg_restore not found on PATH"
+        logger.error(msg)
+        return msg
+
+    if not os.path.exists(dump_file):
+        msg = f"dump not found: {dump_file}"
+        logger.error(msg)
+        return msg
+
+    config = getattr(backend, "config", None)
+    if not config:
+        msg = "PostgreSQL backend missing configuration; cannot perform restore"
+        logger.error(msg)
+        return msg
+
+    host = config.pg_host or "localhost"
+    port = str(config.pg_port or 5432)
+    dbname = config.pg_database or "tldw"
+    user = config.pg_user or "postgres"
+    password = config.pg_password or None
+
+    cmd = [
+        pg_restore,
+        "-h", host,
+        "-p", port,
+        "-U", user,
+        "-d", dbname,
+        "-1",              # single transaction
+    ]
+    if drop_first:
+        cmd.append("-c")    # clean (drop) database objects before recreating
+    cmd.append(dump_file)
+
+    env = os.environ.copy()
+    if password:
+        env["PGPASSWORD"] = str(password)
+
+    try:
+        logger.info(f"Running pg_restore on {dump_file} into database '{dbname}'")
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if proc.returncode != 0:
+            logger.error(f"pg_restore failed ({proc.returncode}): {proc.stderr.strip()}")
+            return f"pg_restore failed: {proc.stderr.strip()}"
+        logger.info("PostgreSQL restore completed successfully")
+        return "ok"
+    except FileNotFoundError:
+        msg = "pg_restore executable not found; ensure PostgreSQL client tools are installed"
+        logger.error(msg)
+        return msg
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"pg_restore error: {exc}")
+        return f"pg_restore error: {exc}"

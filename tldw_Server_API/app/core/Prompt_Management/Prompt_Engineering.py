@@ -1,24 +1,31 @@
 # Prompt_Engineering.py
 # Description: Library for generating prompts
-#
-# Imports
+
+from typing import List, Optional
 import re
-#
-# External Imports
-#
+
 # Local Imports
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
-#
-#
+
 #######################################################################################################################
-#
 # Function Definitions
 
 
 ################################## Meta Prompt Engineering Functions ##############################################
 
-# Function to generate prompt using metaprompt
-def generate_prompt(api_endpoint, api_key, task, variables_str, temperature):
+def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: str, temperature: float):
+    """Generate a prompt using a meta-prompt with examples.
+
+    Args:
+        api_endpoint: Chat API endpoint identifier used by chat_api_call
+        api_key: API key for the provider behind chat_api_call
+        task: The task description to embed into the meta-prompt
+        variables_str: Comma-separated variable names (currently informational)
+        temperature: Sampling temperature for the generation call
+
+    Returns:
+        Provider-specific chat completion response (string or dict depending on backend)
+    """
     # Convert variables into a list from comma-separated input
     variables = [v.strip() for v in variables_str.split(',') if v.strip()]
 
@@ -494,56 +501,120 @@ def generate_prompt(api_endpoint, api_key, task, variables_str, temperature):
     Note: If you want the AI to output its entire response or parts of its response inside certain tags, specify the name of these tags (e.g. "write your answer inside <answer> tags") but do not include closing tags or unnecessary open-and-close tag sections."""
 
     # Call chat API to generate the prompt
-    response = chat_api_call(api_endpoint=api_endpoint, api_key=api_key, input_data="", prompt=metaprompt,
-                             temp=temperature, streaming=False, minp=None, maxp=None, model=None)
+    response = chat_api_call(
+        api_endpoint=api_endpoint,
+        api_key=api_key,
+        input_data="",
+        prompt=metaprompt,
+        temp=temperature,
+        streaming=False,
+        minp=None,
+        maxp=None,
+        model=None,
+    )
     return response
 
-def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
-    ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
-    if strip:
-        ext_list = [e.strip() for e in ext_list]
-    return ext_list
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str]:
+    """Extract all substrings between specific XML-like tags.
 
-def remove_empty_tags(text):
-    return re.sub(r'\n<(\w+)>\s*</\1>\n', '', text, flags=re.DOTALL)
+    Args:
+        tag: Tag name to match (will be regex-escaped)
+        string: Source text
+        strip: When True, strips whitespace around each extracted block
 
-def strip_last_sentence(text):
-    sentences = text.split('. ')
-    if sentences[-1].startswith("Let me know"):
-        sentences = sentences[:-1]
-        result = '. '.join(sentences)
-        if result and not result.endswith('.'):
-            result += '.'
-        return result
-    else:
-        return text
+    Returns:
+        List of extracted strings (possibly empty)
+    """
+    # Escape tag to avoid regex meta-character issues
+    safe_tag = re.escape(tag)
+    ext_list = re.findall(fr"<{safe_tag}>(.+?)</{safe_tag}>", string, re.DOTALL)
+    return [e.strip() for e in ext_list] if strip else ext_list
 
-# Function to extract the refined prompt and handle floating variables
-def extract_prompt(metaprompt_response):
-    # Extract prompt from metaprompt response
-    between_tags = extract_between_tags("Instructions", metaprompt_response)[0]
-    return between_tags[:1000] + strip_last_sentence(remove_empty_tags(between_tags[1000:].strip()).strip())
+def remove_empty_tags(text: str) -> str:
+    """Remove empty XML-like tags that occupy full lines."""
+    return re.sub(r"\n<(\w+)>\s*</\1>\n", "", text, flags=re.DOTALL)
+
+def strip_last_sentence(text: str) -> str:
+    """Strip trailing "Let me know..." style sign-off if present."""
+    sentences = text.split(". ")
+    if sentences and sentences[-1].startswith("Let me know"):
+        trimmed = ". ".join(sentences[:-1])
+        if trimmed and not trimmed.endswith("."):
+            trimmed += "."
+        return trimmed
+    return text
+
+def extract_prompt(metaprompt_response: str) -> str:
+    """Extract the <Instructions> block from the meta-prompt response safely.
+
+    Falls back to returning a cleaned/truncated response when the tag
+    cannot be found.
+    """
+    blocks = extract_between_tags("Instructions", metaprompt_response)
+    if not blocks:
+        # Fallback: best-effort cleanup of the raw response
+        cleaned = strip_last_sentence(remove_empty_tags(metaprompt_response).strip())
+        return cleaned
+    between_tags = blocks[0]
+    prefix = between_tags[:1000]
+    suffix = strip_last_sentence(remove_empty_tags(between_tags[1000:].strip()).strip())
+    return prefix + suffix
 
 
-# Function to test the generated prompt with variable values
-# FIXME - variable replacement is not working
-def test_generated_prompt(api_endpoint, api_key, generated_prompt, variable_values_str, temperature):
-    # Prepare variable values dictionary
-    variable_values = dict(zip(
-        [f"{{$v.strip()}}" for v in re.findall(r'\{\$(.*?)\}', generated_prompt)],  # Extract variable names
-        [v.strip() for v in variable_values_str.split(',')]
-    ))
+def test_generated_prompt(
+    api_endpoint: str,
+    api_key: str,
+    generated_prompt: str,
+    variable_values_str: str,
+    temperature: float,
+) -> Optional[str]:
+    """Fill variables in a generated prompt and call the chat API.
 
-    # Replace variables in the generated prompt with actual values
+    Variables are expected in the form {{$VAR}} within the prompt. Values are
+    provided as a comma-separated list, in the same order as variables appear.
+
+    Args:
+        api_endpoint: Chat API endpoint identifier
+        api_key: API key for the provider
+        generated_prompt: The prompt template to fill
+        variable_values_str: Comma-separated values for variables
+        temperature: Sampling temperature for the generation call
+
+    Returns:
+        Provider-specific chat completion response
+    """
+    # Find placeholders like {{$VAR}}
+    var_names = [m.strip() for m in re.findall(r"\{\{\$(.*?)\}\}", generated_prompt)]
+    values = [v.strip() for v in (variable_values_str.split(",") if variable_values_str else [])]
+
+    # Build replacement mapping based on appearance order
+    replacements = {}
+    for idx, name in enumerate(var_names):
+        if idx < len(values):
+            # Construct the exact placeholder to replace: {{$NAME}}
+            placeholder = f"{{{{${name}}}}}"
+            replacements[placeholder] = values[idx]
+
+    # Replace placeholders; leave unmatched placeholders intact
     prompt_with_values = generated_prompt
-    for var, value in variable_values.items():
-        prompt_with_values = prompt_with_values.replace(var, value)
+    for ph, val in replacements.items():
+        prompt_with_values = prompt_with_values.replace(ph, val)
 
     # Send the filled-in prompt to the chat API
-    response = chat_api_call(api_endpoint=api_endpoint, api_key=api_key, input_data="", prompt=prompt_with_values, temp=temperature, system_message=None, streaming=False, minp=None, maxp=None, model=None)
+    response = chat_api_call(
+        api_endpoint=api_endpoint,
+        api_key=api_key,
+        input_data="",
+        prompt=prompt_with_values,
+        temp=temperature,
+        system_message=None,
+        streaming=False,
+        minp=None,
+        maxp=None,
+        model=None,
+    )
     return response
 
 #
 # End of Function Definitions
 ########################################################################################################################
-

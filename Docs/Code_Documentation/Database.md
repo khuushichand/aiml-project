@@ -27,7 +27,8 @@ Environment and config determine paths. Defaults are created on startup if missi
   - Code: tldw_Server_API/app/core/AuthNZ/database.py:1, tldw_Server_API/app/core/config.py:408
 
 - Media database (content)
-  - Default path (dev): `Databases/server_media_summary.db` via content DB settings
+  - Default path (per user): `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`
+  - Root-level DB paths are deprecated; prefer per-user files for isolation and portability
   - Factory: tldw_Server_API/app/core/DB_Management/DB_Manager.py:33
   - Engine/backends: SQLite (default), PostgreSQL support via backends layer
   - Library: tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:1

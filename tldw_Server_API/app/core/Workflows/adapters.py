@@ -134,8 +134,12 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     top_k = int(config.get("top_k", 10))
     hybrid_alpha = float(config.get("hybrid_alpha", 0.7))
 
-    # Default DB path for media; future: derive per-tenant/user
-    media_db_path = "Databases/Media_DB_v2.db"
+    # Default DB path for media; prefer per-user default
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+        media_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+    except Exception:
+        media_db_path = "Databases/Media_DB_v2.db"
 
     # Map supported options directly to pipeline
     passthrough_keys = {
@@ -341,7 +345,12 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 indexing = config.get("indexing") or {}
                 if isinstance(indexing, dict) and indexing.get("index_in_rag") and extracted_text:
                     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-                    mdb = MediaDatabase("Databases/Media_DB_v2.db", client_id="workflow_engine")
+                    try:
+                        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+                        _mdb_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+                    except Exception:
+                        _mdb_path = "Databases/Media_DB_v2.db"
+                    mdb = MediaDatabase(_mdb_path, client_id="workflow_engine")
                     title = (config.get("metadata", {}) or {}).get("title") or Path(path).name
                     keywords = (config.get("metadata", {}) or {}).get("tags") or []
                     media_type = src.get("media_type") or "document"

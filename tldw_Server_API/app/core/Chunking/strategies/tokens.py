@@ -4,10 +4,10 @@ Token-based chunking strategy.
 Splits text into chunks based on token count using transformers or fallback methods.
 """
 
-from typing import List, Optional, Dict, Any, Generator, Protocol
+from typing import List, Optional, Dict, Any, Generator, Protocol, Tuple
 from loguru import logger
 
-from ..base import BaseChunkingStrategy
+from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
 from ..exceptions import TokenizerError
 
 
@@ -419,6 +419,306 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         else:
             return len(self.tokenizer.encode(text))
     
+    def chunk_with_metadata(self,
+                            text: str,
+                            max_size: int,
+                            overlap: int = 0,
+                            **options) -> List[ChunkResult]:
+        """Chunk text and return metadata with best-possible char offsets.
+
+        - Transformers (fast) tokenizers: use offset mapping to compute spans.
+        - tiktoken: rebuild per-token spans by decoding tokens sequentially.
+        - Fallback tokenizer: approximate via word windows; precise char spans,
+          approximate token counts.
+        """
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+
+        MAX_CHUNK_SIZE_TOKENS = 10000
+        if max_size > MAX_CHUNK_SIZE_TOKENS:
+            raise ValueError(
+                f"max_size {max_size} exceeds maximum allowed {MAX_CHUNK_SIZE_TOKENS} tokens"
+            )
+
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
+            overlap = max_size - 1
+
+        # Fallback path: approximate by words for reliable character spans
+        if isinstance(self.tokenizer, FallbackTokenizer):
+            return self._chunk_with_metadata_fallback(text, max_size, overlap, **options)
+
+        add_special = bool(options.get('add_special_tokens', False))
+
+        token_ids: List[int]
+        offsets: Optional[List[Tuple[int, int]]] = None
+        decode_fn = None
+
+        try:
+            if hasattr(self.tokenizer, 'tokenizer'):
+                tok = self.tokenizer.tokenizer
+                # Prefer wrapper decode to ensure skip_special_tokens=True consistently
+                decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                try:
+                    enc = tok(
+                        text,
+                        add_special_tokens=add_special,
+                        return_offsets_mapping=True,
+                        return_attention_mask=False,
+                        return_special_tokens_mask=False,
+                    )
+                    token_ids = list(enc.get('input_ids') or enc['input_ids'])
+                    offsets = list(enc.get('offset_mapping') or enc['offset_mapping'])
+                except Exception:
+                    token_ids = tok.encode(text, add_special_tokens=add_special)
+                    offsets = None
+            else:
+                token_ids = self.tokenizer.encode(text)
+                # Wrapper decode defaults to skip_special_tokens=True; pass explicitly
+                decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
+        except Exception as e:
+            logger.error(f"Tokenization failed: {e}")
+            raise TokenizerError(f"Failed to tokenize text: {e}")
+
+        if not token_ids:
+            return []
+
+        # Ensure offsets align with token ids length when present
+        if offsets is not None and len(offsets) != len(token_ids):
+            try:
+                offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
+            except Exception:
+                offsets = None
+
+        results: List[ChunkResult] = []
+        step = max(1, max_size - overlap)
+        # Rolling pointer for fallback bounds mapping when offsets are unavailable
+        rolling_pos = 0
+
+        for i in range(0, len(token_ids), step):
+            ids_window = token_ids[i:i + max_size]
+            if not ids_window:
+                continue
+            # Decode without trimming to preserve exact mapping
+            try:
+                if decode_fn is not None:
+                    chunk_text = decode_fn(ids_window)
+                else:
+                    chunk_text = self.tokenizer.decode(ids_window, skip_special_tokens=True)
+            except Exception as e:
+                logger.warning(f"Failed to decode token window at {i}: {e}")
+                continue
+
+            if offsets is not None:
+                start_idx = i
+                end_idx = i + len(ids_window) - 1
+                while start_idx < len(offsets) and (offsets[start_idx][1] - offsets[start_idx][0]) == 0:
+                    start_idx += 1
+                while end_idx >= 0 and (offsets[end_idx][1] - offsets[end_idx][0]) == 0:
+                    end_idx -= 1
+                if start_idx < len(offsets) and end_idx >= start_idx:
+                    start_char = int(offsets[start_idx][0])
+                    end_char = int(offsets[end_idx][1])
+                    # Expand end bound to avoid slicing mid-grapheme when safe
+                    try:
+                        expanded_end = self._expand_end_to_grapheme_boundary(text, end_char)
+                        if expanded_end != end_char:
+                            # Only adopt expansion if it doesn't contradict the decoded chunk materially
+                            import unicodedata as _ud
+                            def _strip_cf(s: str) -> str:
+                                return ''.join(ch for ch in s if _ud.category(ch) != 'Cf')
+                            a = _strip_cf(text[start_char:expanded_end])
+                            b = _strip_cf(chunk_text)
+                            # Accept if either equals or one is a prefix of the other (ZWJ/vs16 tolerated)
+                            if a == b or a.startswith(b) or b.startswith(a):
+                                end_char = expanded_end
+                    except Exception:
+                        pass
+                else:
+                    start_char, end_char = self._bounds_via_rolling_pointer(text, chunk_text, start_from=rolling_pos)
+                    rolling_pos = end_char
+            else:
+                start_char, end_char = self._bounds_via_rolling_pointer(text, chunk_text, start_from=rolling_pos)
+                rolling_pos = end_char
+
+            # Skip zero-length or unmapped spans to maintain monotonic progress
+            if end_char <= start_char:
+                continue
+
+            md = ChunkMetadata(
+                index=len(results),
+                start_char=start_char,
+                end_char=end_char,
+                word_count=len(chunk_text.split()) if chunk_text else 0,
+                token_count=len(ids_window),
+                language=self.language,
+                overlap_with_previous=overlap if i > 0 else 0,
+                overlap_with_next=overlap if (i + step) < len(token_ids) else 0,
+                method='tokens',
+                options={'add_special_tokens': add_special},
+            )
+            results.append(ChunkResult(text=chunk_text, metadata=md))
+
+        logger.info(f"Created {len(results)} token-based chunks with metadata")
+        return results
+
+    # ------------------------ helpers for offsets ------------------------
+    def _expand_end_to_grapheme_boundary(self, text: str, end: int) -> int:
+        # Delegate to BaseChunkingStrategy implementation (config-aware)
+        return super()._expand_end_to_grapheme_boundary(text, end)
+
+    def _reconstruct_offsets_by_decoding(self, token_ids: List[int], text: str) -> List[Tuple[int, int]]:
+        """Rebuild per-token char spans using sequential decode with grapheme-safe clamping.
+
+        Strategy:
+        - Prefer direct sequential mapping: decode all tokens; if it matches the
+          original `text` exactly, compute spans by cumulative lengths without
+          substring search (robust for ZWJ/modifiers and repeated substrings).
+        - Fallback: attempt localized search from a rolling pointer with a small
+          Cf-agnostic (zero-width) match, and clamp indices to [0, len(text)].
+        """
+        # Select decode function for single token and full sequence
+        def _decode_one(tid: int) -> str:
+            try:
+                # Prefer wrapper decode to ensure skip_special_tokens=True
+                return self.tokenizer.decode([tid], skip_special_tokens=True)
+            except Exception:
+                try:
+                    if hasattr(self.tokenizer, 'tokenizer'):
+                        return self.tokenizer.tokenizer.decode([tid], skip_special_tokens=True)
+                except Exception:
+                    pass
+                return ''
+
+        def _decode_all(tids: List[int]) -> str:
+            try:
+                return self.tokenizer.decode(tids, skip_special_tokens=True)
+            except Exception:
+                try:
+                    if hasattr(self.tokenizer, 'tokenizer'):
+                        return self.tokenizer.tokenizer.decode(tids, skip_special_tokens=True)
+                except Exception:
+                    pass
+                return ''
+
+        decoded_all = _decode_all(token_ids)
+
+        offsets: List[Tuple[int, int]] = []
+        n = len(text)
+
+        if decoded_all == text:
+            # Fast path: cumulative lengths map 1:1 to original text
+            pos = 0
+            for tid in token_ids:
+                piece = _decode_one(tid)
+                start = pos
+                end = start + len(piece)
+                if end > n:
+                    end = n
+                if start < 0:
+                    start = 0
+                offsets.append((start, end))
+                pos = end
+            return offsets
+
+        # Fallback path: tolerant forward scan with Cf-insensitive lookups
+        import unicodedata as _ud
+
+        def _strip_cf(s: str) -> str:
+            return ''.join(ch for ch in s if _ud.category(ch) != 'Cf')
+
+        pos = 0
+        for tid in token_ids:
+            piece = _decode_one(tid)
+            if not piece:
+                offsets.append((pos, pos))
+                continue
+            idx = text.find(piece, pos)
+            if idx == -1:
+                # Try a small sliding window search ignoring Cf to better align
+                window_end = min(n, pos + max(64, len(piece) * 4))
+                window = text[pos:window_end]
+                sp = _strip_cf(piece)
+                sw = _strip_cf(window)
+                rel = sw.find(sp) if sp else -1
+                if rel != -1:
+                    idx = pos + rel
+            if idx == -1:
+                idx = pos
+            start = max(0, min(idx, n))
+            end = min(n, start + len(piece))
+            if end < start:
+                end = start
+            offsets.append((start, end))
+            pos = end
+        return offsets
+
+    def _bounds_via_rolling_pointer(self, text: str, chunk_text: str, start_from: int = 0) -> Tuple[int, int]:
+        """Compute approximate bounds by scanning forward for the chunk text.
+
+        Uses a rolling start to avoid mapping every repeated substring to its
+        first occurrence in the source.
+        """
+        n = len(text)
+        sf = max(0, min(start_from, n))
+        idx = text.find(chunk_text, sf)
+        if idx == -1:
+            idx = sf
+        end = min(n, idx + len(chunk_text))
+        if end < idx:
+            end = idx
+        return idx, end
+
+    def _chunk_with_metadata_fallback(self, text: str, max_size: int, overlap: int, **options) -> List[ChunkResult]:
+        """Approximate token windows using words; precise char spans, approximate token counts."""
+        ratio = getattr(self.tokenizer, 'tokens_per_word', {}).get(getattr(self.tokenizer, 'model_name', 'default'), 1.3)
+        max_words = max(1, int(max_size / ratio))
+        raw_overlap_words = int(overlap / ratio)
+        overlap_words = 0 if max_words == 1 else max(0, min(max_words - 1, raw_overlap_words))
+
+        # Build word spans
+        spans: List[Tuple[int, int]] = []
+        words: List[str] = []
+        pos = 0
+        for part in text.split():
+            idx = text.find(part, pos)
+            if idx == -1:
+                idx = pos
+            start = idx
+            end = idx + len(part)
+            spans.append((start, end))
+            words.append(part)
+            pos = end
+
+        if not words:
+            return []
+
+        results: List[ChunkResult] = []
+        step = max(1, max_words - overlap_words)
+        wi = 0
+        while wi < len(words):
+            j = min(len(words), wi + max_words)
+            if j <= wi:
+                break
+            start_char = spans[wi][0]
+            end_char = spans[j - 1][1]
+            chunk_text = ' '.join(words[wi:j])
+            md = ChunkMetadata(
+                index=len(results),
+                start_char=start_char,
+                end_char=end_char,
+                word_count=j - wi,
+                token_count=int(round((j - wi) * ratio)),
+                language=self.language,
+                overlap_with_previous=overlap_words if wi > 0 else 0,
+                overlap_with_next=overlap_words if j < len(words) else 0,
+                method='tokens',
+                options={'approximate': True},
+            )
+            results.append(ChunkResult(text=chunk_text, metadata=md))
+            wi += step
+        return results
     def chunk_generator(self,
                        text: str,
                        max_size: int,

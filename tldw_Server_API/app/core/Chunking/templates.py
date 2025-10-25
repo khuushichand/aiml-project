@@ -300,8 +300,11 @@ class TemplateProcessor:
         text = re.sub(r'[ \t]+', ' ', text)
         # Normalize line breaks
         text = re.sub(r'\r\n', '\n', text)
-        # Remove excessive line breaks
-        max_breaks = options.get("max_line_breaks", 2)
+        # Remove excessive line breaks (coerce provided value to int safely)
+        try:
+            max_breaks = int(options.get("max_line_breaks", 2))
+        except Exception:
+            max_breaks = 2
         text = re.sub(r'\n{' + str(max_breaks + 1) + ',}', '\n' * max_breaks, text)
         return text.strip()
     

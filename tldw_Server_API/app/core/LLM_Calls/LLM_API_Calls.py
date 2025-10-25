@@ -65,6 +65,26 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
 )
 from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries
+from tldw_Server_API.app.core.LLM_Calls.streaming import (
+    iter_sse_lines_requests,
+    aiter_sse_lines_httpx,
+)
+#
+# Shared helper for consistent tool_choice gating across providers
+def _apply_tool_choice(payload: Dict[str, Any], tools: Optional[List[Dict[str, Any]]], tool_choice: Optional[Union[str, Dict[str, Any]]]) -> None:
+    """Set tool_choice in payload only when supported.
+
+    - Always allow "none" to disable tools explicitly.
+    - Otherwise include tool_choice only when tools are present.
+    """
+    try:
+        if tool_choice == "none":
+            payload["tool_choice"] = "none"
+        elif tool_choice is not None and tools:
+            payload["tool_choice"] = tool_choice
+    except Exception:
+        # Never break the call due to helper failure
+        pass
 #
 #######################################################################################################################
 # Function Definitions
@@ -448,6 +468,27 @@ def _raise_chat_error_from_http(provider: str, error: requests.exceptions.HTTPEr
     raise ChatAPIError(provider=provider, message=message, status_code=status_code or 500)
 
 
+def _raise_httpx_chat_error(provider: str, error: httpx.HTTPStatusError) -> None:
+    """Normalize httpx HTTPStatusError into project ChatAPIError subclasses."""
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    text = None
+    try:
+        text = response.text if response is not None else str(error)
+    except Exception:
+        text = str(error)
+
+    if status_code in (400, 404, 422):
+        raise ChatBadRequestError(provider=provider, message=text)
+    if status_code in (401, 403):
+        raise ChatAuthenticationError(provider=provider, message=text)
+    if status_code == 429:
+        raise ChatRateLimitError(provider=provider, message=text)
+    if status_code and 500 <= status_code < 600:
+        raise ChatProviderError(provider=provider, message=text, status_code=status_code)
+    raise ChatAPIError(provider=provider, message=text, status_code=status_code or 500)
+
+
 def get_openai_embeddings(input_data: str, model: str, app_config: Optional[Dict[str, Any]] = None) -> List[float]:
     """
     Get embeddings for a single input text from OpenAI API.
@@ -673,7 +714,8 @@ def chat_with_openai(
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         user: Optional[str] = None, # This is the 'user_identifier' mapped
-        custom_prompt_arg: Optional[str] = None # Legacy
+        custom_prompt_arg: Optional[str] = None, # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Sends a chat completion request to the OpenAI API.
@@ -702,7 +744,7 @@ def chat_with_openai(
         custom_prompt_arg: Legacy, largely ignored.
         **kwargs: Catches any unexpected keyword arguments.
     """
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     openai_config = loaded_config_data.get('openai_api', {})
 
     final_api_key = api_key or openai_config.get('api_key')
@@ -776,10 +818,7 @@ def chat_with_openai(
     if tools is not None: payload["tools"] = tools
 
     # Then conditionally add tool_choice:
-    if payload.get("tools") and tool_choice is not None:
-        payload["tool_choice"] = tool_choice
-    elif tool_choice == "none":  # Allow "none" even if no tools are present
-        payload["tool_choice"] = "none"
+    _apply_tool_choice(payload, tools, tool_choice)
     if user is not None: payload["user"] = user # 'user' is OpenAI's user identifier field
 
     payload_metadata = _sanitize_payload_for_logging(payload)
@@ -787,7 +826,8 @@ def chat_with_openai(
         'Authorization': f'Bearer {final_api_key}',
         'Content-Type': 'application/json'
     }
-    logging.debug(f"OpenAI request metadata: {payload_metadata}")
+    # Keep this phrasing aligned with tests that assert on the log text
+    logging.debug(f"OpenAI Request Payload (excluding messages): {payload_metadata}")
 
     # Allow environment override for API base URL (useful for mock servers in tests)
     env_api_base = os.getenv('OPENAI_API_BASE_URL') or os.getenv('MOCK_OPENAI_BASE_URL')
@@ -811,35 +851,17 @@ def chat_with_openai(
                 raise
 
             def stream_generator():
-                    done_sent = False
+                try:
+                    for chunk in iter_sse_lines_requests(response, decode_unicode=True, provider="openai"):
+                        yield chunk
+                    # Always append a single final sentinel; helper suppresses provider [DONE]
+                    for tail in finalize_stream(response, done_already=False):
+                        yield tail
+                finally:
                     try:
-                        for raw_line in response.iter_lines(decode_unicode=True):
-                            if not raw_line:
-                                continue
-                            if is_done_line(raw_line):
-                                done_sent = True
-                            normalized = normalize_provider_line(raw_line)
-                            if normalized is None:
-                                continue
-                            yield normalized
-                        if not done_sent:
-                            done_sent = True
-                            yield sse_done()
-                    except requests.exceptions.ChunkedEncodingError as e_chunk:
-                        logging.error(f"OpenAI: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "openai_stream_error"}})
-                    except Exception as e_stream:
-                        logging.error(f"OpenAI: Error during stream iteration: {e_stream}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "openai_stream_error"}})
-                    finally:
-                        try:
-                            for tail in finalize_stream(response, done_already=done_sent):
-                                yield tail
-                        finally:
-                            try:
-                                session.close()
-                            except Exception:
-                                pass
+                        session.close()
+                    except Exception:
+                        pass
 
             return stream_generator()
 
@@ -933,12 +955,13 @@ async def chat_with_openai_async(
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         user: Optional[str] = None,
         custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """Async variant of chat_with_openai using httpx.AsyncClient.
 
     Returns JSON dict for non-streaming, and an async iterator of SSE lines for streaming.
     """
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     openai_config = loaded_config_data.get('openai_api', {})
     final_api_key = api_key or openai_config.get('api_key')
     if not final_api_key:
@@ -1000,10 +1023,7 @@ async def chat_with_openai_async(
         payload["stop"] = stop
     if tools is not None:
         payload["tools"] = tools
-    if payload.get("tools") and tool_choice is not None:
-        payload["tool_choice"] = tool_choice
-    elif tool_choice == "none":
-        payload["tool_choice"] = "none"
+    _apply_tool_choice(payload, tools, tool_choice)
     if user is not None:
         payload["user"] = user
 
@@ -1017,18 +1037,7 @@ async def chat_with_openai_async(
     retry_delay = max(0.0, _safe_cast(openai_config.get('api_retry_delay'), float, 1.0))
 
     def _raise_openai_http_error(exc: httpx.HTTPStatusError) -> None:
-        response = getattr(exc, "response", None)
-        status_code = getattr(response, "status_code", None)
-        text = response.text if response is not None else str(exc)
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="openai", message=text)
-        if status_code in (401, 403):
-            raise ChatAuthenticationError(provider="openai", message=text)
-        if status_code == 429:
-            raise ChatRateLimitError(provider="openai", message=text)
-        if _is_retryable_status(status_code):
-            raise ChatProviderError(provider="openai", message=text, status_code=status_code)
-        raise ChatAPIError(provider="openai", message=text, status_code=status_code)
+        _raise_httpx_chat_error("openai", exc)
 
     try:
         if final_streaming:
@@ -1044,19 +1053,11 @@ async def chat_with_openai_async(
                                     if _is_retryable_status(status_code) and attempt < retry_limit:
                                         await _async_retry_sleep(retry_delay, attempt)
                                         continue
-                                    _raise_openai_http_error(e)
-                                done_sent = False
-                                async for line in resp.aiter_lines():
-                                    if not line:
-                                        continue
-                                    if is_done_line(line):
-                                        done_sent = True
-                                    normalized = normalize_provider_line(line)
-                                    if normalized is None:
-                                        continue
-                                    yield normalized
-                                if not done_sent:
-                                    yield sse_done()
+                                    _raise_httpx_chat_error("openai", e)
+                                async for chunk in aiter_sse_lines_httpx(resp, provider="openai"):
+                                    yield chunk
+                                # Append a single [DONE]
+                                yield sse_done()
                                 return
                     except httpx.RequestError as e:
                         if attempt < retry_limit:
@@ -1080,7 +1081,7 @@ async def chat_with_openai_async(
                             if _is_retryable_status(status_code) and attempt < retry_limit:
                                 await _async_retry_sleep(retry_delay, attempt)
                                 continue
-                            _raise_openai_http_error(e)
+                            _raise_httpx_chat_error("openai", e)
                         return resp.json()
                 except httpx.RequestError as e:
                     if attempt < retry_limit:
@@ -1117,9 +1118,11 @@ async def chat_with_groq_async(
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """Async Groq provider using httpx.AsyncClient with SSE normalization."""
-    cfg = load_and_log_configs().get('groq_api', {})
+    cfg_source = app_config or load_and_log_configs()
+    cfg = cfg_source.get('groq_api', {})
     final_api_key = api_key or cfg.get('api_key')
     if not final_api_key:
         raise ChatConfigurationError(provider="groq", message="Groq API Key required.")
@@ -1154,8 +1157,7 @@ async def chat_with_groq_async(
         payload["user"] = user
     if tools is not None:
         payload["tools"] = tools
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
+    _apply_tool_choice(payload, tools, tool_choice)
     if logit_bias is not None:
         payload["logit_bias"] = logit_bias
     if presence_penalty is not None:
@@ -1174,18 +1176,7 @@ async def chat_with_groq_async(
     retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
 
     def _raise_groq_http_error(exc: httpx.HTTPStatusError) -> None:
-        response = getattr(exc, "response", None)
-        status_code = getattr(response, "status_code", None)
-        text = response.text if response is not None else str(exc)
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="groq", message=text)
-        if status_code in (401, 403):
-            raise ChatAuthenticationError(provider="groq", message=text)
-        if status_code == 429:
-            raise ChatRateLimitError(provider="groq", message=text)
-        if _is_retryable_status(status_code):
-            raise ChatProviderError(provider="groq", message=text, status_code=status_code)
-        raise ChatAPIError(provider="groq", message=text, status_code=status_code)
+        _raise_httpx_chat_error("groq", exc)
 
     try:
         if current_streaming:
@@ -1202,18 +1193,9 @@ async def chat_with_groq_async(
                                         await _async_retry_sleep(retry_delay, attempt)
                                         continue
                                     _raise_groq_http_error(e)
-                                done_sent = False
-                                async for line in resp.aiter_lines():
-                                    if not line:
-                                        continue
-                                    if is_done_line(line):
-                                        done_sent = True
-                                    normalized = normalize_provider_line(line)
-                                    if normalized is None:
-                                        continue
-                                    yield normalized
-                                if not done_sent:
-                                    yield sse_done()
+                                async for chunk in aiter_sse_lines_httpx(resp, provider="groq"):
+                                    yield chunk
+                                yield sse_done()
                                 return
                     except httpx.RequestError as e:
                         if attempt < retry_limit:
@@ -1265,9 +1247,11 @@ async def chat_with_anthropic_async(
         max_tokens: Optional[int] = None,
         stop_sequences: Optional[List[str]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """Async Anthropic messages API with SSE normalization."""
-    cfg = load_and_log_configs().get('anthropic_api', {})
+    cfg_source = app_config or load_and_log_configs()
+    cfg = cfg_source.get('anthropic_api', {})
     final_api_key = api_key or cfg.get('api_key')
     if not final_api_key:
         raise ChatConfigurationError(provider="anthropic", message="Anthropic API Key is required.")
@@ -1331,18 +1315,7 @@ async def chat_with_anthropic_async(
     retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
 
     def _raise_anthropic_http_error(exc: httpx.HTTPStatusError) -> None:
-        response = getattr(exc, "response", None)
-        status_code = getattr(response, "status_code", None)
-        text = response.text if response is not None else str(exc)
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="anthropic", message=text)
-        if status_code in (401, 403):
-            raise ChatAuthenticationError(provider="anthropic", message=text)
-        if status_code == 429:
-            raise ChatRateLimitError(provider="anthropic", message=text)
-        if _is_retryable_status(status_code):
-            raise ChatProviderError(provider="anthropic", message=text, status_code=status_code)
-        raise ChatAPIError(provider="anthropic", message=text, status_code=status_code)
+        _raise_httpx_chat_error("anthropic", exc)
 
     try:
         if current_streaming:
@@ -1507,8 +1480,10 @@ async def chat_with_openrouter_async(
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
-    cfg = load_and_log_configs().get('openrouter_api', {})
+    cfg_source = app_config or load_and_log_configs()
+    cfg = cfg_source.get('openrouter_api', {})
     final_api_key = api_key or cfg.get('api_key')
     if not final_api_key:
         raise ChatConfigurationError(provider='openrouter', message='OpenRouter API Key required.')
@@ -1545,8 +1520,7 @@ async def chat_with_openrouter_async(
         payload["user"] = user
     if tools is not None:
         payload["tools"] = tools
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
+    _apply_tool_choice(payload, tools, tool_choice)
     if logit_bias is not None:
         payload["logit_bias"] = logit_bias
     if presence_penalty is not None:
@@ -1571,18 +1545,7 @@ async def chat_with_openrouter_async(
     retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
 
     def _raise_openrouter_http_error(exc: httpx.HTTPStatusError) -> None:
-        response = getattr(exc, "response", None)
-        status_code = getattr(response, "status_code", None)
-        text = response.text if response is not None else str(exc)
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="openrouter", message=text)
-        if status_code in (401, 403):
-            raise ChatAuthenticationError(provider="openrouter", message=text)
-        if status_code == 429:
-            raise ChatRateLimitError(provider="openrouter", message=text)
-        if _is_retryable_status(status_code):
-            raise ChatProviderError(provider="openrouter", message=text, status_code=status_code)
-        raise ChatAPIError(provider="openrouter", message=text, status_code=status_code)
+        _raise_httpx_chat_error("openrouter", exc)
 
     try:
         if current_streaming:
@@ -1599,18 +1562,9 @@ async def chat_with_openrouter_async(
                                         await _async_retry_sleep(retry_delay, attempt)
                                         continue
                                     _raise_openrouter_http_error(e)
-                                done_sent = False
-                                async for line in resp.aiter_lines():
-                                    if not line:
-                                        continue
-                                    if is_done_line(line):
-                                        done_sent = True
-                                    normalized = normalize_provider_line(line)
-                                    if normalized is None:
-                                        continue
-                                    yield normalized
-                                if not done_sent:
-                                    yield sse_done()
+                                async for chunk in aiter_sse_lines_httpx(resp, provider="openrouter"):
+                                    yield chunk
+                                yield sse_done()
                                 return
                     except httpx.RequestError as e:
                         if attempt < retry_limit:
@@ -1673,6 +1627,7 @@ def chat_with_bedrock(
         user: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """
     AWS Bedrock via OpenAI-compatible Chat Completions endpoint.
@@ -1682,7 +1637,7 @@ def chat_with_bedrock(
 
     Auth supports Bedrock API key (Bearer). AWS SigV4 is not implemented here.
     """
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     if loaded_config_data is None:
         raise ChatConfigurationError(provider="bedrock", message="Configuration not available.")
 
@@ -1742,7 +1697,7 @@ def chat_with_bedrock(
     if seed is not None: payload["seed"] = seed
     if response_format is not None: payload["response_format"] = response_format
     if tools is not None: payload["tools"] = tools
-    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    _apply_tool_choice(payload, tools, tool_choice)
     if logprobs is not None: payload["logprobs"] = logprobs
     if top_logprobs is not None: payload["top_logprobs"] = top_logprobs
     if user is not None: payload["user"] = user
@@ -1860,10 +1815,11 @@ def chat_with_anthropic(
         # Anthropic doesn't typically use seed, response_format (for JSON object mode directly), n, user identifier, logit_bias,
         # presence_penalty, frequency_penalty, logprobs, top_logprobs in the same way as OpenAI.
         # tool_choice is usually implicit with tools or controlled differently.
-        custom_prompt_arg: Optional[str] = None # Legacy
+        custom_prompt_arg: Optional[str] = None, # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     # Assuming load_and_log_configs is defined elsewhere
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     anthropic_config = loaded_config_data.get('anthropic_api', {})
     final_api_key = api_key or anthropic_config.get('api_key')
     if not final_api_key:
@@ -2113,10 +2069,11 @@ def chat_with_cohere(
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
-        custom_prompt_arg: Optional[str] = None # Kept for legacy, but focus on structured input
+        custom_prompt_arg: Optional[str] = None, # Kept for legacy, but focus on structured input
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     cohere_config = loaded_config_data.get('cohere_api', loaded_config_data.get('API', {}).get('cohere', {}))
 
     final_api_key = api_key or cohere_config.get('api_key')
@@ -2452,9 +2409,10 @@ def chat_with_deepseek(
         tools: Optional[List[Dict[str, Any]]] = None,  # If supported
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,  # If supported
         logit_bias: Optional[Dict[str, float]] = None,  # If supported
-        custom_prompt_arg: Optional[str] = None  # Legacy
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     deepseek_config = loaded_config_data.get('deepseek_api', {})
     final_api_key = api_key or deepseek_config.get('api_key')
     if not final_api_key:
@@ -2498,7 +2456,7 @@ def chat_with_deepseek(
     if n is not None: data["n"] = n
     if user is not None: data["user"] = user
     if tools is not None: data["tools"] = tools
-    if tool_choice is not None: data["tool_choice"] = tool_choice
+    _apply_tool_choice(data, tools, tool_choice)
     if logit_bias is not None: data["logit_bias"] = logit_bias
 
     api_url = deepseek_config.get('api_base_url', 'https://api.deepseek.com').rstrip('/') + '/chat/completions'
@@ -2594,9 +2552,10 @@ def chat_with_google(
         # Gemini doesn't directly take seed, user_id, logit_bias, presence/freq_penalty, logprobs via REST in the same way.
         # Tools are handled via a 'tools' field in the payload, with a specific format.
         tools: Optional[List[Dict[str, Any]]] = None,  # Gemini 'tools' config
-        custom_prompt_arg: Optional[str] = None
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     google_config = loaded_config_data.get('google_api', {})
     # ... (api key, model, temp, streaming, topP, topK setup) ...
     final_api_key = api_key or google_config.get('api_key')
@@ -2868,10 +2827,11 @@ def chat_with_qwen(
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        custom_prompt_arg: Optional[str] = None
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """OpenAI-compatible chat completions against the commercial Qwen API (DashScope)."""
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     qwen_config = loaded_config_data.get('qwen_api', {}) if loaded_config_data else {}
     final_api_key = api_key or qwen_config.get('api_key')
     if not final_api_key:
@@ -2918,7 +2878,9 @@ def chat_with_qwen(
         payload["user"] = user
     if tools is not None:
         payload["tools"] = tools
-    if tool_choice is not None:
+    if tool_choice == "none":
+        payload["tool_choice"] = "none"
+    elif tool_choice is not None and tools is not None:
         payload["tool_choice"] = tool_choice
     if logit_bias is not None:
         payload["logit_bias"] = logit_bias
@@ -3056,9 +3018,10 @@ def chat_with_groq(
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        custom_prompt_arg: Optional[str] = None  # Legacy
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     groq_config = loaded_config_data.get('groq_api', {})
     final_api_key = api_key or groq_config.get('api_key')
     if not final_api_key:
@@ -3095,7 +3058,7 @@ def chat_with_groq(
     if n is not None: data["n"] = n
     if user is not None: data["user"] = user
     if tools is not None: data["tools"] = tools
-    if tool_choice is not None: data["tool_choice"] = tool_choice
+    _apply_tool_choice(data, tools, tool_choice)
     if logit_bias is not None: data["logit_bias"] = logit_bias
     if presence_penalty is not None: data["presence_penalty"] = presence_penalty
     if frequency_penalty is not None: data["frequency_penalty"] = frequency_penalty
@@ -3205,10 +3168,11 @@ def chat_with_huggingface(
         frequency_penalty: Optional[float] = None, # OpenAI compatible name
         logprobs: Optional[bool] = None, # OpenAI compatible name
         top_logprobs: Optional[int] = None, # OpenAI compatible name
-        custom_prompt_arg: Optional[str] = None  # Legacy
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     logging.debug(f"HuggingFace Chat: Request process starting for model '{model}' (Streaming: {streaming})")
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     hf_config = loaded_config_data.get('huggingface_api', loaded_config_data.get('API', {}).get('huggingface', {}))
 
     final_api_key = api_key or hf_config.get('api_key')
@@ -3306,7 +3270,10 @@ def chat_with_huggingface(
     if num_return_sequences is not None and not final_streaming_payload_val : payload["n"] = num_return_sequences
     if user is not None: payload["user"] = user
     if tools is not None: payload["tools"] = tools
-    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    if tool_choice == "none":
+        payload["tool_choice"] = "none"
+    elif tool_choice is not None and tools is not None:
+        payload["tool_choice"] = tool_choice
     if logit_bias is not None: payload["logit_bias"] = logit_bias
     if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
     if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
@@ -3350,34 +3317,12 @@ def chat_with_huggingface(
             response_handle = response
 
             def stream_generator_huggingface():
-                done_sent = False
                 try:
-                    for line_bytes in response_handle.iter_lines():
-                        if not line_bytes:
-                            continue
-                        decoded_line = line_bytes.decode('utf-8').strip()
-                        if not decoded_line:
-                            continue
-                        if decoded_line.startswith("data:"):
-                            if decoded_line.strip().lower() == "data: [done]".lower():
-                                done_sent = True
-                            yield ensure_sse_line(decoded_line)
-                        else:
-                            # Fallback: wrap as OpenAI-like delta
-                            yield openai_delta_chunk(decoded_line)
-                    # Ensure final sentinel only if not seen
-                    if not done_sent:
-                        done_sent = True
-                        yield sse_done()
-                except requests.exceptions.ChunkedEncodingError as e_chunked:
-                    logging.error(f"HuggingFace stream: ChunkedEncodingError during streaming: {e_chunked}")
-                    yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunked)}", "type": "huggingface_stream_error"}})
-                except Exception as e_stream:
-                    logging.error(f"HuggingFace stream: Unexpected error during streaming: {e_stream}", exc_info=True)
-                    yield sse_data({"error": {"message": f"Unexpected stream error: {str(e_stream)}", "type": "huggingface_stream_error"}})
-                finally:
-                    for tail in finalize_stream(response_handle, done_already=done_sent):
+                    for chunk in iter_sse_lines_requests(response_handle, decode_unicode=True, provider="huggingface"):
+                        yield chunk
+                    for tail in finalize_stream(response_handle, done_already=False):
                         yield tail
+                finally:
                     try:
                         session_handle.close()
                     except Exception:
@@ -3445,9 +3390,10 @@ def chat_with_mistral(
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         response_format: Optional[Dict[str, str]] = None,
-        custom_prompt_arg: Optional[str] = None
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     mistral_config = loaded_config_data.get('mistral_api', {})
     final_api_key = api_key or mistral_config.get('api_key')
     if not final_api_key:
@@ -3487,7 +3433,10 @@ def chat_with_mistral(
     if top_k is not None: data["top_k"] = top_k  # Mistral has top_k
     if current_safe_prompt is not None: data["safe_prompt"] = current_safe_prompt  # Mistral specific
     if tools is not None: data["tools"] = tools
-    if tool_choice is not None: data["tool_choice"] = tool_choice  # "auto", "any", "none"
+    if tool_choice == "none":
+        data["tool_choice"] = "none"
+    elif tool_choice is not None and tools is not None:
+        data["tool_choice"] = tool_choice  # "auto", "any", "none"
     if response_format is not None: data["response_format"] = response_format  # {"type": "json_object"}
 
     api_url = mistral_config.get('api_base_url', 'https://api.mistral.ai/v1').rstrip('/') + '/chat/completions'
@@ -3517,46 +3466,17 @@ def chat_with_mistral(
             response_handle = response
 
             def stream_generator():
-                done_sent = False
-                skip_finalize = False
                 try:
-                    for raw_line in response_handle.iter_lines(decode_unicode=True):
-                        if not raw_line:
-                            continue
-                        if is_done_line(raw_line):
-                            done_sent = True
-                        normalized = normalize_provider_line(raw_line)
-                        if normalized is None:
-                            continue
-                        yield normalized
-                    if not done_sent:
-                        yield sse_done()
-                        done_sent = True
-                except GeneratorExit:
-                    skip_finalize = True
-                    try:
-                        if response_handle:
-                            response_handle.close()
-                    finally:
-                        try:
-                            session_handle.close()
-                        except Exception:
-                            pass
-                    raise
-                except requests.exceptions.ChunkedEncodingError as e:
-                    yield sse_data({"error": {"message": f"Stream connection error: {str(e)}", "type": "mistral_stream_error"}})
-                except Exception as e:
-                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e)}", "type": "mistral_stream_error"}})
+                    for chunk in iter_sse_lines_requests(response_handle, decode_unicode=True, provider="mistral"):
+                        yield chunk
+                    # Finalize with single [DONE] and close objects
+                    for tail in finalize_stream(response_handle, done_already=False):
+                        yield tail
                 finally:
                     try:
-                        if not skip_finalize:
-                            for tail in finalize_stream(response_handle, done_already=done_sent):
-                                yield tail
-                    finally:
-                        try:
-                            session_handle.close()
-                        except Exception:
-                            pass
+                        session_handle.close()
+                    except Exception:
+                        pass
 
             return stream_generator()
         else:
@@ -3611,9 +3531,10 @@ def chat_with_openrouter(
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        custom_prompt_arg: Optional[str] = None
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     openrouter_config = loaded_config_data.get('openrouter_api', {})
     # ... (api key, model, temp, streaming setup) ...
     final_api_key = api_key or openrouter_config.get('api_key')
@@ -3647,7 +3568,7 @@ def chat_with_openrouter(
     if n is not None: data["n"] = n
     if user is not None: data["user"] = user
     if tools is not None: data["tools"] = tools
-    if tool_choice is not None: data["tool_choice"] = tool_choice
+    _apply_tool_choice(data, tools, tool_choice)
     if logit_bias is not None: data["logit_bias"] = logit_bias
     if presence_penalty is not None: data["presence_penalty"] = presence_penalty
     if frequency_penalty is not None: data["frequency_penalty"] = frequency_penalty
@@ -3675,35 +3596,16 @@ def chat_with_openrouter(
                 raise
 
             def stream_generator():
-                    done_sent = False
+                try:
+                    for chunk in iter_sse_lines_requests(response, decode_unicode=True, provider="openrouter"):
+                        yield chunk
+                    for tail in finalize_stream(response, done_already=False):
+                        yield tail
+                finally:
                     try:
-                        for raw_line in response.iter_lines(decode_unicode=True):
-                            if not raw_line:
-                                continue
-                            if is_done_line(raw_line):
-                                done_sent = True
-                            normalized = normalize_provider_line(raw_line)
-                            if normalized is None:
-                                continue
-                            yield normalized
-                        if not done_sent:
-                            done_sent = True
-                            yield sse_done()
-                    except requests.exceptions.ChunkedEncodingError as e:
-                        logging.error(f"OpenRouter: ChunkedEncodingError during stream: {e}", exc_info=True)
-                        yield sse_data({'error': {'message': f'Stream connection error: {str(e)}', 'type': 'openrouter_stream_error'}})
-                    except Exception as e:
-                        logging.error(f"OpenRouter: Stream iteration error: {e}", exc_info=True)
-                        yield sse_data({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'openrouter_stream_error'}})
-                    finally:
-                        try:
-                            for tail in finalize_stream(response, done_already=done_sent):
-                                yield tail
-                        finally:
-                            try:
-                                session.close()
-                            except Exception:
-                                pass
+                        session.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
             session = create_session_with_retries(
@@ -3752,7 +3654,8 @@ def chat_with_moonshot(
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         user: Optional[str] = None,  # User identifier
-        custom_prompt_arg: Optional[str] = None  # Legacy
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Sends a chat completion request to the Moonshot AI API.
@@ -3789,7 +3692,7 @@ def chat_with_moonshot(
         user: A unique identifier representing your end-user.
         custom_prompt_arg: Legacy, largely ignored.
     """
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     moonshot_config = loaded_config_data.get('moonshot_api', {})
     
     final_api_key = api_key or moonshot_config.get('api_key')
@@ -3912,7 +3815,7 @@ def chat_with_moonshot(
     if seed is not None: payload["seed"] = seed
     if stop is not None: payload["stop"] = stop
     if tools is not None: payload["tools"] = tools
-    if tool_choice is not None and tools is not None: payload["tool_choice"] = tool_choice
+    _apply_tool_choice(payload, tools, tool_choice)
     if user is not None: payload["user"] = user
     
     headers = {
@@ -3944,43 +3847,16 @@ def chat_with_moonshot(
                 raise
 
             def stream_generator():
-                    done_sent = False
+                try:
+                    for chunk in iter_sse_lines_requests(response, decode_unicode=True, provider="moonshot"):
+                        yield chunk
+                    for tail in finalize_stream(response, done_already=False):
+                        yield tail
+                finally:
                     try:
-                        for raw_line in response.iter_lines(decode_unicode=True):
-                            if not raw_line:
-                                continue
-                            if is_done_line(raw_line):
-                                done_sent = True
-                            normalized = normalize_provider_line(raw_line)
-                            if normalized is None:
-                                continue
-                            yield normalized
-                        if not done_sent:
-                            done_sent = True
-                            yield sse_done()
-                    except GeneratorExit:
-                        if response:
-                            response.close()
-                        try:
-                            session.close()
-                        except Exception:
-                            pass
-                        raise
-                    except requests.exceptions.ChunkedEncodingError as e_chunk:
-                        logging.error(f"Moonshot: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "moonshot_stream_error"}})
-                    except Exception as e_stream:
-                        logging.error(f"Moonshot: Error during stream iteration: {e_stream}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "moonshot_stream_error"}})
-                    finally:
-                        try:
-                            for tail in finalize_stream(response, done_already=done_sent):
-                                yield tail
-                        finally:
-                            try:
-                                session.close()
-                            except Exception:
-                                pass
+                        session.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:  # Non-streaming
             logging.debug("Moonshot: Posting request (non-streaming)")
@@ -4036,7 +3912,8 @@ def chat_with_zai(
         tools: Optional[List[Dict[str, Any]]] = None,
         do_sample: Optional[bool] = None,
         request_id: Optional[str] = None,
-        custom_prompt_arg: Optional[str] = None  # Legacy
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Sends a chat completion request to the Z.AI API.
@@ -4063,7 +3940,7 @@ def chat_with_zai(
         request_id: Optional request ID for tracking.
         custom_prompt_arg: Legacy, largely ignored.
     """
-    loaded_config_data = load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs()
     zai_config = loaded_config_data.get('zai_api', {})
     
     final_api_key = api_key or zai_config.get('api_key')

@@ -196,6 +196,7 @@ def process_db_messages_to_ui_history(
     additional_char_sender_ids: Optional[Iterable[str]] = None,
     additional_user_sender_ids: Optional[Iterable[str]] = None,
     char_first_message: Optional[str] = None,
+    keep_trailing_user: bool = True,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
     """Convert database messages to UI-friendly paired chat history format."""
 
@@ -208,6 +209,7 @@ def process_db_messages_to_ui_history(
         additional_char_sender_ids=additional_char_sender_ids,
         additional_user_sender_ids=additional_user_sender_ids,
         char_first_message=char_first_message,
+        keep_trailing_user=keep_trailing_user,
     )
 
     processed_history: List[Tuple[Optional[str], Optional[str]]] = []
@@ -231,6 +233,7 @@ def process_db_messages_to_rich_ui_history(
     additional_char_sender_ids: Optional[Iterable[str]] = None,
     additional_user_sender_ids: Optional[Iterable[str]] = None,
     char_first_message: Optional[str] = None,
+    keep_trailing_user: bool = False,
 ) -> List[Dict[str, Optional[Dict[str, Any]]]]:
     """Convert database messages to UI-friendly structures including metadata."""
 
@@ -299,6 +302,11 @@ def process_db_messages_to_rich_ui_history(
         if character_messages_seen > user_messages_seen:
             return "user"
         if next_sender_lower:
+            # If the following sender is clearly a user (and not a character),
+            # then this ambiguous message is best treated as a character reply;
+            # conversely, if the next sender is clearly a character (and not a user),
+            # bias this message as a character as well to avoid misclassifying
+            # consecutive character messages as a user turn.
             if (
                 next_sender_lower in user_identifiers
                 and next_sender_lower not in char_identifiers
@@ -308,10 +316,10 @@ def process_db_messages_to_rich_ui_history(
                 next_sender_lower in char_identifiers
                 and next_sender_lower not in user_identifiers
             ):
-                return "user"
+                return "character"
         if message_index == 0 and char_first_message_normalized:
             return "character"
-        return "user"
+        return "character"
 
     character_messages_seen = 0
     user_messages_seen = 0
@@ -327,6 +335,7 @@ def process_db_messages_to_rich_ui_history(
 
         sender_normalized = str(sender).strip() if isinstance(sender, str) else ""
         sender_lower = sender_normalized.lower()
+        sender_lower_raw = str(sender).lower() if isinstance(sender, str) else ""
 
         is_non_character_sender = False
         if sender_lower:
@@ -376,8 +385,8 @@ def process_db_messages_to_rich_ui_history(
                 )
             continue
 
-        in_user_identifiers = sender_lower in user_identifiers if sender_lower else False
-        in_char_identifiers = sender_lower in char_identifiers if sender_lower else False
+        in_user_identifiers = sender_lower_raw in user_identifiers if sender_lower_raw else False
+        in_char_identifiers = sender_lower_raw in char_identifiers if sender_lower_raw else False
 
         next_sender_lower: Optional[str] = None
         if idx + 1 < total_messages:
@@ -391,14 +400,21 @@ def process_db_messages_to_rich_ui_history(
         elif in_user_identifiers and not in_char_identifiers:
             sender_role = "user"
         elif in_char_identifiers and in_user_identifiers:
-            sender_role = _resolve_ambiguous_sender(
-                message_index=idx,
-                processed_text=processed_content,
-                pending_user_buffer=user_msg_detail_buffer is not None,
-                character_messages_seen=character_messages_seen,
-                user_messages_seen=user_messages_seen,
-                next_sender_lower=next_sender_lower,
-            )
+            # Special case: if user placeholder name equals character name, treat identical sender as character
+            _placeholder_alias = str(user_name_for_placeholders).strip().lower() if isinstance(user_name_for_placeholders, str) else ""
+            _char_sender_norm = str(char_sender_identifier or "").strip().lower()
+            if _placeholder_alias and _char_sender_norm and _placeholder_alias == _char_sender_norm and sender_lower == _char_sender_norm:
+                sender_role = "character"
+            else:
+                # Resolve tie using context (parity/neighbor hints)
+                sender_role = _resolve_ambiguous_sender(
+                    message_index=idx,
+                    processed_text=processed_content,
+                    pending_user_buffer=user_msg_detail_buffer is not None,
+                    character_messages_seen=character_messages_seen,
+                    user_messages_seen=user_messages_seen,
+                    next_sender_lower=next_sender_lower,
+                )
         elif in_user_identifiers:
             sender_role = "user"
         elif in_char_identifiers:
@@ -467,7 +483,12 @@ def process_db_messages_to_rich_ui_history(
             continue
 
         # Unknown sender handling – preserve legacy behaviour by treating as character
-        logger.warning(f"Message from unknown sender '{sender}': {processed_content[:50]}...")
+        # Redact message content in logs to avoid leaking sensitive data
+        try:
+            _len = len(processed_content) if isinstance(processed_content, str) else 0
+        except Exception:
+            _len = 0
+        logger.warning("Message from unknown sender '%s' (content redacted; length=%s)", sender, _len)
         formatted_content = f"[{sender}] {processed_content}"
         detail = {
             "id": msg_data.get("id"),
@@ -500,7 +521,8 @@ def process_db_messages_to_rich_ui_history(
             )
         character_messages_seen += 1
 
-    if user_msg_detail_buffer is not None:
+    # Optionally append trailing user-only turn if requested
+    if keep_trailing_user and user_msg_detail_buffer is not None:
         rich_history.append(
             {
                 "user": user_msg_detail_buffer,
@@ -641,6 +663,8 @@ def start_new_chat_session(
     character_id: int,
     user_name: Optional[str],
     custom_title: Optional[str] = None,
+    greeting_strategy: Optional[str] = None,
+    alternate_index: Optional[int] = None,
 ) -> Tuple[
     Optional[str],
     Optional[Dict[str, Any]],
@@ -652,10 +676,15 @@ def start_new_chat_session(
     logger.debug("Starting new chat session for character_id: %s, user: %s", character_id, user_name)
 
     original_first_message_content: Optional[str] = None
+    original_alternate_greetings: Optional[List[str]] = None
     try:
         raw_char_data_for_first_message = db.get_character_card_by_id(character_id)
         if raw_char_data_for_first_message:
             original_first_message_content = raw_char_data_for_first_message.get("first_message")
+            ag = raw_char_data_for_first_message.get("alternate_greetings")
+            if isinstance(ag, list):
+                # Ensure only strings
+                original_alternate_greetings = [str(x) for x in ag if isinstance(x, (str, bytes))]
         else:
             logger.warning(
                 "Could not load raw character data for ID %s to get original first message.",
@@ -700,6 +729,23 @@ def start_new_chat_session(
 
         message_to_store_in_db: Optional[str] = original_first_message_content
 
+        # Apply optional greeting strategy selection using raw (unprocessed) fields
+        selected_alt: Optional[str] = None
+        try:
+            if greeting_strategy in {"alternate_random", "alternate_index"} and original_alternate_greetings:
+                if greeting_strategy == "alternate_random":
+                    import random as _rnd
+                    if original_alternate_greetings:
+                        selected_alt = _rnd.choice(original_alternate_greetings)
+                elif greeting_strategy == "alternate_index":
+                    if isinstance(alternate_index, int) and alternate_index >= 0 and alternate_index < len(original_alternate_greetings):
+                        selected_alt = original_alternate_greetings[alternate_index]
+        except Exception as _sel_err:
+            logger.debug("Alternate greeting selection failed: %s", _sel_err)
+
+        if isinstance(selected_alt, str) and selected_alt.strip():
+            message_to_store_in_db = selected_alt
+
         if message_to_store_in_db is None:
             if initial_ui_history and initial_ui_history[0] and initial_ui_history[0][1]:
                 message_to_store_in_db = initial_ui_history[0][1]
@@ -728,6 +774,15 @@ def start_new_chat_session(
                 "Added character's first message to new conversation %s.",
                 conversation_id_val,
             )
+            # Ensure returned initial_ui_history aligns with the stored message
+            try:
+                processed = replace_placeholders(message_to_store_in_db, char_name, user_name)
+                if initial_ui_history:
+                    initial_ui_history[0] = (None, processed)
+                else:
+                    initial_ui_history = [(None, processed)]
+            except Exception:
+                pass
         else:
             logger.warning(
                 "Character %s (ID: %s) has no first message to add to new conversation %s.",
@@ -1051,6 +1106,7 @@ def retrieve_conversation_messages_for_ui(
     offset: int = 0,
     order: str = "ASC",
     rich_output: bool = False,
+    char_first_message_hint: Optional[str] = None,
 ) -> Union[List[Tuple[Optional[str], Optional[str]]], List[Dict[str, Optional[Dict[str, Any]]]]]:
     """Retrieve and process conversation messages for UI display.
 
@@ -1081,19 +1137,27 @@ def retrieve_conversation_messages_for_ui(
             list(reversed(raw_db_messages)) if order_upper == "DESC" else raw_db_messages
         )
 
+        # Optionally accept a pre-fetched character first_message to avoid a DB hit
         char_first_message_processed: Optional[str] = None
-        try:
-            char_card = db.get_character_card_by_name(character_name)
-            if char_card and isinstance(char_card.get("first_message"), str):
-                char_first_message_processed = replace_placeholders(
-                    char_card["first_message"],
-                    character_name,
-                    user_name,
-                ).strip()
-        except CharactersRAGDBError:
-            char_first_message_processed = None
-        except Exception:
-            char_first_message_processed = None
+        if isinstance(char_first_message_hint, str) and char_first_message_hint.strip():
+            char_first_message_processed = replace_placeholders(
+                char_first_message_hint,
+                character_name,
+                user_name,
+            ).strip()
+        else:
+            try:
+                char_card = db.get_character_card_by_name(character_name)
+                if char_card and isinstance(char_card.get("first_message"), str):
+                    char_first_message_processed = replace_placeholders(
+                        char_card["first_message"],
+                        character_name,
+                        user_name,
+                    ).strip()
+            except CharactersRAGDBError:
+                char_first_message_processed = None
+            except Exception:
+                char_first_message_processed = None
 
         rich_history = process_db_messages_to_rich_ui_history(
             messages_for_processing,
@@ -1104,6 +1168,7 @@ def retrieve_conversation_messages_for_ui(
             additional_char_sender_ids=additional_aliases,
             additional_user_sender_ids=extra_user_aliases,
             char_first_message=char_first_message_processed,
+            keep_trailing_user=not rich_output,
         )
 
         if order_upper == "DESC":

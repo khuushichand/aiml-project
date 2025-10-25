@@ -558,6 +558,7 @@ def process_mbox_bytes(
             pass
 
     tmp_path = None
+    mbox = None
     try:
         # Write to a temp file for mailbox.mbox
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
@@ -643,6 +644,12 @@ def process_mbox_bytes(
             "error": f"Invalid MBOX file: {e}",
         }]
     finally:
+        # Ensure mbox handle is closed before removing the temporary file
+        try:
+            if mbox is not None:
+                mbox.close()
+        except Exception:
+            pass
         # Cleanup temp file
         try:
             if tmp_path:

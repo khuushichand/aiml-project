@@ -411,19 +411,19 @@ class BackendPromptStudioDatabaseBase:
             return wrapper
 
         raw_conn = self._open_new_connection()
-        # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.user_id'))
+        # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.current_user_id'))
         try:
             if self.backend_type == BackendType.POSTGRESQL and self.client_id:
                 cur = raw_conn.cursor()
                 user_value = str(self.client_id)
                 if psycopg_sql is not None:  # type: ignore[name-defined]
-                    stmt = psycopg_sql.SQL("SET SESSION app.user_id = {}").format(
+                    stmt = psycopg_sql.SQL("SET SESSION app.current_user_id = {}").format(
                         psycopg_sql.Literal(user_value)
                     )
                     cur.execute(stmt)
                 else:
                     safe_value = user_value.replace("'", "''")
-                    cur.execute(f"SET SESSION app.user_id = '{safe_value}'")
+                    cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
                 try:
                     raw_conn.commit()
                 except Exception:

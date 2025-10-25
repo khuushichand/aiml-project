@@ -12,6 +12,7 @@ Note: This implementation requires psycopg (v3) to be installed:
 """
 
 from loguru import logger
+import os
 import time
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union, Generator
@@ -29,6 +30,10 @@ from .base import (
     NotSupportedError
 )
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from .query_utils import (
+    prepare_backend_statement,
+    prepare_backend_many_statement,
+)
 
 
 # Try to import psycopg v3. Keep the legacy flag name for test compatibility.
@@ -244,6 +249,14 @@ class PostgreSQLBackend(DatabaseBackend):
             listen_notify=True        # LISTEN/NOTIFY
         )
 
+    # Public API for callers to reapply scope safely
+    def apply_scope(self, connection: Optional[Any] = None) -> None:
+        try:
+            if connection is not None:
+                self._apply_scope_settings(connection)
+        except Exception as exc:
+            logger.debug(f"apply_scope: unable to apply scope settings: {exc}")
+
     def _apply_scope_settings(self, connection: Any) -> None:
         """Apply scope-related GUC settings for row-level security.
 
@@ -281,8 +294,20 @@ class PostgreSQLBackend(DatabaseBackend):
                 is_admin = "1"
             session_role = getattr(scope, "session_role", None) or None
 
+        # Gate role switching behind explicit configuration and whitelist.
+        # Default: disabled; rely on set_config GUCs and row-level security predicates.
+        allow_role_switch = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower() in {"1", "true", "yes", "on"}
+        allowed_roles_env = os.getenv("TLDW_CONTENT_PG_ROLE_WHITELIST", "").strip()
+        allowed_roles = {r.strip() for r in allowed_roles_env.split(',') if r.strip()}
+        if not allow_role_switch or not session_role or (allowed_roles and session_role not in allowed_roles):
+            if session_role and (not allow_role_switch or (allowed_roles and session_role not in allowed_roles)):
+                logger.debug(f"Session role '{session_role}' not allowed by configuration; skipping role switch")
+            session_role = None
+
         statements = [
+            # Maintain both keys for compatibility across modules/tests
             ("SELECT set_config('app.current_user_id', %s, false)", (user_id,)),
+            ("SELECT set_config('app.user_id', %s, false)", (user_id,)),
             ("SELECT set_config('app.org_ids', %s, false)", (org_ids,)),
             ("SELECT set_config('app.team_ids', %s, false)", (team_ids,)),
             ("SELECT set_config('app.is_admin', %s, false)", (is_admin,)),
@@ -655,23 +680,20 @@ class PostgreSQLBackend(DatabaseBackend):
         query: str,
         params: Optional[Union[Tuple, Dict]]
     ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
-        """Normalize placeholder style so legacy '?' syntax works with psycopg."""
-        if not params:
-            return query, params
+        """Prepare SQL and params for psycopg with robust placeholder handling.
 
-        if isinstance(params, dict):
-            # Named style already explicit; caller must supply %(name)s in SQL
-            return query, params
-
-        if "%s" in query or "%(" in query:
-            return query, params
-
-        if "?" not in query:
-            return query, params
-
-        # Replace bare '?' placeholders with '%s'. Psycopg ignores whitespace.
-        converted = query.replace("?", "%s")
-        return converted, params
+        Delegates to shared query utils to safely convert SQLite-style
+        placeholders ('?') to Postgres ('%s'), avoiding replacements inside
+        quoted strings. Also normalizes params.
+        """
+        prepared_sql, prepared_params = prepare_backend_statement(
+            BackendType.POSTGRESQL,
+            query,
+            params,
+            apply_default_transform=True,
+            ensure_returning=False,
+        )
+        return prepared_sql, prepared_params
 
     def execute(
         self,
@@ -699,7 +721,11 @@ class PostgreSQLBackend(DatabaseBackend):
 
             has_description = cursor.description is not None
 
-            status = (cursor.statusmessage or "").split()
+            # Some wrapped cursors used in higher-level transactions may not expose
+            # a psycopg-like `statusmessage` attribute. Guard access to avoid raising
+            # during metadata fetches executed within an external transaction.
+            statusmsg = getattr(cursor, "statusmessage", None)
+            status = (statusmsg or "").split()
             command_tag = status[0].upper() if status else ""
             is_write = self._is_write_command(command_tag, query)
 
@@ -766,17 +792,15 @@ class PostgreSQLBackend(DatabaseBackend):
         
         try:
             cursor = conn.cursor()
-            normalized_query = query
-            normalized_params: List[Union[Tuple, Dict]] = params_list
+            normalized_query, normalized_params = prepare_backend_many_statement(
+                BackendType.POSTGRESQL,
+                query,
+                params_list,
+                apply_default_transform=True,
+                ensure_returning=False,
+            )
 
-            if params_list:
-                sample = params_list[0]
-                if not isinstance(sample, dict):
-                    normalized_query, _ = self._prepare_query(query, sample)
-                else:
-                    normalized_query = query
-
-            cursor.executemany(normalized_query, params_list)
+            cursor.executemany(normalized_query, normalized_params)
 
             status = (cursor.statusmessage or "").split()
             command_tag = status[0].upper() if status else ""

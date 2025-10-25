@@ -105,6 +105,18 @@ class TokenBucket:
         
         return False
 
+    async def refund(self, tokens: int = 1) -> None:
+        """
+        Safely return tokens to the bucket using the internal lock.
+
+        Args:
+            tokens: Number of tokens to return (clamped to capacity)
+        """
+        if tokens <= 0:
+            return
+        async with self._lock:
+            self.tokens = min(self.capacity, self.tokens + tokens)
+
 
 class ConversationRateLimiter:
     """
@@ -179,7 +191,7 @@ class ConversationRateLimiter:
         
         if not await user_bucket.consume():
             # Return token to global bucket since we're not using it
-            self.global_bucket.tokens += 1
+            await self.global_bucket.refund(1)
             return False, f"User rate limit exceeded for {user_id}"
         
         # Check per-conversation rate limit if specified
@@ -193,8 +205,8 @@ class ConversationRateLimiter:
             
             if not await conv_bucket.consume():
                 # Return tokens
-                self.global_bucket.tokens += 1
-                user_bucket.tokens += 1
+                await self.global_bucket.refund(1)
+                await user_bucket.refund(1)
                 return False, f"Conversation rate limit exceeded for {conversation_id}"
         
         # Check token limit if specified
@@ -208,10 +220,11 @@ class ConversationRateLimiter:
             
             if not await token_bucket.consume(estimated_tokens):
                 # Return tokens
-                self.global_bucket.tokens += 1
-                user_bucket.tokens += 1
+                await self.global_bucket.refund(1)
+                await user_bucket.refund(1)
                 if conversation_id:
-                    self.conversation_buckets[conversation_id].tokens += 1
+                    # conv_bucket is defined above when conversation_id is provided
+                    await conv_bucket.refund(1)  # type: ignore[name-defined]
                 return False, f"Token limit exceeded for user {user_id}"
         
         # Update usage stats

@@ -740,7 +740,11 @@ async def rewrite_query(context: Any, **kwargs) -> Any:
         if best_rewrite.confidence > config.get("min_confidence", 0.7):
             context.metadata["original_query"] = context.query
             context.query = best_rewrite.rewritten_query
-            logger.info(f"Rewrote query using {best_rewrite.rewrite_type}: {best_rewrite.rewritten_query}")
+            try:
+                _qh = __import__("hashlib").md5((best_rewrite.rewritten_query or "").encode("utf-8")).hexdigest()[:8]
+                logger.info(f"Rewrote query using {best_rewrite.rewrite_type}: hash={_qh}")
+            except Exception:
+                logger.info(f"Rewrote query using {best_rewrite.rewrite_type}")
     
     return context
 

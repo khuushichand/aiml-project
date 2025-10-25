@@ -41,7 +41,7 @@ from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
-    sanitize_filename, logging
+    sanitize_filename, logging, get_project_root
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
@@ -1110,9 +1110,17 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
             if not temp_audio_path.exists():
                 raise FileNotFoundError(f"Expected audio file was not found: {temp_audio_path}")
 
-            # Create a persistent directory for the download if it doesn't exist
-            persistent_dir = Path("downloads")
-            persistent_dir.mkdir(exist_ok=True)
+            # Create a persistent directory for the download using configured path if available
+            try:
+                media_cfg = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
+                downloads_root = media_cfg.get('audio_downloads_dir')
+                if downloads_root:
+                    persistent_dir = Path(downloads_root)
+                else:
+                    persistent_dir = Path(get_project_root()) / 'Databases' / 'downloads' / 'audio'
+            except Exception:
+                persistent_dir = Path("downloads")
+            persistent_dir.mkdir(parents=True, exist_ok=True)
 
             # Move the file from the temporary directory to the persistent directory
             persistent_file_path = persistent_dir / f"{sanitized_title}.mp3"

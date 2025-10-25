@@ -595,6 +595,7 @@ class TokenBlacklist:
                 return None
 
             # Blacklist stored JTIs without needing token decryption
+            tokens_revoked = 0
             for session in sessions:
                 access_jti = session.get("access_jti")
                 refresh_jti = session.get("refresh_jti")
@@ -602,7 +603,7 @@ class TokenBlacklist:
                 refresh_exp = _to_datetime(session.get("refresh_expires_at"))
 
                 if access_jti and access_exp:
-                    await self.revoke_token(
+                    if await self.revoke_token(
                         jti=access_jti,
                         expires_at=access_exp,
                         user_id=user_id,
@@ -610,9 +611,10 @@ class TokenBlacklist:
                         reason=reason,
                         revoked_by=revoked_by,
                         ip_address=ip_address,
-                    )
+                    ):
+                        tokens_revoked += 1
                 if refresh_jti and refresh_exp:
-                    await self.revoke_token(
+                    if await self.revoke_token(
                         jti=refresh_jti,
                         expires_at=refresh_exp,
                         user_id=user_id,
@@ -620,13 +622,18 @@ class TokenBlacklist:
                         reason=reason,
                         revoked_by=revoked_by,
                         ip_address=ip_address,
-                    )
+                    ):
+                        tokens_revoked += 1
 
             if self.settings.PII_REDACT_LOGS:
-                logger.info(f"Revoked {len(sessions)} tokens for authenticated user (details redacted)")
+                logger.info(
+                    f"Revoked {tokens_revoked} token(s) across {len(sessions)} session(s) for authenticated user (details redacted)"
+                )
             else:
-                logger.info(f"Revoked {len(sessions)} tokens for user {user_id}")
-            return len(sessions)
+                logger.info(
+                    f"Revoked {tokens_revoked} token(s) across {len(sessions)} session(s) for user {user_id}"
+                )
+            return tokens_revoked
             
         except Exception as e:
             logger.error(f"Failed to revoke user tokens: {e}")

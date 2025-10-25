@@ -326,10 +326,11 @@ class UserRateLimiter:
         """Check per-minute rate limits."""
         now = datetime.now(timezone.utc)
         minute_ago = now - timedelta(minutes=1)
-        # Seconds until window reset
+        # Compute seconds until the next minute boundary for consistent reset headers
         try:
-            elapsed = (now - minute_ago).total_seconds()
-            reset_seconds = max(0, 60 - int(elapsed))
+            window_start = now.replace(second=0, microsecond=0)
+            seconds_into_window = max(0, int((now - window_start).total_seconds()))
+            reset_seconds = max(1, 60 - seconds_into_window)
         except Exception:
             reset_seconds = 60
         
@@ -359,7 +360,8 @@ class UserRateLimiter:
                 burst_count = cursor.fetchone()[0]
                 
                 if burst_count >= config.burst_size:
-                    retry_after = 60 - (now - minute_ago).seconds
+                    # Retry after the remaining seconds in the current minute window
+                    retry_after = reset_seconds
                     return False, {
                         "error": "Rate limit exceeded",
                         "retry_after": retry_after,
@@ -370,7 +372,7 @@ class UserRateLimiter:
                     }
             
             return True, {
-                "requests_remaining": limit - request_count - 1,
+                "requests_remaining": max(0, limit - request_count - 1),
                 "limit": limit,
                 "window": "1 minute",
                 "reset_seconds": reset_seconds,

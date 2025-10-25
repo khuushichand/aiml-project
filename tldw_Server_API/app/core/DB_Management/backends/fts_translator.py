@@ -60,17 +60,18 @@ class FTSQueryTranslator:
         query = re.sub(phrase_pattern, save_phrase, query)
         
         # Handle wildcards
-        # word* -> word:*
-        query = re.sub(r'(\w+)\*', r'\1:*', query)
+        # token* -> token:*
+        # Support hyphens and underscores in tokens
+        query = re.sub(r'([A-Za-z0-9_\-]+)\*', r'\1:*', query)
         
         # Handle NOT operator
-        # -word -> !word
-        query = re.sub(r'\s+-(\w+)', r' !\1', query)
-        query = re.sub(r'^-(\w+)', r'!\1', query)
+        # -token -> !token
+        query = re.sub(r'\s+-([A-Za-z0-9_\-]+)', r' !\1', query)
+        query = re.sub(r'^-([A-Za-z0-9_\-]+)', r'!\1', query)
         
         # Handle NEAR operator
-        # word1 NEAR word2 -> word1 <-> word2
-        query = re.sub(r'(\w+)\s+NEAR\s+(\w+)', r'\1 <-> \2', query, flags=re.IGNORECASE)
+        # token1 NEAR token2 -> token1 <-> token2
+        query = re.sub(r'([A-Za-z0-9_\-]+)\s+NEAR\s+([A-Za-z0-9_\-]+)', r'\1 <-> \2', query, flags=re.IGNORECASE)
         
         # Handle OR operator (already uses |)
         query = re.sub(r'\s+OR\s+', ' | ', query, flags=re.IGNORECASE)

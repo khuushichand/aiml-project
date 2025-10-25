@@ -81,6 +81,7 @@ class SemanticCache:
         self._misses = 0
         self._semantic_hits = 0
         self._exact_hits = 0
+        self._warned_no_embedding = False
         
         # Load persisted cache if available
         if persist_path:
@@ -213,7 +214,12 @@ class SemanticCache:
                     entry.access()
                     self._hits += 1
                     self._exact_hits += 1
-                    logger.debug(f"Exact cache hit for query: {query[:50]}...")
+                    # Avoid logging raw query text; use hash + length for traceback without leakage
+                    try:
+                        key = self._generate_key(query)
+                        logger.debug(f"Exact cache hit for key={key} (len={len(query)})")
+                    except Exception:
+                        logger.debug("Exact cache hit")
                     return entry.value
                 else:
                     # Remove expired entry
@@ -222,6 +228,11 @@ class SemanticCache:
                         del self._embeddings[key]
         
         # Try semantic match if enabled
+        if use_semantic and not self.embedding_model:
+            # Warn once that semantic matching is not active
+            if not self._warned_no_embedding:
+                logger.info("Semantic cache running in exact-match mode (no embedding model configured)")
+                self._warned_no_embedding = True
         if use_semantic and self.embedding_model:
             embedding = await self.get_embedding(query)
             if embedding is not None:
@@ -235,9 +246,9 @@ class SemanticCache:
                             entry.access()
                             self._hits += 1
                             self._semantic_hits += 1
+                            # Log similar cache key and similarity without raw query
                             logger.info(
-                                f"Semantic cache hit (similarity={similarity:.3f}) "
-                                f"for query: {query[:50]}..."
+                                f"Semantic cache hit (similarity={similarity:.3f}) for key={similar_key}"
                             )
                             return entry.value
         
@@ -288,7 +299,11 @@ class SemanticCache:
             while len(self._cache) > self.max_size:
                 self._evict_lru()
             
-            logger.debug(f"Cached result for query: {query[:50]}...")
+            try:
+                key = self._generate_key(query)
+                logger.debug(f"Cached result for key={key} (len={len(query)})")
+            except Exception:
+                logger.debug("Cached result")
     
     def _evict_lru(self) -> None:
         """Evict least recently used entry."""

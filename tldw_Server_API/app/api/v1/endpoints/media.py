@@ -95,6 +95,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
+from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 
 # -----------------------------
 # Code processing helpers
@@ -112,7 +113,7 @@ class ProcessCodeForm(BaseModel):
 CODE_ALLOWED_EXTENSIONS: Set[str] = {
     '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
     '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
-    '.rb', '.php', '.pl', '.lua', '.sql', '.json', '.yaml',
+    '.rb', '.php', '.pl', '.lua', '.sql', '.yaml',
     '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js'
 }
 
@@ -494,6 +495,28 @@ def cache_response(key: str, response: Dict) -> None:
         content = json.dumps(response)
         etag = hashlib.md5(content.encode()).hexdigest()
         cache.setex(key, CACHE_TTL, f"{etag}|{content}")
+        # Index cache keys by media ID set for O(1) invalidation where possible
+        try:
+            # Key format: "cache:{path}:{hash}"
+            parts = key.split(":", 2)
+            if len(parts) >= 3:
+                path = parts[1]
+                # Target only media resource paths: /api/v1/media/{id}
+                if path.startswith("/api/v1/media/"):
+                    seg = path[len("/api/v1/media/"):].split("/", 1)[0]
+                    try:
+                        media_id_int = int(seg)
+                    except Exception:
+                        media_id_int = None
+                    if media_id_int is not None:
+                        idx_key = f"cacheidx:/api/v1/media/{media_id_int}"
+                        try:
+                            cache.sadd(idx_key, key)
+                            cache.expire(idx_key, max(CACHE_TTL, 300))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     except Exception as e:
         logger.warning(f"Failed to cache response: {str(e)}")
 
@@ -576,25 +599,46 @@ async def _validate_identifier_query(
 # Cache Invalidation
 #
 def invalidate_cache(media_id: int):
-    """Invalidate cache entries for a specific media item using SCAN.
+    """Invalidate cache entries for a specific media item.
 
-    Keys are generated via get_cache_key as 'cache:/api/v1/media/<path>:{hash}'.
-    We target '/api/v1/media/{media_id}' path specifically.
+    Tries O(1) set-based invalidation first, then falls back to SCAN.
     """
     if cache is None:
         return
-    pattern = f"cache:/api/v1/media/{media_id}:*"
     try:
-        cursor = 0
+        idx_key = f"cacheidx:/api/v1/media/{media_id}"
+        keys = []
+        try:
+            members = cache.smembers(idx_key)
+            if members:
+                keys = list(members)
+        except Exception:
+            keys = []
         total_deleted = 0
+        if keys:
+            try:
+                total_deleted += cache.delete(*keys)
+            except Exception:
+                for k in keys:
+                    try:
+                        cache.delete(k)
+                        total_deleted += 1
+                    except Exception:
+                        pass
+            try:
+                cache.delete(idx_key)
+            except Exception:
+                pass
+        # Fallback to SCAN in case some keys weren't indexed
+        pattern = f"cache:/api/v1/media/{media_id}:*"
+        cursor = 0
         while True:
-            cursor, keys = cache.scan(cursor=cursor, match=pattern, count=500)
-            if keys:
+            cursor, scan_keys = cache.scan(cursor=cursor, match=pattern, count=500)
+            if scan_keys:
                 try:
-                    total_deleted += cache.delete(*keys)
+                    total_deleted += cache.delete(*scan_keys)
                 except Exception:
-                    # Fallback to deleting individually on older servers
-                    for k in keys:
+                    for k in scan_keys:
                         try:
                             cache.delete(k)
                             total_deleted += 1
@@ -2335,16 +2379,30 @@ async def _save_uploaded_files(
 
             # --- Sanitize and Create Unique Filename ---
             original_stem = FilePath(original_filename).stem
-            secure_base = sanitize_filename(original_stem) # Sanitize the base name
+            # Cap total length (base + extension) to a conservative maximum (e.g., 200)
+            MAX_TOTAL_FILENAME_LEN = 200
+            secure_base = sanitize_filename(
+                original_stem,
+                max_total_length=MAX_TOTAL_FILENAME_LEN,
+                extension=file_extension,
+            )
 
             # Construct filename and ensure uniqueness within the temp dir for this batch
-            secure_filename = f"{secure_base}{file_extension}"
+            def _build_filename(base: str, ext: str, suffix: str | None = None) -> str:
+                # Ensure total length <= MAX_TOTAL_FILENAME_LEN, preserving suffix and extension
+                suffix_txt = f"_{suffix}" if suffix else ""
+                reserved = len(suffix_txt) + len(ext)
+                available = MAX_TOTAL_FILENAME_LEN - reserved
+                trunc_base = base if len(base) <= available else base[: max(1, available)]
+                return f"{trunc_base}{suffix_txt}{ext}"
+
+            secure_filename = _build_filename(secure_base, file_extension)
             counter = 0
             temp_path_to_check = temp_dir / secure_filename
             # Check against names already used *in this batch* and existing files (less likely but possible)
             while secure_filename in used_secure_names or temp_path_to_check.exists():
                 counter += 1
-                secure_filename = f"{secure_base}_{counter}{file_extension}"
+                secure_filename = _build_filename(secure_base, file_extension, str(counter))
                 temp_path_to_check = temp_dir / secure_filename
                 if counter > 100: # Safety break for edge cases
                     raise OSError(f"Could not generate unique filename for {original_filename} after {counter} attempts.")
@@ -2372,9 +2430,11 @@ async def _save_uploaded_files(
                     inferred_media_key = 'html'
                 elif any(c in {'.xml', '.opml'} for c in candidates):
                     inferred_media_key = 'xml'
+                elif any(c in {'.txt', '.md', '.docx', '.rtf', '.json'} for c in candidates):
+                    inferred_media_key = 'document'
                 elif any(c in {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'} for c in candidates):
                     inferred_media_key = 'archive'
-                elif any(c in {'.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go', '.rb', '.php', '.pl', '.lua', '.sql', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js'} for c in candidates):
+                elif any(c in {'.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go', '.rb', '.php', '.pl', '.lua', '.sql', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js'} for c in candidates):
                     inferred_media_key = 'code'
                 else:
                     inferred_media_key = None
@@ -2382,8 +2442,14 @@ async def _save_uploaded_files(
             max_cfg_bytes = None
             try:
                 cfg = validator.get_media_config(inferred_media_key)
-                if cfg and isinstance(cfg.get('max_size_mb'), (int, float)):
-                    max_cfg_bytes = int(cfg['max_size_mb']) * 1024 * 1024
+                if cfg:
+                    if inferred_media_key == 'archive':
+                        # Use compressed archive file cap when available
+                        size_mb = cfg.get('archive_file_size_mb') or cfg.get('max_size_mb')
+                    else:
+                        size_mb = cfg.get('max_size_mb')
+                    if isinstance(size_mb, (int, float)):
+                        max_cfg_bytes = int(size_mb) * 1024 * 1024
             except Exception:
                 max_cfg_bytes = None
 
@@ -6629,9 +6695,9 @@ async def process_documents_endpoint(
     ```
     
     URL inputs must resolve to a supported document format. The server accepts URLs that either:
-    - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, or
+    - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, .json, or
     - provide `Content-Disposition` with a filename that ends with an allowed extension, or
-    - set a supported `Content-Type` (e.g., text/plain, text/markdown, text/html, application/xhtml+xml, application/xml, text/xml, application/rtf, text/rtf, application/vnd.openxmlformats-officedocument.wordprocessingml.document).
+    - set a supported `Content-Type` (e.g., text/plain, text/markdown, text/html, application/xhtml+xml, application/xml, text/xml, application/json, application/rtf, text/rtf, application/vnd.openxmlformats-officedocument.wordprocessingml.document).
     Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-documents (no persistence).")
@@ -6647,7 +6713,7 @@ async def process_documents_endpoint(
 
     # Guardrails: restrict to a known set of document extensions for this endpoint.
     # Dedicated code-file processing will be added separately.
-    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml"]
+    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml", ".json"]
 
     _validate_inputs("document", form_data.urls, files)
 
@@ -8318,6 +8384,7 @@ async def _download_url_async(
                             'application/rtf': '.rtf',
                             'text/rtf': '.rtf',
                             'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                            'application/json': '.json',
                         }
                         mapped_ext = content_type_map.get(content_type)
                         if mapped_ext and (mapped_ext in allowed_extensions):

@@ -527,19 +527,28 @@ class Chunker:
                         k = min(k, max(1, len(tokens) - t_i))
                         s0 = tok_spans[t_i][0] if t_i < len(tok_spans) else 0
                         e0 = tok_spans[t_i + k - 1][1] if (t_i + k - 1) < len(tok_spans) else len(segment_clean)
+                        # Emit exact source slice matching computed offsets
+                        _gstart = start + s0
+                        _gend = start + e0
+                        exact_text = text[_gstart:_gend]
                         out_chunks.append({
                             'type': 'text',
-                            'text': ch_text,
+                            'text': exact_text,
                             'metadata': {
                                 'method': method,
-                                'start_offset': start + s0,
-                                'end_offset': start + e0,
+                                'start_offset': _gstart,
+                                'end_offset': _gend,
                                 'language': language,
                                 'paragraph_kind': kind,
                             }
                         })
-                        # Advance by step (matching words strategy semantics)
-                        t_i = min(len(tokens), t_i + step)
+                        # Advance pointer by the actual token count emitted minus overlap.
+                        # This stays aligned even when strategy merges windows via min_chunk_size.
+                        try:
+                            adv = max(1, k - (overlap if isinstance(overlap, int) else 0))
+                        except Exception:
+                            adv = step
+                        t_i = min(len(tokens), t_i + adv)
                 elif method == 'sentences':
                     # Compute sentence spans and group by sentence count to mirror strategy behavior
                     from .strategies.sentences import SentenceChunkingStrategy  # local import
@@ -558,23 +567,81 @@ class Chunker:
                         s0 = sent_spans[i][0] if i < len(sent_spans) else 0
                         j_last = min(len(sent_spans) - 1, i + len(group) - 1)
                         e0 = sent_spans[j_last][1] if j_last >= 0 else len(segment_clean)
+                        _gstart = start + s0
+                        _gend = start + e0
+                        exact_text = text[_gstart:_gend]
                         out_chunks.append({
                             'type': 'text',
-                            'text': ch_text.strip(),
+                            'text': exact_text,
                             'metadata': {
                                 'method': method,
-                                'start_offset': start + s0,
-                                'end_offset': start + e0,
+                                'start_offset': _gstart,
+                                'end_offset': _gend,
                                 'language': language,
                                 'paragraph_kind': kind,
                             }
                         })
+                elif method == 'tokens':
+                    # Prefer precise offsets from token strategy metadata
+                    try:
+                        meta_results = self.chunk_text_with_metadata(
+                            segment_raw,
+                            method=ChunkingMethod.TOKENS.value,
+                            max_size=max_size,
+                            overlap=overlap,
+                            language=language,
+                            **method_opts,
+                        )
+                        for res in meta_results or []:
+                            local_start = getattr(res.metadata, 'start_char', None)
+                            local_end = getattr(res.metadata, 'end_char', None)
+                            if not isinstance(local_start, int) or not isinstance(local_end, int):
+                                continue
+                            global_start = start + local_start
+                            global_end = start + local_end
+                            # Emit exact source slice to guarantee fidelity
+                            exact_text = text[global_start:global_end]
+                            out_chunks.append({
+                                'type': 'text',
+                                'text': exact_text,
+                                'metadata': {
+                                    'method': method,
+                                    'start_offset': global_start,
+                                    'end_offset': global_end,
+                                    'language': language,
+                                    'paragraph_kind': kind,
+                                },
+                            })
+                    except Exception as e:
+                        logger.debug(f"Token metadata mapping failed, using fallback: {e}")
+                        # Fallback to naive mapping below
+                        cursor = 0
+                        for ch in chunks:
+                            ch_text = ch if isinstance(ch, str) else str(ch)
+                            idx = segment_clean.find(ch_text, cursor)
+                            if idx == -1:
+                                idx = cursor
+                            _gstart = start + idx
+                            _gend = start + idx + len(ch_text)
+                            exact_text = text[_gstart:_gend]
+                            out_chunks.append({
+                                'type': 'text',
+                                'text': exact_text,
+                                'metadata': {
+                                    'method': method,
+                                    'start_offset': _gstart,
+                                    'end_offset': _gend,
+                                    'language': language,
+                                    'paragraph_kind': kind,
+                                }
+                            })
+                            cursor = idx + len(ch_text)
                 elif method == 'structure_aware':
                     # Carry block span directly as a precise chunk for structure-aware mode
-                    ch_text = segment_clean
+                    exact_text = text[start:end]
                     out_chunks.append({
                         'type': 'text',
-                        'text': ch_text,
+                        'text': exact_text,
                         'metadata': {
                             'method': method,
                             'start_offset': start,
@@ -592,13 +659,16 @@ class Chunker:
                         if idx == -1:
                             # If not found, place at cursor to keep monotonicity
                             idx = cursor
+                        _gstart = start + idx
+                        _gend = start + idx + len(ch_text)
+                        exact_text = text[_gstart:_gend]
                         out_chunks.append({
                             'type': 'text',
-                            'text': ch_text,
+                            'text': exact_text,
                             'metadata': {
                                 'method': method,
-                                'start_offset': start + idx,
-                                'end_offset': start + idx + len(ch_text),
+                                'start_offset': _gstart,
+                                'end_offset': _gend,
                                 'language': language,
                                 'paragraph_kind': kind,
                             }
@@ -610,13 +680,17 @@ class Chunker:
                 cursor = 0
                 for ch in chunks:
                     ch_text = ch if isinstance(ch, str) else str(ch)
+                    local_end = min(len(segment_clean), cursor + len(ch_text))
+                    _gstart = start + cursor
+                    _gend = start + local_end
+                    exact_text = text[_gstart:_gend]
                     out_chunks.append({
                         'type': 'text',
-                        'text': ch_text,
+                        'text': exact_text,
                         'metadata': {
                             'method': method,
-                            'start_offset': start + cursor,
-                            'end_offset': start + min(len(segment_clean), cursor + len(ch_text)),
+                            'start_offset': _gstart,
+                            'end_offset': _gend,
                             'language': language,
                             'paragraph_kind': kind,
                         }
@@ -1910,17 +1984,24 @@ class Chunker:
                 overlap = 0
 
         language = opts.get('language')
-        if not language:
-            # Lightweight language detection similar to templates module
+        # Support explicit auto/detect override and default autodetect when not provided
+        if (not language) or (isinstance(language, str) and language.strip().lower() in {"auto", "detect"}):
+            # Lightweight language detection by Unicode script ranges
             try:
                 if re.search(r'[\u4e00-\u9fff]', processed_text):
-                    language = 'zh'
+                    language = 'zh'       # CJK Unified Ideographs (Chinese)
                 elif re.search(r'[\u3040-\u309f\u30a0-\u30ff]', processed_text):
-                    language = 'ja'
+                    language = 'ja'       # Hiragana/Katakana (Japanese)
+                elif re.search(r'[\u0e00-\u0e7f]', processed_text):
+                    language = 'th'       # Thai
+                elif re.search(r'[\u0900-\u097f]', processed_text):
+                    language = 'hi'       # Devanagari (Hindi)
+                elif re.search(r'[\u0400-\u04ff]', processed_text):
+                    language = 'ru'       # Cyrillic (Russian)
                 elif re.search(r'[\uac00-\ud7af]', processed_text):
-                    language = 'ko'
+                    language = 'ko'       # Hangul (Korean)
                 elif re.search(r'[\u0600-\u06ff]', processed_text):
-                    language = 'ar'
+                    language = 'ar'       # Arabic
                 else:
                     language = self.config.language
             except Exception:
@@ -2272,7 +2353,7 @@ class Chunker:
                          **options) -> Generator[str, None, None]:
         """
         Stream-process a file for memory-efficient chunking of very large files.
-        
+
         Args:
             file_path: Path to the file to chunk
             method: Chunking method to use
@@ -2282,9 +2363,15 @@ class Chunker:
             buffer_size: Size of read buffer in bytes
             encoding: File encoding used for reading
             **options: Additional method-specific options
-            
+
         Yields:
             Text chunks one at a time
+
+        Notes:
+            Streaming overlap and boundary behavior differs slightly by method
+            (e.g., words vs sentences). For guidance on reassembly and
+            deduplicating overlap at buffer boundaries, see “Streaming Overlap
+            Semantics” in tldw_Server_API/app/core/Chunking/README.md.
         """
         file_path = Path(file_path)
         
@@ -2434,6 +2521,25 @@ class Chunker:
         if method_norm == 'code_ast':
             factor = 200
         estimated = size * factor
+        # Optional global cap from env or config.txt to avoid large buffers
+        cap = None
+        try:
+            import os as _os
+            env_cap = _os.getenv('CHUNKING_MAX_STREAMING_FLUSH_CHARS')
+            if env_cap is not None:
+                cap = int(env_cap)
+            if cap is None:
+                try:
+                    from tldw_Server_API.app.core.config import load_comprehensive_config
+                    _cp = load_comprehensive_config()
+                    if hasattr(_cp, 'has_section') and _cp.has_section('Chunking'):
+                        cap = int(_cp.get('Chunking', 'max_streaming_flush_threshold_chars', fallback='0') or '0')
+                except Exception:
+                    cap = None
+        except Exception:
+            cap = None
+        if cap is not None and cap > 0:
+            estimated = min(estimated, cap)
         return max(estimated, 2048)
 
     def _find_split_point(self, text: str, target: int) -> int:

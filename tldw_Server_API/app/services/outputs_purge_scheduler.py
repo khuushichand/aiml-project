@@ -63,8 +63,8 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
     """Return (removed, files_deleted)."""
     cdb = CollectionsDatabase.for_user(user_id)
     # Build candidate set similar to /outputs/purge endpoint
-    from datetime import datetime
-    now = datetime.utcnow().replace(microsecond=0).isoformat()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     ids: set[int] = set()
     paths: dict[int, str] = {}
     try:
@@ -147,4 +147,3 @@ async def start_outputs_purge_scheduler() -> Optional[asyncio.Task]:
     task = asyncio.create_task(_runner(), name="outputs_purge_scheduler")
     logger.info(f"Started outputs purge scheduler: interval={interval}s delete_files={delete_files} grace_days={grace_days}")
     return task
-

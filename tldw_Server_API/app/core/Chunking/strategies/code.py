@@ -375,6 +375,11 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                     end_line_idx = i
                 else:
                     break
+            # Expand end bound to avoid splitting graphemes in metadata
+            try:
+                buf_end_char = self._expand_end_to_grapheme_boundary(text, buf_end_char)
+            except Exception:
+                pass
             md = ChunkMetadata(
                 index=len(results),
                 start_char=buf_start_char,
@@ -420,6 +425,10 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                         # Calculate line indices
                         start_line_idx = max(0, max([i for i, ls in enumerate(line_starts) if ls <= start], default=0))
                         end_line_idx = max(start_line_idx, max([i for i, ls in enumerate(line_starts) if ls < end], default=start_line_idx))
+                        try:
+                            end = self._expand_end_to_grapheme_boundary(text, end)
+                        except Exception:
+                            pass
                         md = ChunkMetadata(
                             index=len(results),
                             start_char=start,
@@ -468,6 +477,10 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                             ch_text = text[start:end]
                             start_line_idx = max(0, max([i for i, ls in enumerate(line_starts) if ls <= start], default=0))
                             end_line_idx = max(start_line_idx, max([i for i, ls in enumerate(line_starts) if ls < end], default=start_line_idx))
+                            try:
+                                end = self._expand_end_to_grapheme_boundary(text, end)
+                            except Exception:
+                                pass
                             md = ChunkMetadata(
                                 index=len(results),
                                 start_char=start,

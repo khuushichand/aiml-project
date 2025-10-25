@@ -1,4 +1,7 @@
--- Example RLS policies for per-tenant isolation using current_setting('app.user_id')
+-- Example RLS policies for per-tenant isolation using current_setting('app.current_user_id')
+-- Note: The server sets both GUCs for compatibility:
+--   app.current_user_id (preferred)
+--   app.user_id         (legacy, still set)
 -- Enable per-table RLS and attach policies that match the session tenant.
 
 -- Notes/Characters (ChaChaNotes)
@@ -6,20 +9,20 @@ ALTER TABLE IF EXISTS notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS notes FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS notes_tenant_isolation ON notes;
 CREATE POLICY notes_tenant_isolation ON notes
-  USING (client_id = current_setting('app.user_id', true));
+  USING (client_id = current_setting('app.current_user_id', true));
 
 ALTER TABLE IF EXISTS character_cards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS character_cards FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS chars_tenant_isolation ON character_cards;
 CREATE POLICY chars_tenant_isolation ON character_cards
-  USING (client_id = current_setting('app.user_id', true));
+  USING (client_id = current_setting('app.current_user_id', true));
 
 -- Prompt Studio tables (example: projects stored with user_id)
 ALTER TABLE IF EXISTS prompt_studio_projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS prompt_studio_projects FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_projects_tenant_isolation ON prompt_studio_projects;
 CREATE POLICY ps_projects_tenant_isolation ON prompt_studio_projects
-  USING (user_id = current_setting('app.user_id', true));
+  USING (user_id = current_setting('app.current_user_id', true));
 
 -- Prompts (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_prompts ENABLE ROW LEVEL SECURITY;
@@ -30,7 +33,7 @@ CREATE POLICY ps_prompts_tenant_isolation ON prompt_studio_prompts
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_prompts.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -43,7 +46,7 @@ CREATE POLICY ps_signatures_tenant_isolation ON prompt_studio_signatures
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_signatures.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -56,7 +59,7 @@ CREATE POLICY ps_test_cases_tenant_isolation ON prompt_studio_test_cases
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_test_cases.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -69,7 +72,7 @@ CREATE POLICY ps_test_runs_tenant_isolation ON prompt_studio_test_runs
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_test_runs.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -82,7 +85,7 @@ CREATE POLICY ps_evals_tenant_isolation ON prompt_studio_evaluations
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_evaluations.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -95,7 +98,7 @@ CREATE POLICY ps_opts_tenant_isolation ON prompt_studio_optimizations
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_optimizations.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -110,7 +113,7 @@ CREATE POLICY ps_iter_tenant_isolation ON prompt_studio_optimization_iterations
       FROM prompt_studio_optimizations o
       JOIN prompt_studio_projects p ON p.id = o.project_id
       WHERE o.id = prompt_studio_optimization_iterations.optimization_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -120,11 +123,11 @@ ALTER TABLE IF EXISTS prompt_studio_job_queue FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_jobq_tenant_isolation ON prompt_studio_job_queue;
 CREATE POLICY ps_jobq_tenant_isolation ON prompt_studio_job_queue
   USING (
-    (client_id = current_setting('app.user_id', true))
+    (client_id = current_setting('app.current_user_id', true))
     OR EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_job_queue.project_id
-        AND p.user_id = current_setting('app.user_id', true)
+        AND p.user_id = current_setting('app.current_user_id', true)
     )
   );
 
@@ -134,7 +137,7 @@ ALTER TABLE IF EXISTS prompt_studio_idempotency FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_idem_tenant_isolation ON prompt_studio_idempotency;
 CREATE POLICY ps_idem_tenant_isolation ON prompt_studio_idempotency
   USING (
-    user_id = current_setting('app.user_id', true)
+    user_id = current_setting('app.current_user_id', true)
     OR user_id IS NULL
   );
 
@@ -144,5 +147,5 @@ CREATE POLICY ps_idem_tenant_isolation ON prompt_studio_idempotency
 -- ALTER TABLE prompt_studio_projects FORCE ROW LEVEL SECURITY;
 
 -- Usage: set the session variable at connection time:
---   SET SESSION app.user_id = '<tenant-id>';
+--   SET SESSION app.current_user_id = '<tenant-id>';
 -- The server DB adapters set this automatically using the request/client context.

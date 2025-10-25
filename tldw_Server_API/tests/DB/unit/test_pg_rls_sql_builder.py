@@ -22,5 +22,4 @@ def test_build_rls_sql_contains_expected_policies():
 
     # Ensure projects policy references current_setting
     assert "CREATE POLICY ps_projects_tenant_isolation" in stmts
-    assert "current_setting('app.user_id', true)" in stmts
-
+    assert "current_setting('app.current_user_id', true)" in stmts

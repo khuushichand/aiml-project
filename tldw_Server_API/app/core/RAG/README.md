@@ -106,7 +106,10 @@ Example: enabling hierarchical chunking during ingestion/storage
 ```python
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
-mgr = ChromaDBManager(user_id="u1", db_path="Databases/Media_DB_v2.db")
+# Prefer per-user default Media DB path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+_default_media_db = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+mgr = ChromaDBManager(user_id="u1", db_path=_default_media_db)
 mgr.process_and_store_content(
     content=my_text,
     media_id=42,
@@ -301,8 +304,8 @@ Both gauges are also exported to OTEL when enabled; search for these instrument 
 
 Per‑tenant row‑level security (Postgres)
 - The DB adapters for ChaChaNotes and Prompt Studio set a session variable for the current tenant/user on PostgreSQL connections:
-  - `SET SESSION app.user_id = '<client_id>'`
-- Apply RLS policies referencing `current_setting('app.user_id', true)` to enforce tenant isolation at the DB layer.
+  - `SET SESSION app.current_user_id = '<client_id>'` (server also sets legacy `app.user_id` for compatibility)
+- Apply RLS policies referencing `current_setting('app.current_user_id', true)` to enforce tenant isolation at the DB layer.
 - Example DDL: `Docs/Deployment/Database/postgres-rls-policies.sql`.
 
 Content policy filters (PII/PHI) before generation
@@ -522,7 +525,8 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_ra
 
 result = await unified_rag_pipeline(
     query="...",
-    media_db_path="Databases/Media_DB_v2.db",
+    # Prefer per-user default Media DB path; override as needed
+    media_db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())),
     character_db_path="Databases/user_databases/<uid>/ChaChaNotes.db",
     media_db=media_db_instance,       # required in production
     chacha_db=chacha_db_instance,     # required in production

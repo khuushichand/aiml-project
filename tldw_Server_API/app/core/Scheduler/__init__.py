@@ -36,7 +36,7 @@ Quick Start:
     result = await scheduler.wait_for_task(task_id)
 """
 
-from .scheduler import Scheduler, create_scheduler
+from .scheduler import Scheduler, create_scheduler, get_global_scheduler, stop_global_scheduler
 from .base import Task, TaskStatus, TaskPriority
 from .base.registry import task, get_registry
 from .base.exceptions import (
@@ -60,6 +60,8 @@ __all__ = [
     # Main interfaces
     'Scheduler',
     'create_scheduler',
+    'get_global_scheduler',
+    'stop_global_scheduler',
     'task',
     'get_registry',
     
