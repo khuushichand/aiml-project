@@ -140,7 +140,8 @@ def _build_comment_index() -> Tuple[Dict[Tuple[str, str], str], Dict[str, str]]:
 
         # Treat both '#' and ';' as comment markers (INI-style)
         if stripped.startswith('#') or stripped.startswith(';'):
-            comment_text = stripped.lstrip('#').strip()
+            # Support both '#' and ';' as full-line comment markers
+            comment_text = stripped.lstrip('#;').strip()
             if comment_text:
                 pending_field_comments.append(comment_text)
                 if not seen_field_in_section:

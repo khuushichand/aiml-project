@@ -25,7 +25,6 @@ from loguru import logger
 
 from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from ....core.Prompt_Management.prompt_studio.test_runner import TestRunner
-from ....core.Prompt_Management.prompt_studio.evaluation_metrics import EvaluationMetrics
 from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 from ..API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
 from ..schemas.prompt_studio_schemas import (
@@ -33,7 +32,6 @@ from ..schemas.prompt_studio_schemas import (
     EvaluationResponse,
     EvaluationList,
     EvaluationUpdate,
-    EvaluationMetrics,
 )
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])

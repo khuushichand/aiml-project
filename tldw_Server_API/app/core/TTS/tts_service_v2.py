@@ -363,6 +363,14 @@ class TTSServiceV2:
         Yields:
             Audio chunks in the requested format
         """
+        class _FallbackRequested(Exception):
+            """Internal signal to exit semaphore scope and trigger fallback."""
+
+            def __init__(self, exclude_tokens: List[str], failed_provider: str):
+                super().__init__("Fallback requested")
+                self.exclude_tokens = exclude_tokens
+                self.failed_provider = failed_provider
+
         # Convert OpenAI request to unified TTSRequest
         tts_request = self._convert_request(request)
         factory = await self._ensure_factory()
@@ -445,10 +453,7 @@ class TTSServiceV2:
                             )
                             await self._decrement_active_requests(adapter.provider_name)
                             released_active_slot = True
-                            exclude_tokens = self._build_exclude_tokens(adapter)
-                            async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
-                                yield chunk
-                            return
+                            raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
                         else:
                             raise TTSProviderError(
                                 f"Circuit open for {adapter.provider_name}",
@@ -476,9 +481,7 @@ class TTSServiceV2:
                         await self._handle_provider_fallback(tts_request, adapter.provider_name, error_msg)
                         await self._decrement_active_requests(adapter.provider_name)
                         released_active_slot = True
-                        exclude_tokens = self._build_exclude_tokens(adapter)
-                        async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
-                            yield chunk
+                        raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
                     else:
                         if self._stream_errors_as_audio:
                             yield f"ERROR: {error_msg}".encode()
@@ -497,6 +500,14 @@ class TTSServiceV2:
                     success=True
                 )
                     
+        except _FallbackRequested as fallback_exc:
+            async for chunk in self._try_fallback_providers(
+                tts_request,
+                fallback_exc.exclude_tokens,
+                fallback_exc.failed_provider,
+            ):
+                yield chunk
+            return
         except TTSError as e:
             # Handle TTS-specific errors with proper categorization
             error_msg = f"Error generating speech with {adapter.provider_name}: {str(e)}"
@@ -524,9 +535,7 @@ class TTSServiceV2:
                 )
                 await self._decrement_active_requests(adapter.provider_name)
                 released_active_slot = True
-                exclude_tokens = self._build_exclude_tokens(adapter)
-                async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
-                    yield chunk
+                raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
             else:
                 # For non-recoverable errors or when fallback is disabled
                 if self._stream_errors_as_audio:
@@ -562,9 +571,7 @@ class TTSServiceV2:
                 logger.info("Attempting fallback due to unexpected error")
                 await self._decrement_active_requests(adapter.provider_name)
                 released_active_slot = True
-                exclude_tokens = self._build_exclude_tokens(adapter)
-                async for chunk in self._try_fallback_providers(tts_request, exclude_tokens):
-                    yield chunk
+                raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
             else:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: {error_msg}".encode()
@@ -926,7 +933,8 @@ class TTSServiceV2:
     async def _try_fallback_providers(
         self, 
         request: TTSRequest, 
-        exclude_providers: List[str]
+        exclude_providers: List[str],
+        failed_provider: Optional[str]
     ) -> AsyncGenerator[bytes, None]:
         """
         Try fallback providers in priority order.
@@ -934,10 +942,12 @@ class TTSServiceV2:
         Args:
             request: TTS request to fulfill
             exclude_providers: List of provider names to exclude
+            failed_provider: Canonical provider name that just failed
             
         Yields:
             Audio chunks from successful provider
         """
+        origin_provider = failed_provider or "unknown"
         fallback_adapter = await self._get_fallback_adapter(request, exclude_providers)
         
         if fallback_adapter:
@@ -958,7 +968,7 @@ class TTSServiceV2:
                 self.metrics.increment(
                     "tts_fallback_attempts",
                     labels={
-                        "from_provider": exclude_providers[0] if exclude_providers else "unknown",
+                        "from_provider": origin_provider,
                         "to_provider": fallback_adapter.provider_name,
                         "success": "true"
                     }
@@ -969,7 +979,7 @@ class TTSServiceV2:
                 self.metrics.increment(
                     "tts_fallback_attempts",
                     labels={
-                        "from_provider": exclude_providers[0] if exclude_providers else "unknown",
+                        "from_provider": origin_provider,
                         "to_provider": fallback_adapter.provider_name,
                         "success": "false"
                     }
@@ -981,6 +991,7 @@ class TTSServiceV2:
                         token for token in self._build_exclude_tokens(fallback_adapter)
                         if token not in exclude_providers
                     )
+                    next_failed_provider = fallback_adapter.provider_name
                     final_fallback = await self._get_fallback_adapter(request, exclude_providers)
                     
                     if final_fallback:
@@ -1001,7 +1012,7 @@ class TTSServiceV2:
                             self.metrics.increment(
                                 "tts_fallback_attempts",
                                 labels={
-                                    "from_provider": fallback_adapter.provider_name,
+                                    "from_provider": next_failed_provider,
                                     "to_provider": final_fallback.provider_name,
                                     "success": "true"
                                 }
@@ -1014,6 +1025,14 @@ class TTSServiceV2:
                                     provider=final_fallback.provider_name,
                                     details={"error": str(final_e)}
                                 )
+                            self.metrics.increment(
+                                "tts_fallback_attempts",
+                                labels={
+                                    "from_provider": next_failed_provider,
+                                    "to_provider": final_fallback.provider_name,
+                                    "success": "false"
+                                }
+                            )
                             error_msg = f"All providers failed. Last error: {str(final_e)}"
                             logger.error(error_msg)
                             if self._stream_errors_as_audio:
@@ -1021,6 +1040,7 @@ class TTSServiceV2:
                             else:
                                 raise final_e
                     else:
+                        origin_provider = next_failed_provider
                         if self._stream_errors_as_audio:
                             yield f"ERROR: All fallback providers exhausted".encode()
                         else:

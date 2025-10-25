@@ -1,8 +1,8 @@
 # adapter_registry.py
 # Description: Registry and factory for TTS adapters
 #
-# Imports
 import asyncio
+import time
 from typing import Dict, List, Optional, Type, Any, Set
 from enum import Enum
 #
@@ -91,7 +91,13 @@ class TTSAdapterRegistry:
         self._adapter_specs: Dict[TTSProvider, Any] = self.DEFAULT_ADAPTERS.copy()
         self._init_lock = asyncio.Lock()
         self._initialized_providers: Set[TTSProvider] = set()
-        self._failed_providers: Set[TTSProvider] = set()  # Track failed providers to avoid retrying
+        self._failed_providers: Dict[TTSProvider, float] = {}  # Provider -> retry timestamp
+        retry_seconds = 60.0
+        try:
+            retry_seconds = float(self.config.get("adapter_failure_retry_seconds", retry_seconds))
+        except Exception:
+            retry_seconds = 60.0
+        self._failure_retry_seconds = max(retry_seconds, 5.0)
     
     def register_adapter(self, provider: TTSProvider, adapter: Any):
         """
@@ -140,6 +146,16 @@ class TTSAdapterRegistry:
                 provider=provider.value
             )
         
+        retry_after = self._failed_providers.get(provider)
+        if retry_after:
+            if retry_after > time.time():
+                logger.debug(
+                    f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
+                )
+                return None
+            else:
+                self._failed_providers.pop(provider, None)
+        
         # Check if adapter already exists
         if provider in self._adapters:
             adapter = self._adapters[provider]
@@ -148,19 +164,25 @@ class TTSAdapterRegistry:
         
         # Initialize adapter if needed
         async with self._init_lock:
-            # Skip if we already tried and failed
-            if provider in self._failed_providers:
-                logger.debug(f"Skipping {provider.value} - previously failed")
-                return None
+            retry_after = self._failed_providers.get(provider)
+            if retry_after:
+                if retry_after > time.time():
+                    logger.debug(
+                        f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
+                    )
+                    return None
+                else:
+                    self._failed_providers.pop(provider, None)
                 
             if provider not in self._adapters:
                 success = await self._initialize_adapter(provider)
                 if not success:
-                    self._failed_providers.add(provider)
+                    self._failed_providers[provider] = time.time() + self._failure_retry_seconds
                     return None
             
             adapter = self._adapters.get(provider)
             if adapter and adapter.status == ProviderStatus.AVAILABLE:
+                self._failed_providers.pop(provider, None)
                 return adapter
             else:
                 logger.warning(f"Adapter for {provider.value} is not available (status: {adapter.status if adapter else 'None'})")
@@ -365,8 +387,11 @@ class TTSAdapterRegistry:
         
         for provider in TTSProvider:
             # Skip providers that are disabled or have failed
-            if provider in self._failed_providers:
-                continue
+            retry_after = self._failed_providers.get(provider)
+            if retry_after:
+                if retry_after > time.time():
+                    continue
+                self._failed_providers.pop(provider, None)
                 
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
@@ -390,10 +415,10 @@ class TTSAdapterRegistry:
                         capabilities[provider] = caps
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout getting capabilities for {provider.value}")
-                self._failed_providers.add(provider)
+                self._failed_providers[provider] = time.time() + self._failure_retry_seconds
             except Exception as e:
                 logger.debug(f"Error getting capabilities for {provider.value}: {e}")
-                self._failed_providers.add(provider)
+                self._failed_providers[provider] = time.time() + self._failure_retry_seconds
         
         return capabilities
     
@@ -432,7 +457,7 @@ class TTSAdapterRegistry:
                 continue
             if format and format not in caps.supported_formats:
                 continue
-            if supports_streaming is not None and caps.supports_streaming != supports_streaming:
+            if supports_streaming and not caps.supports_streaming:
                 continue
             if supports_emotion is not None and caps.supports_emotion_control != supports_emotion:
                 continue
@@ -542,7 +567,10 @@ class TTSAdapterRegistry:
                 provider_info = {
                     "status": status_value,
                     "initialized": bool(getattr(adapter, "_initialized", False)),
-                    "failed": provider in self._failed_providers,
+                    "failed": (
+                        provider in self._failed_providers
+                        and self._failed_providers[provider] > time.time()
+                    ),
                 }
                 try:
                     if adapter.capabilities:
@@ -556,7 +584,10 @@ class TTSAdapterRegistry:
                 provider_info = {
                     "status": status_value,
                     "initialized": False,
-                    "failed": provider in self._failed_providers,
+                    "failed": (
+                        provider in self._failed_providers
+                        and self._failed_providers[provider] > time.time()
+                    ),
                 }
             summary["providers"][provider.value] = provider_info
         

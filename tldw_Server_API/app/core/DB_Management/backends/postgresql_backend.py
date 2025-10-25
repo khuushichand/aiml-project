@@ -135,8 +135,8 @@ class PostgreSQLConnectionPool(ConnectionPool):
         if self._closed:
             raise DatabaseError("Connection pool is closed")
         if self._use_psycopg_pool:
-            # Use context-managed acquire; return a raw connection and rely on return_connection to close()
-            conn = self._pool.getconn() if hasattr(self._pool, 'getconn') else self._pool.connection().__enter__()
+            # Standardize on getconn/putconn for clarity
+            conn = self._pool.getconn()
             if hasattr(conn, 'row_factory'):
                 conn.row_factory = dict_row
             try:
@@ -176,10 +176,10 @@ class PostgreSQLConnectionPool(ConnectionPool):
                 pass
             return
         if self._use_psycopg_pool:
-            if hasattr(self._pool, 'putconn'):
+            # Always return via putconn
+            try:
                 self._pool.putconn(connection)
-            else:
-                # If acquired via context manager, close() returns to pool
+            except Exception:
                 try:
                     connection.close()
                 except Exception:

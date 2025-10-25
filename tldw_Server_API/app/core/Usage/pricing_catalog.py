@@ -173,3 +173,14 @@ _DEFAULT_CATALOG = PricingCatalog()
 
 def get_pricing_catalog() -> PricingCatalog:
     return _DEFAULT_CATALOG
+
+
+def reset_pricing_catalog() -> PricingCatalog:
+    """Reset and return the global pricing catalog instance.
+
+    Useful when environment variables (e.g., PRICING_OVERRIDES) or the
+    model pricing file change at runtime (tests, admin ops).
+    """
+    global _DEFAULT_CATALOG
+    _DEFAULT_CATALOG = PricingCatalog()
+    return _DEFAULT_CATALOG

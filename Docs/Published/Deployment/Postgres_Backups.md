@@ -74,6 +74,9 @@ print("Restore result:", status)
 Notes:
 - Helpers require `pg_dump` (backup) and `pg_restore` (restore) to be on PATH.
 - The backup helper writes with `--no-owner --no-privileges` for portability.
+- Backup destination: set `TLDW_DB_BACKUP_PATH` to override the default
+  `./tldw_DB_Backups/` base directory used by server helpers (SQLite and
+  PostgreSQL). Per‑DB subdirectories are created under this base.
 
 ## Roles and Privileges
 
@@ -92,4 +95,3 @@ psql -h <host> -p 5432 -U <admin> -f globals.sql
 - Verification: after restore, sanity-check schema version tables and row counts; run app smoke tests.
 - Performance: for large DBs, consider `pg_dump -j <N>` and `pg_restore -j <N>` to parallelize.
 - Containerized DBs: exec into the container that has client tools, or mount them in an admin container.
-

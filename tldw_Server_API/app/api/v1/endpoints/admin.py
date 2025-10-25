@@ -122,6 +122,7 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgMemberListItem,
     OrgMembershipItem,
 )
+from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
@@ -3726,8 +3727,11 @@ async def get_llm_usage_summary(
         elif group_by == "operation":
             key_expr = "COALESCE(operation,'')"
         else:
-            # day
-            key_expr = "CAST(date(ts) AS TEXT)" if not is_pg else "CAST(date(ts) AS TEXT)"
+            # day; align with aggregators that use UTC day in Postgres
+            if is_pg:
+                key_expr = "CAST(date(ts AT TIME ZONE 'UTC') AS TEXT)"
+            else:
+                key_expr = "CAST(date(ts) AS TEXT)"
 
         # Build SQL using str.format placeholders; avoid mixing with f-strings
         sql = (
@@ -3788,10 +3792,11 @@ async def get_llm_top_spenders(
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
         if is_pg:
+            limit_placeholder = f"${len(params) + 1}"
             sql = (
                 f"SELECT COALESCE(user_id,0) as user_id, COUNT(*) as requests, SUM(COALESCE(total_cost_usd,0)) as total_cost_usd "
-                f"FROM llm_usage_log{where_clause} GROUP BY COALESCE(user_id,0) ORDER BY total_cost_usd DESC LIMIT $ {len(params)+1}"
-            ).replace('$ ', '$')
+                f"FROM llm_usage_log{where_clause} GROUP BY COALESCE(user_id,0) ORDER BY total_cost_usd DESC LIMIT {limit_placeholder}"
+            )
             rows = await db.fetch(sql, *params, limit)
             items = [LLMTopSpenderRow(user_id=int(r["user_id"] or 0), total_cost_usd=float(r["total_cost_usd"] or 0.0), requests=int(r["requests"] or 0)) for r in rows]
         else:
@@ -3850,11 +3855,12 @@ async def export_llm_usage_csv(
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
         if is_pg:
+            limit_placeholder = f"${len(params) + 1}"
             sql = (
                 f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "
                 f"COALESCE(prompt_tokens,0), COALESCE(completion_tokens,0), COALESCE(total_tokens,0), COALESCE(total_cost_usd,0), currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT $ {len(params) + 1}"
-            ).replace('$ ', '$')
+                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
+            )
             rows = await db.fetch(sql, *params, limit)
             data = [(
                 r["id"], r["ts"], r["user_id"], r["key_id"], r["endpoint"], r["operation"], r["provider"], r["model"], r["status"], r["latency_ms"],
@@ -3892,6 +3898,25 @@ async def export_llm_usage_csv(
     except Exception as e:
         logger.error(f"Failed to export llm usage CSV: {e}")
         raise HTTPException(status_code=500, detail="Failed to export CSV")
+
+
+# ---------------------------------------------
+# Pricing Catalog Management
+# ---------------------------------------------
+
+@router.post("/llm-usage/pricing/reload", response_model=dict)
+async def reload_llm_pricing_catalog() -> dict:
+    """Reload the LLM pricing catalog from environment and config file (admin-only).
+
+    Picks up changes in PRICING_OVERRIDES and Config_Files/model_pricing.json
+    without restarting the server.
+    """
+    try:
+        reset_pricing_catalog()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Failed to reload pricing catalog: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reload pricing catalog")
 
 #
 ## End of admin.py

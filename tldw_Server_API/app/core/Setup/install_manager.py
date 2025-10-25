@@ -353,6 +353,20 @@ def _record_latest_status(data: Dict[str, Any]) -> None:
     _LATEST_STATUS_DATA = json.loads(json.dumps(data))
 
 
+# --- HTTPX network error detection -------------------------------------------
+def _is_httpx_network_error(exc: Exception) -> bool:
+    """Return True if the exception is an httpx HTTP/network error.
+
+    We import httpx lazily to avoid hard dependency at module import time
+    (the package is typically installed via huggingface_hub).
+    """
+    try:
+        import httpx  # type: ignore
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(exc, httpx.HTTPError)
+
+
 def get_install_status_snapshot() -> Optional[Dict[str, Any]]:
     """Return the most recent install status if available."""
 
@@ -690,6 +704,7 @@ TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
         PipRequirement(package='phonemizer>=3.2.1', import_name='phonemizer'),
         PipRequirement(package='espeak-phonemizer>=1.0.1', import_name='espeak_phonemizer'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
     'dia': [
         PipRequirement(package='torch>=2.2.0', import_name='torch'),
@@ -698,12 +713,14 @@ TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
         PipRequirement(package='safetensors>=0.4.0', import_name='safetensors'),
         PipRequirement(package='sentencepiece>=0.1.99', import_name='sentencepiece'),
         PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
     'higgs': [
         PipRequirement(package='git+https://github.com/boson-ai/higgs-audio.git', import_name='boson_multimodal'),
         PipRequirement(package='torch>=2.2.0', import_name='torch'),
         PipRequirement(package='torchaudio>=2.2.0', import_name='torchaudio'),
         PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
     'vibevoice': [
         PipRequirement(package='git+https://github.com/vibevoice-community/VibeVoice.git', import_name='vibevoice'),
@@ -711,6 +728,7 @@ TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
         PipRequirement(package='torchaudio>=2.2.0', import_name='torchaudio'),
         PipRequirement(package='sentencepiece>=0.1.99', import_name='sentencepiece'),
         PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
 }
 

@@ -129,6 +129,13 @@ class SQLiteConnectionPool(ConnectionPool):
                     self._local.connection = None
             except Exception:
                 pass
+            # Prune stale entries to avoid unbounded growth
+            try:
+                stale_keys = [tid for tid, conn in self._connections.items() if conn is None]
+                for tid in stale_keys:
+                    self._connections.pop(tid, None)
+            except Exception:
+                pass
     
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -287,7 +294,7 @@ class SQLiteBackend(DatabaseBackend):
             # Determine whether to fetch rows: SELECT or statements with RETURNING
             upper = query.strip().upper()
             is_select = upper.startswith("SELECT")
-            has_returning = " RETURNING " in upper or upper.endswith(" RETURNING")
+            has_returning = " RETURNING " in upper
             if is_select or has_returning:
                 rows = cursor.fetchall()
                 result_rows = [dict(row) for row in rows]

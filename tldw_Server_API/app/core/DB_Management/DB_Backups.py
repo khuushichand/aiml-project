@@ -178,7 +178,11 @@ def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, st
 
     Returns a mapping of logical database names to their backup configuration.
     """
-    backup_base_dir = get_project_relative_path('tldw_DB_Backups')
+    # Standardized backup directory selection:
+    # 1) TLDW_DB_BACKUP_PATH env var
+    # 2) project-relative default ./tldw_DB_Backups/
+    env_base = os.environ.get('TLDW_DB_BACKUP_PATH')
+    backup_base_dir = env_base or get_project_relative_path('tldw_DB_Backups')
     os.makedirs(backup_base_dir, exist_ok=True)
     logger.info(f"Base backup directory: {os.path.abspath(backup_base_dir)}")
 

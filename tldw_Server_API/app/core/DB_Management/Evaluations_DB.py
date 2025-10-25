@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     prepare_backend_many_statement,
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 
@@ -158,7 +159,14 @@ class _EvaluationsBackendConnection:
 class EvaluationsDatabase:
     """Database manager for evaluations system (SQLite or PostgreSQL)."""
 
-    def __init__(self, db_path: str, *, backend: Optional[DatabaseBackend] = None):
+    def __init__(self, db_path: Optional[str], *, backend: Optional[DatabaseBackend] = None):
+        # Default to per-user evaluations DB path when not provided
+        if not db_path:
+            try:
+                uid = DatabasePaths.get_single_user_id()
+                db_path = str(DatabasePaths.get_evaluations_db_path(uid))
+            except Exception:
+                db_path = "Databases/evaluations.db"
         self.db_path = db_path
         # Resolve backend (content backend by default)
         self.backend: Optional[DatabaseBackend] = backend
