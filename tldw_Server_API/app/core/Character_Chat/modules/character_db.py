@@ -105,10 +105,10 @@ def _prepare_character_data_for_db_storage(
                         len(db_data["image"]),
                     )
                 except Exception as img_err:
-                    logger.warning("Could not optimise image, using original bytes: %s", img_err)
+                    logger.warning("Could not optimise image, using original bytes: {}", img_err)
                     db_data["image"] = image_bytes
             except (binascii.Error, ValueError) as exc:
-                logger.error("Invalid image_base64 data for character: %s", exc)
+                logger.error("Invalid image_base64 data for character: {}", exc)
                 raise InputError(f"Invalid image_base64 data: {exc}")
         else:
             db_data["image"] = None
@@ -167,16 +167,16 @@ def create_new_character_from_data(db: CharactersRAGDB, character_payload: Dict[
         db_ready_data = _prepare_character_data_for_db_storage(character_payload, is_update=False)
         char_id = db.add_character_card(db_ready_data)
         if char_id:
-            logger.info("Character '%s' created with ID: %s", db_ready_data["name"], char_id)
+            logger.info("Character '{}' created with ID: {}", db_ready_data["name"], char_id)
         return char_id
     except (InputError, ConflictError) as exc:
-        logger.error("Error creating new character: %s", exc)
+        logger.error("Error creating new character: {}", exc)
         raise
     except CharactersRAGDBError as exc:
-        logger.error("Database error creating character: %s", exc)
+        logger.error("Database error creating character: {}", exc)
         raise
     except Exception as exc:
-        logger.error("Unexpected error creating character: %s", exc, exc_info=True)
+        logger.error("Unexpected error creating character: {}", exc, exc_info=True)
         raise CharactersRAGDBError(f"Unexpected error creating character: {exc}") from exc
 
 
@@ -186,10 +186,10 @@ def get_character_details(db: CharactersRAGDB, character_id: int) -> Optional[Di
     try:
         return db.get_character_card_by_id(character_id)
     except CharactersRAGDBError as exc:
-        logger.error("Database error getting character %s: %s", character_id, exc)
+        logger.error("Database error getting character {}: {}", character_id, exc)
         raise
     except Exception as exc:
-        logger.error("Unexpected error getting character %s: %s", character_id, exc, exc_info=True)
+        logger.error("Unexpected error getting character {}: {}", character_id, exc, exc_info=True)
         raise CharactersRAGDBError(f"Unexpected error getting character: {exc}") from exc
 
 
@@ -227,13 +227,13 @@ def update_existing_character_details(
         db_ready_data = _prepare_character_data_for_db_storage(update_payload, is_update=True)
         success = db.update_character_card(character_id, db_ready_data, expected_version)
         if success:
-            logger.info("Character ID %s updated successfully.", character_id)
+            logger.info("Character ID {} updated successfully.", character_id)
         return bool(success)
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
-        logger.error("Error updating character %s: %s", character_id, exc)
+        logger.error("Error updating character {}: {}", character_id, exc)
         raise
     except Exception as exc:
-        logger.error("Unexpected error updating character %s: %s", character_id, exc, exc_info=True)
+        logger.error("Unexpected error updating character {}: {}", character_id, exc, exc_info=True)
         raise CharactersRAGDBError(f"Unexpected error updating character: {exc}") from exc
 
 
@@ -243,13 +243,13 @@ def delete_character_from_db(db: CharactersRAGDB, character_id: int, expected_ve
     try:
         success = db.soft_delete_character_card(character_id, expected_version)
         if success:
-            logger.info("Character ID %s soft-deleted successfully.", character_id)
+            logger.info("Character ID {} soft-deleted successfully.", character_id)
         return bool(success)
     except (ConflictError, CharactersRAGDBError) as exc:
-        logger.error("Error soft-deleting character %s: %s", character_id, exc)
+        logger.error("Error soft-deleting character {}: {}", character_id, exc)
         raise
     except Exception as exc:
-        logger.error("Unexpected error soft-deleting character %s: %s", character_id, exc, exc_info=True)
+        logger.error("Unexpected error soft-deleting character {}: {}", character_id, exc, exc_info=True)
         raise CharactersRAGDBError(f"Unexpected error deleting character: {exc}") from exc
 
 
@@ -263,10 +263,10 @@ def search_characters_by_query_text(
     try:
         return db.search_character_cards(search_term, limit=limit)
     except CharactersRAGDBError as exc:
-        logger.error("Error searching characters for '%s': %s", search_term, exc)
+        logger.error("Error searching characters for '{}': {}", search_term, exc)
         raise
     except Exception as exc:
-        logger.error("Unexpected error searching characters: %s", exc, exc_info=True)
+        logger.error("Unexpected error searching characters: {}", exc, exc_info=True)
         raise CharactersRAGDBError(f"Unexpected error searching characters: {exc}") from exc
 
 
@@ -280,11 +280,11 @@ def load_character_and_image(
     Placeholders are processed using the supplied user name.
     """
 
-    logger.debug("Loading character and image for ID: %s, User: %s", character_id, user_name)
+    logger.debug("Loading character and image for ID: {}, User: {}", character_id, user_name)
     try:
         char_data = db.get_character_card_by_id(character_id)
         if not char_data:
-            logger.warning("No character data found for ID: %s", character_id)
+            logger.warning("No character data found for ID: {}", character_id)
             return None, [], None
 
         char_name_from_card = char_data.get("name", "Character")
@@ -350,7 +350,7 @@ def load_character_and_image(
         return char_data, chat_history, img
 
     except CharactersRAGDBError as exc:
-        logger.error("Database error in load_character_and_image for ID %s: %s", character_id, exc)
+        logger.error("Database error in load_character_and_image for ID {}: {}", character_id, exc)
         return None, [], None
     except Exception as exc:
         logger.error(
@@ -379,7 +379,7 @@ def load_character_wrapper(
 
         return load_character_and_image(db, char_id_int, user_name)
     except ValueError as exc:
-        logger.error("Error in load_character_wrapper with input '%s': %s", character_id_or_ui_choice, exc)
+        logger.error("Error in load_character_wrapper with input '{}': {}", character_id_or_ui_choice, exc)
         raise
     except Exception as exc:
         logger.error(

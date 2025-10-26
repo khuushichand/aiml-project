@@ -12,8 +12,20 @@ def _db_path(user_id: str) -> Path:
     return user_dir / 'vector_store_meta.db'
 
 
+def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=3000;")
+    except Exception:
+        pass
+    return conn
+
+
 def _connect(user_id: str) -> sqlite3.Connection:
-    return sqlite3.connect(_db_path(user_id), check_same_thread=False)
+    return _prime(sqlite3.connect(_db_path(user_id), check_same_thread=False))
 
 
 def init_meta_db(user_id: str) -> None:
@@ -87,4 +99,3 @@ def list_stores(user_id: str) -> List[Dict[str, Any]]:
                 'id': r[0], 'name': r[1], 'name_lower': r[2], 'created_at': r[3], 'updated_at': r[4]
             } for r in rows
         ]
-

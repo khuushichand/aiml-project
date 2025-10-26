@@ -8,6 +8,10 @@ Enhanced web scraping pipeline with production features:
 - Content deduplication
 - Robust error handling and retries
 - Support for multiple scraping strategies
+
+Persistent caches:
+- Cookies and deduplication hashes are stored under `Databases/webscraper/`
+  within the project root (created on demand) for durability and easier ops.
 """
 
 import asyncio
@@ -35,6 +39,7 @@ import atexit
 # Import existing components
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -145,7 +150,11 @@ class CookieManager:
     """Manages cookies and sessions for scraping"""
     
     def __init__(self, storage_path: Optional[Path] = None, *, connector_limit: int = 10, per_host_limit: int = 2):
-        self.storage_path = storage_path or Path("./scraping_cookies.json")
+        if storage_path is None:
+            base = Path(get_database_dir()) / "webscraper"
+            base.mkdir(parents=True, exist_ok=True)
+            storage_path = base / "cookies.json"
+        self.storage_path = storage_path
         self._cookies: Dict[str, List[Dict[str, Any]]] = {}
         self._sessions: Dict[str, aiohttp.ClientSession] = {}
         self._connector_limit = int(connector_limit)
@@ -251,7 +260,11 @@ class ContentDeduplicator:
     """Handles content deduplication"""
     
     def __init__(self, storage_path: Optional[Path] = None):
-        self.storage_path = storage_path or Path("./content_hashes.db")
+        if storage_path is None:
+            base = Path(get_database_dir()) / "webscraper"
+            base.mkdir(parents=True, exist_ok=True)
+            storage_path = base / "content_hashes.pkl"
+        self.storage_path = storage_path
         self._hashes: Dict[str, Dict[str, Any]] = {}
         self._load_hashes()
     
@@ -566,6 +579,22 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Scrape a single article with specified method"""
+        # Enforce centralized egress/SSRF policy before any network access
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(url)
+            if not getattr(pol, 'allowed', False):
+                return {
+                    "url": url,
+                    "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}",
+                    "extraction_successful": False,
+                }
+        except Exception as _e:
+            return {
+                "url": url,
+                "error": f"Egress policy evaluation failed: {_e}",
+                "extraction_successful": False,
+            }
         # Apply rate limiting
         await self.rate_limiter.acquire()
         
@@ -903,6 +932,16 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """Scrape all URLs from a sitemap"""
+        # Egress guard for sitemap endpoint
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(sitemap_url)
+            if not getattr(pol, 'allowed', False):
+                logger.error(f"Egress denied for sitemap: {getattr(pol, 'reason', 'blocked')}")
+                return []
+        except Exception as _e:
+            logger.error(f"Egress policy evaluation failed: {_e}")
+            return []
         session = await self.cookie_manager.get_session(
             sitemap_url,
             user_agent=user_agent,
@@ -949,6 +988,16 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively scrape a website"""
+        # Egress guard for base URL
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(base_url)
+            if not getattr(pol, 'allowed', False):
+                logger.error(f"Egress denied for recursive scrape: {getattr(pol, 'reason', 'blocked')}")
+                return []
+        except Exception as _e:
+            logger.error(f"Egress policy evaluation failed: {_e}")
+            return []
         visited = set()
         to_visit = [(base_url, 0)]
         results = []
@@ -993,16 +1042,29 @@ class EnhancedWebScraper:
         return results
     
     async def _extract_links(self, base_url: str, content: str) -> List[str]:
-        """Extract links from content"""
-        soup = BeautifulSoup(content, 'html.parser')
-        links = []
-        
-        for a_tag in soup.find_all('a', href=True):
-            href = a_tag['href']
-            if href and not href.startswith('#'):
-                links.append(href)
-        
-        return links
+        """Extract links. If provided content looks like plain text, fetch HTML first."""
+        html_text = content or ""
+        # Heuristic: if content lacks HTML tags, fetch the page HTML
+        if '<a' not in html_text and '<html' not in html_text:
+            try:
+                session = await self.cookie_manager.get_session(base_url)
+                async with session.get(base_url) as resp:
+                    html_text = await resp.text()
+            except Exception as e:
+                logger.warning(f"Failed to fetch HTML for link extraction: {e}")
+                return []
+
+        try:
+            soup = BeautifulSoup(html_text, 'html.parser')
+            links = []
+            for a_tag in soup.find_all('a', href=True):
+                href = a_tag['href']
+                if href and not href.startswith('#'):
+                    links.append(href)
+            return links
+        except Exception as e:
+            logger.warning(f"Error parsing links from content: {e}")
+            return []
     
     def get_progress(self, task_name: str) -> Dict[str, Any]:
         """Get progress for a specific task"""

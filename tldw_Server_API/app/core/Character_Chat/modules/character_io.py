@@ -706,12 +706,12 @@ def load_chat_history_from_file_and_save_to_db(
             def _process_pair_history(entries: List[Any]) -> None:
                 for idx, entry in enumerate(entries):
                     if not isinstance(entry, (list, tuple)):
-                        logger.warning("Skipping malformed message pair at index %s: not a list", idx)
+                        logger.warning("Skipping malformed message pair at index {}: not a list", idx)
                         continue
 
                     if len(entry) > 2:
                         logger.warning(
-                            "Skipping malformed message pair at index %s: expected at most 2 elements, got %s",
+                            "Skipping malformed message pair at index {}: expected at most 2 elements, got {}",
                             idx,
                             len(entry),
                         )
@@ -728,7 +728,7 @@ def load_chat_history_from_file_and_save_to_db(
                     if char_chunk:
                         _add_message_to_conversation(char_chunk, False, None)
                     if not user_chunk and not char_chunk:
-                        logger.warning("Skipping malformed message pair at index %s: empty or non-string values", idx)
+                        logger.warning("Skipping malformed message pair at index {}: empty or non-string values", idx)
 
             history_node = chat_data.get("history")
             if isinstance(history_node, dict) and isinstance(history_node.get("internal"), list):
@@ -737,22 +737,22 @@ def load_chat_history_from_file_and_save_to_db(
                 messages = chat_data.get("messages", [])
                 if isinstance(messages, list):
                     for entry in messages:
-                        if not isinstance(entry, dict):
-                            logger.warning("Skipping malformed message entry (expected dict): %s", entry)
-                            continue
-                        raw_content = entry.get("content")
-                        normalized_content = _normalize_message_content(raw_content)
-                        if normalized_content is None or not normalized_content.strip():
-                            logger.warning("Skipping message with empty or invalid content: %s", entry)
-                            continue
-                        is_user, sender_override = _resolve_sender(entry.get("role"), entry)
-                        if sender_override and sender_override.lower() == "system" and not normalized_content.strip():
-                            logger.debug(
-                                "System message with empty content skipped for conversation import: %s",
-                                entry,
-                            )
-                            continue
-                        _add_message_to_conversation(normalized_content, is_user, sender_override)
+                        if isinstance(entry, dict):
+                            raw_content = entry.get("content")
+                            normalized_content = _normalize_message_content(raw_content)
+                            if normalized_content is None or not normalized_content.strip():
+                                logger.warning("Skipping message with empty or invalid content: {}", entry)
+                                continue
+                            is_user, sender_override = _resolve_sender(entry.get("role"), entry)
+                            if sender_override and sender_override.lower() == "system" and not normalized_content.strip():
+                                logger.debug(
+                                    "System message with empty content skipped for conversation import: {}",
+                                    entry,
+                                )
+                                continue
+                            _add_message_to_conversation(normalized_content, is_user, sender_override)
+                        else:
+                            logger.warning("Skipping malformed message entry (expected dict): {}", entry)
 
             if messages_added == 0:
                 logger.info("Chat history import completed but contained no valid messages.")
@@ -763,5 +763,5 @@ def load_chat_history_from_file_and_save_to_db(
             raise
 
     except Exception as exc:
-        logger.error("Error loading chat history: %s", exc, exc_info=True)
+        logger.error("Error loading chat history: {}", exc, exc_info=True)
         return None, None

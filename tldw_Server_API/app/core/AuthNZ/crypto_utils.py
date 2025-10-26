@@ -47,6 +47,9 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
 
     The first item represents the *current* secret material. Subsequent entries
     capture legacy/secondary secrets that should remain valid during rotations.
+
+    Important: Public keys are intentionally excluded from HMAC/encryption key
+    derivation to avoid using non-secret material as cryptographic input.
     """
     s = settings or get_settings()
     auth_mode = getattr(s, "AUTH_MODE", "single_user")
@@ -75,12 +78,11 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
         add_source(getattr(s, "API_KEY_PEPPER", None))
         add_source(getattr(s, "JWT_SECRET_KEY", None))
         add_source(getattr(s, "JWT_PRIVATE_KEY", None))
-        add_source(getattr(s, "JWT_PUBLIC_KEY", None))
 
     # Secondary / legacy material to support key rotations
     add_source(getattr(s, "JWT_SECONDARY_SECRET", None))
     add_source(getattr(s, "JWT_SECONDARY_PRIVATE_KEY", None))
-    add_source(getattr(s, "JWT_SECONDARY_PUBLIC_KEY", None))
+    # Note: secondary public keys are also excluded by design
 
     if not digest_sources:
         # Allow fallback only in explicit automated test scenarios to preserve fixture behaviour.

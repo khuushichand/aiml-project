@@ -192,6 +192,32 @@ def convert_html_to_markdown(html: str) -> str:
 
 async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     logging.info(f"Scraping article from URL: {url}")
+    # Enforce centralized egress/SSRF policy before any network access
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(url)
+        if not getattr(pol, 'allowed', False):
+            logging.error(f"Egress denied for scrape target: {getattr(pol, 'reason', 'blocked')}")
+            return {
+                "url": url,
+                "title": "N/A",
+                "author": "N/A",
+                "date": "N/A",
+                "content": "",
+                "extraction_successful": False,
+                "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}"
+            }
+    except Exception as _e:
+        logging.error(f"Egress policy evaluation failed: {_e}")
+        return {
+            "url": url,
+            "title": "N/A",
+            "author": "N/A",
+            "date": "N/A",
+            "content": "",
+            "extraction_successful": False,
+            "error": f"Egress policy evaluation failed: {_e}"
+        }
     async def fetch_html(url: str) -> str:
         # Load and log the configuration
         loaded_config = load_and_log_configs()
@@ -300,6 +326,15 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
     then extracts article content via trafilatura and converts to display text.
     """
     try:
+        # Egress guard
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(url)
+            if not getattr(pol, 'allowed', False):
+                return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}"}
+        except Exception as _e:
+            return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress policy evaluation failed: {_e}"}
+
         headers = {"User-Agent": web_scraping_user_agent}
         session = requests.Session()
         session.headers.update(headers)
@@ -605,7 +640,18 @@ def scrape_by_url_level(base_url: str, level: int) -> list:
 def scrape_from_sitemap(sitemap_url: str) -> list:
     """Scrape articles from a sitemap URL."""
     try:
-        response = requests.get(sitemap_url)
+        # Egress guard
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(sitemap_url)
+            if not getattr(pol, 'allowed', False):
+                logging.error(f"Egress denied for sitemap: {getattr(pol, 'reason', 'blocked')}")
+                return []
+        except Exception as _e:
+            logging.error(f"Egress policy evaluation failed: {_e}")
+            return []
+
+        response = requests.get(sitemap_url, timeout=15)
         response.raise_for_status()
         root = xET.fromstring(response.content)
 
@@ -630,13 +676,24 @@ def collect_internal_links(base_url: str) -> set:
     visited = set()
     to_visit = {base_url}
 
+    # Egress guard
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(base_url)
+        if not getattr(pol, 'allowed', False):
+            logging.error(f"Egress denied for base URL: {getattr(pol, 'reason', 'blocked')}")
+            return visited
+    except Exception as _e:
+        logging.error(f"Egress policy evaluation failed: {_e}")
+        return visited
+
     while to_visit:
         current_url = to_visit.pop()
         if current_url in visited:
             continue
 
         try:
-            response = requests.get(current_url)
+            response = requests.get(current_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 

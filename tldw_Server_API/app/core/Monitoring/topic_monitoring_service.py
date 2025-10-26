@@ -46,12 +46,34 @@ class TopicMonitoringService:
         self._config = load_and_log_configs() or {}
         self._max_scan_chars = int(os.getenv("TOPIC_MONITOR_MAX_SCAN_CHARS", "200000"))
         self._dedup_window_seconds = int(os.getenv("TOPIC_MONITOR_DEDUP_SECONDS", "300"))
-        self._watchlists_path = (
+        raw_watchlists = (
             self._config.get("monitoring", {}).get("watchlists_file")
             if isinstance(self._config, dict)
             else None
         ) or os.getenv("MONITORING_WATCHLISTS_FILE", "tldw_Server_API/Config_Files/monitoring_watchlists.json")
-        self._db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
+        raw_db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
+        # Anchor relative paths to project root to avoid creating dirs from CWD
+        try:
+            from pathlib import Path as _Path
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+            _root = _Path(_gpr())
+        except Exception:
+            from pathlib import Path as _Path
+            _root = _Path(__file__).resolve().parents[5]
+        try:
+            wl_p = _Path(str(raw_watchlists))
+        except Exception:
+            wl_p = _Path("tldw_Server_API/Config_Files/monitoring_watchlists.json")
+        if not wl_p.is_absolute():
+            wl_p = (_root / wl_p).resolve()
+        try:
+            db_p = _Path(str(raw_db_path))
+        except Exception:
+            db_p = _Path("Databases/monitoring_alerts.db")
+        if not db_p.is_absolute():
+            db_p = (_root / db_p).resolve()
+        self._watchlists_path = str(wl_p)
+        self._db_path = str(db_p)
         self._db = TopicMonitoringDB(db_path=self._db_path)
         self._watchlists: Dict[str, Watchlist] = {}
         # Cached compiled patterns per watchlist id

@@ -27,7 +27,6 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     create_from_settings_for_user,
 )
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 import pathlib
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 import asyncio

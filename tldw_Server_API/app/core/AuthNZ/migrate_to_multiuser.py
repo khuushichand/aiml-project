@@ -162,7 +162,12 @@ def migrate_existing_data(user_db: UserDatabase) -> None:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
         media_db_path = Path(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
     except Exception:
-        media_db_path = Path("../Databases/Media_DB_v2.db")
+        # Anchor fallback to project root to avoid writing outside repo
+        try:
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root
+            media_db_path = Path(get_project_root()) / "Databases" / "Media_DB_v2.db"
+        except Exception:
+            media_db_path = Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db"
     
     if media_db_path.exists():
         print(f"\n📁 Found existing Media database at: {media_db_path}")

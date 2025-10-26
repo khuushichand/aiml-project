@@ -363,14 +363,6 @@ class TTSServiceV2:
         Yields:
             Audio chunks in the requested format
         """
-        class _FallbackRequested(Exception):
-            """Internal signal to exit semaphore scope and trigger fallback."""
-
-            def __init__(self, exclude_tokens: List[str], failed_provider: str):
-                super().__init__("Fallback requested")
-                self.exclude_tokens = exclude_tokens
-                self.failed_provider = failed_provider
-
         # Convert OpenAI request to unified TTSRequest
         tts_request = self._convert_request(request)
         factory = await self._ensure_factory()
@@ -427,19 +419,21 @@ class TTSServiceV2:
         audio_size = 0
         chunks_count = 0
         released_active_slot = False
+        fallback_plan: Optional[Tuple[List[str], str]] = None
         await self._increment_active_requests(adapter.provider_name)
-        
+
         # Generate speech with circuit breaker and comprehensive error handling
         try:
             async with self._semaphore:
                 logger.info(f"Generating speech with {adapter.provider_name}")
-                
+
                 # Get circuit breaker if available
                 circuit_breaker = None
                 if self.circuit_manager:
                     circuit_breaker = await self.circuit_manager.get_breaker(adapter.provider_name)
-                
+
                 # Generate response (with or without circuit breaker)
+                response: Optional[TTSResponse] = None
                 if circuit_breaker:
                     try:
                         response = await circuit_breaker.call(adapter.generate, tts_request)
@@ -453,7 +447,7 @@ class TTSServiceV2:
                             )
                             await self._decrement_active_requests(adapter.provider_name)
                             released_active_slot = True
-                            raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
+                            fallback_plan = (self._build_exclude_tokens(adapter), adapter.provider_name)
                         else:
                             raise TTSProviderError(
                                 f"Circuit open for {adapter.provider_name}",
@@ -462,52 +456,43 @@ class TTSServiceV2:
                             )
                 else:
                     response = await adapter.generate(tts_request)
-                
-                # Stream audio
-                if response.audio_stream:
-                    async for chunk in response.audio_stream:
-                        chunks_count += 1
-                        audio_size += len(chunk)
-                        yield chunk
-                elif response.audio_data:
-                    # Non-streaming response
-                    chunks_count = 1
-                    audio_size = len(response.audio_data)
-                    yield response.audio_data
-                else:
-                    error_msg = f"No audio data returned by {adapter.provider_name}"
-                    logger.error(error_msg)
-                    if fallback:
-                        await self._handle_provider_fallback(tts_request, adapter.provider_name, error_msg)
-                        await self._decrement_active_requests(adapter.provider_name)
-                        released_active_slot = True
-                        raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
+
+                if fallback_plan is None and response is not None:
+                    if response.audio_stream:
+                        async for chunk in response.audio_stream:
+                            chunks_count += 1
+                            audio_size += len(chunk)
+                            yield chunk
+                    elif response.audio_data:
+                        chunks_count = 1
+                        audio_size = len(response.audio_data)
+                        yield response.audio_data
                     else:
-                        if self._stream_errors_as_audio:
-                            yield f"ERROR: {error_msg}".encode()
+                        error_msg = f"No audio data returned by {adapter.provider_name}"
+                        logger.error(error_msg)
+                        if fallback:
+                            await self._handle_provider_fallback(tts_request, adapter.provider_name, error_msg)
+                            await self._decrement_active_requests(adapter.provider_name)
+                            released_active_slot = True
+                            fallback_plan = (self._build_exclude_tokens(adapter), adapter.provider_name)
                         else:
-                            raise TTSGenerationError(error_msg, provider=adapter.provider_name)
-                
-                # Record success metrics
-                self._record_tts_metrics(
-                    provider=adapter.provider_name,
-                    model=tts_request.model or "default",
-                    voice=tts_request.voice or "default",
-                    format=tts_request.format.value,
-                    text_length=len(tts_request.text),
-                    audio_size=audio_size,
-                    duration=time.time() - start_time,
-                    success=True
-                )
-                    
-        except _FallbackRequested as fallback_exc:
-            async for chunk in self._try_fallback_providers(
-                tts_request,
-                fallback_exc.exclude_tokens,
-                fallback_exc.failed_provider,
-            ):
-                yield chunk
-            return
+                            if self._stream_errors_as_audio:
+                                yield f"ERROR: {error_msg}".encode()
+                            else:
+                                raise TTSGenerationError(error_msg, provider=adapter.provider_name)
+
+                if fallback_plan is None:
+                    self._record_tts_metrics(
+                        provider=adapter.provider_name,
+                        model=tts_request.model or "default",
+                        voice=tts_request.voice or "default",
+                        format=tts_request.format.value,
+                        text_length=len(tts_request.text),
+                        audio_size=audio_size,
+                        duration=time.time() - start_time,
+                        success=True
+                    )
+
         except TTSError as e:
             # Handle TTS-specific errors with proper categorization
             error_msg = f"Error generating speech with {adapter.provider_name}: {str(e)}"
@@ -535,7 +520,7 @@ class TTSServiceV2:
                 )
                 await self._decrement_active_requests(adapter.provider_name)
                 released_active_slot = True
-                raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
+                fallback_plan = (self._build_exclude_tokens(adapter), adapter.provider_name)
             else:
                 # For non-recoverable errors or when fallback is disabled
                 if self._stream_errors_as_audio:
@@ -571,7 +556,7 @@ class TTSServiceV2:
                 logger.info("Attempting fallback due to unexpected error")
                 await self._decrement_active_requests(adapter.provider_name)
                 released_active_slot = True
-                raise _FallbackRequested(self._build_exclude_tokens(adapter), adapter.provider_name)
+                fallback_plan = (self._build_exclude_tokens(adapter), adapter.provider_name)
             else:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: {error_msg}".encode()
@@ -583,6 +568,15 @@ class TTSServiceV2:
                     await self._decrement_active_requests(adapter.provider_name)
             except Exception:
                 pass
+
+        if fallback_plan:
+            async for chunk in self._try_fallback_providers(
+                tts_request,
+                fallback_plan[0],
+                fallback_plan[1],
+            ):
+                yield chunk
+            return
     
     async def _generate_with_adapter(
         self,

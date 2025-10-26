@@ -3,6 +3,7 @@
 #
 import asyncio
 import time
+import math
 from typing import Dict, List, Optional, Type, Any, Set
 from enum import Enum
 #
@@ -92,12 +93,35 @@ class TTSAdapterRegistry:
         self._init_lock = asyncio.Lock()
         self._initialized_providers: Set[TTSProvider] = set()
         self._failed_providers: Dict[TTSProvider, float] = {}  # Provider -> retry timestamp
-        retry_seconds = 60.0
-        try:
-            retry_seconds = float(self.config.get("adapter_failure_retry_seconds", retry_seconds))
-        except Exception:
-            retry_seconds = 60.0
-        self._failure_retry_seconds = max(retry_seconds, 5.0)
+
+        def _extract_retry_seconds(raw_cfg: Any) -> Optional[float]:
+            if raw_cfg is None:
+                return None
+            try:
+                return float(raw_cfg)
+            except (TypeError, ValueError):
+                return None
+
+        retry_seconds: Optional[float] = None
+        if isinstance(self.config, dict):
+            retry_seconds = _extract_retry_seconds(self.config.get("adapter_failure_retry_seconds"))
+            if retry_seconds is None:
+                perf_cfg = self.config.get("performance")
+                if isinstance(perf_cfg, dict):
+                    retry_seconds = _extract_retry_seconds(perf_cfg.get("adapter_failure_retry_seconds"))
+        if retry_seconds is None and self.config_manager:
+            try:
+                perf_cfg = self.config_manager.get_config().performance  # type: ignore[call-arg]
+                retry_seconds = _extract_retry_seconds(
+                    getattr(perf_cfg, "adapter_failure_retry_seconds", None)
+                )
+            except Exception:
+                pass
+
+        if retry_seconds is not None and retry_seconds <= 0:
+            retry_seconds = None
+
+        self._failure_retry_seconds: Optional[float] = retry_seconds
     
     def register_adapter(self, provider: TTSProvider, adapter: Any):
         """
@@ -113,6 +137,13 @@ class TTSAdapterRegistry:
         except Exception:
             name = str(adapter)
         logger.info(f"Registered adapter {name} for provider {provider.value}")
+
+    def _schedule_retry(self, provider: TTSProvider) -> None:
+        """Record a failed provider with optional retry backoff."""
+        if self._failure_retry_seconds is None:
+            self._failed_providers[provider] = math.inf
+        else:
+            self._failed_providers[provider] = time.time() + self._failure_retry_seconds
 
     def _resolve_adapter_class(self, spec: Any) -> Type[TTSAdapter]:
         """Resolve an adapter class from a class object or dotted path string."""
@@ -148,6 +179,9 @@ class TTSAdapterRegistry:
         
         retry_after = self._failed_providers.get(provider)
         if retry_after:
+            if math.isinf(retry_after):
+                logger.debug(f"Skipping {provider.value} - initialization previously failed (retry disabled)")
+                return None
             if retry_after > time.time():
                 logger.debug(
                     f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
@@ -166,6 +200,9 @@ class TTSAdapterRegistry:
         async with self._init_lock:
             retry_after = self._failed_providers.get(provider)
             if retry_after:
+                if math.isinf(retry_after):
+                    logger.debug(f"Skipping {provider.value} - initialization previously failed (retry disabled)")
+                    return None
                 if retry_after > time.time():
                     logger.debug(
                         f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
@@ -177,7 +214,7 @@ class TTSAdapterRegistry:
             if provider not in self._adapters:
                 success = await self._initialize_adapter(provider)
                 if not success:
-                    self._failed_providers[provider] = time.time() + self._failure_retry_seconds
+                    self._schedule_retry(provider)
                     return None
             
             adapter = self._adapters.get(provider)
@@ -389,6 +426,8 @@ class TTSAdapterRegistry:
             # Skip providers that are disabled or have failed
             retry_after = self._failed_providers.get(provider)
             if retry_after:
+                if math.isinf(retry_after):
+                    continue
                 if retry_after > time.time():
                     continue
                 self._failed_providers.pop(provider, None)
@@ -415,10 +454,12 @@ class TTSAdapterRegistry:
                         capabilities[provider] = caps
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout getting capabilities for {provider.value}")
-                self._failed_providers[provider] = time.time() + self._failure_retry_seconds
+                if self._failure_retry_seconds is not None:
+                    self._schedule_retry(provider)
             except Exception as e:
                 logger.debug(f"Error getting capabilities for {provider.value}: {e}")
-                self._failed_providers[provider] = time.time() + self._failure_retry_seconds
+                if self._failure_retry_seconds is not None:
+                    self._schedule_retry(provider)
         
         return capabilities
     

@@ -281,9 +281,26 @@ class L2DiskCache:
                 # Get file size
                 size_bytes = file_path.stat().st_size
                 
-                # Check total cache size
-                if self._get_total_size() + size_bytes > self.max_size_bytes:
-                    self._evict_lru()
+                # Check total cache size and evict until we have room
+                total = self._get_total_size()
+                if total + size_bytes > self.max_size_bytes:
+                    prev_total = -1
+                    # Keep evicting while over capacity and there are entries to evict
+                    while total + size_bytes > self.max_size_bytes and self.index:
+                        self._evict_lru()
+                        new_total = self._get_total_size()
+                        # If eviction did not change total size, break to avoid infinite loop
+                        if new_total == total:
+                            break
+                        total = new_total
+                    if total + size_bytes > self.max_size_bytes:
+                        # Give up: refuse to cache this entry and clean up file
+                        try:
+                            file_path.unlink()
+                        except Exception:
+                            pass
+                        logger.warning(f"L2 Disk cache at capacity; refusing to cache key {key}")
+                        return False
                 
                 # Update index
                 self.index[key] = {

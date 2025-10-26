@@ -262,6 +262,7 @@ class DatabasePool:
             conn = None
             try:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
+                await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute("PRAGMA foreign_keys = ON")
                 await conn.execute("BEGIN")
                 
@@ -327,6 +328,7 @@ class DatabasePool:
             conn = None
             try:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
+                await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute("PRAGMA foreign_keys = ON")
                 conn.row_factory = aiosqlite.Row
                 # Yield a shim with normalized execute() signature (see transaction())

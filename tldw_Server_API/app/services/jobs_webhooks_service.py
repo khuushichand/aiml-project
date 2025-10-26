@@ -62,8 +62,19 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
         pass
     jm = JobManager()
     after_id = 0
-    # Persistent cursor path (opt-in via env, defaults under Databases/)
-    cursor_path = os.getenv("JOBS_WEBHOOKS_CURSOR_PATH") or os.path.join(os.getcwd(), "Databases", "jobs_webhooks_cursor.txt")
+    # Persistent cursor path (opt-in via env, defaults under project Databases/)
+    cp = os.getenv("JOBS_WEBHOOKS_CURSOR_PATH")
+    if cp:
+        cursor_path = cp
+    else:
+        try:
+            from pathlib import Path as _Path
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+            cursor_path = str(_Path(_gpr()) / "Databases" / "jobs_webhooks_cursor.txt")
+        except Exception:
+            # Last resort: relative to this module's package root
+            from pathlib import Path as _Path
+            cursor_path = str(_Path(__file__).resolve().parents[3] / "Databases" / "jobs_webhooks_cursor.txt")
     # Resume from persisted cursor if present, unless explicitly overridden by env
     persisted_after = None
     try:

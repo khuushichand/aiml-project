@@ -223,11 +223,13 @@ class HiggsAdapter(TTSAdapter):
             
             # Register model with resource manager
             if self.serve_engine:
-                resource_manager.register_model(
+                register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.serve_engine,
                     cleanup_callback=self._cleanup_resources
                 )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
             
             logger.info(
                 f"{self.provider_name}: Initialized successfully "
@@ -350,13 +352,12 @@ class HiggsAdapter(TTSAdapter):
         if not hasattr(self, 'serve_engine') or not self.serve_engine:
             raise ValueError("Higgs serve engine not initialized")
         
-        # Import required modules
+        # Import required modules (torchaudio optional; avoid hard dependency)
         from boson_multimodal.serve.serve_engine import HiggsAudioResponse
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
             StreamingAudioWriter,
             AudioNormalizer
         )
-        import torchaudio
         
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(

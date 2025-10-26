@@ -194,13 +194,23 @@ class ModerationService:
             categories_enabled=categories_enabled or None,
         )
 
-        # Store paths for overrides
+        # Store paths for overrides (anchor runtime-overrides to project root when relative)
         self._user_overrides_path = user_overrides_path
         self._blocklist_path = blocklist_path
+        def _anchor(p: str) -> str:
+            try:
+                from pathlib import Path as _Path
+                pp = _Path(str(p))
+                if pp.is_absolute():
+                    return str(pp)
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+                return str((_Path(_gpr()) / pp).resolve())
+            except Exception:
+                return str(p)
         if runtime_overrides_path:
-            self._runtime_overrides_path = runtime_overrides_path
+            self._runtime_overrides_path = _anchor(runtime_overrides_path)
         else:
-            self._runtime_overrides_path = "tldw_Server_API/Config_Files/moderation_runtime_overrides.json"
+            self._runtime_overrides_path = _anchor("tldw_Server_API/Config_Files/moderation_runtime_overrides.json")
 
         # Optionally augment with built-in PII rules
         if pii_enabled:

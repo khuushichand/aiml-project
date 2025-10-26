@@ -350,8 +350,9 @@ class StreamingResponseHandler:
                                                 "type": stopper.error_type,
                                             }
                                         }
-                                        outputs.append(f"data: {json.dumps(err_payload)}\n\n")
-                                        outputs.append("data: [DONE]\n\n")
+                                        # Combine error and DONE into a single chunk to ensure clients see DONE
+                                        combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]\n\n"
+                                        outputs.append(combined)
                                         self.done_sent = True
                                         self.error_occurred = True
                                         return outputs, True
@@ -388,8 +389,8 @@ class StreamingResponseHandler:
                             "type": stopper.error_type,
                         }
                     }
-                    outputs.append(f"data: {json.dumps(err_payload)}\n\n")
-                    outputs.append("data: [DONE]\n\n")
+                    combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]\n\n"
+                    outputs.append(combined)
                     self.done_sent = True
                     self.error_occurred = True
                     return outputs, True

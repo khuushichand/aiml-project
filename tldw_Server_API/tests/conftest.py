@@ -6,7 +6,6 @@ from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
-
 class _TestUsageLogger:
     def __init__(self):
         self.events = []
@@ -47,4 +46,3 @@ def client_user_only(client_with_single_user):
     """Shorthand fixture that returns only the TestClient from client_with_single_user."""
     client, _ = client_with_single_user
     return client
-

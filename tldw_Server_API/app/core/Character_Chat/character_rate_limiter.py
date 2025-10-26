@@ -235,7 +235,7 @@ class CharacterRateLimiter:
                 try:
                     self.redis.zremrangebyscore(key, 0, window_start)
                 except Exception:
-                    logger.debug("Rate limiter stats: unable to prune Redis window for key %s", key)
+                    logger.debug("Rate limiter stats: unable to prune Redis window for key {}", key)
                 count = self.redis.zcount(key, window_start, "+inf")
                 count_int = int(count)
                 earliest_entry_score: Optional[float] = None

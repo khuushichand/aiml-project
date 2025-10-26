@@ -12,6 +12,9 @@ os.environ["TEST_MODE"] = "true"
 os.environ["DEFAULT_LLM_PROVIDER"] = "openai"
 os.environ["API_BEARER"] = os.environ.get("API_BEARER", "test-api-key-12345")
 os.environ["SINGLE_USER_API_KEY"] = os.environ.get("SINGLE_USER_API_KEY", "test-api-key-12345")
+# Reduce background services during tests
+os.environ.setdefault("DISABLE_AUTHNZ_SCHEDULER", "1")
+os.environ.setdefault("WORKFLOWS_SCHEDULER_ENABLED", "false")
 # Deterministic chat rate limits for integration tests
 os.environ.setdefault("TEST_CHAT_PER_USER_RPM", "2")
 os.environ.setdefault("TEST_CHAT_PER_CONVERSATION_RPM", "2")
@@ -52,6 +55,11 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionSystemMessageParam,
     ChatCompletionAssistantMessageParam,
 )
+
+# Note: FastAPI TestClient already triggers application lifespan shutdown
+# which calls shutdown_all_audit_services() and performs DB cleanup.
+# Adding an extra session-scope shutdown here risks duplicate teardown
+# and can contend with SQLite locks. Intentionally omitted.
 
 # =====================================================================
 # Default LLM call mocking

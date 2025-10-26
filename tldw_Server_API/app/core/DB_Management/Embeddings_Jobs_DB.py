@@ -27,7 +27,15 @@ class EmbeddingsJobsDatabase:
     
     def __init__(self, db_path: str = "./Databases/embeddings_jobs.db"):
         """Initialize the database connection and create tables if needed"""
-        self.db_path = Path(db_path)
+        p = Path(db_path)
+        if not p.is_absolute():
+            try:
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                p = Path(get_project_root()) / p
+            except Exception:
+                # Anchor to package root if project root cannot be resolved
+                p = Path(__file__).resolve().parents[4] / p
+        self.db_path = p
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_database()
     

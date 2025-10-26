@@ -34,9 +34,16 @@ class SecurityAlertDispatcher:
         self.min_severity = getattr(
             self.settings, "SECURITY_ALERT_MIN_SEVERITY", "high"
         ).lower()
-        self.file_path = getattr(
-            self.settings, "SECURITY_ALERT_FILE_PATH", "Databases/security_alerts.log"
-        )
+        raw_fp = getattr(self.settings, "SECURITY_ALERT_FILE_PATH", "Databases/security_alerts.log")
+        try:
+            fp = Path(str(raw_fp))
+            if not fp.is_absolute():
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+                fp = Path(_gpr()) / fp
+        except Exception:
+            # Anchor relative to package root if project resolution fails
+            fp = Path(__file__).resolve().parents[5] / str(raw_fp)
+        self.file_path = str(fp)
         self.webhook_url = getattr(self.settings, "SECURITY_ALERT_WEBHOOK_URL", None)
         raw_headers = getattr(
             self.settings, "SECURITY_ALERT_WEBHOOK_HEADERS", None

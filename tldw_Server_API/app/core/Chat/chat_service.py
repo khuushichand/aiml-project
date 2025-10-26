@@ -243,8 +243,8 @@ def build_call_params_from_request(
         call_params["temp"] = call_params.pop("temperature")
     if "top_p" in call_params:
         top_p_value = call_params.pop("top_p")
+        # Normalize to a single generic param; provider maps translate as needed
         call_params["topp"] = top_p_value
-        call_params["maxp"] = top_p_value
     if "user" in call_params:
         call_params["user_identifier"] = call_params.pop("user")
 

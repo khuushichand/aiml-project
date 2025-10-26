@@ -108,17 +108,16 @@ def terminate_process(task: SubprocessTask, grace_ms: int = 5000) -> Tuple[bool,
                     try:
                         import signal as _sig
                         os.kill(task.pid, _sig.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Subprocess terminate: CTRL_BREAK failed for pid={task.pid}: {e}")
                     time.sleep(grace_ms / 1000.0)
                     try:
                         os.kill(task.pid, signal.SIGTERM)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Subprocess terminate: SIGTERM failed for pid={task.pid}: {e}")
             except Exception as e:
                 logger.warning(f"Failed to terminate pid={task.pid}: {e}")
         terminated = True
     except Exception as e:
         logger.error(f"Terminate process failed: {e}")
     return terminated, forced
-

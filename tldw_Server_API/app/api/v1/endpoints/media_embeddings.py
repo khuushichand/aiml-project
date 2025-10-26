@@ -469,14 +469,14 @@ async def generate_embeddings(
                     jobs_update(job_id=job_id, user_id=user_id, status='completed',
                                 embedding_count=result.get('embedding_count'),
                                 chunks_processed=result.get('chunks_processed'))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"media_embeddings: failed to remove orphaned embedding row {row_id}: {e}")
             except Exception as e:
                 logger.error(f"Background embeddings generation failed for media {media_id}: {e}")
                 try:
                     jobs_update(job_id=job_id, user_id=user_id, status='failed', error=str(e))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"media_embeddings: failed to update embedding status for {row_id}: {e}")
 
         # Schedule the job on the current event loop; avoid creating tasks from non-async background thread
         asyncio.create_task(_run_job())
@@ -560,14 +560,14 @@ async def generate_embeddings_batch(
                         embedding_count=result.get('embedding_count'),
                         chunks_processed=result.get('chunks_processed')
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"media_embeddings: index op failed: {e}")
             except Exception as exc:
                 logger.error(f"Batch embeddings job failed for media {mid}: {exc}")
                 try:
                     jobs_update(job_id=job_ref, user_id=user_id, status='failed', error=str(exc))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"media_embeddings: cleanup failed: {e}")
 
         asyncio.create_task(_run_batch_job())
 

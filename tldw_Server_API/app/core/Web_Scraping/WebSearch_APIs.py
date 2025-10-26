@@ -19,7 +19,7 @@ from lxml.etree import _Element
 from lxml.html import document_fromstring
 from requests import RequestException
 from requests.adapters import HTTPAdapter
-from urllib3 import Retry
+from urllib3.util.retry import Retry
 #
 # Local Imports
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -182,8 +182,12 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
     web_search_results_dict["search_query"] = question
 
     # 3. Perform searches and accumulate all raw results
-    for q in all_queries:
-        sleep_time = random.uniform(1, 1.5)  # Add a random delay to avoid rate limiting
+    for idx, q in enumerate(all_queries):
+        # Add a small random delay between sub-queries to avoid rate limiting
+        # Skip delay for the very first query
+        if idx > 0:
+            sleep_time = random.uniform(1, 1.5)
+            time.sleep(sleep_time)
         logging.info(f"Performing web search for query: {q}")
         raw_results = perform_websearch(
             search_engine=search_params.get('engine'),
@@ -465,12 +469,12 @@ async def search_result_relevance(
 
             relevancy_result = await asyncio.wait_for(_llm_call(), timeout=timeouts["llm"])
 
-            # FIXME
+            # Verbose debug for provider output
             logging.debug(f"[DEBUG] Relevancy LLM response for index {idx}:\n{relevancy_result}\n---")
 
             if relevancy_result:
                 # Extract the selected answer and reasoning via regex
-                logging.debug(f"LLM Relevancy Response for item:", relevancy_result)
+                logging.debug(f"LLM Relevancy Response for item: {relevancy_result}")
                 selected_answer_match = re.search(
                     r"Selected Answer:\s*(True|False)",
                     relevancy_result,
@@ -1630,10 +1634,11 @@ def search_web_google(
         except Exception as _e:
             raise RequestException(f"Egress policy evaluation failed: {_e}")
 
-        # Make the API call
-        response = requests.get(search_url, params=params)
-        response.raise_for_status()
-        google_search_results = response.json()
+        # Make the API call with retry/session + timeout
+        with create_session() as _s:
+            response = _s.get(search_url, params=params, timeout=15)
+            response.raise_for_status()
+            google_search_results = response.json()
 
         logging.info(f"Successfully retrieved search results. Items found: {len(google_search_results.get('items', []))}")
 
@@ -1698,10 +1703,8 @@ def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
         raw_results (Dict): Raw Google API response.
         output_dict (Dict): Dictionary to store processed results.
     """
-    logging.info(f"Raw results received: {json.dumps(raw_results, indent=2)}")
-    # For debugging only FIXME
-    logging.debug("Raw web_search_results from Google:")
-    logging.debug(json.dumps(raw_results, indent=2))
+    # Lower verbosity: only log raw payload at debug level
+    logging.debug(f"Raw results received: {json.dumps(raw_results, indent=2)}")
     try:
         # Initialize results list if not present
         if "results" not in output_dict:
@@ -1826,7 +1829,7 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
     except Exception as _e:
         raise RequestException(f"Egress policy evaluation failed: {_e}")
 
-    response = requests.get(endpoint, headers=headers, params=params)
+    response = requests.get(endpoint, headers=headers, params=params, timeout=15)
     response.raise_for_status()
     logging.debug(response.json())
     return response.json()
@@ -1981,7 +1984,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         time.sleep(delay)
 
         session = searx_create_session()
-        response = session.get(search_url, headers=headers)
+        response = session.get(search_url, headers=headers, timeout=15)
         response.raise_for_status()
 
         # Check if the response is JSON
@@ -2119,7 +2122,7 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'
         }
 
-        response = requests.post(tavily_api_url, headers=headers, data=json.dumps(payload))
+        response = requests.post(tavily_api_url, headers=headers, data=json.dumps(payload), timeout=15)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:

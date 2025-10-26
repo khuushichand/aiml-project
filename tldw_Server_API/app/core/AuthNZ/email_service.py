@@ -237,7 +237,17 @@ class EmailService:
         # Email configuration
         self.provider = os.getenv("EMAIL_PROVIDER", "mock")  # mock, smtp, sendgrid, etc.
         self.mock_output = os.getenv("EMAIL_MOCK_OUTPUT", "console")  # console, file, both
-        self.mock_file_path = Path(os.getenv("EMAIL_MOCK_FILE_PATH", "./mock_emails"))
+        # Anchor mock file path to project root when relative
+        raw_mock = Path(os.getenv("EMAIL_MOCK_FILE_PATH", "./mock_emails"))
+        try:
+            if not raw_mock.is_absolute():
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                raw_mock = Path(get_project_root()) / raw_mock
+        except Exception:
+            # Fallback: anchor to package root to avoid CWD effects
+            if not raw_mock.is_absolute():
+                raw_mock = Path(__file__).resolve().parents[4] / raw_mock
+        self.mock_file_path = raw_mock
         
         # SMTP configuration (if using SMTP)
         self.smtp_host = os.getenv("SMTP_HOST", "localhost")

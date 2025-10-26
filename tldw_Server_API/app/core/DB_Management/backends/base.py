@@ -146,7 +146,12 @@ class DatabaseConfig:
                             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                             cfg.sqlite_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                         except Exception:
-                            cfg.sqlite_path = "./Databases/Media_DB_v2.db"
+                            try:
+                                from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                                from pathlib import Path as _Path
+                                cfg.sqlite_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
+                            except Exception:
+                                cfg.sqlite_path = "./Databases/Media_DB_v2.db"
                 return cfg
             # Fallback to TLDW_* handling if unknown scheme
 
@@ -177,7 +182,12 @@ class DatabaseConfig:
                     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                     cfg.sqlite_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                 except Exception:
-                    cfg.sqlite_path = "./Databases/Media_DB_v2.db"
+                    try:
+                        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                        from pathlib import Path as _Path
+                        cfg.sqlite_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
+                    except Exception:
+                        cfg.sqlite_path = "./Databases/Media_DB_v2.db"
             cfg.sqlite_wal_mode = os.getenv("TLDW_SQLITE_WAL_MODE", "true").lower() in {"1", "true", "yes", "on"}
             cfg.sqlite_foreign_keys = os.getenv("TLDW_SQLITE_FOREIGN_KEYS", "true").lower() in {"1", "true", "yes", "on"}
         elif backend_type == BackendType.POSTGRESQL:

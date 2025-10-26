@@ -1041,6 +1041,12 @@ def create_embeddings_batch(
 ) -> List[List[float]]:
     """
     Creates embeddings for a batch of texts.
+
+    Accepted model_id formats for lookup in embedding_config.models:
+    - provider:model  (e.g., "huggingface:sentence-transformers/all-MiniLM-L6-v2")
+    - model          (bare model name; resolver will attempt to infer provider or
+                      match a unique "provider:model" key ending with ":model")
+
     `user_app_config` should contain an 'embedding_config' key with EmbeddingConfigSchema structure.
     """
     if not texts:
@@ -1064,10 +1070,42 @@ def create_embeddings_batch(
         logging.error("No `model_id` specified and no `default_model_id` found in embedding_config.")
         raise ValueError("Embedding model ID not specified or configured as default.")
 
-    model_spec = embedding_service_config.models.get(model_id_to_use)
-    if not model_spec:
-        logging.error(f"Configuration for `model_id` '{model_id_to_use}' not found in `embedding_config.models`.")
-        raise ValueError(f"Invalid `model_id` or configuration missing: {model_id_to_use}")
+    def _resolve_model_key(models_map: Dict[str, Any], mid: str) -> tuple[str, Any]:
+        """Resolve a model key from models_map supporting bare or provider-prefixed IDs.
+
+        Tries exact match first, then:
+        - If mid contains ':', try its suffix as a bare key
+        - If bare, try common provider prefixes (heuristic) and any unique key ending with ":mid"
+        Returns (resolved_key, model_spec) on success or raises ValueError.
+        """
+        # 1) Exact key
+        if mid in models_map:
+            return mid, models_map[mid]
+        # 2) If provider-prefixed, try bare suffix
+        if ":" in mid:
+            suffix = mid.split(":", 1)[1]
+            if suffix in models_map:
+                return suffix, models_map[suffix]
+        # 3) If bare, try prefixed candidates based on simple heuristics
+        bare = mid.split(":", 1)[1] if ":" in mid else mid
+        guessed_providers = []
+        if "/" in bare:
+            guessed_providers.append("huggingface")
+        # Always consider openai and local_api as common options
+        guessed_providers.extend(["openai", "local_api"])  # order matters for tie-breaks
+        for prov in guessed_providers:
+            candidate = f"{prov}:{bare}"
+            if candidate in models_map:
+                return candidate, models_map[candidate]
+        # 4) Unique suffix match (any key that ends with ":<bare>")
+        suffix_matches = [k for k in models_map.keys() if k.endswith(f":{bare}")]
+        if len(suffix_matches) == 1:
+            k = suffix_matches[0]
+            return k, models_map[k]
+        logging.error(f"Configuration for `model_id` '{mid}' not found in `embedding_config.models`.")
+        raise ValueError(f"Invalid `model_id` or configuration missing: {mid}")
+
+    resolved_key, model_spec = _resolve_model_key(embedding_service_config.models, model_id_to_use)
 
     provider = model_spec.provider
     # Ensure model_storage_base_dir exists
@@ -1368,8 +1406,8 @@ def get_embedding_config() -> Dict[str, Any]:
     # Build the configuration in the expected format
     config = {
         "embedding_config": {
-            # Default to a lightweight, widely available HF model
-            "default_model_id": embedding_settings.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2'),
+            # Use provider:model convention for keys and default_model_id
+            "default_model_id": None,
             "models": {},
             "model_storage_base_dir": resolve_model_storage_base_dir(embedding_settings),
         }
@@ -1378,29 +1416,30 @@ def get_embedding_config() -> Dict[str, Any]:
     # Add model configurations based on provider
     provider = embedding_settings.get('embedding_provider', 'huggingface')
     model = embedding_settings.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2')
+    model_id_key = f"{provider}:{model}"
     
     # Add default configurations for common models - create proper instances
     if provider == 'openai':
-        config["embedding_config"]["models"][model] = OpenAIModelCfg(
+        config["embedding_config"]["models"][model_id_key] = OpenAIModelCfg(
             provider="openai",
             model_name_or_path=model,
             api_key=embedding_settings.get('embedding_api_key', settings.get("OPENAI_API_KEY", ""))
         )
     elif provider == 'huggingface':
-        config["embedding_config"]["models"][model] = HFModelCfg(
+        config["embedding_config"]["models"][model_id_key] = HFModelCfg(
             provider="huggingface",
             model_name_or_path=model,
             trust_remote_code=False,
             hf_cache_dir_subpath="huggingface_cache"
         )
     elif provider == 'local_api':
-        config["embedding_config"]["models"][model] = LocalAPICfg(
+        config["embedding_config"]["models"][model_id_key] = LocalAPICfg(
             provider="local_api",
             model_name_or_path=model,
             api_url=embedding_settings.get('embedding_api_url', 'http://localhost:8080/v1/embeddings'),
             api_key=embedding_settings.get('embedding_api_key', '')
         )
-    
+
     # Add common HuggingFace models that might be requested
     common_hf_models = [
         "sentence-transformers/all-MiniLM-L6-v2",
@@ -1408,13 +1447,17 @@ def get_embedding_config() -> Dict[str, Any]:
     ]
     
     for hf_model in common_hf_models:
-        if hf_model not in config["embedding_config"]["models"]:
-            config["embedding_config"]["models"][hf_model] = HFModelCfg(
+        hf_key = f"huggingface:{hf_model}"
+        if hf_key not in config["embedding_config"]["models"]:
+            config["embedding_config"]["models"][hf_key] = HFModelCfg(
                 provider="huggingface",
                 model_name_or_path=hf_model,
                 trust_remote_code=False,
                 hf_cache_dir_subpath="huggingface_cache"
             )
+
+    # Set default_model_id now that keys are known
+    config["embedding_config"]["default_model_id"] = model_id_key
 
     # Optional: test override for model unload timeout
     # If TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS (or EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS) is set,

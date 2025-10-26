@@ -1609,15 +1609,15 @@ class ChatDictionaryService:
         try:
             numeric = float(cleaned)
         except ValueError:
-            logger.warning("Invalid probability value '%s' in markdown entry; using default.", raw_probability)
+            logger.warning("Invalid probability value '{}' in markdown entry; using default.", raw_probability)
             return None
         if has_percent or numeric > 1.0:
             numeric /= 100.0
         if numeric < 0.0:
-            logger.warning("Probability %s below 0; clamping to 0.", raw_probability)
+            logger.warning("Probability {} below 0; clamping to 0.", raw_probability)
             return 0.0
         if numeric > 1.0:
-            logger.warning("Probability %s above 1 after normalization; clamping to 1.", raw_probability)
+            logger.warning("Probability {} above 1 after normalization; clamping to 1.", raw_probability)
             return 1.0
         return numeric
     

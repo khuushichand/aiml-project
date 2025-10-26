@@ -202,7 +202,20 @@ def ensure_jobs_tables(db_path: Optional[Path] = None) -> Path:
         Path to the database used
     """
     if db_path is None:
-        db_path = Path("Databases/jobs.db")
+        # Anchor default path to project root to avoid CWD effects
+        try:
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+            db_path = (Path(_gpr()) / "Databases" / "jobs.db").resolve()
+        except Exception:
+            db_path = (Path(__file__).resolve().parents[5] / "Databases" / "jobs.db").resolve()
+    else:
+        try:
+            db_path = Path(db_path)
+            if not db_path.is_absolute():
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+                db_path = (Path(_gpr()) / db_path).resolve()
+        except Exception:
+            db_path = Path(db_path)
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:

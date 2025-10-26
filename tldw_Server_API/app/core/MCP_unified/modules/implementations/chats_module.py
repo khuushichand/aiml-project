@@ -28,8 +28,13 @@ class ChatsModule(BaseModule):
             checks["driver_available"] = False
         try:
             import os
-            base = os.path.dirname("./Databases/test.db") or "."
-            stat = os.statvfs(base)
+            from pathlib import Path
+            try:
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                base = Path(get_project_root())
+            except Exception:
+                base = Path(__file__).resolve().parents[5]
+            stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
         except Exception:

@@ -3,9 +3,12 @@ import sys
 import types
 import asyncio
 import pytest
+from pathlib import Path
 
-# Avoid Matplotlib writing to user home in sandboxed CI
-_cache_dir = os.path.join('tldw_Server_API', '.mplcache')
+# Avoid Matplotlib writing to user home or outside the repo.
+# Anchor cache under the package root regardless of current working directory.
+_pkg_root = Path(__file__).resolve().parents[2]  # .../tldw_Server_API
+_cache_dir = str(_pkg_root / '.mplcache')
 os.makedirs(_cache_dir, exist_ok=True)
 os.environ.setdefault('MPLCONFIGDIR', _cache_dir)
 

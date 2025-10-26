@@ -38,13 +38,13 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     try:
         if isinstance(data.get("inputs"), dict):
             data["inputs"] = types.SimpleNamespace(**data["inputs"])  # type: ignore[arg-type]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Prompt adapter: failed to namespace inputs: {e}", exc_info=True)
     try:
         # Keep a shallow namespace for convenience
         data.update(variables)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Prompt adapter: failed to merge variables into context: {e}", exc_info=True)
 
     # Pre-pass: replacements for common tokens to be robust in sandbox
     try:
@@ -60,8 +60,8 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 key = m.group(1)
                 return str(context["inputs"].get(key, ""))
             template = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl_simple, template)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Prompt adapter: pre-pass templating fallback failed: {e}", exc_info=True)
 
     # Optional simulated delay/error for testing retries/timeouts
     try:
@@ -75,8 +75,8 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 sl = min(0.05, remaining)
                 await asyncio.sleep(sl)
                 remaining -= sl
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Prompt adapter: simulate_delay handling failed: {e}", exc_info=True)
     # Force-error handling (test-friendly)
     fe = config.get("force_error")
     if isinstance(fe, str):
@@ -102,8 +102,8 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 mime_type="text/plain",
                 metadata={"step": "prompt"},
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Prompt adapter: failed to persist prompt artifact: {e}", exc_info=True)
     return {"text": rendered}
 
 
@@ -139,7 +139,14 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
         media_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
     except Exception:
-        media_db_path = "Databases/Media_DB_v2.db"
+        # Anchor fallback to project root to avoid CWD effects
+        try:
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root
+            from pathlib import Path as _Path
+            media_db_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
+        except Exception:
+            from pathlib import Path as _Path
+            media_db_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
 
     # Map supported options directly to pipeline
     passthrough_keys = {
@@ -349,7 +356,13 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                         _mdb_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                     except Exception:
-                        _mdb_path = "Databases/Media_DB_v2.db"
+                        try:
+                            from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                            from pathlib import Path as _Path
+                            _mdb_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
+                        except Exception:
+                            from pathlib import Path as _Path
+                            _mdb_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
                     mdb = MediaDatabase(_mdb_path, client_id="workflow_engine")
                     title = (config.get("metadata", {}) or {}).get("title") or Path(path).name
                     keywords = (config.get("metadata", {}) or {}).get("tags") or []
@@ -614,8 +627,8 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                                 for chunk in iter(lambda: f.read(65536), b""):
                                     h.update(chunk)
                             sha256 = h.hexdigest()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Media ingest adapter: failed to compute sha256 for {fp}: {e}")
                         context["add_artifact"](
                             type="download",
                             uri=f"file://{fp}",

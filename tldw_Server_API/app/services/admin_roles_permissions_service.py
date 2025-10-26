@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+from loguru import logger
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+
+
+async def list_roles(db) -> List[Dict[str, Any]]:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            rows = await db.fetch("SELECT id, name, description, COALESCE(is_system, FALSE) as is_system FROM roles ORDER BY name")
+            return [dict(r) for r in rows]
+        cur = await db.execute("SELECT id, name, description, COALESCE(is_system, 0) as is_system FROM roles ORDER BY name")
+        return [{"id": r[0], "name": r[1], "description": r[2], "is_system": bool(r[3])} for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"admin_service.list_roles failed: {e}")
+        raise
+
+
+async def create_role(db, name: str, description: Optional[str] = None, is_system: bool = False) -> Dict[str, Any]:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            row = await db.fetchrow(
+                "INSERT INTO roles (name, description, is_system) VALUES ($1, $2, $3) RETURNING id, name, description, is_system",
+                name, description, is_system,
+            )
+            return dict(row)
+        cur = await db.execute("INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?)", (name, description, 1 if is_system else 0))
+        commit = getattr(db, "commit", None)
+        if callable(commit):
+            await commit()
+        rid = cur.lastrowid
+        cur2 = await db.execute("SELECT id, name, description, COALESCE(is_system,0) FROM roles WHERE id = ?", (rid,))
+        r = await cur2.fetchone()
+        return {"id": r[0], "name": r[1], "description": r[2], "is_system": bool(r[3])}
+    except Exception as e:
+        logger.error(f"admin_service.create_role failed: {e}")
+        raise
+
+
+async def delete_role(db, role_id: int) -> bool:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            await db.execute("DELETE FROM roles WHERE id = $1 AND COALESCE(is_system, FALSE) = FALSE", role_id)
+        else:
+            await db.execute("DELETE FROM roles WHERE id = ? AND COALESCE(is_system, 0) = 0", (role_id,))
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                await commit()
+        return True
+    except Exception as e:
+        logger.error(f"admin_service.delete_role failed: {e}")
+        raise
+
+
+async def list_role_permissions(db, role_id: int) -> List[Dict[str, Any]]:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            rows = await db.fetch(
+                """
+                SELECT p.id, p.name, p.description, p.category
+                FROM permissions p
+                JOIN role_permissions rp ON p.id = rp.permission_id
+                WHERE rp.role_id = $1
+                ORDER BY p.name
+                """,
+                role_id,
+            )
+            return [dict(r) for r in rows]
+        cur = await db.execute(
+            """
+            SELECT p.id, p.name, p.description, p.category
+            FROM permissions p
+            JOIN role_permissions rp ON p.id = rp.permission_id
+            WHERE rp.role_id = ?
+            ORDER BY p.name
+            """,
+            (role_id,),
+        )
+        return [{"id": r[0], "name": r[1], "description": r[2], "category": r[3]} for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"admin_service.list_role_permissions failed: {e}")
+        raise
+
+
+async def list_tool_permissions(db) -> List[Dict[str, Any]]:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            rows = await db.fetch("SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name")
+            return [dict(r) for r in rows]
+        cur = await db.execute("SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name")
+        return [{"name": r[0], "description": r[1], "category": r[2]} for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"admin_service.list_tool_permissions failed: {e}")
+        raise
+
+
+async def delete_tool_permission(db, full_name: str) -> bool:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            await db.execute("DELETE FROM permissions WHERE name = $1", full_name)
+        else:
+            await db.execute("DELETE FROM permissions WHERE name = ?", (full_name,))
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                await commit()
+        return True
+    except Exception as e:
+        logger.error(f"admin_service.delete_tool_permission failed: {e}")
+        raise
+
+
+async def ensure_permission(db, name: str, description: str, category: str = 'tools') -> Dict[str, Any]:
+    """Idempotently create a permission and return its row."""
+    is_pg = await is_postgres_backend()
+    if is_pg:
+        await db.execute(
+            "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
+            name, description, category,
+        )
+        row = await db.fetchrow("SELECT id, name, description, category FROM permissions WHERE name = $1", name)
+        if not row:
+            raise RuntimeError("Failed to create or fetch permission")
+        return dict(row)
+    cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
+    r = await cur.fetchone()
+    if not r:
+        await db.execute("INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)", (name, description, category))
+        commit = getattr(db, "commit", None)
+        if callable(commit):
+            await commit()
+        cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
+        r = await cur.fetchone()
+    return {"id": r[0], "name": r[1], "description": r[2], "category": r[3]}
+
+
+async def grant_tool_permission_to_role(db, role_id: int, permission_name: str, description: str) -> Dict[str, Any]:
+    perm = await ensure_permission(db, permission_name, description, category='tools')
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, perm['id'])
+            return perm
+        await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, perm['id']))
+        commit = getattr(db, "commit", None)
+        if callable(commit):
+            await commit()
+        # Verify mapping
+        cur2 = await db.execute("SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, perm['id']))
+        exists = await cur2.fetchone()
+        if not exists:
+            await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, perm['id']))
+            if callable(commit):
+                await commit()
+        return perm
+    except Exception as e:
+        logger.error(f"admin_service.grant_tool_permission_to_role failed: {e}")
+        raise
+
+
+async def revoke_tool_permission_from_role(db, role_id: int, permission_name: str) -> bool:
+    is_pg = await is_postgres_backend()
+    try:
+        if is_pg:
+            row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", permission_name)
+            if not row:
+                return False
+            await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, row['id'])
+            return True
+        cur = await db.execute("SELECT id FROM permissions WHERE name = ?", (permission_name,))
+        r = await cur.fetchone()
+        if not r:
+            return False
+        await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, r[0]))
+        commit = getattr(db, "commit", None)
+        if callable(commit):
+            await commit()
+        return True
+    except Exception as e:
+        logger.error(f"admin_service.revoke_tool_permission_from_role failed: {e}")
+        raise
+

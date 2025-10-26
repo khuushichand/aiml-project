@@ -26,8 +26,13 @@ def _build_chacha_db_for_user(user_id: str) -> CharactersRAGDB:
         return CharactersRAGDB(db_path=str(db_path), client_id=str(user_id))
     except Exception as e:
         logger.warning(f"Core Jobs Worker: fallback path for user {user_id} due to: {e}")
-        # Fallback path inside Databases/user_databases
-        base = Path("Databases/user_databases") / str(user_id)
+        # Fallback path inside project-root Databases/user_databases
+        try:
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root
+            base = Path(get_project_root()) / "Databases" / "user_databases" / str(user_id)
+        except Exception:
+            # Last resort: anchor to this file's package root to avoid CWD effects
+            base = Path(__file__).resolve().parents[3] / "Databases" / "user_databases" / str(user_id)
         base.mkdir(parents=True, exist_ok=True)
         return CharactersRAGDB(db_path=str(base / "ChaChaNotes.db"), client_id=str(user_id))
 

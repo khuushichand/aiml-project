@@ -488,7 +488,7 @@ def process_db_messages_to_rich_ui_history(
             _len = len(processed_content) if isinstance(processed_content, str) else 0
         except Exception:
             _len = 0
-        logger.warning("Message from unknown sender '%s' (content redacted; length=%s)", sender, _len)
+        logger.warning("Message from unknown sender '{}' (content redacted; length={})", sender, _len)
         formatted_content = f"[{sender}] {processed_content}"
         detail = {
             "id": msg_data.get("id"),
@@ -555,7 +555,7 @@ def load_chat_and_character(
     try:
         conversation_data = db.get_conversation_by_id(conversation_id_str)
         if not conversation_data:
-            logger.warning("No conversation found with ID: %s", conversation_id_str)
+            logger.warning("No conversation found with ID: {}", conversation_id_str)
             return None, [], None
 
         character_id = conversation_data.get("character_id")
@@ -673,7 +673,7 @@ def start_new_chat_session(
 ]:
     """Start a new chat session with the specified character."""
 
-    logger.debug("Starting new chat session for character_id: %s, user: %s", character_id, user_name)
+    logger.debug("Starting new chat session for character_id: {}, user: {}", character_id, user_name)
 
     original_first_message_content: Optional[str] = None
     original_alternate_greetings: Optional[List[str]] = None
@@ -700,7 +700,7 @@ def start_new_chat_session(
     char_data, initial_ui_history, img = load_character_and_image(db, character_id, user_name)
 
     if not char_data:
-        logger.error("Failed to load character_id %s to start new chat session.", character_id)
+        logger.error("Failed to load character_id {} to start new chat session.", character_id)
         return None, None, None, None
 
     char_name = char_data.get("name", "Character")
@@ -741,7 +741,7 @@ def start_new_chat_session(
                     if isinstance(alternate_index, int) and alternate_index >= 0 and alternate_index < len(original_alternate_greetings):
                         selected_alt = original_alternate_greetings[alternate_index]
         except Exception as _sel_err:
-            logger.debug("Alternate greeting selection failed: %s", _sel_err)
+            logger.debug("Alternate greeting selection failed: {}", _sel_err)
 
         if isinstance(selected_alt, str) and selected_alt.strip():
             message_to_store_in_db = selected_alt
@@ -803,7 +803,7 @@ def start_new_chat_session(
         )
         return conversation_id_val, char_data, initial_ui_history, img
     except Exception as exc:
-        logger.error("Unexpected error in start_new_chat_session: %s", exc, exc_info=True)
+        logger.error("Unexpected error in start_new_chat_session: {}", exc, exc_info=True)
         return conversation_id_val, char_data, initial_ui_history, img
 
 
@@ -909,7 +909,7 @@ def delete_conversation_by_id(
     try:
         success = db.soft_delete_conversation(conversation_id, expected_version)
         if success:
-            logger.info("Conversation %s soft-deleted successfully.", conversation_id)
+            logger.info("Conversation {} soft-deleted successfully.", conversation_id)
         return success
     except (CharactersRAGDBError, ConflictError) as exc:
         logger.error(
@@ -919,7 +919,7 @@ def delete_conversation_by_id(
         )
         return False
     except Exception as exc:
-        logger.error("Unexpected error removing conversation ID %s: %s", conversation_id, exc, exc_info=True)
+        logger.error("Unexpected error removing conversation ID {}: {}", conversation_id, exc, exc_info=True)
         return False
 
 
@@ -1085,7 +1085,7 @@ def retrieve_message_details(
             )
         return message_data
     except CharactersRAGDBError as exc:
-        logger.error("Failed to retrieve message ID %s: %s", message_id, exc)
+        logger.error("Failed to retrieve message ID {}: {}", message_id, exc)
         return None
     except Exception as exc:
         logger.error(
@@ -1115,7 +1115,7 @@ def retrieve_conversation_messages_for_ui(
 
     order_upper = order.upper()
     if order_upper not in ["ASC", "DESC"]:
-        logger.warning("Invalid order '%s' for message retrieval. Defaulting to ASC.", order)
+        logger.warning("Invalid order '{}' for message retrieval. Defaulting to ASC.", order)
         order_upper = "ASC"
 
     try:
@@ -1217,7 +1217,7 @@ def edit_message_content(
         update_payload = {"content": new_content}
         success = db.update_message(message_id, update_payload, expected_version)
         if success:
-            logger.info("Edited message %s", message_id)
+            logger.info("Edited message {}", message_id)
         else:
             logger.warning(
                 "Failed to edit message %s - version mismatch or message not found",
@@ -1225,7 +1225,7 @@ def edit_message_content(
             )
         return bool(success)
     except (CharactersRAGDBError, InputError, ConflictError) as exc:
-        logger.error("Failed to edit content for message ID %s: %s", message_id, exc)
+        logger.error("Failed to edit content for message ID {}: {}", message_id, exc)
         return False
     except Exception as exc:
         logger.error(
@@ -1249,7 +1249,7 @@ def set_message_ranking(
     try:
         return bool(db.update_message(message_id, update_payload, expected_version))
     except (CharactersRAGDBError, InputError, ConflictError) as exc:
-        logger.error("Failed to set ranking for message ID %s: %s", message_id, exc)
+        logger.error("Failed to set ranking for message ID {}: {}", message_id, exc)
         return False
     except Exception as exc:
         logger.error(
@@ -1271,7 +1271,7 @@ def remove_message_from_conversation(
     try:
         return bool(db.soft_delete_message(message_id, expected_version))
     except (CharactersRAGDBError, ConflictError) as exc:
-        logger.error("Failed to remove message ID %s: %s", message_id, exc)
+        logger.error("Failed to remove message ID {}: {}", message_id, exc)
         return False
     except Exception as exc:
         logger.error(

@@ -123,6 +123,26 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgMembershipItem,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
+from tldw_Server_API.app.services.admin_roles_permissions_service import (
+    list_roles as svc_list_roles,
+    create_role as svc_create_role,
+    delete_role as svc_delete_role,
+    list_role_permissions as svc_list_role_permissions,
+    list_tool_permissions as svc_list_tool_permissions,
+    delete_tool_permission as svc_delete_tool_permission,
+    grant_tool_permission_to_role as svc_grant_tool_perm,
+    revoke_tool_permission_from_role as svc_revoke_tool_perm,
+)
+from tldw_Server_API.app.services.admin_orgs_service import list_teams_by_org as svc_list_teams_by_org
+from tldw_Server_API.app.services.admin_usage_service import (
+    fetch_usage_daily as svc_fetch_usage_daily,
+    export_usage_daily_csv_text as svc_export_usage_daily_csv_text,
+    fetch_usage_top as svc_fetch_usage_top,
+    export_usage_top_csv_text as svc_export_usage_top_csv_text,
+    fetch_llm_usage as svc_fetch_llm_usage,
+    fetch_llm_usage_summary as svc_fetch_llm_usage_summary,
+)
+from tldw_Server_API.app.services.admin_service import update_api_key_metadata
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
@@ -397,54 +417,18 @@ async def admin_update_user_api_key(
 ) -> APIKeyMetadata:
     """Update per-key limits like rate_limit and allowed_ips (admin)."""
     try:
-        import json
-        is_pg = await is_postgres_backend()
-        fields = []
-        params = []
-        if request.rate_limit is not None:
-            fields.append("rate_limit = ${}" if is_pg else "rate_limit = ?")
-            params.append(request.rate_limit)
-        if request.allowed_ips is not None:
-            fields.append("allowed_ips = ${}" if is_pg else "allowed_ips = ?")
-            params.append(json.dumps(request.allowed_ips))
-        if not fields:
+        try:
+            row = await update_api_key_metadata(
+                db,
+                user_id=user_id,
+                key_id=key_id,
+                rate_limit=request.rate_limit,
+                allowed_ips=request.allowed_ips,
+            )
+        except ValueError:
             raise HTTPException(status_code=400, detail="No updates provided")
-
-        if is_pg:
-            # PostgreSQL numbered params
-            set_clause = ", ".join(fields[i].format(i + 1) for i in range(len(fields)))
-            query = f"UPDATE api_keys SET {set_clause} WHERE id = $ {len(fields) + 1} AND user_id = $ {len(fields) + 2}"
-            # Fix spacing: replace '$ ' with '$'
-            query = query.replace('$ ', '$')
-            await db.execute(query, *params, key_id, user_id)
-            row = await db.fetchrow("SELECT * FROM api_keys WHERE id = $1 AND user_id = $2", key_id, user_id)
-        else:
-            # SQLite
-            set_clause = ", ".join(fields)
-            params2 = list(params) + [key_id, user_id]
-            await db.execute(f"UPDATE api_keys SET {set_clause} WHERE id = ? AND user_id = ?", params2)
-            await db.commit()
-            cursor = await db.execute("SELECT * FROM api_keys WHERE id = ? AND user_id = ?", (key_id, user_id))
-            row = await cursor.fetchone()
-
-        if not row:
+        except LookupError:
             raise HTTPException(status_code=404, detail="API key not found")
-
-        # Normalize row to dict
-        if not isinstance(row, dict):
-            try:
-                row = dict(row)
-            except Exception:
-                # Map by column order (SQLite fallback)
-                cols = [
-                    'id','user_id','key_hash','key_prefix','name','description','scope','status','created_at','expires_at',
-                    'last_used_at','last_used_ip','usage_count','rate_limit','allowed_ips','metadata','rotated_from','rotated_to',
-                    'revoked_at','revoked_by','revoke_reason'
-                ]
-                row = {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
-
-        # Drop sensitive hash field and return metadata-like view
-        row.pop('key_hash', None)
         return APIKeyMetadata(**row)
     except HTTPException:
         raise
@@ -490,24 +474,8 @@ async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResp
 @router.get("/orgs/{org_id}/teams", response_model=List[TeamResponse])
 async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), db=Depends(get_db_transaction)) -> list[TeamResponse]:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                "SELECT id, org_id, name, slug, description, COALESCE(is_active,TRUE) as is_active, created_at, updated_at FROM teams WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-                org_id, limit, offset,
-            )
-            return [TeamResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                "SELECT id, org_id, name, slug, description, COALESCE(is_active,1), created_at, updated_at FROM teams WHERE org_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (org_id, limit, offset),
-            )
-            rows = await cur.fetchall()
-            return [
-                TeamResponse(
-                    id=r[0], org_id=r[1], name=r[2], slug=r[3], description=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
-                ) for r in rows
-            ]
+        rows = await svc_list_teams_by_org(db, org_id, limit, offset)
+        return [TeamResponse(**r) for r in rows]
     except Exception as e:
         logger.error(f"Failed to list teams: {e}")
         raise HTTPException(status_code=500, detail="Failed to list teams")
@@ -1111,23 +1079,8 @@ async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
 @router.post("/roles", response_model=RoleResponse)
 async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)) -> RoleResponse:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            row = await db.fetchrow(
-                "INSERT INTO roles (name, description, is_system) VALUES ($1, $2, $3) RETURNING id, name, description, is_system",
-                payload.name, payload.description, False,
-            )
-            return RoleResponse(**dict(row))
-        else:
-            cur = await db.execute(
-                "INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?)",
-                (payload.name, payload.description, 0),
-            )
-            await db.commit()
-            rid = cur.lastrowid
-            cur2 = await db.execute("SELECT id, name, description, COALESCE(is_system,0) FROM roles WHERE id = ?", (rid,))
-            row = await cur2.fetchone()
-            return RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3]))
+        row = await svc_create_role(db, payload.name, payload.description, False)
+        return RoleResponse(**row)
     except Exception as e:
         logger.error(f"Failed to create role: {e}")
         raise HTTPException(status_code=500, detail="Failed to create role")
@@ -1136,12 +1089,7 @@ async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)
 @router.delete("/roles/{role_id}")
 async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute("DELETE FROM roles WHERE id = $1 AND COALESCE(is_system, FALSE) = FALSE", role_id)
-        else:
-            await db.execute("DELETE FROM roles WHERE id = ? AND COALESCE(is_system, 0) = 0", (role_id,))
-            await db.commit()
+        await svc_delete_role(db, role_id)
         return {"message": "Role deleted"}
     except Exception as e:
         logger.error(f"Failed to delete role {role_id}: {e}")
@@ -1152,32 +1100,8 @@ async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
 async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
     """List permissions granted to a specific role (read-only matrix row)."""
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT p.id, p.name, p.description, p.category
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                WHERE rp.role_id = $1
-                ORDER BY p.name
-                """,
-                role_id,
-            )
-            return [PermissionResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                """
-                SELECT p.id, p.name, p.description, p.category
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                WHERE rp.role_id = ?
-                ORDER BY p.name
-                """,
-                (role_id,),
-            )
-            rows = await cur.fetchall()
-            return [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in rows]
+        rows = await svc_list_role_permissions(db, role_id)
+        return [PermissionResponse(**r) for r in rows]
     except Exception as e:
         logger.error(f"Failed to list permissions for role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list role permissions")
@@ -1187,18 +1111,8 @@ async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) ->
 async def list_tool_permissions(db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """List tool execution permissions (name starts with 'tools.execute:')."""
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                "SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name"
-            )
-            return [ToolPermissionResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                "SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name"
-            )
-            rows = await cur.fetchall()
-            return [ToolPermissionResponse(name=r[0], description=r[1], category=r[2]) for r in rows]
+        rows = await svc_list_tool_permissions(db)
+        return [ToolPermissionResponse(**r) for r in rows]
     except Exception as e:
         logger.error(f"Failed to list tool permissions: {e}")
         raise HTTPException(status_code=500, detail="Failed to list tool permissions")
@@ -1251,12 +1165,7 @@ async def delete_tool_permission(perm_name: str, db=Depends(get_db_transaction))
     try:
         if not perm_name.startswith('tools.execute:'):
             raise HTTPException(status_code=400, detail="Invalid tool permission name")
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute("DELETE FROM permissions WHERE name = $1", perm_name)
-        else:
-            await db.execute("DELETE FROM permissions WHERE name = ?", (perm_name,))
-            await db.commit()
+        await svc_delete_tool_permission(db, perm_name)
         return {"message": "Tool permission deleted", "name": perm_name}
     except HTTPException:
         raise
@@ -1277,50 +1186,8 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
     name = f"tools.execute:{'*' if tool == '*' else tool}"
     desc = f"Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
     try:
-        is_pg = await is_postgres_backend()
-        # Ensure permission exists
-        if is_pg:
-            await db.execute(
-                "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
-                name, desc, 'tools',
-            )
-            row = await db.fetchrow("SELECT id, name, description, category FROM permissions WHERE name = $1", name)
-            perm_id = row['id'] if row else None
-            if perm_id is None:
-                raise HTTPException(status_code=500, detail="Failed to insert permission")
-            await db.execute(
-                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                role_id, perm_id,
-            )
-            return ToolPermissionResponse(name=name, description=row['description'], category=row['category'])
-        else:
-            cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
-            r = await cur.fetchone()
-            if not r:
-                await db.execute("INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)", (name, desc, 'tools'))
-                await db.commit()
-                cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
-                r = await cur.fetchone()
-            perm_id = r[0]
-            await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, perm_id))
-            await db.commit()
-            # Verify the mapping exists; fallback to hard insert if needed
-            cur2 = await db.execute(
-                "SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?",
-                (role_id, perm_id),
-            )
-            exists = await cur2.fetchone()
-            if not exists:
-                try:
-                    await db.execute(
-                        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
-                        (role_id, perm_id),
-                    )
-                    await db.commit()
-                except Exception:
-                    # Ignore if constraint error due to racing insert
-                    pass
-            return ToolPermissionResponse(name=r[1], description=r[2], category=r[3])
+        perm = await svc_grant_tool_perm(db, role_id, name, desc)
+        return ToolPermissionResponse(name=perm['name'], description=perm.get('description'), category=perm.get('category'))
     except HTTPException:
         raise
     except Exception as e:
@@ -1336,21 +1203,10 @@ async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depe
     """
     name = f"tools.execute:{'*' if tool_name.strip() == '*' else tool_name.strip()}"
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", name)
-            if not row:
-                return {"message": "Permission not found; nothing to revoke", "name": name}
-            await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, row['id'])
-            return {"message": "Tool permission revoked", "name": name}
-        else:
-            cur = await db.execute("SELECT id FROM permissions WHERE name = ?", (name,))
-            r = await cur.fetchone()
-            if not r:
-                return {"message": "Permission not found; nothing to revoke", "name": name}
-            await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, r[0]))
-            await db.commit()
-            return {"message": "Tool permission revoked", "name": name}
+        ok = await svc_revoke_tool_perm(db, role_id, name)
+        if not ok:
+            return {"message": "Permission not found; nothing to revoke", "name": name}
+        return {"message": "Tool permission revoked", "name": name}
     except Exception as e:
         logger.error(f"Failed to revoke tool permission from role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke tool permission")
@@ -3132,117 +2988,8 @@ async def get_usage_daily(
 ) -> UsageDailyResponse:
     """Query daily usage aggregates, optionally filtered by user and date range."""
     try:
-        offset = (page - 1) * limit
-        conditions: list[str] = []
-        params: list = []
-
-        is_pg = await is_postgres_backend()
-
-        if user_id is not None:
-            if is_pg:
-                conditions.append(f"user_id = ${len(params) + 1}")
-            else:
-                conditions.append("user_id = ?")
-            params.append(user_id)
-
-        if start:
-            if is_pg:
-                conditions.append(f"day >= ${len(params) + 1}::date")
-            else:
-                conditions.append("day >= ?")
-            params.append(start)
-
-        if end:
-            if is_pg:
-                conditions.append(f"day <= ${len(params) + 1}::date")
-            else:
-                conditions.append("day <= ?")
-            params.append(end)
-
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        if is_pg:
-            count_sql = f"SELECT COUNT(*) FROM usage_daily{where_clause}"
-            total = await db.fetchval(count_sql, *params)
-
-            # Try including bytes_in_total; fallback if column absent
-            try:
-                data_sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, COALESCE(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} "
-                    f"ORDER BY day DESC, user_id ASC "
-                    f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-                )
-                rows = await db.fetch(data_sql, *params, limit, offset)
-                rows_mode = 'pg_with_in'
-            except Exception:
-                data_sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} "
-                    f"ORDER BY day DESC, user_id ASC "
-                    f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-                )
-                rows = await db.fetch(data_sql, *params, limit, offset)
-                rows_mode = 'pg_legacy'
-        else:
-            count_sql = f"SELECT COUNT(*) FROM usage_daily{where_clause}"
-            cur = await db.execute(count_sql, params)
-            total = (await cur.fetchone())[0]
-
-            try:
-                data_sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} "
-                    f"ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
-                )
-                params2 = list(params) + [limit, offset]
-                cur = await db.execute(data_sql, params2)
-                rows = await cur.fetchall()
-                rows_mode = 'sqlite_with_in'
-            except Exception:
-                data_sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} "
-                    f"ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
-                )
-                params2 = list(params) + [limit, offset]
-                cur = await db.execute(data_sql, params2)
-                rows = await cur.fetchall()
-                rows_mode = 'sqlite_legacy'
-
-        items: list[UsageDailyRow] = []
-        for r in rows:
-            if isinstance(r, dict):
-                # In legacy mode, bytes_in_total may be absent
-                if 'bytes_in_total' not in r:
-                    r = {**r, 'bytes_in_total': None}
-                items.append(UsageDailyRow(**r))
-            else:
-                if rows_mode in ('pg_with_in','sqlite_with_in'):
-                    items.append(
-                        UsageDailyRow(
-                            user_id=int(r[0]),
-                            day=str(r[1]),
-                            requests=int(r[2] or 0),
-                            errors=int(r[3] or 0),
-                            bytes_total=int(r[4] or 0),
-                            bytes_in_total=int(r[5] or 0),
-                            latency_avg_ms=float(r[6]) if r[6] is not None else None,
-                        )
-                    )
-                else:
-                    items.append(
-                        UsageDailyRow(
-                            user_id=int(r[0]),
-                            day=str(r[1]),
-                            requests=int(r[2] or 0),
-                            errors=int(r[3] or 0),
-                            bytes_total=int(r[4] or 0),
-                            bytes_in_total=None,
-                            latency_avg_ms=float(r[5]) if r[5] is not None else None,
-                        )
-                    )
-
+        rows, total, _ = await svc_fetch_usage_daily(db, user_id=user_id, start=start, end=end, page=page, limit=limit)
+        items = [UsageDailyRow(**r) for r in rows]
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except Exception:
         logger.exception("Failed to query usage_daily")
@@ -3259,103 +3006,10 @@ async def get_usage_top(
 ) -> UsageTopResponse:
     """Top users by aggregate usage over a date range."""
     try:
-        is_pg = await is_postgres_backend()
-        conditions: list[str] = []
-        params: list = []
-
-        if start:
-            if is_pg:
-                conditions.append(f"day >= ${len(params) + 1}::date")
-            else:
-                conditions.append("day >= ?")
-            params.append(start)
-        if end:
-            if is_pg:
-                conditions.append(f"day <= ${len(params) + 1}::date")
-            else:
-                conditions.append("day <= ?")
-            params.append(end)
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        def _build_order(m: str) -> str:
-            mapping = {
-                "requests": "SUM(requests) DESC",
-                "bytes_total": "SUM(bytes_total) DESC",
-                "bytes_in_total": "COALESCE(SUM(bytes_in_total),0) DESC",
-                "errors": "SUM(errors) DESC",
-            }
-            return mapping[m]
-
-        order_by = _build_order(metric)
-
-        if is_pg:
-            try:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
-                ).replace('$ ', '$')
-                rows = await db.fetch(sql, *params, limit)
-                rows_mode = 'pg_with_in'
-            except Exception:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
-                ).replace('$ ', '$')
-                rows = await db.fetch(sql, *params, limit)
-                rows_mode = 'pg_legacy'
-        else:
-            try:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
-                )
-                cur = await db.execute(sql, params + [limit])
-                rows = await cur.fetchall()
-                rows_mode = 'sqlite_with_in'
-            except Exception:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
-                )
-                cur = await db.execute(sql, params + [limit])
-                rows = await cur.fetchall()
-                rows_mode = 'sqlite_legacy'
-
-        items: list[UsageTopRow] = []
+        rows = await svc_fetch_usage_top(db, start=start, end=end, limit=limit, metric=metric)
         for r in rows:
-            if isinstance(r, dict):
-                if 'bytes_in_total' not in r:
-                    r = {**r, 'bytes_in_total': None}
-                items.append(UsageTopRow(**r))
-            else:
-                if rows_mode in ('pg_with_in','sqlite_with_in'):
-                    items.append(
-                        UsageTopRow(
-                            user_id=int(r[0]),
-                            requests=int(r[1] or 0),
-                            errors=int(r[2] or 0),
-                            bytes_total=int(r[3] or 0),
-                            bytes_in_total=int(r[4] or 0),
-                            latency_avg_ms=float(r[5]) if r[5] is not None else None,
-                        )
-                    )
-                else:
-                    items.append(
-                        UsageTopRow(
-                            user_id=int(r[0]),
-                            requests=int(r[1] or 0),
-                            errors=int(r[2] or 0),
-                            bytes_total=int(r[3] or 0),
-                            bytes_in_total=None,
-                            latency_avg_ms=float(r[4]) if r[4] is not None else None,
-                        )
-                    )
-
-        return UsageTopResponse(items=items)
+            r.setdefault('bytes_in_total', None)
+        return UsageTopResponse(items=[UsageTopRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to query usage top: {e}")
         raise HTTPException(status_code=500, detail="Failed to load usage top data")
@@ -3384,82 +3038,7 @@ async def export_usage_daily_csv(
 ) -> PlainTextResponse:
     """Export usage_daily rows as CSV (includes bytes_in_total when available)."""
     try:
-        is_pg = await is_postgres_backend()
-        conditions: list[str] = []
-        params: list = []
-
-        if user_id is not None:
-            if is_pg:
-                conditions.append(f"user_id = ${len(params) + 1}")
-            else:
-                conditions.append("user_id = ?")
-            params.append(user_id)
-        if start:
-            if is_pg:
-                conditions.append(f"day >= ${len(params) + 1}::date")
-            else:
-                conditions.append("day >= ?")
-            params.append(start)
-        if end:
-            if is_pg:
-                conditions.append(f"day <= ${len(params) + 1}::date")
-            else:
-                conditions.append("day <= ?")
-            params.append(end)
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        header = ["user_id","day","requests","errors","bytes_total","bytes_in_total","latency_avg_ms"]
-        rows_data = []
-
-        if is_pg:
-            try:
-                sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, COALESCE(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT $ {len(params) + 1}"
-                ).replace('$ ', '$')
-                rows = await db.fetch(sql, *params, limit)
-                for r in rows:
-                    rows_data.append((r["user_id"], str(r["day"]), r["requests"], r["errors"], r["bytes_total"], r["bytes_in_total"], r["latency_avg_ms"]))
-            except Exception:
-                sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT $ {len(params) + 1}"
-                ).replace('$ ', '$')
-                rows = await db.fetch(sql, *params, limit)
-                for r in rows:
-                    rows_data.append((r["user_id"], str(r["day"]), r["requests"], r["errors"], r["bytes_total"], None, r["latency_avg_ms"]))
-        else:
-            try:
-                sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ?"
-                )
-                cur = await db.execute(sql, params + [limit])
-                rows = await cur.fetchall()
-                for r in rows:
-                    rows_data.append((r[0], str(r[1]), r[2], r[3], r[4], r[5], r[6]))
-            except Exception:
-                sql = (
-                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
-                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ?"
-                )
-                cur = await db.execute(sql, params + [limit])
-                rows = await cur.fetchall()
-                for r in rows:
-                    rows_data.append((r[0], str(r[1]), r[2], r[3], r[4], None, r[5]))
-
-        def _fmt(x):
-            if x is None:
-                return ""
-            s = str(x)
-            if "," in s or "\n" in s:
-                return '"' + s.replace('"', '""') + '"'
-            return s
-
-        lines = [",".join(header)]
-        for row in rows_data:
-            lines.append(",".join(_fmt(c) for c in row))
-        content = "\n".join(lines) + "\n"
+        content = await svc_export_usage_daily_csv_text(db, user_id=user_id, start=start, end=end, limit=limit)
         resp = PlainTextResponse(content=content, media_type="text/csv")
         # Default filename when not provided
         if not filename:
@@ -3485,90 +3064,7 @@ async def export_usage_top_csv(
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     try:
-        is_pg = await is_postgres_backend()
-        conditions: list[str] = []
-        params: list = []
-        if start:
-            if is_pg:
-                conditions.append(f"day >= ${len(params) + 1}::date")
-            else:
-                conditions.append("day >= ?")
-            params.append(start)
-        if end:
-            if is_pg:
-                conditions.append(f"day <= ${len(params) + 1}::date")
-            else:
-                conditions.append("day <= ?")
-            params.append(end)
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        def _build_order(m: str) -> str:
-            mapping = {
-                "requests": "SUM(requests) DESC",
-                "bytes_total": "SUM(bytes_total) DESC",
-                "bytes_in_total": "COALESCE(SUM(bytes_in_total),0) DESC",
-                "errors": "SUM(errors) DESC",
-            }
-            return mapping[m]
-
-        order_by = _build_order(metric)
-
-        header = ["user_id","requests","errors","bytes_total","bytes_in_total","latency_avg_ms"]
-        data = []
-
-        if is_pg:
-            try:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
-                ).replace('$ ', '$')
-                rows = await db.fetch(sql, *params, limit)
-                for r in rows:
-                    data.append((r["user_id"], r["requests"], r["errors"], r["bytes_total"], r["bytes_in_total"], r["latency_avg_ms"]))
-            except Exception:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
-                ).replace('$ ', '$')
-                rows = await db.fetch(sql, *params, limit)
-                for r in rows:
-                    data.append((r["user_id"], r["requests"], r["errors"], r["bytes_total"], None, r["latency_avg_ms"]))
-        else:
-            try:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
-                )
-                cur = await db.execute(sql, params + [limit])
-                rows = await cur.fetchall()
-                for r in rows:
-                    data.append((r[0], r[1], r[2], r[3], r[4], r[5]))
-            except Exception:
-                sql = (
-                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms "
-                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
-                )
-                cur = await db.execute(sql, params + [limit])
-                rows = await cur.fetchall()
-                for r in rows:
-                    data.append((r[0], r[1], r[2], r[3], None, r[4]))
-
-        def _fmt(x):
-            if x is None:
-                return ""
-            s = str(x)
-            if "," in s or "\n" in s:
-                return '"' + s.replace('"', '""') + '"'
-            return s
-
-        lines = [",".join(header)]
-        for row in data:
-            lines.append(",".join(_fmt(c) for c in row))
-        content = "\n".join(lines) + "\n"
+        content = await svc_export_usage_top_csv_text(db, start=start, end=end, limit=limit, metric=metric)
         resp = PlainTextResponse(content=content, media_type="text/csv")
         # Default filename when not provided
         if not filename:
@@ -3611,80 +3107,19 @@ async def get_llm_usage(
     db=Depends(get_db_transaction)
 ) -> LLMUsageLogResponse:
     try:
-        offset = (page - 1) * limit
-        conditions: list[str] = []
-        params: list = []
-        is_pg = await is_postgres_backend()
-
-        def add_cond(sql: str, value):
-            if value is None:
-                return
-            if is_pg:
-                conditions.append(sql.replace('?', f"${len(params) + 1}"))
-            else:
-                conditions.append(sql)
-            params.append(value)
-
-        add_cond("user_id = ?", user_id)
-        add_cond("LOWER(provider) = LOWER(?)", provider)
-        add_cond("LOWER(model) = LOWER(?)", model)
-        add_cond("operation = ?", operation)
-        add_cond("status = ?", status_code)
-        if start:
-            add_cond("ts >= ?", start)
-        if end:
-            add_cond("ts <= ?", end)
-
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        if is_pg:
-            count_sql = f"SELECT COUNT(*) FROM llm_usage_log{where_clause}"
-            total = await db.fetchval(count_sql, *params)
-            data_sql = (
-                f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, "
-                f"prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-            )
-            rows = await db.fetch(data_sql, *params, limit, offset)
-            items = [LLMUsageLogRow(**dict(r)) for r in rows]
-        else:
-            count_sql = f"SELECT COUNT(*) FROM llm_usage_log{where_clause}"
-            cur = await db.execute(count_sql, params)
-            total_row = await cur.fetchone()
-            total = int(total_row[0] if total_row else 0)
-
-            data_sql = (
-                f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, "
-                f"prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ? OFFSET ?"
-            )
-            cur = await db.execute(data_sql, params + [limit, offset])
-            rows = await cur.fetchall()
-            items = []
-            for row in rows:
-                # aiosqlite.Row supports both key and index access; normalize to indices
-                items.append(
-                    LLMUsageLogRow(
-                        id=(row["id"] if hasattr(row, "keys") else row[0]),
-                        ts=(row["ts"] if hasattr(row, "keys") else row[1]),
-                        user_id=(row["user_id"] if hasattr(row, "keys") else row[2]),
-                        key_id=(row["key_id"] if hasattr(row, "keys") else row[3]),
-                        endpoint=(row["endpoint"] if hasattr(row, "keys") else row[4]),
-                        operation=(row["operation"] if hasattr(row, "keys") else row[5]),
-                        provider=(row["provider"] if hasattr(row, "keys") else row[6]),
-                        model=(row["model"] if hasattr(row, "keys") else row[7]),
-                        status=(row["status"] if hasattr(row, "keys") else row[8]),
-                        latency_ms=(row["latency_ms"] if hasattr(row, "keys") else row[9]),
-                        prompt_tokens=(row["prompt_tokens"] if hasattr(row, "keys") else row[10]),
-                        completion_tokens=(row["completion_tokens"] if hasattr(row, "keys") else row[11]),
-                        total_tokens=(row["total_tokens"] if hasattr(row, "keys") else row[12]),
-                        total_cost_usd=(row["total_cost_usd"] if hasattr(row, "keys") else row[13]),
-                        currency=(row["currency"] if hasattr(row, "keys") else row[14]),
-                        estimated=bool(row["estimated"] if hasattr(row, "keys") else row[15]),
-                        request_id=(row["request_id"] if hasattr(row, "keys") else row[16]),
-                    )
-                )
-
+        rows, total = await svc_fetch_llm_usage(
+            db,
+            user_id=user_id,
+            provider=provider,
+            model=model,
+            operation=operation,
+            status_code=status_code,
+            start=start,
+            end=end,
+            page=page,
+            limit=limit,
+        )
+        items = [LLMUsageLogRow(**r) for r in rows]
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except Exception:
         # Log full stack to aid debugging in tests
@@ -3700,67 +3135,9 @@ async def get_llm_usage_summary(
     db=Depends(get_db_transaction)
 ) -> LLMUsageSummaryResponse:
     try:
-        is_pg = await is_postgres_backend()
-        conditions: list[str] = []
-        params: list = []
-        if start:
-            if is_pg:
-                conditions.append(f"ts >= ${len(params)+1}")
-            else:
-                conditions.append("ts >= ?")
-            params.append(start)
-        if end:
-            if is_pg:
-                conditions.append(f"ts <= ${len(params)+1}")
-            else:
-                conditions.append("ts <= ?")
-            params.append(end)
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        # Group key expression
-        if group_by == "user":
-            key_expr = "COALESCE(CAST(user_id AS TEXT),'0')"
-        elif group_by == "provider":
-            key_expr = "COALESCE(provider,'')"
-        elif group_by == "model":
-            key_expr = "COALESCE(model,'')"
-        elif group_by == "operation":
-            key_expr = "COALESCE(operation,'')"
-        else:
-            # day; align with aggregators that use UTC day in Postgres
-            if is_pg:
-                key_expr = "CAST(date(ts AT TIME ZONE 'UTC') AS TEXT)"
-            else:
-                key_expr = "CAST(date(ts) AS TEXT)"
-
-        # Build SQL using str.format placeholders; avoid mixing with f-strings
-        sql = (
-            "SELECT {key} as group_value, "
-            "COUNT(*) as requests, "
-            "SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, "
-            "COALESCE(SUM(COALESCE(prompt_tokens,0)),0) as input_tokens, "
-            "COALESCE(SUM(COALESCE(completion_tokens,0)),0) as output_tokens, "
-            "COALESCE(SUM(COALESCE(total_tokens,0)),0) as total_tokens, "
-            "COALESCE(SUM(COALESCE(total_cost_usd,0)),0) as total_cost_usd, "
-            "AVG(latency_ms) as latency_avg_ms "
-            "FROM llm_usage_log{where} GROUP BY {key} ORDER BY total_cost_usd DESC"
-        ).format(key=key_expr, where=where_clause)
-
-        if is_pg:
-            rows = await db.fetch(sql, *params)
-            items = [LLMUsageSummaryRow(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(sql, params)
-            rows = await cur.fetchall()
-            items = [
-                LLMUsageSummaryRow(
-                    group_value=row[0], requests=int(row[1] or 0), errors=int(row[2] or 0),
-                    input_tokens=int(row[3] or 0), output_tokens=int(row[4] or 0), total_tokens=int(row[5] or 0),
-                    total_cost_usd=float(row[6] or 0.0), latency_avg_ms=float(row[7]) if row[7] is not None else None
-                ) for row in rows
-            ]
-
-        return LLMUsageSummaryResponse(items=items)
+        # Directly support 'user'|'operation'|'day'|'provider'|'model'
+        rows = await svc_fetch_llm_usage_summary(db, group_by=group_by, provider=None, start=start, end=end)
+        return LLMUsageSummaryResponse(items=[LLMUsageSummaryRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to summarize llm_usage_log: {e}")
         raise HTTPException(status_code=500, detail="Failed to load LLM usage summary")
@@ -3774,43 +3151,8 @@ async def get_llm_top_spenders(
     db=Depends(get_db_transaction)
 ) -> LLMTopSpendersResponse:
     try:
-        is_pg = await is_postgres_backend()
-        conditions: list[str] = []
-        params: list = []
-        if start:
-            if is_pg:
-                conditions.append(f"ts >= ${len(params)+1}")
-            else:
-                conditions.append("ts >= ?")
-            params.append(start)
-        if end:
-            if is_pg:
-                conditions.append(f"ts <= ${len(params)+1}")
-            else:
-                conditions.append("ts <= ?")
-            params.append(end)
-        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        if is_pg:
-            limit_placeholder = f"${len(params) + 1}"
-            sql = (
-                f"SELECT COALESCE(user_id,0) as user_id, COUNT(*) as requests, SUM(COALESCE(total_cost_usd,0)) as total_cost_usd "
-                f"FROM llm_usage_log{where_clause} GROUP BY COALESCE(user_id,0) ORDER BY total_cost_usd DESC LIMIT {limit_placeholder}"
-            )
-            rows = await db.fetch(sql, *params, limit)
-            items = [LLMTopSpenderRow(user_id=int(r["user_id"] or 0), total_cost_usd=float(r["total_cost_usd"] or 0.0), requests=int(r["requests"] or 0)) for r in rows]
-        else:
-            sql = (
-                f"SELECT IFNULL(user_id,0) as user_id, COUNT(*) as requests, SUM(IFNULL(total_cost_usd,0)) as total_cost_usd "
-                f"FROM llm_usage_log{where_clause} GROUP BY IFNULL(user_id,0) ORDER BY total_cost_usd DESC LIMIT ?"
-            )
-            cur = await db.execute(sql, params + [limit])
-            rows = await cur.fetchall()
-            items = [
-                LLMTopSpenderRow(user_id=int(row[0] or 0), requests=int(row[1] or 0), total_cost_usd=float(row[2] or 0.0))
-                for row in rows
-            ]
-        return LLMTopSpendersResponse(items=items)
+        rows = await svc_fetch_llm_top_spenders(db, start=start, end=end, limit=limit)
+        return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to load llm top spenders: {e}")
         raise HTTPException(status_code=500, detail="Failed to load LLM top spenders")
@@ -4088,12 +3430,8 @@ async def create_tool_catalog(payload: ToolCatalogCreateRequest, db=Depends(get_
 async def delete_tool_catalog(catalog_id: int, db=Depends(get_db_transaction)) -> dict:
     """Delete a tool catalog (entries cascade)."""
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute("DELETE FROM tool_catalogs WHERE id = $1", catalog_id)
-        else:
-            await db.execute("DELETE FROM tool_catalogs WHERE id = ?", (catalog_id,))
-            await db.commit()
+        from tldw_Server_API.app.services.admin_tool_catalog_service import delete_tool_catalog as _svc
+        await _svc(db, catalog_id)
         return {"message": "Catalog deleted", "id": catalog_id}
     except Exception as e:
         logger.error(f"Failed to delete tool catalog {catalog_id}: {e}")
@@ -4112,20 +3450,9 @@ async def delete_tool_catalog(catalog_id: int, db=Depends(get_db_transaction)) -
 async def list_tool_catalog_entries(catalog_id: int, db=Depends(get_db_transaction)) -> List[ToolCatalogEntryResponse]:
     """List entries in a tool catalog."""
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 ORDER BY tool_name",
-                catalog_id,
-            )
-            return [ToolCatalogEntryResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? ORDER BY tool_name",
-                (catalog_id,),
-            )
-            rows = await cur.fetchall()
-            return [ToolCatalogEntryResponse(catalog_id=r[0], tool_name=r[1], module_id=r[2]) for r in rows]
+        from tldw_Server_API.app.services.admin_tool_catalog_service import list_tool_catalog_entries as _svc
+        rows = await _svc(db, catalog_id)
+        return [ToolCatalogEntryResponse(**r) for r in rows]
     except Exception as e:
         logger.error(f"Failed to list tool catalog entries: {e}")
         raise HTTPException(status_code=500, detail="Failed to list tool catalog entries")
@@ -4144,40 +3471,11 @@ async def list_tool_catalog_entries(catalog_id: int, db=Depends(get_db_transacti
 async def add_tool_catalog_entry(catalog_id: int, payload: ToolCatalogEntryCreateRequest, db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
     """Add a tool entry to a catalog (idempotent)."""
     try:
+        from tldw_Server_API.app.services.admin_tool_catalog_service import add_tool_catalog_entry as _svc
         tool = payload.tool_name.strip()
         module_id = payload.module_id.strip() if payload.module_id else None
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute(
-                """
-                INSERT INTO tool_catalog_entries (catalog_id, tool_name, module_id)
-                VALUES ($1, $2, $3) ON CONFLICT (catalog_id, tool_name) DO NOTHING
-                """,
-                catalog_id, tool, module_id,
-            )
-            row = await db.fetchrow(
-                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2",
-                catalog_id, tool,
-            )
-            return ToolCatalogEntryResponse(**dict(row)) if row else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
-        else:
-            cur = await db.execute(
-                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
-                (catalog_id, tool),
-            )
-            r = await cur.fetchone()
-            if not r:
-                await db.execute(
-                    "INSERT OR IGNORE INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES (?, ?, ?)",
-                    (catalog_id, tool, module_id),
-                )
-                await db.commit()
-                cur2 = await db.execute(
-                    "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
-                    (catalog_id, tool),
-                )
-                r = await cur2.fetchone()
-            return ToolCatalogEntryResponse(catalog_id=r[0], tool_name=r[1], module_id=r[2]) if r else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
+        row = await _svc(db, catalog_id, tool, module_id)
+        return ToolCatalogEntryResponse(**row)
     except Exception as e:
         logger.error(f"Failed to add tool catalog entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to add tool catalog entry")
@@ -4194,18 +3492,8 @@ async def add_tool_catalog_entry(catalog_id: int, payload: ToolCatalogEntryCreat
 async def delete_tool_catalog_entry(catalog_id: int, tool_name: str, db=Depends(get_db_transaction)) -> dict:
     """Remove a tool from a catalog."""
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute(
-                "DELETE FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2",
-                catalog_id, tool_name,
-            )
-        else:
-            await db.execute(
-                "DELETE FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
-                (catalog_id, tool_name),
-            )
-            await db.commit()
+        from tldw_Server_API.app.services.admin_tool_catalog_service import delete_tool_catalog_entry as _svc
+        await _svc(db, catalog_id, tool_name)
         return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name}
     except Exception as e:
         logger.error(f"Failed to delete tool catalog entry: {e}")

@@ -50,21 +50,21 @@ async def get_prometheus_metrics() -> Response:
                         _emb.embedding_stage_flag.labels(stage=_st, flag="paused").set(1.0 if str(p).lower() in ("1","true","yes") else 0.0)
                         _emb.embedding_stage_flag.labels(stage=_st, flag="drain").set(1.0 if str(d).lower() in ("1","true","yes") else 0.0)
                     except Exception:
-                        pass
+                        logger.debug("metrics: failed to refresh stage gauge for %s", _st)
                 try:
                     await client.close()
                 except Exception:
-                    pass
+                    logger.debug("metrics: failed to close redis client")
             except Exception:
-                pass
+                logger.debug("metrics: redis not available for stage flags")
         except Exception:
-            pass
+            logger.debug("metrics: embeddings modules not available for import")
         prometheus_text = registry.export_prometheus_format() or ""
         try:
             from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
             prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
         except Exception:
-            pass
+            logger.debug("metrics: failed to augment with prometheus_client registry")
         # Append explicit stage flag gauge lines (best-effort) to satisfy text scrapers
         try:
             import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as _emb
@@ -84,14 +84,14 @@ async def get_prometheus_metrics() -> Response:
                 try:
                     await client.close()
                 except Exception:
-                    pass
+                    logger.debug("metrics: failed closing redis client (gauge lines)")
             except Exception:
                 # Fallback: if Redis unavailable, skip explicit lines
                 lines = []
             if lines:
                 prometheus_text = (prometheus_text.rstrip("\n") + "\n" + "\n".join(lines) + "\n")
         except Exception:
-            pass
+            logger.debug("metrics: failed to append explicit gauge lines")
         return Response(
             content=prometheus_text,
             media_type="text/plain; version=0.0.4",

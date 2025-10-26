@@ -296,14 +296,14 @@ class PIIDetector:
     DEFAULT_PATTERNS = {
         "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
         "credit_card": r"\b(?:\d{4}[\s-]?){3}\d{4}\b",
-        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
         "phone": r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
         "ip_address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
         "passport": r"\b[A-Z]{1,2}[0-9]{6,9}\b",
         "driver_license": r"\b[A-Z]{1,2}[\s-]?\d{6,8}\b",
         "bank_account": r"\b\d{8,17}\b",
-        "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}\b",
-        "api_key": r"\b(sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b",
+        "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]?){0,16}\b",
+        "api_key": r"\b(?:sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b",
         "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
     }
 
@@ -431,14 +431,99 @@ class RiskScorer:
         "modify_permissions", "create_admin", "delete_user"
     }
     
-    # Suspicious patterns
-    SUSPICIOUS_PATTERNS = {
-        "rapid_requests": 100,  # More than 100 requests per minute
-        "failed_auth": 5,       # More than 5 failed auth attempts
-        "data_export": 1000,    # Exporting more than 1000 records
-        "after_hours": True,     # Activity outside business hours
-        "unusual_location": True # Access from unusual location
+    # Default suspicious thresholds and toggles
+    DEFAULT_SUSPICIOUS_THRESHOLDS = {
+        "rapid_requests": 100,  # requests/minute threshold (unused in current scorer)
+        "failed_auth": 3,       # consecutive failures threshold
+        "data_export": 1000,    # result_count threshold considered large export
+        "after_hours": True,    # apply time-of-day risk
+        "unusual_location": True,  # reserved for future use
     }
+    
+    # Default action-specific bonuses to fine-tune risk semantics
+    DEFAULT_ACTION_RISK_BONUS = {
+        "sla_breached": 10,
+        "quarantined": 10,
+        "unauthorized_access": 10,
+    }
+
+    def __init__(self, action_bonus_overrides: Optional[Dict[str, int]] = None,
+                 *,
+                 high_risk_ops_override: Optional[Union[List[str], str]] = None,
+                 suspicious_thresholds_override: Optional[Dict[str, Union[int, bool]]] = None) -> None:
+        # Merge overrides from settings, then supplied overrides
+        merged: Dict[str, int] = dict(self.DEFAULT_ACTION_RISK_BONUS)
+        try:
+            cfg = _app_settings.get("AUDIT_ACTION_RISK_BONUS", None)
+            if isinstance(cfg, dict):
+                for k, v in cfg.items():
+                    try:
+                        key = str(k).strip().lower()
+                        val = int(v)
+                        if key:
+                            merged[key] = max(0, min(100, val))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        if isinstance(action_bonus_overrides, dict):
+            for k, v in action_bonus_overrides.items():
+                try:
+                    key = str(k).strip().lower()
+                    val = int(v)
+                    if key:
+                        merged[key] = max(0, min(100, val))
+                except Exception:
+                    continue
+        self.action_risk_bonus: Dict[str, int] = merged
+
+        # High-risk operations list (lowercase exact substring check)
+        def _parse_ops(value: Union[List[str], str, None]) -> Set[str]:
+            out: Set[str] = set()
+            if value is None:
+                return out
+            if isinstance(value, str):
+                parts = [p.strip() for p in value.split(',') if p.strip()]
+            else:
+                parts = [str(p).strip() for p in value if str(p).strip()]
+            for p in parts:
+                out.add(p.lower())
+            return out
+
+        default_ops = set(self.HIGH_RISK_OPERATIONS)
+        try:
+            cfg_ops = _app_settings.get("AUDIT_HIGH_RISK_OPERATIONS", None)
+            ops_from_settings = _parse_ops(cfg_ops)
+        except Exception:
+            ops_from_settings = set()
+        ops_from_arg = _parse_ops(high_risk_ops_override)
+        self.high_risk_operations: Set[str] = set(map(str.lower, default_ops)) | ops_from_settings | ops_from_arg
+
+        # Suspicious thresholds (numeric or boolean toggles)
+        def _merge_thresholds(base: Dict[str, Union[int, bool]], val: Optional[Dict[str, Union[int, bool]]]) -> Dict[str, Union[int, bool]]:
+            merged_thr = dict(base)
+            if isinstance(val, dict):
+                for k, v in val.items():
+                    key = str(k).strip()
+                    if not key:
+                        continue
+                    if isinstance(v, bool):
+                        merged_thr[key] = v
+                    else:
+                        try:
+                            merged_thr[key] = int(v)  # type: ignore[assignment]
+                        except Exception:
+                            continue
+            return merged_thr
+
+        thresholds = dict(self.DEFAULT_SUSPICIOUS_THRESHOLDS)
+        try:
+            cfg_thr = _app_settings.get("AUDIT_SUSPICIOUS_THRESHOLDS", None)
+            thresholds = _merge_thresholds(thresholds, cfg_thr if isinstance(cfg_thr, dict) else None)
+        except Exception:
+            pass
+        thresholds = _merge_thresholds(thresholds, suspicious_thresholds_override)
+        self.suspicious_thresholds: Dict[str, Union[int, bool]] = thresholds
     
     def calculate_risk_score(self, event: AuditEvent) -> int:
         """Calculate risk score for an event (0-100)"""
@@ -466,7 +551,7 @@ class RiskScorer:
             score += 10
         
         # High-risk operations
-        if event.action and any(op in event.action.lower() for op in self.HIGH_RISK_OPERATIONS):
+        if event.action and any(op in event.action.lower() for op in self.high_risk_operations):
             score += 30
         
         # PII detection
@@ -474,9 +559,11 @@ class RiskScorer:
             score += 25
         
         # Time-based risk (after hours)
-        hour = event.timestamp.hour
-        if hour < 6 or hour > 22:
-            score += 10
+        # Toggleable after-hours risk
+        if bool(self.suspicious_thresholds.get("after_hours", True)):
+            hour = event.timestamp.hour
+            if hour < 6 or hour > 22:
+                score += 10
         
         # Weekend activity
         if event.timestamp.weekday() >= 5:
@@ -505,12 +592,30 @@ class RiskScorer:
             except Exception:
                 metadata = {}
 
-        if metadata.get("consecutive_failures", 0) > 3:
+        failed_thr = 3
+        try:
+            v = self.suspicious_thresholds.get("failed_auth", 3)  # type: ignore[assignment]
+            failed_thr = int(v) if not isinstance(v, bool) else 3
+        except Exception:
+            failed_thr = 3
+        if metadata.get("consecutive_failures", 0) > failed_thr:
             score += 20
         
         # Large data operations
-        if event.result_count and event.result_count > 1000:
+        export_thr = 1000
+        try:
+            v2 = self.suspicious_thresholds.get("data_export", 1000)  # type: ignore[assignment]
+            export_thr = int(v2) if not isinstance(v2, bool) else 1000
+        except Exception:
+            export_thr = 1000
+        if event.result_count and event.result_count > export_thr:
             score += 15
+        
+        # Action-specific adjustments (case-insensitive exact match on action label)
+        if event.action:
+            bonus = self.action_risk_bonus.get(event.action.lower())
+            if bonus:
+                score += int(bonus)
         
         return min(score, 100)
 
@@ -586,7 +691,8 @@ class UnifiedAuditService:
         if enable_pii_detection:
             # Settings: AUDIT_PII_USE_RAG_PATTERNS, AUDIT_PII_PATTERNS (dict)
             use_rag = bool(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower() in {"1","true","yes","on","y"})
-            overrides = _app_settings.get("AUDIT_PII_PATTERNS") if isinstance(_app_settings, dict) else None
+            # Pull overrides from settings if present (no dict-type gate; LazySettings isn't a dict)
+            overrides = _app_settings.get("AUDIT_PII_PATTERNS", None)
             if overrides is not None and not isinstance(overrides, dict):
                 overrides = None
             self.pii_detector = PIIDetector(overrides=overrides, use_rag_patterns=use_rag)
@@ -597,7 +703,8 @@ class UnifiedAuditService:
         default_scan = ["action", "resource_id", "error_message", "context_user_agent"]
         extra_scan = []
         try:
-            raw = _app_settings.get("AUDIT_PII_SCAN_FIELDS") if isinstance(_app_settings, dict) else None
+            # Allow comma-separated string or list from settings
+            raw = _app_settings.get("AUDIT_PII_SCAN_FIELDS", None)
             if isinstance(raw, str):
                 extra_scan = [s.strip() for s in raw.split(",") if s.strip()]
             elif isinstance(raw, list):
@@ -748,6 +855,7 @@ class UnifiedAuditService:
                     await self._db_pool.execute("PRAGMA synchronous=NORMAL;")
                     await self._db_pool.execute("PRAGMA temp_store=MEMORY;")
                     await self._db_pool.execute("PRAGMA foreign_keys=ON;")
+                    await self._db_pool.execute("PRAGMA busy_timeout=5000;")
                     # Return rows as mappings consistently across this service
                     self._db_pool.row_factory = aiosqlite.Row
                     await self._db_pool.commit()
@@ -765,7 +873,13 @@ class UnifiedAuditService:
     async def stop(self):
         """Stop background tasks and flush remaining events"""
         current_loop = asyncio.get_running_loop()
-        if self._owner_loop and current_loop is not self._owner_loop:
+        owner_closed = False
+        try:
+            owner_closed = bool(self._owner_loop and self._owner_loop.is_closed())
+        except Exception:
+            owner_closed = False
+        # Enforce same-loop shutdown only when the owner loop is still alive.
+        if self._owner_loop and (not owner_closed) and current_loop is not self._owner_loop:
             raise RuntimeError("UnifiedAuditService.stop must run on the owner event loop")
         # Cancel background tasks
         if self._flush_task:
@@ -789,8 +903,24 @@ class UnifiedAuditService:
             finally:
                 self._flush_futures.clear()
 
+        # If the owner loop has been closed, a pooled aiosqlite connection created
+        # on that loop may not be usable here. Close and recreate on the current loop
+        # before performing the final flush.
+        if owner_closed and self._db_pool:
+            try:
+                await self._db_pool.close()
+            except Exception:
+                pass
+            finally:
+                self._db_pool = None
+
         # Final flush of any remaining buffered events
-        await self.flush()
+        try:
+            await self.flush()
+        except Exception as _e:
+            # During teardown it's acceptable to skip the final flush if the event loop
+            # or DB is no longer available.
+            logger.debug(f"Audit final flush skipped due to shutdown condition: {_e}")
         
         # Close connection pool
         if self._db_pool:
@@ -984,39 +1114,56 @@ class UnifiedAuditService:
             self.event_buffer.clear()
         
         try:
-            db = await self._ensure_db_pool()
-            async with self._db_lock:
-                # Prepare batch data
-                records = [event.to_dict() for event in events]
-                
-                # Batch insert
-                await db.executemany("""
-                    INSERT OR IGNORE INTO audit_events (
-                        event_id, timestamp, category, event_type, severity,
-                        context_request_id, context_correlation_id, context_session_id,
-                        context_user_id, context_api_key_hash, context_ip_address,
-                        context_user_agent, context_endpoint, context_method,
-                        resource_type, resource_id, action, result, error_message,
-                        duration_ms, tokens_used, estimated_cost, result_count,
-                        risk_score, pii_detected, compliance_flags, metadata
-                    ) VALUES (
-                        :event_id, :timestamp, :category, :event_type, :severity,
-                        :context_request_id, :context_correlation_id, :context_session_id,
-                        :context_user_id, :context_api_key_hash, :context_ip_address,
-                        :context_user_agent, :context_endpoint, :context_method,
-                        :resource_type, :resource_id, :action, :result, :error_message,
-                        :duration_ms, :tokens_used, :estimated_cost, :result_count,
-                        :risk_score, :pii_detected, :compliance_flags, :metadata
-                    )
-                """, records)
-                
-                # Update daily statistics
-                await self._update_daily_stats(db, events)
-                await db.commit()
-                
-                self.stats["events_flushed"] += len(events)
-                logger.debug(f"Flushed {len(events)} audit events to database")
-                
+            max_retries = 3
+            backoff_base = 0.05  # 50ms base
+            last_error: Optional[Exception] = None
+            for attempt in range(max_retries):
+                try:
+                    db = await self._ensure_db_pool()
+                    async with self._db_lock:
+                        # Prepare batch data
+                        records = [event.to_dict() for event in events]
+
+                        # Batch insert
+                        await db.executemany("""
+                            INSERT OR IGNORE INTO audit_events (
+                                event_id, timestamp, category, event_type, severity,
+                                context_request_id, context_correlation_id, context_session_id,
+                                context_user_id, context_api_key_hash, context_ip_address,
+                                context_user_agent, context_endpoint, context_method,
+                                resource_type, resource_id, action, result, error_message,
+                                duration_ms, tokens_used, estimated_cost, result_count,
+                                risk_score, pii_detected, compliance_flags, metadata
+                            ) VALUES (
+                                :event_id, :timestamp, :category, :event_type, :severity,
+                                :context_request_id, :context_correlation_id, :context_session_id,
+                                :context_user_id, :context_api_key_hash, :context_ip_address,
+                                :context_user_agent, :context_endpoint, :context_method,
+                                :resource_type, :resource_id, :action, :result, :error_message,
+                                :duration_ms, :tokens_used, :estimated_cost, :result_count,
+                                :risk_score, :pii_detected, :compliance_flags, :metadata
+                            )
+                        """, records)
+
+                        # Update daily statistics
+                        await self._update_daily_stats(db, events)
+                        await db.commit()
+
+                    # Success
+                    self.stats["events_flushed"] += len(events)
+                    logger.debug(f"Flushed {len(events)} audit events to database")
+                    last_error = None
+                    break
+                except aiosqlite.OperationalError as oe:  # type: ignore[attr-defined]
+                    last_error = oe
+                    msg = str(oe).lower()
+                    if ("database is locked" in msg or "database locked" in msg) and attempt < max_retries - 1:
+                        await asyncio.sleep(backoff_base * (attempt + 1))
+                        continue
+                    raise
+                except Exception as e:
+                    last_error = e
+                    raise
         except Exception as e:
             logger.error(f"Failed to flush audit events: {e}")
             self.stats["flush_failures"] += 1
@@ -1058,7 +1205,7 @@ class UnifiedAuditService:
             key = (date, event.category.value)
             
             stats[key]["total"] += 1
-            if event.risk_score >= 70:
+            if event.risk_score >= HIGH_RISK_SCORE:
                 stats[key]["high_risk"] += 1
             if event.result != "success":
                 stats[key]["failed"] += 1

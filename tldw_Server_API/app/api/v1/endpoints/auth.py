@@ -63,6 +63,12 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     WeakPasswordError,
     InvalidRegistrationCodeError
 )
+from tldw_Server_API.app.services.auth_service import (
+    fetch_user_by_login_identifier,
+    update_user_password_hash,
+    update_user_last_login,
+    fetch_active_user_by_id,
+)
 
 #######################################################################################################################
 #
@@ -302,22 +308,7 @@ async def login(
                 pass
         
         # Fetch user from database using sanitized identifier
-        user = None
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL: use two-parameter query to avoid driver-specific quirks
-            ident_l = login_identifier.lower()
-            user = await db.fetchrow(
-                "SELECT * FROM users WHERE lower(username) = $1 OR lower(email) = $2",
-                ident_l, ident_l
-            )
-        else:
-            # SQLite
-            cursor = await db.execute(
-                "SELECT * FROM users WHERE lower(username) = ? OR lower(email) = ?",
-                (login_identifier.lower(), login_identifier.lower())
-            )
-            user = await cursor.fetchone()
+        user = await fetch_user_by_login_identifier(db, login_identifier)
         
         # Check if user exists
         if not user:
@@ -358,25 +349,7 @@ async def login(
                 user = await user  # resolve unexpected awaitables from mocks
             except Exception:
                 pass
-        if not isinstance(user, dict):
-            try:
-                from collections.abc import Mapping as _Mapping
-                if isinstance(user, _Mapping):
-                    user = dict(user)
-                elif hasattr(user, 'keys') and callable(getattr(user, 'keys', None)):
-                    user = dict(user)
-                else:
-                    # SQLite returns tuple
-                    columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role',
-                              'is_active', 'is_verified', 'created_at', 'updated_at',
-                              'last_login', 'storage_quota_mb', 'storage_used_mb']
-                    user = dict(zip(columns[:len(user)], user))
-            except Exception:
-                # As a last resort, wrap in minimal dict to prevent attribute errors downstream
-                try:
-                    user = {"id": user[0], "username": user[2], "email": user[3], "role": user[5], "is_active": user[6], "is_verified": user[7]}
-                except Exception:
-                    user = {}
+        # user already normalized to dict in service
         
         # Verify password
         is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
@@ -468,19 +441,7 @@ async def login(
         # If password needs rehashing, update it
         if needs_rehash:
             new_hash = password_service.hash_password(form_data.password)
-            if is_pg:
-                # PostgreSQL
-                await db.execute(
-                    "UPDATE users SET password_hash = $1 WHERE id = $2",
-                    new_hash, user['id']
-                )
-            else:
-                # SQLite
-                await db.execute(
-                    "UPDATE users SET password_hash = ? WHERE id = ?",
-                    (new_hash, user['id'])
-                )
-                await db.commit()
+            await update_user_password_hash(db, int(user['id']), new_hash)
             logger.info(f"Updated password hash for user {user['username']} with new parameters")
         
         # Create session first to get session_id
@@ -541,20 +502,7 @@ async def login(
             session_info = temp_session_info
         
         # Update last login time
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            await db.execute(
-                "UPDATE users SET last_login = $1 WHERE id = $2",
-                datetime.utcnow(), user['id']
-            )
-        else:
-            # SQLite
-            await db.execute(
-                "UPDATE users SET last_login = ? WHERE id = ?",
-                (datetime.utcnow().isoformat(), user['id'])
-            )
-            await db.commit()
+        await update_user_last_login(db, int(user['id']), datetime.utcnow())
         
         # Log successful login
         if settings.PII_REDACT_LOGS:
@@ -768,21 +716,7 @@ async def refresh_token(
             session_id = payload.get("session_id")
         
         # Fetch user
-        user = None
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            user = await db.fetchrow(
-                "SELECT * FROM users WHERE id = $1 AND is_active = $2",
-                user_id, True
-            )
-        else:
-            # SQLite
-            cursor = await db.execute(
-                "SELECT * FROM users WHERE id = ? AND is_active = ?",
-                (user_id, 1)
-            )
-            user = await cursor.fetchone()
+        user = await fetch_active_user_by_id(db, user_id)
         
         if not user:
             if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):

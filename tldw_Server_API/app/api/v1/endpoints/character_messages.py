@@ -392,7 +392,8 @@ async def get_chat_messages(
                                         tool_calls_list = parsed
                                     if not isinstance(tool_calls_list, list):
                                         tool_calls_list = None
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"character_messages: failed to parse tool_calls from suffix: {e}")
                                 tool_calls_list = None
 
                     if role == 'assistant' and tool_calls_list:
@@ -409,7 +410,8 @@ async def get_chat_messages(
                             tr = extra.get('tool_results') if isinstance(extra, dict) else None
                             if isinstance(tr, dict):
                                 tool_results_by_id = tr
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"character_messages: failed to extract tool_results: {e}")
                             tool_results_by_id = {}
 
                         for tc in tool_calls_list:
@@ -419,8 +421,8 @@ async def get_chat_messages(
                                 tc_id = tc.get('id')
                                 func = tc.get('function') or {}
                                 tc_name = func.get('name')
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"character_messages: tool_call parse error: {e}")
                             tool_content = ""
                             # If we have stored results keyed by tool_call_id, include them
                             try:
@@ -432,8 +434,8 @@ async def get_chat_messages(
                                         tool_content = _json.dumps(res)
                                     else:
                                         tool_content = str(res)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"character_messages: failed to stringify tool result: {e}")
                             tool_msg: Dict[str, Any] = {"role": "tool", "content": tool_content}
                             if tc_id:
                                 tool_msg["tool_call_id"] = tc_id
@@ -467,15 +469,15 @@ async def get_chat_messages(
                         md = db.get_message_metadata(resp.id)
                         if md and md.get('tool_calls') is not None:
                             resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"character_messages: failed to include tool_calls in response: {e}")
                 if include_metadata:
                     try:
                         md = db.get_message_metadata(resp.id)
                         if md and md.get('extra') is not None:
                             resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"character_messages: failed to include metadata_extra in response: {e}")
                 built_messages.append(resp)
             response = MessageListResponse(
                 messages=built_messages,
@@ -507,15 +509,15 @@ async def get_chat_messages(
                     md = db.get_message_metadata(resp.id)
                     if md and md.get('tool_calls') is not None:
                         resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"character_messages: failed to include tool_calls (std): {e}")
             if include_metadata:
                 try:
                     md = db.get_message_metadata(resp.id)
                     if md and md.get('extra') is not None:
                         resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"character_messages: failed to include metadata_extra (std): {e}")
             built_messages.append(resp)
         return MessageListResponse(
             messages=built_messages,

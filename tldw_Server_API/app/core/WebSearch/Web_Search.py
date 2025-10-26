@@ -17,7 +17,7 @@ from lxml.etree import _Element
 from lxml.html import document_fromstring
 from requests import RequestException
 from requests.adapters import HTTPAdapter
-from urllib3 import Retry
+from urllib3.util.retry import Retry
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
@@ -1724,9 +1724,8 @@ def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
         raw_results (Dict): Raw Google API response.
         output_dict (Dict): Dictionary to store processed results.
     """
-    logging.info(f"Raw results received: {json.dumps(raw_results, indent=2)}")
-    logging.debug("Raw web_search_results from Google:")
-    logging.debug(json.dumps(raw_results, indent=2))
+    # Lower verbosity: raw payload only at debug level
+    logging.debug(f"Raw results received: {json.dumps(raw_results, indent=2)}")
     try:
         # Initialize results list if not present
         if "results" not in output_dict:

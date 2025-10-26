@@ -637,6 +637,11 @@ class MediaDatabase:
             ValueError: If client_id is empty or None.
             DatabaseError: If database initialization or schema setup fails.
         """
+        # Validate input path early to avoid implicit fallbacks
+        if isinstance(db_path, str):
+            if db_path.strip() == "":
+                raise ValueError("db_path cannot be an empty string; pass an explicit path or ':memory:'")
+
         # Determine if it's an in-memory DB and resolve the path
         if isinstance(db_path, Path):
             self.is_memory_db = False
@@ -673,8 +678,21 @@ class MediaDatabase:
         self.default_org_id = default_org_id
         self.default_team_id = default_team_id
 
-        # Initialize thread-local storage for connections
-        self._local = threading.local()
+        # Transaction-scoped connection and depth (no per-thread caching)
+        self._txn_conn = None
+        self._tx_depth = 0
+        # Persistent non-transaction connection (PostgreSQL) to mimic previous per-thread behavior
+        self._persistent_conn = None
+        # For SQLite in-memory databases, maintain a persistent connection so state persists
+        if self.backend_type == BackendType.SQLITE and self.is_memory_db:
+            pc = sqlite3.connect(self.db_path_str, check_same_thread=False)
+            try:
+                pc.row_factory = sqlite3.Row
+                pc.execute("PRAGMA foreign_keys = ON")
+                pc.execute("PRAGMA busy_timeout = 10000")
+            except sqlite3.Error:
+                pass
+            self._persistent_conn = pc
         # Add lock for media insertion to prevent race conditions in concurrent uploads
         self._media_insert_lock = threading.Lock()
         self._scope_cache: Tuple[Optional[int], Optional[int]] = (self.default_org_id, self.default_team_id)
@@ -783,10 +801,23 @@ class MediaDatabase:
         if resolved is not None:
             return resolved
 
-        # 4) Fallback to a local SQLite backend in the working directory
+        # 4) Fallback to a local SQLite backend anchored to project root
+        try:
+            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+            _default_sqlite_path = str((Path(_gpr()) / "Databases" / "Media_DB_v2.db").resolve())
+        except Exception:
+            _default_sqlite_path = str((Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
+        # Emit a warning so callers can fix missing explicit paths
+        try:
+            logging.warning(
+                "MediaDatabase backend falling back to default SQLite path; pass an explicit db_path or configure content backend. path=%s",
+                _default_sqlite_path,
+            )
+        except Exception:
+            pass
         default_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
-            sqlite_path="./Databases/Media_DB_v2.db",
+            sqlite_path=_default_sqlite_path,
         )
         return DatabaseBackendFactory.create_backend(default_config)
 
@@ -930,88 +961,34 @@ class MediaDatabase:
         return [dict(r) for r in rows]
 
     # --- Connection Management ---
-    def _get_thread_connection(self):
-        conn = getattr(self._local, 'conn', None)
-        pool = self.backend.get_pool()
-        if conn is not None:
-            if self.backend_type == BackendType.SQLITE:
-                try:
-                    conn.execute("SELECT 1")
-                    return conn
-                except (sqlite3.ProgrammingError, sqlite3.OperationalError):
-                    logging.warning(
-                        "Thread-local connection to %s was closed. Reopening.",
-                        self.db_path_str,
-                    )
-                    try:
-                        conn.close()
-                    except sqlite3.Error:
-                        pass
-                    try:
-                        # Prefer public helper if exposed by the pool
-                        if hasattr(pool, 'clear_thread_local_connection'):
-                            pool.clear_thread_local_connection()  # type: ignore[attr-defined]
-                        else:
-                            # Fallback: best-effort clear via connection.close() below
-                            pass
-                    except Exception:
-                        pass
-                    conn = None
-                    self._local.conn = None
-            else:
-                if getattr(conn, "closed", False):
-                    self._release_connection(conn)
-                    conn = None
-                    self._local.conn = None
-                else:
-                    try:
-                        # Reapply scope for pooled PostgreSQL connections when context changes
-                        if hasattr(self.backend, 'apply_scope'):
-                            self.backend.apply_scope(conn)  # type: ignore[attr-defined]
-                    except Exception as scope_exc:
-                        logging.debug(f"Unable to refresh scope settings: {scope_exc}")
-                    return conn
-
-        if conn is None:
-            conn = self._open_new_connection()
-            self._local.conn = conn
-        return conn
-
-    def _open_new_connection(self):
-        try:
-            pool = self.backend.get_pool()
-            return pool.get_connection()
-        except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to acquire database connection: {exc}") from exc
-
-    def _release_connection(self, connection) -> None:
-        try:
-            if self.backend_type == BackendType.SQLITE:
-                try:
-                    pool = self.backend.get_pool()
-                    if hasattr(pool, 'clear_thread_local_connection'):
-                        pool.clear_thread_local_connection()  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-                try:
-                    connection.close()
-                except sqlite3.Error:
-                    pass
-            else:
-                self.backend.get_pool().return_connection(connection)
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("Error while releasing connection: %s", exc)
-
     def get_connection(self):
-        """Provides the active database connection for the current thread."""
-        return self._get_thread_connection()
+        """Compatibility shim to return a usable connection.
+
+        - Inside transactions returns the transaction-scoped connection.
+        - For SQLite, returns a pooled thread-local connection.
+        - For PostgreSQL, returns a persistent connection grabbed from the pool
+          on first use (released by close_connection()).
+        """
+        if self._txn_conn is not None:
+            return self._txn_conn
+        if self.backend_type == BackendType.SQLITE:
+            if self.is_memory_db and self._persistent_conn is not None:
+                return self._persistent_conn
+            return self.backend.get_pool().get_connection()
+        # PostgreSQL: reuse a single persistent connection outside transactions
+        if self._persistent_conn is None:
+            self._persistent_conn = self.backend.get_pool().get_connection()
+        return self._persistent_conn
 
     def close_connection(self):
-        """Closes or returns the database connection for the current thread, if open."""
-        if hasattr(self._local, 'conn') and self._local.conn is not None:
-            conn = self._local.conn
-            self._local.conn = None
-            self._release_connection(conn)
+        """Release persistent non-transaction connection if present."""
+        if self._txn_conn is not None:
+            return
+        try:
+            if self._persistent_conn is not None:
+                self.backend.get_pool().return_connection(self._persistent_conn)
+        finally:
+            self._persistent_conn = None
 
     def _ensure_sqlite_backend(self) -> None:
         if self.backend_type != BackendType.SQLITE:
@@ -1024,6 +1001,7 @@ class MediaDatabase:
         params: Optional[Union[tuple, list, Dict]] = None,
         *,
         commit: bool = False,
+        connection: Optional[Any] = None,
     ):
         """
          Executes a single SQL query.
@@ -1043,73 +1021,80 @@ class MediaDatabase:
              sqlite3.IntegrityError: Specifically re-raised if a sync validation
                                      trigger (defined in schema) fails.
          """
-        conn = self.get_connection()
         prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+
+        eff_conn = connection or self._txn_conn
 
         if self.backend_type == BackendType.SQLITE:
             try:
-                cursor = conn.cursor()
-                logging.debug(
-                    "Executing Query: %s... Params: %s...",
-                    prepared_query[:200],
-                    str(prepared_params)[:100],
-                )
-                cursor.execute(prepared_query, prepared_params or ())
-                if commit:
-                    conn.commit()
-                    logging.debug("Committed.")
-                return cursor
-            except sqlite3.IntegrityError as e:  # Catch validation errors specifically
+                if eff_conn is None and not self.is_memory_db:
+                    eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
+                    eph.row_factory = sqlite3.Row
+                    cur = eph.cursor()
+                    cur.execute(prepared_query, prepared_params or ())
+                    upper = prepared_query.strip().upper()
+                    is_select = upper.startswith("SELECT")
+                    has_returning = " RETURNING " in upper
+                    if commit:
+                        eph.commit()
+                    rows = []
+                    if is_select or has_returning:
+                        rows = [dict(r) for r in cur.fetchall()]
+                    result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                    cur.close()
+                    eph.close()
+                    return BackendCursorAdapter(result)
+                else:
+                    # Use transaction/persistent connection (required for :memory: databases)
+                    conn_use = eff_conn or self.get_connection()
+                    cur = conn_use.cursor()
+                    cur.execute(prepared_query, prepared_params or ())
+                    if commit and conn_use:
+                        conn_use.commit()
+                    upper = prepared_query.strip().upper()
+                    is_select = upper.startswith("SELECT")
+                    has_returning = " RETURNING " in upper
+                    rows = []
+                    if is_select or has_returning:
+                        rows = [dict(r) for r in cur.fetchall()]
+                    result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                    return BackendCursorAdapter(result)
+            except sqlite3.IntegrityError as e:
                 msg = str(e).lower()
                 if "sync error" in msg:
                     logging.error(f"Sync Validation Failed: {e}")
-                    raise e  # Re-raise the specific IntegrityError
-                logging.error(
-                    "Integrity error: %s... Error: %s",
-                    prepared_query[:200],
-                    e,
-                    exc_info=True,
-                )
+                    raise e
+                logging.error("Integrity error executing query: %s", e, exc_info=True)
                 raise DatabaseError(f"Integrity constraint violation: {e}") from e
-            except sqlite3.Error as e:  # Other SQLite errors
-                logging.error(
-                    "Query failed: %s... Error: %s",
-                    prepared_query[:200],
-                    e,
-                    exc_info=True,
-                )
+            except sqlite3.Error as e:
+                logging.error("SQLite query failed: %s", e, exc_info=True)
                 raise DatabaseError(f"Query execution failed: {e}") from e
 
         try:
-            logging.debug(
-                "Executing Backend Query (Postgres): %s... Params: %s...",
-                prepared_query[:200],
-                str(prepared_params)[:100],
-            )
-            result = self.backend.execute(
-                prepared_query,
-                prepared_params,
-                connection=conn,
-            )
-            if commit:
+            if eff_conn is None:
+                raw = self.backend.get_pool().get_connection()
                 try:
-                    conn.commit()
-                except Exception as exc:
-                    logging.error(
-                        "Failed to commit backend query for %s: %s",
-                        self.db_path_str,
-                        exc,
-                        exc_info=True,
-                    )
-                    raise DatabaseError(f"Backend commit failed: {exc}") from exc
+                    result = self.backend.execute(prepared_query, prepared_params, connection=raw)
+                    if commit:
+                        try:
+                            raw.commit()
+                        except Exception as exc:
+                            raise DatabaseError(f"Backend commit failed: {exc}") from exc
+                finally:
+                    try:
+                        self.backend.get_pool().return_connection(raw)
+                    except Exception:
+                        pass
+            else:
+                result = self.backend.execute(prepared_query, prepared_params, connection=eff_conn)
+                if commit:
+                    try:
+                        eff_conn.commit()
+                    except Exception as exc:
+                        raise DatabaseError(f"Backend commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
-            logging.error(
-                "Backend query failed: %s... Error: %s",
-                prepared_query[:200],
-                exc,
-                exc_info=True,
-            )
+            logging.error("Backend query failed: %s", exc, exc_info=True)
             raise DatabaseError(f"Backend query execution failed: {exc}") from exc
 
     def execute_many(
@@ -1118,6 +1103,7 @@ class MediaDatabase:
         params_list: List[Union[tuple, list, Dict]],
         *,
         commit: bool = False,
+        connection: Optional[Any] = None,
     ) -> Optional[object]:
         """
         Executes a SQL query for multiple sets of parameters.
@@ -1137,7 +1123,6 @@ class MediaDatabase:
             TypeError: If `params_list` is not a list or contains invalid data types.
             DatabaseError: For general SQLite errors or integrity violations.
         """
-        conn = self.get_connection()
         if not isinstance(params_list, list):
             raise TypeError("params_list must be a list of parameter iterables for execute_many().")
         if not params_list:
@@ -1146,73 +1131,64 @@ class MediaDatabase:
 
         prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
 
+        eff_conn = connection or self._txn_conn
+
         if self.backend_type == BackendType.SQLITE:
             try:
-                cursor = conn.cursor()
-                logging.debug(
-                    "Executing Many: %s... with %s sets.",
-                    prepared_query[:150],
-                    len(prepared_params_list),
-                )
-                cursor.executemany(prepared_query, prepared_params_list)
-                if commit:
-                    conn.commit()
-                    logging.debug("Committed Many.")
-                return cursor
+                if eff_conn is None and not self.is_memory_db:
+                    eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
+                    eph.row_factory = sqlite3.Row
+                    cur = eph.cursor()
+                    cur.executemany(prepared_query, prepared_params_list)
+                    if commit:
+                        eph.commit()
+                    result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                    cur.close()
+                    eph.close()
+                    return BackendCursorAdapter(result)
+                else:
+                    conn_use = eff_conn or self.get_connection()
+                    cur = conn_use.cursor()
+                    cur.executemany(prepared_query, prepared_params_list)
+                    if commit and conn_use:
+                        conn_use.commit()
+                    result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                    return BackendCursorAdapter(result)
             except sqlite3.IntegrityError as e:
-                logging.error(
-                    "Integrity error during Execute Many: %s... Error: %s",
-                    prepared_query[:150],
-                    e,
-                    exc_info=True,
-                )
+                logging.error("Integrity error during execute_many: %s", e, exc_info=True)
                 raise DatabaseError(f"Integrity constraint violation during batch: {e}") from e
             except sqlite3.Error as e:
-                logging.error(
-                    "Execute Many failed: %s... Error: %s",
-                    prepared_query[:150],
-                    e,
-                    exc_info=True,
-                )
+                logging.error("SQLite execute_many failed: %s", e, exc_info=True)
                 raise DatabaseError(f"Execute Many failed: {e}") from e
             except TypeError as te:
-                logging.error(
-                    "TypeError during Execute Many: %s. Check params_list format.",
-                    te,
-                    exc_info=True,
-                )
+                logging.error("TypeError during execute_many: %s", te, exc_info=True)
                 raise TypeError(f"Parameter list format error: {te}") from te
 
         try:
-            logging.debug(
-                "Executing Backend Many (Postgres): %s... with %s sets.",
-                prepared_query[:150],
-                len(prepared_params_list),
-            )
-            result = self.backend.execute_many(
-                prepared_query,
-                prepared_params_list,
-                connection=conn,
-            )
-            if commit:
+            if eff_conn is None:
+                raw = self.backend.get_pool().get_connection()
                 try:
-                    conn.commit()
-                except Exception as exc:
-                    logging.error(
-                        "Failed to commit backend batch for %s: %s",
-                        self.db_path_str,
-                        exc,
-                        exc_info=True,
-                    )
-                    raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
+                    result = self.backend.execute_many(prepared_query, prepared_params_list, connection=raw)
+                    if commit:
+                        try:
+                            raw.commit()
+                        except Exception as exc:
+                            raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
+                finally:
+                    try:
+                        self.backend.get_pool().return_connection(raw)
+                    except Exception:
+                        pass
+            else:
+                result = self.backend.execute_many(prepared_query, prepared_params_list, connection=eff_conn)
+                if commit:
+                    try:
+                        eff_conn.commit()
+                    except Exception as exc:
+                        raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
-            logging.error(
-                "Backend execute_many failed: %s... Error: %s",
-                prepared_query[:150],
-                exc,
-                exc_info=True,
-            )
+            logging.error("Backend execute_many failed: %s", exc, exc_info=True)
             raise DatabaseError(f"Backend execute_many failed: {exc}") from exc
 
     # -------------------------
@@ -1286,79 +1262,67 @@ class MediaDatabase:
             Exception: Re-raises any exception that occurs within the block
                        after attempting a rollback.
         """
-        conn = self.get_connection()
+        # no-op: connection will be set by backend/transaction logic below
 
         if self.backend_type == BackendType.SQLITE:
-            in_outer = conn.in_transaction
+            # Dedicated connection for this transaction
+            conn = self._persistent_conn or self.backend.connect()
             try:
-                if not in_outer:
-                    conn.execute("BEGIN")
-                    logging.debug("Started transaction.")
+                conn.row_factory = sqlite3.Row
+            except Exception:
+                pass
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("PRAGMA busy_timeout = 10000")
+            except sqlite3.Error:
+                pass
+
+            try:
+                conn.execute("BEGIN")
+                self._txn_conn = conn
+                logging.debug("Started SQLite transaction.")
                 yield conn
-                if not in_outer:
-                    conn.commit()
-                    logging.debug("Committed transaction.")
+                conn.commit()
+                logging.debug("Committed SQLite transaction.")
             except Exception as e:
-                if not in_outer:
-                    logging.error(
-                        "Transaction failed, rolling back: %s - %s",
-                        type(e).__name__,
-                        e,
-                        exc_info=False,
-                    )
+                logging.error("SQLite transaction failed, rolling back: %s", e)
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise
+            finally:
+                self._txn_conn = None
+                if self._persistent_conn is None:
                     try:
-                        conn.rollback()
-                        logging.debug("Rollback successful.")
-                    except sqlite3.Error as rb_err:
-                        logging.error(f"Rollback FAILED: {rb_err}", exc_info=True)
-                raise e
+                        conn.close()
+                    except Exception:
+                        pass
             return
 
-        depth = getattr(self._local, "tx_depth", 0)
-        manages_backend_tx = depth == 0
+        # PostgreSQL and others: reuse a single connection for nested transactions
+        manages_backend_conn = self._txn_conn is None
+        if manages_backend_conn:
+            conn = self.backend.get_pool().get_connection()
+        else:
+            conn = self._txn_conn
+
+        manages_backend_tx = self._tx_depth == 0
+        self._tx_depth += 1
         ctx = self.backend.transaction(conn) if manages_backend_tx else nullcontext(conn)
-        self._local.tx_depth = depth + 1
-        tx_conn = conn
         try:
             with ctx as inner_conn:
-                tx_conn = inner_conn
+                self._txn_conn = inner_conn
                 yield inner_conn
-        except Exception as exc:
-            if manages_backend_tx:
-                try:
-                    tx_conn.rollback()
-                except Exception as rb_exc:  # noqa: BLE001
-                    logging.error(
-                        "Rollback failed for backend transaction on %s: %s",
-                        self.db_path_str,
-                        rb_exc,
-                        exc_info=True,
-                    )
-            logging.error("Backend transaction failed: %s", exc, exc_info=False)
-            raise
-        else:
-            if manages_backend_tx:
-                try:
-                    tx_conn.commit()
-                except Exception as commit_exc:  # noqa: BLE001
-                    logging.error(
-                        "Commit failed for backend transaction on %s: %s",
-                        self.db_path_str,
-                        commit_exc,
-                        exc_info=True,
-                    )
-                    try:
-                        tx_conn.rollback()
-                    except Exception as rb_exc:  # noqa: BLE001
-                        logging.error(
-                            "Rollback after commit failure also failed on %s: %s",
-                            self.db_path_str,
-                            rb_exc,
-                            exc_info=True,
-                        )
-                    raise DatabaseError(f"Backend commit failed: {commit_exc}") from commit_exc
         finally:
-            self._local.tx_depth = depth
+            self._tx_depth -= 1
+            if self._tx_depth == 0:
+                self._txn_conn = None
+            if manages_backend_conn:
+                try:
+                    self.backend.get_pool().return_connection(conn)
+                except Exception:
+                    pass
 
     # --- Schema Initialization and Migration ---
     def _get_db_version(self, conn: sqlite3.Connection) -> int:
@@ -1741,7 +1705,8 @@ class MediaDatabase:
                                     f"No migration scripts to apply (status={status}); proceeding with FTS/setup checks"
                                 )
                             # Get a new connection after migration (or when no migration files present)
-                            conn = self.get_connection()
+                            conn = sqlite3.connect(self.db_path_str, check_same_thread=False)
+                            conn.row_factory = sqlite3.Row
                             final_db_version = self._get_db_version(conn)
                             if final_db_version != target_version:
                                 raise SchemaError(
@@ -2336,7 +2301,7 @@ class MediaDatabase:
                 c.get("prev_version"),
                 c.get("merge_parent_uuid"),
             ))
-        with self.transaction():
+        with self.transaction() as conn:
             self.execute_many(
                 """
                 INSERT INTO Claims (
@@ -2347,6 +2312,7 @@ class MediaDatabase:
                 """,
                 rows,
                 commit=False,
+                connection=conn,
             )
         return len(rows)
 
@@ -3863,9 +3829,9 @@ class MediaDatabase:
         placeholders = ','.join('?' * len(change_ids))
         query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"
         try:
-            with self.transaction():
+            with self.transaction() as conn:
                 cursor = self._execute_with_connection(
-                    self.get_connection(),
+                    conn,
                     query,
                     tuple(change_ids),
                 )
@@ -3899,9 +3865,9 @@ class MediaDatabase:
             raise ValueError("change_id_threshold must be a non-negative integer.")
         query = "DELETE FROM sync_log WHERE change_id <= ?"
         try:
-            with self.transaction():
+            with self.transaction() as conn:
                 cursor = self._execute_with_connection(
-                    self.get_connection(),
+                    conn,
                     query,
                     (change_id_threshold,),
                 )
@@ -7296,7 +7262,7 @@ def process_chunks(self, media_id: int, chunks: List[Dict[str, Any]], batch_size
                                  """
                     # self.execute_many is called within the transaction.
                     # The default commit=False for execute_many is correct here.
-                    self.execute_many(insert_sql, db_insert_params_list)
+                    self.execute_many(insert_sql, db_insert_params_list, connection=conn)
 
                     # If execute_many succeeded, log sync events for this batch
                     for entity_uuid, version_val, payload_dict in sync_log_data_for_batch:

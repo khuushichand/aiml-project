@@ -906,8 +906,9 @@ async def test_authentication():
 
             # Validate the token via access-token decoder
             decoded = jwt_service.decode_access_token(test_token)
-            
-            if decoded and decoded.get("sub") == "test_user":
+
+            # sub contains user_id; username holds the display name
+            if decoded and decoded.get("username") == "test_user":
                 print("✅ JWT authentication system working")
             else:
                 print("❌ JWT validation failed")

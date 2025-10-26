@@ -51,11 +51,11 @@ async def create_evaluation(
                             if response is not None:
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"evaluations_crud: failed to load eval metadata for {row.get('id') if isinstance(row, dict) else 'row'}: {e}")
                         return EvaluationResponse(**existing)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"evaluations_crud: error during pagination counting: {e}")
         evaluation = await svc.create_evaluation(
             name=eval_request.name,
             description=eval_request.description,
@@ -69,8 +69,8 @@ async def create_evaluation(
         try:
             if idempotency_key and evaluation.get("id"):
                 svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"evaluations_crud: failed to compute totals: {e}")
         return EvaluationResponse(**evaluation)
     except Exception as e:
         logger.error(f"Failed to create evaluation: {e}")

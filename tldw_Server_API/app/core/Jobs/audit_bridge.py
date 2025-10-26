@@ -162,11 +162,13 @@ async def _log_audit_event(
         user_id=str(owner) if owner else None,
     )
 
+    # Normalize result to one of: success, failure, error
     result = "success"
     if event == "job.failed":
         result = "failure"
     elif event == "job.sla_breached":
-        result = "warning"
+        # Treat SLA breach as a failure for risk scoring and consistency
+        result = "failure"
 
     await service.log_event(
         event_type=event_type,

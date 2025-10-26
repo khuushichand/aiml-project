@@ -294,37 +294,38 @@ async def create_speech(
                 "Cache-Control": "no-cache",
             },
         )
+    # Non-streaming mode: accumulate chunks and return a single response
+    # Apply to both single-user and multi-user modes for consistent behavior
+    first_chunk = await _pull_first_chunk()
+    all_audio_bytes = b""
+    if first_chunk:
+        all_audio_bytes += first_chunk
+    try:
+        async for chunk in speech_iter:
+            all_audio_bytes += chunk
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_for_tts_error(exc)
 
-    if not is_multi_user_mode():
-        first_chunk = await _pull_first_chunk()
-        all_audio_bytes = b""
-        if first_chunk:
-            all_audio_bytes += first_chunk
-        try:
-            async for chunk in speech_iter:
-                all_audio_bytes += chunk
-        except HTTPException:
-            raise
-        except Exception as exc:
-            _raise_for_tts_error(exc)
+    # Drop any internal boundary markers if present
+    all_audio_bytes = all_audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
 
-        all_audio_bytes = all_audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
-
-        if not all_audio_bytes:
-            logger.error("Non-streaming generation resulted in empty audio data.")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Audio generation failed to produce data."
-            )
-
-        return Response(
-            content=all_audio_bytes,
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-                "Cache-Control": "no-cache",
-            },
+    if not all_audio_bytes:
+        logger.error("Non-streaming generation resulted in empty audio data.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Audio generation failed to produce data."
         )
+
+    return Response(
+        content=all_audio_bytes,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @router.post(
@@ -736,7 +737,7 @@ async def create_translation(
         usage_log.log_event(
             "audio.transcriptions",
             tags=[str(model or "")],
-            metadata={"filename": getattr(file, 'filename', None), "language": language or None},
+            metadata={"filename": getattr(file, 'filename', None), "language": "en"},
         )
     except Exception:
         pass

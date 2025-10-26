@@ -509,8 +509,13 @@ def _install_faster_whisper(models: List[str]) -> None:
 
     for model_name in models or DEFAULT_WHISPER_MODELS:
         logger.info("Downloading faster-whisper checkpoint %s", model_name)
-        instance = WhisperModel(model_name, device='cpu')
-        del instance
+        try:
+            instance = WhisperModel(model_name, device='cpu')
+            del instance
+        except Exception as exc:  # noqa: BLE001
+            if _is_httpx_network_error(exc):
+                raise DownloadBlockedError(f'Network unavailable while downloading {model_name}.') from exc
+            raise
 
 
 def _install_qwen2_audio() -> None:
@@ -523,9 +528,14 @@ def _install_qwen2_audio() -> None:
 
     repo = 'Qwen/Qwen2-Audio-7B-Instruct'
     logger.info("Fetching Qwen2Audio assets from %s", repo)
-    AutoProcessor.from_pretrained(repo)
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    Qwen2AudioForConditionalGeneration.from_pretrained(repo, torch_dtype=dtype, device_map='cpu')
+    try:
+        AutoProcessor.from_pretrained(repo)
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        Qwen2AudioForConditionalGeneration.from_pretrained(repo, torch_dtype=dtype, device_map='cpu')
+    except Exception as exc:  # noqa: BLE001
+        if _is_httpx_network_error(exc):
+            raise DownloadBlockedError(f'Network unavailable while downloading {repo}.') from exc
+        raise
 
 
 def _install_nemo_parakeet(variant: str) -> None:
@@ -636,6 +646,10 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
         )
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
+    except Exception as exc:  # noqa: BLE001
+        if _is_httpx_network_error(exc):
+            raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
+        raise
 
 
 def _snapshot_repo(repo_id: str) -> None:
@@ -649,6 +663,10 @@ def _snapshot_repo(repo_id: str) -> None:
         snapshot_download(repo_id=repo_id, local_dir_use_symlinks=False)
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
+    except Exception as exc:  # noqa: BLE001
+        if _is_httpx_network_error(exc):
+            raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
+        raise
 
 
 def _run_subprocess(command: List[str]) -> None:

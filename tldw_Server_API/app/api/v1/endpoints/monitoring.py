@@ -86,8 +86,8 @@ async def list_alerts(
             try:
                 import json
                 r["metadata"] = json.loads(meta)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"monitoring: failed to parse alert metadata JSON: {e}")
         items.append(AlertItem(**r))
     return AlertsListResponse(items=items)
 
@@ -133,6 +133,7 @@ async def send_test_notification(payload: NotificationTestRequest, _: Any = Depe
     try:
         notifier.notify(alert)
     except Exception as e:
+        logger.error(f"monitoring: failed to send test notification: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     return {"status": "ok"}
 
@@ -154,7 +155,8 @@ async def get_recent_notifications(limit: int = Query(50, ge=1, le=500), _: Any 
                 continue
             try:
                 items.append(json.loads(ln))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"monitoring: failed to parse recent notification JSONL line: {e}")
                 items.append({"raw": ln})
         return {"items": items}
     except Exception as e:

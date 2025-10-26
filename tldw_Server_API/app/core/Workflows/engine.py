@@ -86,8 +86,8 @@ class WorkflowEngine:
             if secrets:
                 # Store a shallow copy to avoid external mutation and attach timestamp
                 cls._RUN_SECRETS[run_id] = {"data": dict(secrets), "set_at": time.time()}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"WorkflowEngine: failed to set run secrets for {run_id}: {e}", exc_info=True)
 
     @classmethod
     def _pop_run_secrets(cls, run_id: str) -> Optional[dict[str, str]]:
@@ -109,15 +109,16 @@ class WorkflowEngine:
                     set_at = float(entry.get("set_at", 0.0)) if isinstance(entry, dict) else 0.0
                     if set_at and (now - set_at) > max(1, int(ttl_seconds)):
                         to_del.append(rid)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"WorkflowEngine: unable to evaluate secret TTL for {rid}: {e}")
                     to_del.append(rid)
             for rid in to_del:
                 try:
                     cls._RUN_SECRETS.pop(rid, None)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as e:
+                    logger.debug(f"WorkflowEngine: failed to purge secret for {rid}: {e}")
+        except Exception as e:
+            logger.debug(f"WorkflowEngine: purge_expired_secrets failed: {e}")
 
     def _tenant_for_run(self, run_id: Optional[str]) -> str:
         """Resolve tenant id for a given run with simple caching."""
@@ -140,15 +141,18 @@ class WorkflowEngine:
             return
         try:
             self._tenant_cache.pop(run_id, None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"WorkflowEngine: failed to clear tenant cache for {run_id}: {e}")
 
     def _append_event(self, run_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None, step_run_id: Optional[str] = None) -> None:
         try:
             tenant = self._tenant_for_run(run_id)
             self.db.append_event(tenant, run_id, event_type, payload or {}, step_run_id=step_run_id)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                logger.debug(f"WorkflowEngine: append_event failed run_id={run_id} type={event_type}: {e}")
+            except Exception:
+                pass
 
     @staticmethod
     def _resolve_database(db: Optional[WorkflowsDatabase]) -> WorkflowsDatabase:
@@ -190,8 +194,8 @@ class WorkflowEngine:
             try:
                 if not keep:
                     self._pop_run_secrets(run_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"WorkflowEngine: pop_run_secrets failed for {run_id}: {e}")
             self._clear_tenant_cache(run_id)
             try:
                 WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
@@ -821,8 +825,11 @@ class WorkflowEngine:
                 except Exception:
                     terminated, forced = (False, False)
                 self._append_event(run_id, "step_cancelled", {"step_run_id": r.get("step_run_id"), "forced_kill": bool(forced)})
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                logger.debug(f"WorkflowEngine: cancel subprocess cleanup failed for run_id={run_id}: {e}")
+            except Exception:
+                pass
         # Ensure ended_at is set on cancel for lifecycle completeness
         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
         self._append_event(run_id, "run_cancelled", {"by": "user"})

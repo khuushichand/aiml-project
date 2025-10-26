@@ -18,8 +18,21 @@ def get_db_path(user_id: str) -> Path:
     return user_dir / 'vector_store_batches.db'
 
 
+def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Apply recommended SQLite PRAGMAs for concurrency and resilience."""
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=3000;")
+    except Exception:
+        pass
+    return conn
+
+
 def _connect(user_id: str) -> sqlite3.Connection:
-    return sqlite3.connect(get_db_path(user_id), check_same_thread=False)
+    return _prime(sqlite3.connect(get_db_path(user_id), check_same_thread=False))
 
 
 def _ensure_initialized(user_id: str) -> None:

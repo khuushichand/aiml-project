@@ -20,6 +20,11 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from starlette.responses import FileResponse
 import re
 import json
+from tldw_Server_API.app.services.outputs_service import (
+    update_output_artifact_db,
+    find_outputs_to_purge,
+    delete_outputs_by_ids,
+)
 
 
 router = APIRouter(prefix="/outputs", tags=["outputs"])
@@ -229,8 +234,8 @@ async def create_output(
         # Try to clean up the file on failure
         try:
             os.remove(path)
-        except Exception:
-            pass
+        except Exception as _cleanup_err:
+            logger.warning(f"failed to cleanup output file after DB insert failure: {path} err={_cleanup_err}")
         raise HTTPException(status_code=500, detail="db_insert_failed")
 
     return OutputArtifact(
@@ -444,36 +449,26 @@ async def update_output(
             if target_path.resolve() != source_path.resolve() and source_path.exists():
                 try:
                     source_path.unlink()
-                except Exception:
-                    pass
+                except Exception as _unlink_err:
+                    logger.warning(f"failed to remove old output file {source_path}: {_unlink_err}")
             new_path = str(target_path)
             new_format = payload.format
         except Exception:
             raise HTTPException(status_code=500, detail="write_failed")
 
-    # Apply DB updates
+    # Apply DB updates via service
     try:
-        sets = []
-        params: list[object] = []
-        if new_title is not None:
-            sets.append("title = ?")
-            params.append(new_title)
-        if new_path is not None:
-            sets.append("storage_path = ?")
-            params.append(new_path)
-        if new_format is not None:
-            sets.append("format = ?")
-            params.append(new_format)
-        if payload.retention_until is not None:
-            sets.append("retention_until = ?")
-            params.append(payload.retention_until)
-        if sets:
-            params.extend([output_id, row.user_id])
-            q = f"UPDATE outputs SET {', '.join(sets)} WHERE id = ? AND user_id = ? AND deleted = 0"
-            cdb.backend.execute(q, tuple(params))
-        final = cdb.get_output_artifact(output_id)
+        final = update_output_artifact_db(
+            cdb=cdb,
+            output_id=output_id,
+            user_id=row.user_id,
+            new_title=new_title,
+            new_path=new_path,
+            new_format=new_format,
+            retention_until=payload.retention_until,
+        )
     except Exception as e:
-        # Unique constraint might fail on rename
+        logger.error(f"outputs.update conflict or DB error: {e}")
         raise HTTPException(status_code=409, detail="conflict_on_update")
 
     return OutputArtifact(
@@ -502,29 +497,18 @@ async def purge_outputs(
     ids: set[int] = set()
     paths: dict[int, str] = {}
 
-    if payload.include_retention:
-        try:
-            cur = cdb.backend.execute(
-                "SELECT id, storage_path FROM outputs WHERE user_id = ? AND retention_until IS NOT NULL AND retention_until <= ?",
-                (cdb.user_id, now),
-            )
-            for row in cur.rows:
-                rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
-                ids.add(rid)
-                paths[rid] = row["storage_path"] if isinstance(row, dict) else row[1]
-        except Exception:
-            pass
     try:
-        cur2 = cdb.backend.execute(
-            "SELECT id, storage_path FROM outputs WHERE user_id = ? AND deleted = 1 AND deleted_at IS NOT NULL AND julianday(?) - julianday(deleted_at) >= ?",
-            (cdb.user_id, now, payload.soft_deleted_grace_days),
+        candidate_paths = find_outputs_to_purge(
+            cdb=cdb,
+            now_iso=now,
+            soft_deleted_grace_days=payload.soft_deleted_grace_days,
+            include_retention=payload.include_retention,
         )
-        for row in cur2.rows:
-            rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
+        for rid, pth in candidate_paths.items():
             ids.add(rid)
-            paths[rid] = row["storage_path"] if isinstance(row, dict) else row[1]
-    except Exception:
-        pass
+            paths[rid] = pth
+    except Exception as e:
+        logger.error(f"outputs.purge: failed to enumerate purge candidates: {e}")
 
     files_deleted = 0
     if payload.delete_files and ids:
@@ -534,19 +518,17 @@ async def purge_outputs(
                 if p.exists():
                     p.unlink()
                     files_deleted += 1
-            except Exception:
+            except Exception as del_err:
+                logger.warning(f"outputs.purge: failed to delete file {pth}: {del_err}")
                 continue
 
     removed = 0
     if ids:
         placeholders = ",".join(["?"] * len(ids))
         try:
-            cdb.backend.execute(
-                f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
-                tuple([cdb.user_id] + list(ids)),
-            )
-            removed = len(ids)
-        except Exception:
+            removed = delete_outputs_by_ids(cdb=cdb, user_id=cdb.user_id, ids=list(ids))
+        except Exception as e:
+            logger.error(f"outputs.purge: DB delete failed: {e}")
             removed = 0
 
     return {"removed": removed, "files_deleted": files_deleted}

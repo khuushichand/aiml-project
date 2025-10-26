@@ -88,8 +88,12 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
                     db_path.parent.mkdir(parents=True, exist_ok=True)
                     db_path = str(db_path)
                 else:
-                    # Fallback to old path if config not available
-                    db_path = 'Databases/user_databases/1/Media_DB_v2.db'
+                    # Fallback anchored to project or package root if config not available
+                    try:
+                        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                        db_path = str(Path(get_project_root()) / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
+                    except Exception:
+                        db_path = str(Path(__file__).resolve().parents[5] / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
             
             # Create database instance
             db = MediaDatabase(db_path=db_path, client_id=client_id)
@@ -143,8 +147,12 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
                     db_path.parent.mkdir(parents=True, exist_ok=True)
                     db_path = str(db_path)
                 else:
-                    # Fallback to old path if config not available
-                    db_path = 'Databases/user_databases/1/Media_DB_v2.db'
+                    # Fallback anchored to project or package root if config not available
+                    try:
+                        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                        db_path = str(Path(get_project_root()) / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
+                    except Exception:
+                        db_path = str(Path(__file__).resolve().parents[5] / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
             
             db = MediaDatabase(db_path=db_path, client_id=client_id)
         templates = load_builtin_templates()
@@ -210,9 +218,13 @@ def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) 
                         # Ensure directory exists
                         db_path.parent.mkdir(parents=True, exist_ok=True)
                         db_path = str(db_path)
-                    else:
-                        # Fallback to old path if config not available
-                        db_path = 'Databases/user_databases/1/Media_DB_v2.db'
+                else:
+                    # Fallback anchored to project or package root if config not available
+                    try:
+                        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                        db_path = str(Path(get_project_root()) / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
+                    except Exception:
+                        db_path = str(Path(__file__).resolve().parents[5] / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
                 
                 db = MediaDatabase(db_path=db_path, client_id='system')
             existing = db.list_chunking_templates(include_builtin=True, include_custom=False)

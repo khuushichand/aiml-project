@@ -2,6 +2,7 @@
 # Description: Dia TTS adapter implementation for ultra-realistic dialogue generation
 #
 # Imports
+import asyncio
 import os
 import re
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
@@ -140,11 +141,13 @@ class DiaAdapter(TTSAdapter):
             
             # Register model with resource manager
             if self.model:
-                resource_manager.register_model(
+                register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.model,
                     cleanup_callback=self._cleanup_resources
                 )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
             
             logger.info(
                 f"{self.provider_name}: Initialized successfully "

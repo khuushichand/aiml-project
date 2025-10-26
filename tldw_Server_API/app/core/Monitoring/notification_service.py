@@ -44,7 +44,16 @@ class NotificationService:
         ncfg = (cfg.get("monitoring") or {}).get("notifications") if isinstance(cfg, dict) else None
         self.enabled = os.getenv("MONITORING_NOTIFY_ENABLED", str((ncfg or {}).get("enabled", False))).strip().lower() in {"1","true","yes","on","y"}
         self.min_severity = str(os.getenv("MONITORING_NOTIFY_MIN_SEVERITY", (ncfg or {}).get("min_severity", "critical"))).strip().lower()
-        self.file_path = os.getenv("MONITORING_NOTIFY_FILE", (ncfg or {}).get("file", "Databases/monitoring_notifications.log"))
+        raw_file = os.getenv("MONITORING_NOTIFY_FILE", (ncfg or {}).get("file", "Databases/monitoring_notifications.log"))
+        try:
+            fp = Path(str(raw_file))
+            if not fp.is_absolute():
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+                fp = Path(_gpr()) / fp
+            self.file_path = str(fp)
+        except Exception:
+            # Last resort: anchor relative to package root to avoid CWD effects
+            self.file_path = str(Path(__file__).resolve().parents[5] / str(raw_file))
         self.webhook_url = os.getenv("MONITORING_NOTIFY_WEBHOOK_URL", (ncfg or {}).get("webhook_url", ""))
         self.email_to = os.getenv("MONITORING_NOTIFY_EMAIL_TO", (ncfg or {}).get("email_to", ""))
         # SMTP configuration (optional)

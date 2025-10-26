@@ -5,6 +5,8 @@
 import re
 import uuid
 from typing import Any, Optional
+import os
+import json
 from pydantic import field_validator, model_validator, ValidationError
 from loguru import logger
 
@@ -22,7 +24,34 @@ CHARACTER_ID_PATTERN = re.compile(r'^(\d+|[a-zA-Z0-9_\- ]{1,100})$')
 MAX_TOOL_DEFINITION_SIZE = 10000  # characters
 
 # Maximum total request size
-MAX_REQUEST_SIZE = 1000000  # 1MB in characters
+def _get_max_request_size() -> int:
+    """Resolve the max request size with env/config overrides.
+
+    Precedence:
+    - Env var CHAT_REQUEST_MAX_SIZE (integer, characters)
+    - Config [Chat-Module] max_request_size_chars
+    - Default 1_000_000
+    """
+    # Env override
+    try:
+        env_val = os.getenv("CHAT_REQUEST_MAX_SIZE")
+        if env_val is not None:
+            return max(1, int(env_val))
+    except Exception:
+        pass
+    # Config override
+    try:
+        from tldw_Server_API.app.core.config import load_comprehensive_config
+        cfg = load_comprehensive_config()
+        if cfg and cfg.has_section('Chat-Module'):
+            raw = cfg.get('Chat-Module', 'max_request_size_chars', fallback=None)
+            if raw is not None:
+                return max(1, int(raw))
+    except Exception:
+        pass
+    return 1_000_000
+
+MAX_REQUEST_SIZE = _get_max_request_size()
 
 #######################################################################################################################
 #
@@ -205,6 +234,32 @@ def validate_max_tokens(max_tokens: Optional[int]) -> Optional[int]:
     return max_tokens
 
 
+def _sanitize_value_for_size(value: Any) -> Any:
+    """Redact large data:image payloads to avoid penalizing multimodal requests.
+
+    - Replaces base64 content in data URIs with a short '<redacted>' marker.
+    - Leaves other values intact.
+    """
+    try:
+        # Redact strings that look like data:image URIs
+        if isinstance(value, str) and value.startswith('data:image'):
+            try:
+                prefix, _rest = value.split(',', 1)
+            except ValueError:
+                prefix = value
+            # Keep mime/metadata, drop base64 bulk
+            return f"{prefix},<redacted>"
+        # Recurse lists
+        if isinstance(value, list):
+            return [_sanitize_value_for_size(v) for v in value]
+        # Recurse dicts
+        if isinstance(value, dict):
+            return {k: _sanitize_value_for_size(v) for k, v in value.items()}
+        return value
+    except Exception:
+        return value
+
+
 def validate_request_size(request_data: Any) -> bool:
     """
     Validate total request size.
@@ -219,25 +274,34 @@ def validate_request_size(request_data: Any) -> bool:
         ValueError: If request is too large
     """
     try:
-        import json
-        
-        # Check if it's already a JSON string
+        # If it's already a JSON string, try to parse + sanitize structurally;
+        # fall back to conservative regex redaction if parse fails.
         if isinstance(request_data, str):
-            request_json = request_data
-        # Check if it's a Pydantic model with model_dump
-        elif hasattr(request_data, 'model_dump'):
-            request_json = json.dumps(request_data.model_dump())
-        # Otherwise try to serialize it
+            try:
+                obj = json.loads(request_data)
+                sanitized_obj = _sanitize_value_for_size(obj)
+                request_json = json.dumps(sanitized_obj)
+            except Exception:
+                # Regex: replace base64 payload until next quote/space with <redacted>
+                # Pattern: (data:image... ,)<base64>
+                pattern = re.compile(r'(data:image[^,]*,)[^"\s]+')
+                request_json = pattern.sub(r'\1<redacted>', request_data)
         else:
-            request_json = json.dumps(request_data)
-        
+            # Convert to a serializable dict and sanitize recursively
+            if hasattr(request_data, 'model_dump'):
+                raw = request_data.model_dump()
+            else:
+                raw = request_data
+            sanitized_obj = _sanitize_value_for_size(raw)
+            request_json = json.dumps(sanitized_obj)
+
         if len(request_json) > MAX_REQUEST_SIZE:
             raise ValueError(
                 f"Request too large (max {MAX_REQUEST_SIZE} chars, got {len(request_json)})"
             )
-        
+
         return True
-        
+
     except json.JSONDecodeError as e:
         logger.error(f"JSON error validating request size: {e}")
         raise ValueError(f"Invalid JSON in request: {str(e)}")

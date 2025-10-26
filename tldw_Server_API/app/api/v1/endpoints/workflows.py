@@ -14,7 +14,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSock
 import sqlite3
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Any, Dict, Optional
 from loguru import logger
 from pathlib import Path
 
@@ -34,7 +33,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode
+from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
@@ -283,8 +282,8 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                 if succ not in id_to_idx:
                     raise HTTPException(status_code=422, detail=f"Step '{sid}' on_success points to unknown step '{succ}'")
                 edges[sid].append(succ)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"workflows._validate_dag: on_success parse error for step {sid}: {e}")
         # explicit on_failure
         try:
             failn = str(s.get("on_failure") or "").strip()
@@ -292,8 +291,8 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                 if failn not in id_to_idx:
                     raise HTTPException(status_code=422, detail=f"Step '{sid}' on_failure points to unknown step '{failn}'")
                 edges[sid].append(failn)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"workflows._validate_dag: on_failure parse error for step {sid}: {e}")
         # branch-specific
         try:
             if str(s.get("type") or "").strip() == "branch":
@@ -305,8 +304,8 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                         if nxt not in id_to_idx:
                             raise HTTPException(status_code=422, detail=f"Step '{sid}' branch targets unknown step '{nxt}'")
                         edges[sid].append(nxt)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"workflows._validate_dag: branch parse error for step {sid}: {e}")
 
     # Detect cycles among explicit edges (DFS)
     visiting: Dict[str, bool] = {}
@@ -364,8 +363,8 @@ async def _wait_for_run_completion(
             # Trim timeouts under pytest/TEST_MODE to keep suites responsive
             if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
                 timeout_seconds = min(timeout_seconds, 120.0)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows endpoint: failed to adjust run timeout; using defaults: {e}")
     deadline = time.monotonic() + timeout_seconds
     terminal = {"succeeded", "failed", "cancelled"}
     while True:
@@ -448,8 +447,8 @@ async def create_definition(
                 action="create",
                 metadata={"name": body.name, "version": body.version},
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows audit(create) failed: {e}")
     return WorkflowDefinitionResponse(
         id=workflow_id,
         name=body.name,
@@ -533,8 +532,8 @@ async def create_new_version(
                 action="create_version",
                 metadata={"base_id": workflow_id, "version": body.version},
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows audit(create_version) failed: {e}")
     return WorkflowDefinitionResponse(id=wid, name=body.name, version=body.version, description=body.description, tags=body.tags, is_active=True)
 
 
@@ -576,8 +575,8 @@ async def delete_definition(
                 resource_id=str(workflow_id),
                 action="delete",
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows audit(run_saved) failed: {e}")
     return {"ok": True}
 
 
@@ -712,15 +711,15 @@ async def run_saved(
                 headers = _build_rate_limit_headers(burst_limit, 0, reset)
                 raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
             if c_day >= daily_limit:
-                # Reset at next UTC midnight
+                # Reset at next UTC midnight (use UTC-aware datetime for correct epoch)
                 tomorrow = (now + _dt.timedelta(days=1)).date()
-                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0))
+                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0, tzinfo=_dt.timezone.utc))
                 headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
                 raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows audit(run_adhoc) failed: {e}")
 
     run_id = str(uuid4())
     db.create_run(
@@ -782,15 +781,15 @@ async def run_saved(
                             error=run.error,
                             definition_version=run.definition_version,
                         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows endpoint: inline fallback check failed: {e}")
     engine = WorkflowEngine(db)
     # Inject scoped secrets (not persisted)
     try:
         if body and getattr(body, "secrets", None):
             WorkflowEngine.set_run_secrets(run_id, body.secrets)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Workflows endpoint(adhoc): inline fallback check failed: {e}")
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
     engine.submit(run_id, run_mode)
     # Nudge: wait briefly for background engine to transition off 'queued' in test environments
@@ -801,17 +800,26 @@ async def run_saved(
             if _r and _r.status != "queued":
                 break
             await _a.sleep(0.005)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"workflows: failed to load workflows engine config: {e}")
     # Fallback for environments where background scheduling is delayed: run inline once
     try:
         _r2 = db.get_run(run_id)
         if _r2 and _r2.status == "queued":
             from loguru import logger as _logger
-            _logger.debug(f"Workflows endpoint: fallback inline start for run_id={run_id}")
-            await engine.start_run(run_id, run_mode)
-    except Exception:
-        pass
+            # Only run inline if not present in scheduler queue (avoid breaking concurrency limits)
+            try:
+                in_queue = WorkflowScheduler.instance().drain_pending(run_id)
+            except Exception as _e:
+                logger.debug(f"workflows: scheduler.drain_pending error: {_e}")
+                in_queue = False
+            if not in_queue:
+                _logger.debug(f"Workflows endpoint: fallback inline start for run_id={run_id}")
+                await engine.start_run(run_id, run_mode)
+            else:
+                _logger.debug(f"Workflows endpoint: run_id={run_id} is queued; skipping inline fallback")
+    except Exception as e:
+        logger.debug(f"workflows: failed to initialize scheduler: {e}")
     if run_mode == RunMode.SYNC:
         run = await _wait_for_run_completion(db, run_id)
     else:
@@ -819,8 +827,8 @@ async def run_saved(
     from loguru import logger as _logger
     try:
         _logger.debug(f"Workflows endpoint: post-submit status={run.status if run else 'missing'} run_id={run_id}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"workflows: failed to log post-submit status: {e}")
     if run is None:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     # Audit: run created
@@ -894,6 +902,7 @@ async def list_runs(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
     request: Request = None,
+    response: Response = None,
     audit_service=Depends(get_audit_service_for_user),
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
@@ -980,8 +989,8 @@ async def list_runs(
                 cur_order_desc = token_od
                 # When using cursor, ignore provided offset
                 offset = 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Workflows runs: failed to parse cursor token; ignoring. Error: {e}")
 
     rows = db.list_runs(
         tenant_id=tenant_id,
@@ -1030,8 +1039,50 @@ async def list_runs(
             }
             raw = _json.dumps(token_obj, default=str).encode("utf-8")
             next_cursor = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Workflows runs: failed to build next_cursor token: {e}")
             next_cursor = None
+
+    # Optional RFC5988 Link headers for pagination
+    if response is not None:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints._pagination_utils import build_link_header
+            base_path = "/api/v1/workflows/runs"
+            params_common = []
+            if status:
+                for s in status:
+                    params_common.append(("status", s))
+            if owner:
+                params_common.append(("owner", str(owner)))
+            if workflow_id is not None:
+                params_common.append(("workflow_id", str(workflow_id)))
+            if created_after:
+                params_common.append(("created_after", str(created_after)))
+            if created_before:
+                params_common.append(("created_before", str(created_before)))
+            if last_n_hours is not None:
+                params_common.append(("last_n_hours", str(last_n_hours)))
+            if order_by:
+                params_common.append(("order_by", str(order_by)))
+            if order:
+                params_common.append(("order", str(order)))
+            # Choose offset links only when not using cursor-seek mode
+            eff_offset = None if cursor_ts is not None else int(offset)
+            eff_has_more = None if cursor_ts is not None else bool(has_more)
+            link_value = build_link_header(
+                base_path,
+                params_common,
+                next_cursor=next_cursor,
+                limit=int(limit),
+                offset=eff_offset,
+                has_more=eff_has_more,
+                cursor_param="cursor",
+                include_first_last=True,
+            )
+            if link_value:
+                response.headers["Link"] = link_value
+        except Exception as e:
+            logger.debug(f"Workflows runs: failed to set Link headers: {e}")
 
     return WorkflowRunListResponse(
         runs=items,
@@ -1099,7 +1150,7 @@ async def run_adhoc(
                 raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
             if c_day >= daily_limit:
                 tomorrow = (now + _dt.timedelta(days=1)).date()
-                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0))
+                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0, tzinfo=_dt.timezone.utc))
                 headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
                 raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
     except HTTPException:
@@ -1144,8 +1195,16 @@ async def run_adhoc(
         _r2 = db.get_run(run_id)
         if _r2 and _r2.status == "queued":
             from loguru import logger as _logger
-            _logger.debug(f"Workflows endpoint(adhoc): fallback inline start for run_id={run_id}")
-            await engine.start_run(run_id, run_mode)
+            # Only start inline if not enqueued by the scheduler (preserve concurrency limits)
+            try:
+                in_queue = WorkflowScheduler.instance().drain_pending(run_id)
+            except Exception:
+                in_queue = False
+            if not in_queue:
+                _logger.debug(f"Workflows endpoint(adhoc): fallback inline start for run_id={run_id}")
+                await engine.start_run(run_id, run_mode)
+            else:
+                _logger.debug(f"Workflows endpoint(adhoc): run_id={run_id} is queued; skipping inline fallback")
     except Exception:
         pass
     if run_mode == RunMode.SYNC:
@@ -1232,8 +1291,8 @@ async def get_run(
                     resource_id=str(run_id),
                     action="tenant_mismatch",
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Workflows get_run: audit tenant_mismatch failed: {e}")
         raise HTTPException(status_code=404, detail="Run not found")
     # Owner or admin (if attribute available)
     is_admin = bool(getattr(current_user, "is_admin", False))
@@ -1255,8 +1314,8 @@ async def get_run(
                     resource_id=str(run_id),
                     action="not_owner",
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Workflows get_run: audit not_owner failed: {e}")
         raise HTTPException(status_code=404, detail="Run not found")
     return WorkflowRunResponse(
         id=run.run_id,
@@ -1298,6 +1357,7 @@ async def get_run_events(
     types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
     cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),
     response: Response = None,
+    request: Request = None,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
@@ -1322,8 +1382,8 @@ async def get_run_events(
             tok = _json.loads(raw)
             if isinstance(tok.get("last_seq"), int):
                 since = int(tok["last_seq"])  # seek after this seq
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Workflows events: failed to parse cursor token; ignoring. Error: {e}")
     events = db.get_events(run_id, since=since, limit=limit, types=types_norm if types_norm else None)
     out: List[EventResponse] = []
     for e in events:
@@ -1339,10 +1399,12 @@ async def get_run_events(
     if response is not None and len(out) == int(limit):
         try:
             last_seq = int(out[-1].event_seq) if hasattr(out[-1], "event_seq") else int(events[-1]["event_seq"])  # type: ignore
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Workflows events: failed to derive last_seq: {e}")
             try:
                 last_seq = int(events[-1]["event_seq"]) if events else None  # type: ignore
-            except Exception:
+            except Exception as e2:
+                logger.debug(f"Workflows events: no last_seq available: {e2}")
                 last_seq = None
         if last_seq is not None:
             import base64, json as _json
@@ -1351,8 +1413,28 @@ async def get_run_events(
             nxt = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
             try:
                 response.headers["Next-Cursor"] = nxt
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Workflows events: failed to set Next-Cursor header: {e}")
+            # Optional RFC5988 Link header for 'next'
+            try:
+                from tldw_Server_API.app.api.v1.endpoints._pagination_utils import build_link_header
+                base_path = f"/api/v1/workflows/runs/{run_id}/events"
+                params = [("limit", str(limit))]
+                if types:
+                    for t in types:
+                        params.append(("types", t))
+                link_value = build_link_header(
+                    base_path,
+                    params,
+                    next_cursor=nxt,
+                    limit=int(limit),
+                    offset=None,
+                    has_more=None,
+                )
+                if link_value:
+                    response.headers["Link"] = link_value
+            except Exception as e:
+                logger.debug(f"Workflows events: failed to set Link header: {e}")
     return out
 
 
@@ -1933,7 +2015,7 @@ async def download_artifact(
             f"attachment; filename={ascii_name}" + (f"; filename*=UTF-8''{encoded_name}" if encoded_name else "")
         ),
     }
-    return FileResponse(str(p), filename=p.name, media_type=mime, headers=headers)
+    return FileResponse(str(p), media_type=mime, headers=headers)
 
 
 @router.get(

@@ -143,10 +143,10 @@ class TTSRequest:
         try:
             self._original_speed = self.speed
             if self.speed is not None:
-                if self.speed < 0.25:
-                    self.speed = 0.25
-                elif self.speed > 4.0:
-                    self.speed = 4.0
+                if self.speed < 0.1:
+                    self.speed = 0.1
+                elif self.speed > 3.0:
+                    self.speed = 3.0
         except Exception:
             pass
         try:

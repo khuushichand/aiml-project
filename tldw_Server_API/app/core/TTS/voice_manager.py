@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 # Third-party Imports
 import aiofiles
 from loguru import logger
+from tldw_Server_API.app.core.config import settings
 from pydantic import BaseModel, Field, field_validator
 #
 # Local Imports
@@ -250,7 +251,12 @@ class VoiceManager:
     
     def get_user_voices_path(self, user_id: int) -> Path:
         """Get the voices directory path for a user"""
-        base_path = Path("./Databases/user_databases") / str(user_id) / "voices"
+        try:
+            base_dir: Path = settings.get("USER_DB_BASE_DIR")
+            base_path = base_dir / str(user_id) / "voices"
+        except Exception:
+            # Anchor to package root as last resort to avoid CWD effects
+            base_path = Path(__file__).resolve().parents[4] / "Databases" / "user_databases" / str(user_id) / "voices"
         base_path.mkdir(parents=True, exist_ok=True)
         
         # Create subdirectories
@@ -543,7 +549,10 @@ class VoiceManager:
         """Clean up old temporary files"""
         try:
             # Clean all user temp directories
-            base_path = Path("./Databases/user_databases")
+            try:
+                base_path: Path = settings.get("USER_DB_BASE_DIR")
+            except Exception:
+                base_path = Path(__file__).resolve().parents[4] / "Databases" / "user_databases"
             if base_path.exists():
                 for user_dir in base_path.iterdir():
                     if user_dir.is_dir():

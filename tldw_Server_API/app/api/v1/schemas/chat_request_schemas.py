@@ -283,7 +283,7 @@ class ChatCompletionRequest(BaseModel):
     )
 
     # --- Standard OpenAI-like Parameters ---
-    model: str = Field(None, description="ID of the model to use. Specific model compatibility depends on the selected `api_provider`.")
+    model: Optional[str] = Field(None, description="ID of the model to use. Specific model compatibility depends on the selected `api_provider`.")
     messages: List[ChatCompletionMessageParam] = Field(..., description="A list of messages comprising the conversation so far.", min_length=1)
     frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0, description="Frequency penalty parameter (provider support varies).")
     logit_bias: Optional[Dict[str, float]] = Field(None, description="Logit bias parameter (provider support varies).")

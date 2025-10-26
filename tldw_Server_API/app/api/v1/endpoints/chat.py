@@ -8,13 +8,13 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.Utils.image_validation import (
-    validate_image_url
+    validate_image_url,
+    get_max_base64_bytes,
 )
 import asyncio
 import sys
 import datetime
 import json
-import os
 import sqlite3
 import time
 import uuid
@@ -174,8 +174,7 @@ _chat_config = {}
 if _config and _config.has_section('Chat-Module'):
     _chat_config = dict(_config.items('Chat-Module'))
 
-ALLOWED_IMAGE_MIME_TYPES: set[str] = {"image/png", "image/jpeg", "image/webp"}
-MAX_BASE64_BYTES: int = int(_chat_config.get('max_base64_image_size_mb', 3)) * 1024 * 1024
+# Use centralized image limits/utilities (config-aware)
 MAX_TEXT_LENGTH: int = int(_chat_config.get('max_text_length_per_message', 400000))
 MAX_MESSAGES_PER_REQUEST: int = int(_chat_config.get('max_messages_per_request', 1000))
 MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10))
@@ -326,7 +325,7 @@ async def _process_content_for_db_sync(
                 image_processor = get_image_processor()
                 if image_processor and len(url_str) > 100000:  # Large image, use chunked processing
                     is_valid, decoded_bytes, mime_type, error_msg = await image_processor.process_image_url(
-                        url_str, MAX_BASE64_BYTES
+                        url_str, get_max_base64_bytes()
                     )
                     if is_valid and decoded_bytes:
                         images_sync.append((decoded_bytes, mime_type))
@@ -591,7 +590,9 @@ async def _save_message_turn_to_db(
         "Generates an assistant response using the configured LLM provider. "
         "Supports OpenAI-compatible request schema, optional SSE streaming via `stream=true`, "
         "character/world book context, and chat dictionaries. Non-stream responses include "
-        "`tldw_conversation_id` for client state."
+        "`tldw_conversation_id` for client state. "
+        "Authentication headers are validated via dependencies (AuthNZ); the declared header "
+        "parameters are included for OpenAPI documentation clarity."
     ),
     tags=["chat"],
     responses={

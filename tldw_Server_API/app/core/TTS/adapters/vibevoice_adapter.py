@@ -2,6 +2,7 @@
 # Description: VibeVoice TTS adapter implementation - emotion and tone-aware synthesis
 #
 # Imports
+import asyncio
 import os
 import json
 import re
@@ -404,11 +405,13 @@ class VibeVoiceAdapter(TTSAdapter):
                 self.model.eval()
                 
                 # Register model with resource manager
-                resource_manager.register_model(
+                register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.model,
                     cleanup_callback=self._cleanup_resources
                 )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
             
             # Warm up the model
             await self._warmup_model()
