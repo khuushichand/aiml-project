@@ -335,35 +335,67 @@ class SessionManager:
             return False
 
     def _load_persisted_session_key(self) -> Optional[bytes]:
-        """Load persisted session encryption key if available."""
-        path = self._persisted_key_path or self._resolve_persisted_key_path()
-        if not path or not path.exists():
-            return None
+        """Load persisted session encryption key if available.
+
+        Preferred location (new): tldw_Server_API/Config_Files/session_encryption.key
+        Legacy read-only fallback: PROJECT_ROOT/Config_Files/session_encryption.key
+        """
+        # Try new canonical location first
+        primary_path = self._persisted_key_path or self._resolve_persisted_key_path()
+        candidate_paths: list[Path] = []
+        if primary_path:
+            candidate_paths.append(primary_path)
+
+        # Legacy fallback: previous behavior used PROJECT_ROOT/Config_Files
+        # Keep as read-only to avoid breaking existing deployments; do not write here.
         try:
-            content = path.read_text(encoding="utf-8").strip()
-            if not content:
-                return None
-            decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
-            if len(decoded) != 32:
-                logger.warning(f"Persisted session encryption key at {path} is invalid; ignoring.")
-                return None
-            self._persisted_key_path = path
-            return content.encode("utf-8")
-        except Exception as exc:
-            logger.warning(f"Failed to read persisted session encryption key from {path}: {exc}")
-            return None
+            legacy_base = None
+            if core_settings:
+                legacy_base = core_settings.get("PROJECT_ROOT")
+            if legacy_base:
+                legacy_root = Path(legacy_base)
+            else:
+                legacy_root = Path.cwd()
+            legacy_path = (legacy_root / "Config_Files" / "session_encryption.key").resolve()
+            if not primary_path or legacy_path != primary_path:
+                candidate_paths.append(legacy_path)
+        except Exception:
+            pass
+
+        for path in candidate_paths:
+            try:
+                if not path.exists():
+                    continue
+                content = path.read_text(encoding="utf-8").strip()
+                if not content:
+                    continue
+                decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
+                if len(decoded) != 32:
+                    logger.warning(f"Persisted session encryption key at {path} is invalid; ignoring.")
+                    continue
+                # Use the first valid candidate found
+                self._persisted_key_path = path
+                if path != primary_path:
+                    logger.warning(
+                        f"Using legacy session_encryption.key at {path}. Migrate to tldw_Server_API/Config_Files."
+                    )
+                return content.encode("utf-8")
+            except Exception as exc:
+                logger.warning(f"Failed to read persisted session encryption key from {path}: {exc}")
+                continue
+        return None
 
     def _resolve_persisted_key_path(self) -> Optional[Path]:
-        """Determine filesystem location for persisted session key."""
+        """Determine filesystem location for persisted session key.
+
+        Only use the API component's Config_Files directory:
+        tldw_Server_API/Config_Files/session_encryption.key
+        """
         try:
-            base = None
-            if core_settings:
-                base = core_settings.get("PROJECT_ROOT")
-            if base:
-                project_root = Path(base)
-            else:
-                project_root = Path.cwd()
-            return (project_root / "Config_Files" / "session_encryption.key").resolve()
+            # session_manager.py is at: .../tldw_Server_API/app/core/AuthNZ/session_manager.py
+            # API root (tldw_Server_API) is four parents up from this file
+            api_root = Path(__file__).resolve().parent.parent.parent.parent
+            return (api_root / "Config_Files" / "session_encryption.key").resolve()
         except Exception:
             return None
     

@@ -330,9 +330,15 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         }
     # Resolve scraper plan via router (configurable via YAML)
     try:
-        rules_path = _default_rules_path()
+        cfg = load_and_log_configs() or {}
+        ws_cfg = cfg.get('web_scraper', {}) or {}
+        rules_path = ws_cfg.get('custom_scrapers_yaml_path', _default_rules_path())
         rules = ScraperRouter.load_rules_from_yaml(rules_path)
-        router = ScraperRouter(rules, ua_mode="fixed")
+        ua_mode = str(ws_cfg.get('web_scraper_ua_mode', 'fixed') or 'fixed')
+        respect_robots_default = ws_cfg.get('web_scraper_respect_robots', True)
+        if isinstance(respect_robots_default, str):
+            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
+        router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
         plan = router.resolve(url)
     except Exception:
         # Safe default plan
@@ -385,7 +391,11 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             method="GET",
             headers=ua_headers,
             cookies=cookies_map or None,
-            backend=getattr(plan, "backend", "auto"),
+            backend=(
+                (str(ws_cfg.get('web_scraper_default_backend')).lower().strip() if ws_cfg.get('web_scraper_default_backend') else None)
+                if getattr(plan, "backend", "auto") == "auto"
+                else getattr(plan, "backend", "auto")
+            ) or getattr(plan, "backend", "auto"),
             impersonate=getattr(plan, "impersonate", None),
             http2=True,
             timeout=15.0,
@@ -441,7 +451,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             browser = None
             try:
                 logging.info(f"Fetching HTML from {url} (Attempt {attempt + 1}/{retries})")
-
+                t0 = time.time()
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(headless=True)
                     context = await browser.new_context(
@@ -474,7 +484,8 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                         try:
                             from tldw_Server_API.app.core.config import config
                             stealth_wait_ms = config.get("STEALTH_WAIT_MS", 5000)
-                        except:
+                        except Exception as e:
+                            logger.debug(f"Falling back to default STEALTH_WAIT_MS; error={e}")
                             stealth_wait_ms = 5000
                         await page.wait_for_timeout(stealth_wait_ms)  # configurable delay
                     else:
@@ -484,6 +495,10 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                     # Capture final HTML
                     content = await page.content()
 
+                    # Metrics for Playwright path
+                    elapsed = max(0.0, time.time() - t0)
+                    log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": "playwright"})
+                    log_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "success"})
                     logging.info(f"HTML fetched successfully from {url}")
                     log_counter("html_fetched", labels={"url": url})
 
@@ -492,6 +507,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
             except Exception as e:
                 logging.error(f"Error fetching HTML from {url} on attempt {attempt + 1}: {e}")
+                log_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "error"})
 
                 if attempt < retries - 1:
                     logging.info("Retrying...")

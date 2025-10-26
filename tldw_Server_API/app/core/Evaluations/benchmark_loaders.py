@@ -290,9 +290,9 @@ class BenchmarkDatasetLoader:
             # Try to load from HuggingFace if available
             try:
                 return DatasetLoader.load_huggingface("openai/simple-qa", split="test")
-            except:
+            except Exception as e:
                 # Fallback to sample data
-                logger.warning("SimpleQA dataset not found, using sample data")
+                logger.warning(f"SimpleQA dataset not found, using sample data. error={e}")
                 from tldw_Server_API.app.core.Evaluations.simpleqa_eval import SimpleQADataset
                 return SimpleQADataset.create_sample_dataset()
         

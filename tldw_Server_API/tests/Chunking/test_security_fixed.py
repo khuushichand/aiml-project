@@ -22,11 +22,22 @@ from tldw_Server_API.app.core.Chunking import (
     ChunkingError,
 )
 from tldw_Server_API.app.core.Chunking.strategies.json_xml import XMLChunkingStrategy
+import tldw_Server_API.app.core.config as _cfg_mod
 
-# Keep regex ops snappy across all tests in this module
-os.environ.setdefault("CHUNKING_REGEX_TIMEOUT", "0.5")
-os.environ.setdefault("CHUNKING_DISABLE_MP", "1")
-os.environ.setdefault("CHUNKING_REGEX_SIMPLE_ONLY", "1")
+# Keep regex ops snappy across all tests via config.txt loader; avoid env toggles
+@pytest.fixture(autouse=True)
+def _patch_chunking_regex_policy(monkeypatch):
+    class _DummyCfg:
+        def has_section(self, name):
+            return name == 'Chunking'
+        def get(self, section, key, fallback=None):
+            mapping = {
+                'regex_timeout_seconds': '0.5',
+                'regex_disable_multiprocessing': '1',
+                'regex_simple_only': '1',
+            }
+            return mapping.get(key, fallback)
+    monkeypatch.setattr(_cfg_mod, 'load_comprehensive_config', lambda: _DummyCfg())
 
 
 class TestXXEProtection:

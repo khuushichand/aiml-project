@@ -1304,8 +1304,8 @@ class VibeVoiceAdapter(TTSAdapter):
                     
                     if allocated_gb > self._memory_stats["peak_vram_gb"]:
                         self._memory_stats["peak_vram_gb"] = allocated_gb
-                except:
-                    pass  # MPS memory tracking may not be available
+                except Exception as e:
+                    logger.debug(f"MPS memory tracking not available: error={e}")
         except Exception as e:
             logger.debug(f"Could not update memory stats: {e}")
     

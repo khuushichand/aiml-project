@@ -309,8 +309,8 @@ def count_calls(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"label_extractor failed (async): error={e}")
                 
                 increment_counter(counter_name, labels=metric_labels)
                 return await func(*args, **kwargs)
@@ -325,8 +325,8 @@ def count_calls(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"label_extractor failed (sync): error={e}")
                 
                 increment_counter(counter_name, labels=metric_labels)
                 return func(*args, **kwargs)

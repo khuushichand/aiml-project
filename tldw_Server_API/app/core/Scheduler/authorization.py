@@ -323,8 +323,8 @@ class TaskAuthorizer:
                 # Non-admin users limited to 100KB payloads
                 if payload_size > 102400:
                     return False, f"Payload too large for non-admin user: {payload_size} bytes"
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Payload size computation failed in scheduler authorization: error={e}")
         
         # Example: Some handlers might require specific fields
         # This would be configured per handler

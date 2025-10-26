@@ -55,8 +55,8 @@ class AudioProcessor:
             import subprocess
             result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
             return result.returncode == 0
-        except:
-            logger.warning("ffmpeg not found - audio conversion will be limited")
+        except Exception as e:
+            logger.warning(f"ffmpeg not found or not runnable; audio conversion limited. error={e}")
             return False
     
     def _check_librosa(self) -> bool:

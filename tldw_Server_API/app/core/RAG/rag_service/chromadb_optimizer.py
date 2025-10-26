@@ -641,9 +641,9 @@ class OptimizedChromaStore:
             # Check collection size
             count = self.collection.count()
             if count > 50000:
-                logger.warning(f"Collection {collection_name} has {count} documents. "
-                             f"Consider partitioning for better performance.")
-        except:
+                logger.warning(f"Collection {collection_name} has {count} documents. Consider partitioning.")
+        except Exception as e:
+            logger.debug(f"Chroma get_collection failed, creating new: name={collection_name}, error={e}")
             self.collection = self.client.create_collection(
                 name=collection_name,
                 metadata={"hnsw:space": "cosine"}  # Optimize for cosine similarity

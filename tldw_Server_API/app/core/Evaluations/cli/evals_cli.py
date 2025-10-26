@@ -264,7 +264,8 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                     score_match = re.search(r'([0-9]*\.?[0-9]+)', response_text)
                     score = float(score_match.group(1)) if score_match else 0.5
                     score = max(0.0, min(1.0, score))  # Clamp to [0, 1]
-                except:
+                except Exception as e:
+                    logger.debug(f"Failed to parse score from LLM response; defaulting to 0.5. error={e}")
                     score = 0.5  # Default score if parsing fails
                 
                 result = {

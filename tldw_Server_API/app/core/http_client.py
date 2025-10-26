@@ -156,12 +156,18 @@ def fetch(
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available for fallback backend")
 
+    # Sanitize Accept-Encoding for httpx: drop zstd (unsupported)
+    hdrs = dict(headers) if headers else None
+    if hdrs and "Accept-Encoding" in hdrs and "zstd" in hdrs["Accept-Encoding"].lower():
+        # Keep gzip/deflate/br where possible
+        hdrs["Accept-Encoding"] = "gzip, deflate, br"
+
     to = httpx.Timeout(timeout)
     with httpx.Client(timeout=to, trust_env=False, proxies=proxies) as client:
         r = client.request(
             method.upper(),
             url,
-            headers=headers,
+            headers=hdrs,
             cookies=cookies,
             follow_redirects=allow_redirects,
         )

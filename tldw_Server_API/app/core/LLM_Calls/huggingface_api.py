@@ -252,76 +252,84 @@ class HuggingFaceAPI:
         
         async with httpx.AsyncClient() as client:
             retries, backoff = self.api_retries, self.api_retry_delay
-            try:
-                # Get file size first (with retries)
-                total_size = 0
-                for attempt in range(retries + 1):
-                    try:
-                        head_response = await client.head(
-                            url, headers=self.headers, follow_redirects=True, timeout=self.api_timeout
-                        )
-                        head_response.raise_for_status()
-                        total_size = int(head_response.headers.get("content-length", 0))
-                        break
-                    except httpx.HTTPStatusError as e:
-                        sc = getattr(e.response, "status_code", None)
-                        if _is_retryable_status_code(sc) and attempt < retries:
-                            await _async_retry_sleep(backoff, attempt)
-                            continue
-                        logger.error(f"HEAD failed for {filename}: {e}")
-                        return False
-                    except httpx.RequestError as e:
-                        if attempt < retries:
-                            await _async_retry_sleep(backoff, attempt)
-                            continue
-                        logger.error(f"HEAD network error for {filename}: {e}")
-                        return False
+            # Get file size first (with retries)
+            total_size = 0
+            for attempt in range(retries + 1):
+                try:
+                    head_response = await client.head(
+                        url, headers=self.headers, follow_redirects=True, timeout=self.api_timeout
+                    )
+                    head_response.raise_for_status()
+                    total_size = int(head_response.headers.get("content-length", 0))
+                    break
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"HEAD failed for {filename}: {e}")
+                    return False
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"HEAD network error for {filename}: {e}")
+                    return False
+                except httpx.HTTPError as e:
+                    # Fallback for generic httpx errors in tests/mocks
+                    logger.error(f"HEAD generic error for {filename}: {e}")
+                    return False
 
-                # Check if file already exists and has the right size
-                if destination.exists() and total_size > 0 and destination.stat().st_size == total_size:
-                    logger.info(f"File {filename} already exists with correct size, skipping download")
+            # Check if file already exists and has the right size
+            if destination.exists() and total_size > 0 and destination.stat().st_size == total_size:
+                logger.info(f"File {filename} already exists with correct size, skipping download")
+                return True
+
+            # Download with progress (with retries for connection setup)
+            for attempt in range(retries + 1):
+                downloaded = 0
+                try:
+                    async with client.stream(
+                        "GET", url, headers=self.headers, follow_redirects=True, timeout=self.api_timeout
+                    ) as response:
+                        response.raise_for_status()
+                        with open(temp_file, "wb") as f:
+                            async for chunk in response.aiter_bytes(chunk_size):
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if progress_callback:
+                                    progress_callback(downloaded, total_size)
+                    # Move temp file to final destination
+                    temp_file.rename(destination)
+                    logger.info(f"Successfully downloaded {filename} to {destination}")
                     return True
-
-                # Download with progress (with retries for connection setup)
-                for attempt in range(retries + 1):
-                    downloaded = 0
-                    try:
-                        async with client.stream(
-                            "GET", url, headers=self.headers, follow_redirects=True, timeout=self.api_timeout
-                        ) as response:
-                            response.raise_for_status()
-                            with open(temp_file, "wb") as f:
-                                async for chunk in response.aiter_bytes(chunk_size):
-                                    f.write(chunk)
-                                    downloaded += len(chunk)
-                                    if progress_callback:
-                                        progress_callback(downloaded, total_size)
-                        # Move temp file to final destination
-                        temp_file.rename(destination)
-                        logger.info(f"Successfully downloaded {filename} to {destination}")
-                        return True
-                    except httpx.HTTPStatusError as e:
-                        sc = getattr(e.response, "status_code", None)
-                        if _is_retryable_status_code(sc) and attempt < retries:
-                            await _async_retry_sleep(backoff, attempt)
-                            continue
-                        logger.error(f"Error downloading {filename}: {e}")
-                        if temp_file.exists():
-                            temp_file.unlink()
-                        return False
-                    except httpx.RequestError as e:
-                        if attempt < retries:
-                            await _async_retry_sleep(backoff, attempt)
-                            continue
-                        logger.error(f"Network error downloading {filename}: {e}")
-                        if temp_file.exists():
-                            temp_file.unlink()
-                        return False
-                    except Exception as e:
-                        logger.error(f"Unexpected error downloading {filename}: {e}")
-                        if temp_file.exists():
-                            temp_file.unlink()
-                        return False
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Error downloading {filename}: {e}")
+                    if temp_file.exists():
+                        temp_file.unlink()
+                    return False
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Network error downloading {filename}: {e}")
+                    if temp_file.exists():
+                        temp_file.unlink()
+                    return False
+                except httpx.HTTPError as e:
+                    logger.error(f"Generic httpx error downloading {filename}: {e}")
+                    if temp_file.exists():
+                        temp_file.unlink()
+                    return False
+                except Exception as e:
+                    logger.error(f"Unexpected error downloading {filename}: {e}")
+                    if temp_file.exists():
+                        temp_file.unlink()
+                    return False
             
     async def get_model_readme(self, repo_id: str) -> Optional[str]:
         """
@@ -336,11 +344,11 @@ class HuggingFaceAPI:
         url = f"{self.BASE_URL}/{repo_id}/raw/main/README.md"
         
         async with httpx.AsyncClient() as client:
-            retries, backoff = 2, 0.5
+            retries, backoff = self.api_retries, self.api_retry_delay
             # Try README.md first
             for attempt in range(retries + 1):
                 try:
-                    response = await client.get(url, headers=self.headers, timeout=30.0)
+                    response = await client.get(url, headers=self.headers, timeout=self.api_timeout)
                     response.raise_for_status()
                     return response.text
                 except httpx.HTTPStatusError as e:
@@ -358,7 +366,7 @@ class HuggingFaceAPI:
             alt = f"{self.BASE_URL}/{repo_id}/raw/main/README"
             for attempt in range(retries + 1):
                 try:
-                    response = await client.get(alt, headers=self.headers, timeout=30.0)
+                    response = await client.get(alt, headers=self.headers, timeout=self.api_timeout)
                     response.raise_for_status()
                     return response.text
                 except httpx.HTTPStatusError as e:
@@ -388,10 +396,10 @@ class HuggingFaceAPI:
         url = f"{self.BASE_URL}/{repo_id}/raw/main/config.json"
         
         async with httpx.AsyncClient() as client:
-            retries, backoff = 2, 0.5
+            retries, backoff = self.api_retries, self.api_retry_delay
             for attempt in range(retries + 1):
                 try:
-                    response = await client.get(url, headers=self.headers, timeout=30.0)
+                    response = await client.get(url, headers=self.headers, timeout=self.api_timeout)
                     response.raise_for_status()
                     return response.json()
                 except httpx.HTTPStatusError as e:

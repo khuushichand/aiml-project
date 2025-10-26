@@ -295,6 +295,24 @@ class MetricsRegistry:
                 labels=["pipeline", "status"]
             )
         )
+
+        # Generic application observability counters
+        self.register_metric(
+            MetricDefinition(
+                name="app_exception_events_total",
+                type=MetricType.COUNTER,
+                description="Application exception events",
+                labels=["component", "event"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="app_warning_events_total",
+                type=MetricType.COUNTER,
+                description="Application warning events",
+                labels=["component", "event"],
+            )
+        )
         
         self.register_metric(
             MetricDefinition(
@@ -698,6 +716,42 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total number of errors",
                 labels=["component", "error_type"]
+            )
+        )
+
+        # Scraping metrics
+        self.register_metric(
+            MetricDefinition(
+                name="scrape_fetch_total",
+                type=MetricType.COUNTER,
+                description="Total number of scrape fetch attempts",
+                labels=["backend", "outcome"],  # outcome: success|no_extract|error
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="scrape_fetch_latency_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Latency of scrape fetch path",
+                unit="s",
+                labels=["backend"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="scrape_playwright_fallback_total",
+                type=MetricType.COUNTER,
+                description="Total number of fallbacks to Playwright",
+                labels=["reason"],  # reason: js_required|no_extract|error
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="scrape_blocked_by_robots_total",
+                type=MetricType.COUNTER,
+                description="Total scrapes blocked by robots policy",
+                labels=["domain"],
             )
         )
 

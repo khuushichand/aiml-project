@@ -271,7 +271,8 @@ class CostTracker:
         # Initialize tokenizer for counting
         try:
             self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        except:
+        except Exception as e:
+            logger.debug(f"Falling back to base tokenizer: error={e}")
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
     
     def count_tokens(self, text: str) -> int:

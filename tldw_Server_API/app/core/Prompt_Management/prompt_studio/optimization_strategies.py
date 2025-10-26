@@ -354,7 +354,8 @@ Suggest specific refinements to fix these errors:"""
                 parameters={"temperature": 0.7, "max_tokens": 500}
             )
             return result["content"].strip()
-        except:
+        except Exception as e:
+            logger.debug(f"_generate_refinement failed to call LLM: error={e}")
             return None
     
     async def _create_refined_prompt(self, base_prompt_id: int,
@@ -568,8 +569,9 @@ Variation:"""
                 "user_prompt": result["content"].strip(),
                 "system_prompt": prompt.get("system_prompt", "")
             }
-        except:
+        except Exception as e:
             # Fallback to original with minor changes
+            logger.debug(f"_generate_variation failed to call LLM; using fallback variation. error={e}")
             return {
                 "user_prompt": (prompt.get("user_prompt", "") + "\nBe precise and clear.").strip(),
                 "system_prompt": prompt.get("system_prompt", "")
@@ -629,8 +631,9 @@ Combined user prompt:"""
                 "user_prompt": result["content"].strip(),
                 "system_prompt": parent1.get("system_prompt", "")
             }
-        except:
+        except Exception as e:
             # Fallback: return parent1
+            logger.debug(f"_crossover failed to call LLM; returning parent1. error={e}")
             return parent1.copy()
     
     async def _mutate(self, individual: Dict[str, Any]) -> Dict[str, Any]:
@@ -653,8 +656,9 @@ Mutated user prompt:"""
                 "user_prompt": result["content"].strip(),
                 "system_prompt": individual.get("system_prompt", "")
             }
-        except:
+        except Exception as e:
             # Fallback: add random instruction
+            logger.debug(f"_mutate failed to call LLM; using random instruction. error={e}")
             mutations = [
                 "\nBe concise.",
                 "\nProvide detailed explanations.",

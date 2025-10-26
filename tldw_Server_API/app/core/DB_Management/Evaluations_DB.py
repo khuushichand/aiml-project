@@ -1444,14 +1444,16 @@ class EvaluationsDatabase:
         if row["started_at"]:
             try:
                 started_at = int(datetime.fromisoformat(row["started_at"].replace("Z", "+00:00")).timestamp())
-            except:
+            except Exception as e:
+                logger.debug(f"Failed to parse started_at: value={row['started_at']}, error={e}")
                 started_at = None
                 
         completed_at = None
         if row["completed_at"]:
             try:
                 completed_at = int(datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00")).timestamp())
-            except:
+            except Exception as e:
+                logger.debug(f"Failed to parse completed_at: value={row['completed_at']}, error={e}")
                 completed_at = None
         
         return {

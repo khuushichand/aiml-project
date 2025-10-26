@@ -363,8 +363,8 @@ class DocumentGeneratorService:
                 try:
                     dt = datetime.fromisoformat(timestamp)
                     timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Timestamp parse failed in chat context: value={timestamp}, error={e}")
             
             context_parts.append(f"[{timestamp}] {role.upper()}: {content}")
         
@@ -1096,8 +1096,8 @@ class DocumentGeneratorService:
                     if result.get('metadata'):
                         try:
                             result['metadata'] = json.loads(result['metadata'])
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse document metadata JSON: id={document_id}, error={e}")
                     return result
                 return None
                 

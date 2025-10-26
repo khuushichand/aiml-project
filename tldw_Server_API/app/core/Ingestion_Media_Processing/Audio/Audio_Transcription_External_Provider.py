@@ -255,8 +255,8 @@ async def transcribe_with_external_provider_async(
                             try:
                                 error_json = response.json()
                                 error_detail = error_json.get('error', {}).get('message', error_detail)
-                            except:
-                                pass
+                            except Exception as parse_err:
+                                logger.debug(f"Failed to parse provider error JSON: error={parse_err}")
                             return f"[Error: API returned {response.status_code} - {error_detail}]"
                     
                     except httpx.TimeoutException:
@@ -285,8 +285,8 @@ async def transcribe_with_external_provider_async(
         if temp_file and os.path.exists(temp_file.name):
             try:
                 os.remove(temp_file.name)
-            except:
-                pass
+            except Exception as rm_err:
+                logger.debug(f"Failed to remove temp file for external provider: path={temp_file.name}, error={rm_err}")
 
 
 def transcribe_with_external_provider(

@@ -19,6 +19,7 @@ import configparser
 from pathlib import Path
 from datetime import datetime
 import argparse
+from loguru import logger
 
 def main():
     parser = argparse.ArgumentParser(description='Migrate API keys from config.txt to .env file')
@@ -116,7 +117,7 @@ def main():
                     print(f"  Found {env_name}: {value[:10]}...") 
         except Exception as e:
             # Section or key doesn't exist, skip
-            pass
+            logger.debug(f"migrate_api_keys: skipping [{section}].{key}: {e}")
     
     if not env_vars and not existing_env:
         print("\nNo API keys found to migrate.")
@@ -179,8 +180,8 @@ def main():
                 # Replace with placeholder
                 new_config.set(section, key, f'<{key}>')
                 print(f"  Removed {key} from [{section}]")
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"migrate_api_keys: failed to remove {key} from [{section}]: {e}")
         
         # Write updated config
         with open(config_path, 'w') as f:

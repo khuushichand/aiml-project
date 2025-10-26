@@ -10,6 +10,7 @@ from typing import Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 # Expose httpx at module scope for test monkeypatching
 try:
@@ -58,8 +59,15 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
     # Admin context for reading outbox across domains
     try:
         JobManager.set_rls_context(is_admin=True, domain_allowlist=None, owner_user_id=None)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Jobs webhooks: failed to set RLS admin context: {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_warning_events_total",
+                labels={"component": "jobs_webhooks", "event": "set_rls_context_failed"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for set_rls_context_failed")
     jm = JobManager()
     after_id = 0
     # Persistent cursor path (opt-in via env, defaults under project Databases/)
@@ -81,11 +89,20 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
         if cursor_path and os.path.exists(cursor_path):
             with open(cursor_path, "r", encoding="utf-8") as f:
                 persisted_after = int((f.read() or "0").strip() or 0)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Jobs webhooks: failed to read cursor file: {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_warning_events_total",
+                labels={"component": "jobs_webhooks", "event": "read_cursor_failed"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for read_cursor_failed")
         persisted_after = None
     try:
         env_after = int(os.getenv("JOBS_WEBHOOKS_AFTER_ID", "0") or 0)
-    except Exception:
+    except (TypeError, ValueError) as e:
+        logger.debug(f"Jobs webhooks: invalid JOBS_WEBHOOKS_AFTER_ID; using 0: {e}")
         env_after = 0
     if env_after:
         after_id = env_after
@@ -98,9 +115,23 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
         pol = _eval_policy(url)
         if not getattr(pol, "allowed", False):
             logger.warning(f"Jobs webhooks disabled: URL not allowed by egress policy ({getattr(pol, 'reason', 'denied')})")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "jobs_webhooks", "event": "egress_policy_denied"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for egress_policy_denied")
             return
-    except Exception:
-        logger.warning("Jobs webhooks: egress policy check failed; refusing to start for safety")
+    except Exception as e:
+        logger.warning(f"Jobs webhooks: egress policy check failed; refusing to start for safety: {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_exception_events_total",
+                labels={"component": "jobs_webhooks", "event": "egress_policy_check_failed"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for egress_policy_check_failed")
         return
 
     # Use centralized HTTP client with safe defaults (trust_env=False)
@@ -155,23 +186,58 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
                         resp = await client.post(url, headers=headers, content=body)
                         if resp.status_code >= 400:
                             logger.debug(f"Jobs webhook delivery failed {resp.status_code}: {resp.text}")
+                            try:
+                                get_metrics_registry().increment(
+                                    "app_warning_events_total",
+                                    labels={"component": "jobs_webhooks", "event": "delivery_failed"},
+                                )
+                            except Exception:
+                                logger.debug("metrics increment failed for delivery_failed")
                         after_id = eid
                     except Exception as e:
                         logger.debug(f"Jobs webhook send error: {e}")
+                        try:
+                            get_metrics_registry().increment(
+                                "app_exception_events_total",
+                                labels={"component": "jobs_webhooks", "event": "send_error"},
+                            )
+                        except Exception:
+                            logger.debug("metrics increment failed for send_error")
                 # Persist latest cursor for resume across restarts
                 try:
                     if cursor_path:
                         os.makedirs(os.path.dirname(cursor_path), exist_ok=True)
                         with open(cursor_path, "w", encoding="utf-8") as f:
                             f.write(str(after_id))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Jobs webhooks: failed to persist cursor: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "jobs_webhooks", "event": "persist_cursor_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for persist_cursor_failed")
             finally:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Jobs webhooks: failed to close connection: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "jobs_webhooks", "event": "conn_close_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for conn_close_failed")
         try:
             JobManager.clear_rls_context()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Jobs webhooks: failed to clear RLS context: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "jobs_webhooks", "event": "clear_rls_context_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for clear_rls_context_failed")

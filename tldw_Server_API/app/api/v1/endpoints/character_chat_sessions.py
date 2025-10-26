@@ -460,8 +460,9 @@ async def prepare_chat_completion(
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         character_name = character.get('name')
         include_ctx = bool(body.include_character_context)
-        limit = int(body.limit)
-        offset = int(body.offset)
+        # Fields are validated by Pydantic; avoid redundant int() casting
+        limit = body.limit
+        offset = body.offset
 
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         # Filter deleted
@@ -552,8 +553,8 @@ async def character_chat_completion(
         # Gather character and context
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         include_ctx = bool(body.include_character_context)
-        limit = int(body.limit)
-        offset = int(body.offset)
+        limit = body.limit
+        offset = body.offset
 
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         messages = [m for m in messages if not m.get('deleted')]

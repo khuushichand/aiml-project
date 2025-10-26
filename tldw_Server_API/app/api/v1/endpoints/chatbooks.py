@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from loguru import logger
+from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from slowapi.util import get_remote_address
 
 # Unified audit service
@@ -403,8 +404,12 @@ async def import_chatbook(
         if not valid:
             try:
                 temp_file.unlink()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to remove invalid uploaded file during import: path={temp_file}, user={user.id}, error={e}")
+            try:
+                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "import_invalid_upload_cleanup_failed"})
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (chatbooks import_invalid_upload_cleanup_failed): error={m_err}")
             raise HTTPException(status_code=400, detail=error)
         
         # Convert content selections if provided (schema enum or string keys)
@@ -486,8 +491,12 @@ async def import_chatbook(
         if 'temp_file' in locals() and not import_request.async_mode and temp_file.exists():
             try:
                 temp_file.unlink()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Cleanup of temp import file failed: path={temp_file}, user={user.id}, error={e}")
+            try:
+                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "import_cleanup_failed"})
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (chatbooks import_cleanup_failed): error={m_err}")
 
 
 @router.post("/preview", response_model=PreviewChatbookResponse)
@@ -579,8 +588,12 @@ async def preview_chatbook(
         if not ok:
             try:
                 temp_file.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to remove invalid uploaded file during preview: path={temp_file}, user={user.id}, error={e}")
+            try:
+                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "preview_invalid_upload_cleanup_failed"})
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (chatbooks preview_invalid_upload_cleanup_failed): error={m_err}")
             raise HTTPException(status_code=400, detail=err or "Invalid archive")
 
         # Preview chatbook
@@ -589,8 +602,12 @@ async def preview_chatbook(
         # Cleanup temp file
         try:
             temp_file.unlink()
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Cleanup of preview temp file failed: path={temp_file}, user={user.id}, error={e}")
+            try:
+                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "preview_cleanup_failed"})
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (chatbooks preview_cleanup_failed): error={m_err}")
         
         if manifest:
             # Convert manifest to response model

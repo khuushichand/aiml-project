@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 
@@ -54,7 +55,15 @@ async def fetch_usage_daily(
                 f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ${len(params)+1} OFFSET ${len(params)+2}"
             )
             rows = await db.fetch(sql, *params, limit, offset)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"usage_daily: falling back without bytes_in_total (pg): {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "admin_usage", "event": "daily_bytes_in_missing_fallback"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for daily_bytes_in_missing_fallback")
             has_in = False
             sql = (
                 f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
@@ -96,7 +105,15 @@ async def fetch_usage_daily(
         else:
             cur = await db.execute(sql, params + [limit, offset])
             rows = await cur.fetchall()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"usage_daily: falling back without bytes_in_total (sqlite): {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_warning_events_total",
+                labels={"component": "admin_usage", "event": "daily_bytes_in_missing_fallback"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for daily_bytes_in_missing_fallback")
         has_in = False
         sql = (
             f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
@@ -186,7 +203,15 @@ async def fetch_usage_top(
                 f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
             ).replace('$ ', '$')
             rows = await db.fetch(sql, *params, limit)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"usage_top: falling back without bytes_in_total (pg): {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "admin_usage", "event": "top_bytes_in_missing_fallback"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for top_bytes_in_missing_fallback")
             sql = (
                 f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
             ).replace('$ ', '$')
@@ -224,7 +249,15 @@ async def fetch_usage_top(
                     "latency_avg_ms": r[5],
                 })
         return out_rows
-    except Exception:
+    except Exception as e:
+        logger.debug(f"usage_top: falling back without bytes_in_total (sqlite): {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_warning_events_total",
+                labels={"component": "admin_usage", "event": "top_bytes_in_missing_fallback"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for top_bytes_in_missing_fallback")
         sql = (
             f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
         )

@@ -662,7 +662,8 @@ class SQLiteBackend(QueueBackend):
                 VALUES (?, ?, ?, ?)
             """, lease_id, task_id, worker_id, expires_at.isoformat())
             return True
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to create task lease: task_id={task_id}, lease_id={lease_id}, error={e}")
             return False
     
     async def renew_lease(self, task_id: str, lease_id: str) -> bool:

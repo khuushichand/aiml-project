@@ -659,7 +659,8 @@ class LlamafileHandler(BaseLLMHandler):
                             try:
                                 pgid = os.getpgid(pid)
                                 os.killpg(pgid, signal.SIGKILL)
-                            except:
+                            except Exception as e_kill:
+                                self.logger.debug(f"os.killpg failed for PID {pid} (pgid may be absent): error={e_kill}; falling back to proc.kill()")
                                 proc.kill()  # fallback
             if port in self._active_servers:
                 del self._active_servers[port]

@@ -112,8 +112,8 @@ class TableParser:
             data = json.loads(text)
             if isinstance(data, list) and all(isinstance(item, dict) for item in data):
                 return TableFormat.JSON
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Table JSON detection failed: error={e}")
         
         # Check for CSV/TSV
         first_line = lines[0]

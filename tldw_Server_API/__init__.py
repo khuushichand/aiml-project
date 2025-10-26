@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+from loguru import logger
 
 
 def _under_pytest() -> bool:
@@ -18,7 +19,8 @@ def _under_pytest() -> bool:
         if "PYTEST_CURRENT_TEST" in os.environ:
             return True
         return any("pytest" in (arg or "") for arg in sys.argv)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"__init__._under_pytest check failed: {e}")
         return False
 
 

@@ -116,6 +116,13 @@ max_streaming_flush_threshold_chars = 0
 json_single_metadata_reference = false
 ; Reference key included in JSON chunks when single metadata reference is enabled
 json_metadata_reference_key = __meta_ref__
+; Chunking cache and logging controls
+cache_copy_on_access = true
+verbose_logging = false
+; Regex safety controls (replaces former env toggles)
+regex_timeout_seconds = 0
+regex_disable_multiprocessing = true
+regex_simple_only = false
 enable_contextual_retrieval = false
 context_window_size = 500
 include_parent_context = false

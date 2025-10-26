@@ -1,13 +1,23 @@
-import os
 import pytest
 
 from tldw_Server_API.app.core.Chunking import Chunker
+import tldw_Server_API.app.core.config as _cfg_mod
 
 
-# Keep regex operations snappy and deterministic in tests
-os.environ.setdefault("CHUNKING_REGEX_TIMEOUT", "0.5")
-os.environ.setdefault("CHUNKING_DISABLE_MP", "1")
-os.environ.setdefault("CHUNKING_REGEX_SIMPLE_ONLY", "1")
+# Keep regex operations snappy via config patch
+@pytest.fixture(autouse=True)
+def _patch_chunking_regex_policy(monkeypatch):
+    class _DummyCfg:
+        def has_section(self, name):
+            return name == 'Chunking'
+        def get(self, section, key, fallback=None):
+            mapping = {
+                'regex_timeout_seconds': '0.5',
+                'regex_disable_multiprocessing': '1',
+                'regex_simple_only': '1',
+            }
+            return mapping.get(key, fallback)
+    monkeypatch.setattr(_cfg_mod, 'load_comprehensive_config', lambda: _DummyCfg())
 
 
 @pytest.mark.unit
@@ -44,4 +54,3 @@ def test_ebook_chapters_with_metadata_overlap_ge_maxsize_does_not_hang():
     first = results[0]
     assert hasattr(first, "text") and isinstance(first.text, str)
     assert hasattr(first, "metadata") and hasattr(first.metadata, "word_count")
-

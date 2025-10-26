@@ -1,3 +1,15 @@
+"""
+Pytest configuration for the main test suite.
+
+Registers shared test plugins and provides common fixtures.
+"""
+
+# Shared Chat/AuthNZ fixtures used across multiple test packages
+pytest_plugins = (
+    "tldw_Server_API.tests._plugins.chat_fixtures",
+    "tldw_Server_API.tests._plugins.authnz_fixtures",
+)
+
 import os
 import pytest
 from fastapi.testclient import TestClient

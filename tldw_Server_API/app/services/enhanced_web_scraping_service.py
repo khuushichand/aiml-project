@@ -519,7 +519,13 @@ class WebScrapingService:
                                 'chunk_type': ctype,
                                 'metadata': small,
                             })
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"webscraping.persist: chunking failed; storing without chunks: {e}")
+                        try:
+                            if reg:
+                                reg.increment("app_warning_events_total", 1, {"component": "webscraping", "event": "chunking_failed"})
+                        except Exception:
+                            logger.debug("metrics increment failed for webscraping chunking_failed")
                         chunks_for_sql = []
 
                     # Run blocking DB write off the event loop and observe latency
@@ -544,8 +550,8 @@ class WebScrapingService:
                     try:
                         if reg:
                             reg.observe("webscraping.persist.article_duration_seconds", _dt, {"method": str(result.get("method", "unknown"))})
-                    except Exception:
-                        pass
+                    except Exception as me:
+                        logger.debug(f"webscraping.persist: metric observe failed: {me}")
                     
                     if media_id:
                         media_ids.append(media_id)
@@ -553,15 +559,15 @@ class WebScrapingService:
                         try:
                             if reg:
                                 reg.increment("webscraping.persist.stored_total", 1, {"method": str(result.get("method", "unknown"))})
-                        except Exception:
-                            pass
+                        except Exception as me:
+                            logger.debug(f"webscraping.persist: metric increment failed: {me}")
                     else:
                         logger.warning(f"Failed to get media_id for article: {article.get('url')}")
                         try:
                             if reg:
                                 reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
-                        except Exception:
-                            pass
+                        except Exception as me:
+                            logger.debug(f"webscraping.persist: metric increment failed: {me}")
                     
                 except Exception as e:
                     logger.error(f"Failed to store article: {e}")
@@ -569,15 +575,15 @@ class WebScrapingService:
                     try:
                         if reg:
                             reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
-                    except Exception:
-                        pass
+                    except Exception as me:
+                        logger.debug(f"webscraping.persist: metric increment failed: {me}")
 
             try:
                 if reg:
                     _batch_dt = max(0.0, time.perf_counter() - _batch_t0)
                     reg.observe("webscraping.persist.batch_duration_seconds", _batch_dt, {"method": str(result.get("method", "unknown"))})
-            except Exception:
-                pass
+            except Exception as me:
+                logger.debug(f"webscraping.persist: batch metric observe failed: {me}")
         finally:
             # Close database connection
             db.close_connection()

@@ -136,7 +136,8 @@ class ConnectionPool:
         try:
             conn.execute("SELECT 1")
             return True
-        except:
+        except Exception as e:
+            logger.debug(f"Connection validation failed: error={e}")
             return False
     
     @contextmanager
@@ -302,8 +303,8 @@ class ConnectionPool:
             for info in list(self._all_connections.values()):
                 try:
                     info["connection"].close()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error closing pooled connection during shutdown: error={e}")
             
             self._all_connections.clear()
         

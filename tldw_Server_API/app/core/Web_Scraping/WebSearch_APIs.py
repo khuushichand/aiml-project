@@ -15,11 +15,10 @@ from urllib.parse import urlparse, urlencode, unquote
 #
 # 3rd-Party Imports
 import requests
+import httpx
 from lxml.etree import _Element
 from lxml.html import document_fromstring
-from requests import RequestException
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+# Removed: HTTPAdapter/Retry (migrated to httpx)
 #
 # Local Imports
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -1158,9 +1157,9 @@ def search_web_baidu(arg1, arg2, arg3):
         # Use canonical host for policy; actual API endpoint TBD
         pol = evaluate_url_policy("https://www.baidu.com")
         if not getattr(pol, 'allowed', False):
-            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except Exception as _e:
-        raise RequestException(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
     return {"error": "Baidu provider not implemented"}
 
 
@@ -1235,12 +1234,12 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
         pol = evaluate_url_policy(search_url)
         if not getattr(pol, 'allowed', False):
-            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except Exception as _e:
-        raise RequestException(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-    with create_session() as _s:
-        response = _s.get(search_url, headers=headers, params=params, timeout=10)
+    with httpx.Client(timeout=10.0, trust_env=False) as client:
+        response = client.get(search_url, headers=headers, params=params)
         response.raise_for_status()
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     brave_search_results = response.json()
@@ -1333,17 +1332,9 @@ def test_parse_brave_results():
 #
 # https://github.com/deedy5/duckduckgo_search
 # Copied request format/structure from https://github.com/deedy5/duckduckgo_search/blob/main/duckduckgo_search/duckduckgo_search.py
-def create_session() -> requests.Session:
-    """Create a Requests session with safe defaults: retries, trust_env=False."""
-    session = requests.Session()
-    try:
-        session.trust_env = False
-    except Exception:
-        pass
-    retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[429, 500, 502, 503, 504])
-    session.mount('https://', HTTPAdapter(max_retries=retries))
-    session.mount('http://', HTTPAdapter(max_retries=retries))
-    return session
+def create_httpx_client() -> httpx.Client:
+    """Create an httpx client with safe defaults."""
+    return httpx.Client(timeout=10.0, trust_env=False)
 
 def search_web_duckduckgo(
     keywords: str,
@@ -1386,9 +1377,10 @@ def search_web_duckduckgo(
     except Exception:
         return results
 
+    headers = _websearch_browser_headers(restrict_encodings_for_requests=True)
     for _ in range(5):
-        with create_session() as _s:
-            response = _s.post(ddg_url, data=payload, timeout=10)
+        with create_httpx_client() as client:
+            response = client.post(ddg_url, data=payload, headers=headers)
         resp_content = response.content
         if b"No  results." in resp_content:
             return results
@@ -1460,7 +1452,7 @@ def test_search_duckduckgo():
 
     except ValueError as e:
         print(f"Invalid input: {str(e)}")
-    except requests.RequestException as e:
+    except httpx.RequestError as e:
         print(f"Request error: {str(e)}")
 
 
@@ -1653,13 +1645,13 @@ def search_web_google(
             from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
             pol = evaluate_url_policy(search_url)
             if not getattr(pol, 'allowed', False):
-                raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
         except Exception as _e:
-            raise RequestException(f"Egress policy evaluation failed: {_e}")
+            raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-        # Make the API call with retry/session + timeout
-        with create_session() as _s:
-            response = _s.get(search_url, params=params, timeout=15)
+        # Make the API call with httpx client + timeout
+        with httpx.Client(timeout=15.0, trust_env=False) as client:
+            response = client.get(search_url, params=params)
             response.raise_for_status()
             google_search_results = response.json()
 
@@ -1671,7 +1663,7 @@ def search_web_google(
         logging.error(f"Configuration error: {str(ve)}")
         raise
 
-    except RequestException as re:
+    except httpx.RequestError as re:
         logging.error(f"Error during API request: {str(re)}")
         raise
 
@@ -1848,11 +1840,12 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
         pol = evaluate_url_policy(endpoint)
         if not getattr(pol, 'allowed', False):
-            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except Exception as _e:
-        raise RequestException(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-    response = requests.get(endpoint, headers=headers, params=params, timeout=15)
+    with httpx.Client(timeout=15.0, trust_env=False) as client:
+        response = client.get(endpoint, headers=headers, params=params)
     response.raise_for_status()
     logging.debug(response.json())
     return response.json()
@@ -1927,21 +1920,7 @@ def test_parse_kagi_results():
 #
 # https://searx.space
 # https://searx.github.io/searx/dev/search_api.html
-def searx_create_session() -> requests.Session:
-    """
-    Create a requests session with retry logic.
-    """
-    session = requests.Session()
-    retries = Retry(
-        total=3,  # Maximum number of retries
-        backoff_factor=1,  # Exponential backoff factor
-        status_forcelist=[429, 500, 502, 503, 504],  # Retry on these status codes
-        allowed_methods=["GET"]  # Only retry on GET requests
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+# (legacy session helper removed; using httpx directly)
 
 def search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general', searx_url=None):
     """
@@ -1988,9 +1967,9 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
             from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
             pol = evaluate_url_policy(search_url)
             if not getattr(pol, 'allowed', False):
-                raise requests.RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
         except Exception as _e:
-            raise requests.RequestException(f"Egress policy evaluation failed: {_e}")
+            raise ValueError(f"Egress policy evaluation failed: {_e}")
 
         # Mimic browser headers via centralized UA builder
         headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5", restrict_encodings_for_requests=True)
@@ -1999,9 +1978,10 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
         time.sleep(delay)
 
-        session = searx_create_session()
-        response = session.get(search_url, headers=headers, timeout=15)
-        response.raise_for_status()
+        # Use httpx for better encoding support
+        with httpx.Client(timeout=15.0, trust_env=False) as client:
+            response = client.get(search_url, headers=headers)
+            response.raise_for_status()
 
         # Check if the response is JSON
         content_type = response.headers.get('Content-Type', '')
@@ -2028,7 +2008,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
         return {"results": data}
 
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         logging.error(f"Error searching for content: {str(e)}")
         return {"error": f"There was an error searching for content. {str(e)}"}
 
@@ -2084,9 +2064,9 @@ def search_web_serper():
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
         pol = evaluate_url_policy("https://google.serper.dev/search")
         if not getattr(pol, 'allowed', False):
-            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except Exception as _e:
-        raise RequestException(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
     return {"error": "Serper provider not implemented"}
 
 
@@ -2126,23 +2106,23 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
         pol = evaluate_url_policy(tavily_api_url)
         if not getattr(pol, 'allowed', False):
-            raise requests.RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except Exception as _e:
         # Surface policy evaluation failure in a consistent way
-        raise requests.RequestException(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
 
     # Perform the search request
     try:
         headers = {"Content-Type": "application/json"}
-        # Add UA from centralized builder
         ua_only = build_browser_headers(pick_ua_profile("fixed"))
         if "User-Agent" in ua_only:
             headers["User-Agent"] = ua_only["User-Agent"]
 
-        response = requests.post(tavily_api_url, headers=headers, data=json.dumps(payload), timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
+        with httpx.Client(timeout=15.0, trust_env=False) as client:
+            response = client.post(tavily_api_url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
         return {"error": f"There was an error searching for content. {str(e)}"}
 
 
@@ -2202,9 +2182,9 @@ def search_web_yandex():
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
         pol = evaluate_url_policy("https://yandex.cloud")
         if not getattr(pol, 'allowed', False):
-            raise RequestException(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except Exception as _e:
-        raise RequestException(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
     return {"error": "Yandex provider not implemented"}
 
 

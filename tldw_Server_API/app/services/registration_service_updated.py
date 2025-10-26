@@ -241,8 +241,8 @@ class RegistrationService:
                 # Delete user from database
                 try:
                     self.user_db.delete_user(user_id)
-                except:
-                    pass
+                except Exception as del_err:
+                    logger.debug(f"Failed to delete partially-created user after registration failure: user_id={user_id}, error={del_err}")
                 
                 # Cleanup directories
                 if directories_created:

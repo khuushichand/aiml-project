@@ -441,8 +441,9 @@ class AcademicCitationFormatter:
             try:
                 # Try common date formats
                 dt = datetime.fromisoformat(str(date))
-            except:
+            except Exception as e:
                 # Fallback to string representation
+                logger.debug(f"Citation date parse failed; returning raw. value={date}, error={e}")
                 return str(date)
         
         if style == "mla":

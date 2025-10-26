@@ -513,8 +513,8 @@ class AuthNZMonitor:
                         'severity': details.get('labels', {}).get('severity'),
                         'timestamp': alert['created_at']
                     })
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse monitoring alert details JSON: error={e}")
             
             return {
                 'metrics': {

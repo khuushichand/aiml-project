@@ -156,7 +156,8 @@ class L1MemoryCache:
         """Estimate size of value in bytes"""
         try:
             return len(pickle.dumps(value))
-        except:
+        except Exception as e:
+            logger.debug(f"Failed to estimate pickle size; using default. error={e}")
             return 1024  # Default estimate
     
     def clear(self):
@@ -350,8 +351,8 @@ class L2DiskCache:
             
             try:
                 file_path.unlink()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to remove L2 cache file during eviction: file={file_path}, error={e}")
             
             del self.index[key]
     
@@ -390,8 +391,8 @@ class L2DiskCache:
                 file_path = self.cache_dir / entry['file']
                 try:
                     file_path.unlink()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to remove L2 cache file during clear: file={file_path}, error={e}")
             
             self.index.clear()
             self._save_index()
@@ -545,8 +546,8 @@ class L3RemoteCache:
             try:
                 info = self.redis_client.info('memory')
                 stats['memory_used_mb'] = info.get('used_memory', 0) / (1024 * 1024)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to fetch Redis memory info: error={e}")
         
         return stats
 
@@ -660,8 +661,8 @@ class MultiTierCache:
             full_key = f"{self.l3.key_prefix}{key}"
             try:
                 self.l3.redis_client.delete(full_key)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to delete L3 cache key: key={full_key}, error={e}")
     
     def clear_all(self):
         """Clear all cache tiers"""

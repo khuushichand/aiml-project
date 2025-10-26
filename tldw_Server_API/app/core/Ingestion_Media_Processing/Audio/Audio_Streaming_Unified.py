@@ -1328,8 +1328,8 @@ async def handle_unified_websocket(
                 "type": "error",
                 "message": f"Server error: {str(e)}"
             })
-        except:
-            pass
+        except Exception as send_err:
+            logger.debug(f"Failed to send error frame on websocket: error={send_err}")
     finally:
         # Clean up
         if transcriber:

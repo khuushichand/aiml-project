@@ -400,34 +400,44 @@ def setup_dependencies(test_user, mock_user_db, mock_chacha_db, mock_media_db):
 
 
 @pytest.fixture
-def client():
+def client(setup_dependencies):
     """Create test client with CSRF handling."""
     # Make sure we're using the same app instance
     from tldw_Server_API.app.main import app as main_app
-    with TestClient(main_app) as test_client:
-        # Get CSRF token
-        response = test_client.get("/api/v1/health")
-        csrf_token = response.cookies.get("csrf_token", "")
-        test_client.csrf_token = csrf_token
-        test_client.cookies = {"csrf_token": csrf_token}
+    # Reduce startup overhead and file handle usage during tests
+    prev_validate = os.environ.get("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP")
+    os.environ["PRIVILEGE_METADATA_VALIDATE_ON_STARTUP"] = "0"
+    try:
+        with TestClient(main_app) as test_client:
+            # Get CSRF token
+            response = test_client.get("/api/v1/health")
+            csrf_token = response.cookies.get("csrf_token", "")
+            test_client.csrf_token = csrf_token
+            test_client.cookies = {"csrf_token": csrf_token}
 
-        # Add helper method
-        def post_with_auth(url, auth_token, **kwargs):
-            headers = kwargs.pop("headers", {})
-            headers["X-CSRF-Token"] = csrf_token
+            # Add helper method
+            def post_with_auth(url, auth_token, **kwargs):
+                headers = kwargs.pop("headers", {})
+                headers["X-CSRF-Token"] = csrf_token
 
-            settings = get_settings()
-            if settings.AUTH_MODE == "multi_user":
-                headers["Authorization"] = auth_token
-            else:
-                # Use X-API-KEY header for single-user mode
-                headers["X-API-KEY"] = auth_token
+                settings = get_settings()
+                if settings.AUTH_MODE == "multi_user":
+                    headers["Authorization"] = auth_token
+                else:
+                    # Use X-API-KEY header for single-user mode
+                    headers["X-API-KEY"] = auth_token
 
-            return test_client.post(url, headers=headers, **kwargs)
+                return test_client.post(url, headers=headers, **kwargs)
 
-        test_client.post_with_auth = post_with_auth
+            test_client.post_with_auth = post_with_auth
 
-        yield test_client
+            yield test_client
+    finally:
+        # Restore env override
+        if prev_validate is None:
+            os.environ.pop("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", None)
+        else:
+            os.environ["PRIVILEGE_METADATA_VALIDATE_ON_STARTUP"] = prev_validate
 
 
 @pytest.fixture

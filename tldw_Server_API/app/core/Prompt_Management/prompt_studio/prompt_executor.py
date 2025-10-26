@@ -383,8 +383,8 @@ class PromptExecutor:
             if json_match:
                 parsed = json.loads(json_match.group())
                 return parsed
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to parse JSON from LLM output for signature-guided parsing: error={e}")
         
         # Try to extract fields from text
         parsed = {}
@@ -526,7 +526,8 @@ class PromptValidator:
                         return False, "Each input field must be an object"
                     if not field.get("name"):
                         return False, "Each input field must have a name"
-            except:
+            except Exception as e:
+                logger.debug(f"Invalid input schema format in signature: error={e}")
                 return False, "Invalid input schema format"
         
         # Validate output schema
@@ -541,7 +542,8 @@ class PromptValidator:
                         return False, "Each output field must be an object"
                     if not field.get("name"):
                         return False, "Each output field must have a name"
-            except:
+            except Exception as e:
+                logger.debug(f"Invalid output schema format in signature: error={e}")
                 return False, "Invalid output schema format"
         
         return True, None

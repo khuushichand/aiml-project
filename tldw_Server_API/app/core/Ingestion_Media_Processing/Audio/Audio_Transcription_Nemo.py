@@ -367,8 +367,8 @@ def transcribe_with_canary(
         if cleanup_temp and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-            except:
-                pass
+            except Exception as rm_err:
+                logging.debug(f"Failed to remove temp audio file (Canary): path={audio_path}, error={rm_err}")
 
 
 def transcribe_with_parakeet(
@@ -466,8 +466,8 @@ def transcribe_with_parakeet(
         if cleanup_temp and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-            except:
-                pass
+            except Exception as rm_err:
+                logging.debug(f"Failed to remove temp audio file (Parakeet): path={audio_path}, error={rm_err}")
 
 
 def transcribe_with_nemo(
@@ -520,8 +520,8 @@ def unload_nemo_models():
             if hasattr(model, 'cpu'):
                 model.cpu()
             del model
-        except:
-            pass
+        except Exception as free_err:
+            logging.debug(f"Failed to release Nemo model resources: key={key}, error={free_err}")
     
     _model_cache.clear()
     

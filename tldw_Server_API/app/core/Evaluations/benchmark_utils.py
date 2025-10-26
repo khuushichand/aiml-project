@@ -220,15 +220,16 @@ def parse_function_call(response: str) -> Dict[str, Any]:
                             try:
                                 # Try to parse as literal
                                 args_dict[key] = ast.literal_eval(value)
-                            except:
+                            except Exception as e:
+                                logger.debug(f"Arg literal eval failed; using raw string: key={key}, value={value}, error={e}")
                                 args_dict[key] = value
                 
                 return {
                     "name": func_name,
                     "parameters": args_dict
                 }
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Function call parse inner block failed: error={e}")
         
         return {}
         

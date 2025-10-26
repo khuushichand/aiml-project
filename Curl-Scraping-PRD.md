@@ -159,14 +159,15 @@ Router responsibilities:
 
 ## 7. Configuration
 
-Environment variables (examples):
-- `WEB_SCRAPER_HTTP_BACKEND`: `auto|curl|requests|playwright` (default: `auto`)
-- `WEB_SCRAPER_IMPERSONATE`: `chrome120|safari17|firefox120` (default: tied to UA profile)
-- `WEB_SCRAPER_UA_MODE`: `fixed|rotate` (default: `fixed`)
-- `WEB_SCRAPER_UA_PROFILE`: `chrome_120_win|safari_17_mac|firefox_120_win` (default: chrome_120_win)
-- `WEB_SCRAPER_ROBOTS`: `respect|ignore` (default: `respect`)
+All settings are configured via `Config_Files/config.txt` (loaded by `load_and_log_configs()`); this PRD does not use environment variables.
 
-YAML (`custom_scrapers.yaml`) controls per-domain overrides (backend, UA, impersonate, headers, cookies, patterns).
+Relevant `config.txt` keys (section: `Web-Scraper`):
+- `custom_scrapers_yaml_path`: Path to `custom_scrapers.yaml` (default: `tldw_Server_API/Config_Files/custom_scrapers.yaml`).
+- `web_scraper_default_backend`: `auto|curl|httpx|playwright` (applied when a rule resolves to `auto`).
+- `web_scraper_ua_mode`: `fixed|rotate` (default: `fixed`).
+- `web_scraper_respect_robots`: `True|False` (default: `True`).
+
+YAML (`custom_scrapers.yaml`) controls per-domain overrides (backend, UA, impersonate, headers, cookies, proxies, patterns).
 
 ## 8. Dependencies & Changes
 
@@ -292,6 +293,19 @@ domains:
 Sections on modular extraction strategies, LLM/block extraction, regex catalogs, clustering, and extended observability have been split into a dedicated document to keep this PRD focused on transport/UA/routing. See:
 
 - Docs/Design/Extraction_Pipeline_PRD.md
+
+## 19. Router YAML Schema (Short)
+
+See full schema and examples in Docs/Design/Custom_Scrapers_Router.md. Allowed per-domain keys:
+- `backend`: `auto|curl|httpx|playwright`
+- `handler`: allowlisted import string
+- `ua_profile`: e.g., `chrome_120_win`
+- `impersonate`: e.g., `chrome120|safari17|firefox120`
+- `extra_headers`: string map
+- `cookies`: string map
+- `respect_robots`: boolean
+- `url_patterns`: list of regex strings
+- `proxies`: string map for `http`/`https`
 
 ## 18. Implementation Status
 

@@ -62,20 +62,35 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             language: Language code for text processing
         """
         super().__init__(language)
-        # Policy toggles via environment
-        self._force_simple_only = os.getenv("CHUNKING_REGEX_SIMPLE_ONLY", "").lower() in ("1", "true", "yes")
-        # Default: disable multiprocessing for regex to avoid platform/harness issues; enable only if explicitly requested
-        disable_mp_env = os.getenv("CHUNKING_DISABLE_MP", None)
-        if disable_mp_env is None:
-            self._disable_mp = True
-        else:
-            self._disable_mp = disable_mp_env.lower() in ("1", "true", "yes")
-        # Allow overriding timeout via env
+        # Policy toggles via config.txt (no env toggles)
+        self._force_simple_only = False
+        self._disable_mp = True
         try:
-            env_timeout = float(os.getenv("CHUNKING_REGEX_TIMEOUT", ""))
-            if env_timeout > 0:
-                self.REGEX_TIMEOUT = env_timeout
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            _cp = load_comprehensive_config()
+            if hasattr(_cp, 'has_section') and _cp.has_section('Chunking'):
+                try:
+                    v = _cp.get('Chunking', 'regex_simple_only', fallback=None)
+                    if v is not None:
+                        self._force_simple_only = str(v).strip().lower() in ("1", "true", "yes", "on")
+                except Exception:
+                    pass
+                try:
+                    v = _cp.get('Chunking', 'regex_disable_multiprocessing', fallback=None)
+                    if v is not None:
+                        self._disable_mp = str(v).strip().lower() in ("1", "true", "yes", "on")
+                except Exception:
+                    pass
+                try:
+                    v = _cp.get('Chunking', 'regex_timeout_seconds', fallback=None)
+                    if v is not None:
+                        vt = float(str(v))
+                        if vt > 0:
+                            self.REGEX_TIMEOUT = vt
+                except Exception:
+                    pass
         except Exception:
+            # Default values above remain in effect if config unavailable
             pass
         logger.debug(f"EbookChapterChunkingStrategy initialized for language: {language}")
     

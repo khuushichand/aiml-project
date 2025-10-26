@@ -12,13 +12,22 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus, ImportStatus, ContentType, ConflictResolution
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 def _build_chacha_db_for_user(user_id: str) -> CharactersRAGDB:
     # Use the same logic as the dependency util to locate per-user DB
     try:
         uid_int = int(str(user_id))
-    except Exception:
+    except (TypeError, ValueError) as e:
+        logger.debug(f"Core Jobs Worker: non-int user_id {user_id}, fallback to 1: {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_warning_events_total",
+                labels={"component": "core_jobs_worker", "event": "non_int_user_id"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for non_int_user_id")
         uid_int = 1  # fallback for non-int ids
     try:
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import _get_chacha_db_path_for_user  # type: ignore
@@ -84,8 +93,15 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                             if stop_event and stop_event.is_set():
                                 return
                             jm.renew_job_lease(int(job_id), seconds=lease_seconds, worker_id=worker_id, lease_id=str(lease_id))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Core Jobs Worker: lease renew failed for job {job_id}: {e}")
+                            try:
+                                get_metrics_registry().increment(
+                                    "app_warning_events_total",
+                                    labels={"component": "core_jobs_worker", "event": "lease_renew_failed"},
+                                )
+                            except Exception:
+                                logger.debug("metrics increment failed for lease_renew_failed")
                         # Apply jitter to renewal interval to avoid thundering herd
                         slp = renew_interval + random.uniform(-float(renew_jitter), float(renew_jitter))
                         await asyncio.sleep(max(1.0, slp))
@@ -94,7 +110,15 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
             if action == "export":
                 try:
                     ej = svc._get_export_job(chatbooks_job_id)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Core Jobs Worker: get export job failed {chatbooks_job_id}: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "core_jobs_worker", "event": "get_export_job_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for get_export_job_failed")
                     ej = None
                 if ej:
                     ej.status = ExportStatus.IN_PROGRESS
@@ -150,8 +174,15 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                         ej.output_path = file_path
                         try:
                             ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Core Jobs Worker: stat exported file failed: {e}")
+                            try:
+                                get_metrics_registry().increment(
+                                    "app_warning_events_total",
+                                    labels={"component": "core_jobs_worker", "event": "export_stat_failed"},
+                                )
+                            except Exception:
+                                logger.debug("metrics increment failed for export_stat_failed")
                         ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
                         ej.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
                         ej.download_url = svc._build_download_url(ej.job_id, ej.expires_at)
@@ -160,7 +191,8 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                 else:
                     try:
                         ej = svc._get_export_job(chatbooks_job_id)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Core Jobs Worker: get export job (post-fail) failed {chatbooks_job_id}: {e}")
                         ej = None
                     if ej:
                         ej.status = ExportStatus.FAILED
@@ -171,8 +203,15 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                 # Stop renewal
                 try:
                     _renew_task.cancel()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Core Jobs Worker: failed to cancel renew task: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for renew_task_cancel_failed")
             elif action == "import":
                 ij = svc._get_import_job(chatbooks_job_id)
                 if ij:
@@ -192,12 +231,20 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                 for k, v in (payload.get("content_selections") or {}).items():
                     try:
                         cs[ContentType(k)] = v
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Core Jobs Worker: invalid content type {k}: {e}")
+                        try:
+                            get_metrics_registry().increment(
+                                "app_warning_events_total",
+                                labels={"component": "core_jobs_worker", "event": "invalid_content_type"},
+                            )
+                        except Exception:
+                            logger.debug("metrics increment failed for invalid_content_type")
                 conf_val = payload.get("conflict_resolution", "skip")
                 try:
                     conf = ConflictResolution(conf_val)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Core Jobs Worker: invalid conflict_resolution {conf_val}: {e}; defaulting to SKIP")
                     conf = ConflictResolution.SKIP
                 _renew_task = await _start_renewal(int(job["id"]))
                 ok, msg, _ = await asyncio.to_thread(
@@ -233,10 +280,24 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
                 try:
                     _renew_task.cancel()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Core Jobs Worker: failed to cancel renew task (import): {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for renew_task_cancel_failed")
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
         except Exception as e:
             logger.error(f"Core Jobs worker loop error: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_exception_events_total",
+                    labels={"component": "core_jobs_worker", "event": "worker_loop_error"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for worker_loop_error")
             await asyncio.sleep(poll_sleep)

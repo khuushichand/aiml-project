@@ -1255,8 +1255,8 @@ class UnifiedEvaluationService:
                                 continue
                             if end_date and created_at > end_date:
                                 continue
-                        except:
-                            pass
+                        except Exception as dt_err:
+                            logger.debug(f"Failed to parse evaluation created_at timestamp: value={created_at_str}, error={dt_err}")
                 
                 filtered_evaluations.append(eval)
             
@@ -1326,8 +1326,8 @@ class UnifiedEvaluationService:
                                 continue
                             if end_date and created_at > end_date:
                                 continue
-                        except:
-                            pass
+                        except Exception as dt_err:
+                            logger.debug(f"Failed to parse evaluation created_at timestamp: value={created_at_str}, error={dt_err}")
                 
                 count += 1
             

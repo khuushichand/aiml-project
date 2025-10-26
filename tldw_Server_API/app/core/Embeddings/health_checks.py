@@ -514,8 +514,8 @@ class HealthChecker:
                 'threads': process.num_threads(),
                 'open_files': len(process.open_files())
             }
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to collect process metrics: error={e}")
         
         # Get metrics from metrics module
         embedding_metrics = get_metrics()
@@ -584,7 +584,8 @@ async def liveness_probe() -> bool:
         # Just check if we can import and get config
         config = get_config()
         return config is not None
-    except:
+    except Exception as e:
+        logger.debug(f"Liveness probe failed: error={e}")
         return False
 
 
@@ -599,7 +600,8 @@ async def readiness_probe() -> bool:
         
         # Service is ready if not critical
         return health['status'] != HealthStatus.CRITICAL.value
-    except:
+    except Exception as e:
+        logger.debug(f"Readiness probe failed: error={e}")
         return False
 
 

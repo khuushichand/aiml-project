@@ -230,7 +230,8 @@ Rephrased instruction:"""
                 parameters={"temperature": 0.7, "max_tokens": 500}
             )
             return result["content"].strip()
-        except:
+        except Exception as e:
+            logger.debug(f"_add_constraints failed to call LLM: error={e}")
             return None
     
     async def _add_details(self, instruction: str, current_score: float) -> Optional[str]:
@@ -251,7 +252,8 @@ Enhanced instruction with more details:"""
                 parameters={"temperature": 0.8, "max_tokens": 500}
             )
             return result["content"].strip()
-        except:
+        except Exception as e:
+            logger.debug(f"_add_details failed to call LLM: error={e}")
             return None
     
     async def _simplify_instruction(self, instruction: str) -> Optional[str]:
@@ -272,7 +274,8 @@ Simplified instruction:"""
                 parameters={"temperature": 0.5, "max_tokens": 300}
             )
             return result["content"].strip()
-        except:
+        except Exception as e:
+            logger.debug(f"_simplify_instruction failed to call LLM: error={e}")
             return None
     
     async def _add_examples(self, instruction: str) -> Optional[str]:

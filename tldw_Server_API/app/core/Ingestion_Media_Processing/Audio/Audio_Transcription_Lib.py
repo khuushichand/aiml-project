@@ -678,13 +678,13 @@ def record_audio_to_disk(device_id, output_file_path, stop_event, audio_queue):
             try:
                 stream.stop_stream()
                 stream.close()
-            except:
-                pass
+            except Exception as e:
+                logging.debug(f"Failed to stop/close audio stream during cleanup: error={e}")
         if 'wf' in locals():
             try:
                 wf.close()
-            except:
-                pass
+            except Exception as e:
+                logging.debug(f"Failed to close wav file during cleanup: error={e}")
         p.terminate()
 
 
@@ -896,8 +896,8 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
             # Clean up temporary file
             try:
                 os.remove(tmp_wav_path)
-            except:
-                pass
+            except Exception as e:
+                logging.debug(f"Failed to remove temp wav file: path={tmp_wav_path}, error={e}")
 
 #
 # End of Sink Function
@@ -1786,7 +1786,7 @@ def speech_to_text_parakeet(
         try:
             import librosa
             audio_duration = librosa.get_duration(path=audio_file_path)
-        except:
+        except Exception:
             audio_duration = None
             logging.warning("Could not determine audio duration")
         

@@ -372,8 +372,8 @@ def trace_operation(
                     try:
                         span_attributes["args"] = json.dumps(str(args)[:1000])
                         span_attributes["kwargs"] = json.dumps(str(kwargs)[:1000])
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"trace_operation arg serialization failed: error={e}")
                 
                 async with manager.async_span(span_name, kind=kind, attributes=span_attributes) as span:
                     try:
@@ -382,8 +382,8 @@ def trace_operation(
                         if record_result and span:
                             try:
                                 span.set_attribute("result", json.dumps(str(result)[:1000]))
-                            except:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"trace_operation result serialization failed: error={e}")
                         
                         return result
                         
@@ -409,8 +409,8 @@ def trace_operation(
                     try:
                         span_attributes["args"] = json.dumps(str(args)[:1000])
                         span_attributes["kwargs"] = json.dumps(str(kwargs)[:1000])
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"trace_operation arg serialization failed: error={e}")
                 
                 with manager.span(span_name, kind=kind, attributes=span_attributes) as span:
                     try:
@@ -419,8 +419,8 @@ def trace_operation(
                         if record_result and span:
                             try:
                                 span.set_attribute("result", json.dumps(str(result)[:1000]))
-                            except:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"trace_operation result serialization failed: error={e}")
                         
                         return result
                         

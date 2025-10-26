@@ -183,8 +183,15 @@ class StorageQuotaService:
             reg = get_metrics_registry()
             reg.set_gauge("user_storage_used_mb", float(current_mb), labels={"user_id": str(user_id)})
             reg.set_gauge("user_storage_quota_mb", float(quota_mb), labels={"user_id": str(user_id)})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"storage_quota: failed to record gauges for user {user_id}: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "storage_quota", "event": "metrics_record_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for storage_quota metrics_record_failed")
 
         # Calculate new usage
         new_mb = new_bytes / (1024 * 1024)
@@ -299,8 +306,15 @@ class StorageQuotaService:
                     reg = get_metrics_registry()
                     reg.set_gauge("user_storage_used_mb", float(new_usage), labels={"user_id": str(user_id)})
                     reg.set_gauge("user_storage_quota_mb", float(quota), labels={"user_id": str(user_id)})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"storage_quota: failed to record updated gauges for user {user_id}: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "storage_quota", "event": "metrics_record_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for storage_quota metrics_record_failed")
 
                 return {
                     "user_id": user_id,

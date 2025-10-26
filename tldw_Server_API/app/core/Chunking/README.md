@@ -274,22 +274,21 @@ Notes:
 - Mapping is best‑effort: if a chunk overlaps a segment, the mapped times cover the overlapped portion proportionally.
 - If multiple segments overlap a chunk, the first overlap is used.
 
-## Environment Toggles (Regex Safety)
-These environment variables harden regex-based detection used by the eBook chapter strategy (`strategies/ebook_chapters.py`). They do not affect non‑regex strategies.
+## Config Settings (Regex Safety)
+Configure regex safety for `ebook_chapters` via `Config_Files/config.txt` under `[Chunking]`:
 
-- `CHUNKING_REGEX_TIMEOUT`
-  - Purpose: Cap regex execution time (seconds) for chapter/section detection.
-  - Default: `2` (class default). Values `<= 0` are ignored.
-  - Example: `export CHUNKING_REGEX_TIMEOUT=0.5`
+- `regex_timeout_seconds`
+  - Cap regex execution time (seconds) for chapter/section detection. `0` disables.
+  - Default: `0` (disabled). Example: `regex_timeout_seconds = 0.5`.
 
-- `CHUNKING_DISABLE_MP`
-  - Purpose: Control optional process-based isolation fallback for regex execution.
-  - Default: Multiprocessing is disabled when unset (safer cross‑platform default).
-  - Values: `1`/`true`/`yes` keeps MP disabled; `0`/`false`/`no` enables MP fallback. Note some environments disallow process spawning.
+- `regex_disable_multiprocessing`
+  - When `true`, disables process-based isolation fallback and uses thread-guarded execution only.
+  - Default: `true` (safer cross‑platform default).
 
-- `CHUNKING_REGEX_SIMPLE_ONLY`
-  - Purpose: Restrict custom chapter regex to a safe subset.
-  - Effect: When set (`1`/`true`/`yes`), disallows grouping `()`, alternation `|`, wildcard `.`, `?`, `*`. Allows literals, anchors `^`/`$`, character classes `[A-Z]`, escapes `\d`/`\w`, and `+` after safe atoms. Unsafe patterns are rejected during validation.
+- `regex_simple_only`
+  - When `true`, restricts custom chapter regex to a safe subset.
+  - Disallows grouping `()`, alternation `|`, wildcard `.`, `?`, `*`; allows literals, anchors `^`/`$`, character classes `[A-Z]`, escapes `\d`/`\w`, and `+` after safe atoms.
+  - Default: `false`.
 
 ## Security Hardening (General)
 - Input sanitization removes null bytes, suspicious control characters, and bidi overrides; Unicode is normalized.

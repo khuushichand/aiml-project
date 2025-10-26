@@ -835,8 +835,8 @@ class ChatbookService:
             if conn:
                 try:
                     conn.execute("ROLLBACK")
-                except:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"Transaction rollback failed: error={e2}")
             logger.error(f"Transaction rolled back: {e}")
             raise
         finally:
@@ -844,8 +844,8 @@ class ChatbookService:
             if conn:
                 try:
                     conn.close()
-                except:
-                    pass
+                except Exception as e3:
+                    logger.debug(f"Connection close failed after transaction: error={e3}")
     
     async def _create_chatbook_sync_wrapper(
         self,
@@ -3344,8 +3344,9 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except:
+                        except Exception as q_err:
                             # Table might not exist or have different schema
+                            logger.debug(f"world_books count query failed (no user filter): error={q_err}")
                             items = []
                         result["world_books"] = len(items) if items else 0
                     elif content_type == "dictionaries":
@@ -3356,8 +3357,9 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except:
+                        except Exception as q_err:
                             # Table might not exist
+                            logger.debug(f"dictionaries count query failed: error={q_err}")
                             items = []
                         result["dictionaries"] = len(items) if items else 0
                     elif content_type == "prompts":
@@ -3368,8 +3370,9 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except:
+                        except Exception as q_err:
                             # Table might not exist
+                            logger.debug(f"prompts count query failed: error={q_err}")
                             items = []
                         result["prompts"] = len(items) if items else 0
                 except Exception as e:
@@ -3492,8 +3495,8 @@ class ChatbookService:
                     with zipfile.ZipFile(file_path, 'r') as zf:
                         manifest_data = zf.read('manifest.json')
                         manifest = json.loads(manifest_data)
-                except:
-                    pass
+                except Exception as mf_err:
+                    logger.debug(f"Failed to read chatbook manifest.json: path={file_path}, error={mf_err}")
             
             return {
                 "is_valid": is_valid,

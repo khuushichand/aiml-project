@@ -367,8 +367,8 @@ class ScrapingJobQueue:
                         self._job_futures[job.job_id].set_exception(
                             Exception("Job cancelled due to shutdown")
                         )
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to cancel pending scraping job during shutdown: error={e}")
         
         # Wait for workers to finish
         await asyncio.gather(*self._workers, return_exceptions=True)

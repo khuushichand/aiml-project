@@ -98,12 +98,12 @@ class JobManager:
                 self._metrics.metrics_manager.increment(
                     "jobs.scheduled_total", labels={"job_type": job_type.value}
                 )
-            except Exception:
-                pass
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (jobs.scheduled_total): error={m_err}")
             try:
                 self._refresh_gauges_for_type(job_type.value)
-            except Exception:
-                pass
+            except Exception as g_err:
+                logger.debug(f"refresh gauges failed for job_type={job_type.value}: error={g_err}")
             return self._normalize_job(job)
         except DatabaseError:
             raise
@@ -229,8 +229,10 @@ class JobManager:
             try:
                 jt = str(normalized.get("job_type"))
                 self._refresh_gauges_for_type(jt)
-            except Exception:
-                pass
+            except Exception as g_err:
+                logger.debug(
+                    f"refresh gauges failed in get_next_job: job_type={jt if 'jt' in locals() else '?'} error={g_err}"
+                )
         return normalized
     
     def retry_job(self, job_id: int) -> bool:
@@ -265,8 +267,8 @@ class JobManager:
                     "jobs.retries_total",
                     labels={"job_type": jt},
                 )
-            except Exception:
-                pass
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (jobs.retries_total): error={m_err}")
         return success
     
     def register_handler(self, job_type: JobType, handler: Optional[Callable] = None):
@@ -316,8 +318,8 @@ class JobManager:
             if isinstance(payload, str):
                 try:
                     payload = json.loads(payload)
-                except Exception:
-                    pass
+                except Exception as hb_err:
+                    logger.debug(f"lease renewal metrics increment failed: error={hb_err}")
             
             # Start lease heartbeat
             lease_secs = 60
@@ -343,11 +345,11 @@ class JobManager:
                                         "jobs.lease_renewals_total",
                                         labels={"job_type": job_type.value},
                                     )
-                                except Exception:
-                                    pass
-                        except Exception:
+                                except Exception as m_err:
+                                    logger.debug(f"metrics increment failed (jobs.lease_renewals_total): error={m_err}")
+                        except Exception as rn_err:
                             # Best-effort; ignore renewal failures here
-                            pass
+                            logger.debug(f"lease renewal failed (best-effort ignored): error={rn_err}")
                 except asyncio.CancelledError:  # graceful shutdown
                     return
 
@@ -360,8 +362,8 @@ class JobManager:
             self.update_job_status(job["id"], JobStatus.COMPLETED, result=result)
             try:
                 self._refresh_gauges_for_type(job_type.value)
-            except Exception:
-                pass
+            except Exception as g_err:
+                logger.debug(f"refresh gauges failed after completion: job_type={job_type.value}, error={g_err}")
             
             logger.info(f"Completed {job_type.value} job {job['id']}")
             return result
@@ -372,7 +374,8 @@ class JobManager:
             # Delegate retry decision to retry_job() to keep semantics consistent
             try:
                 scheduled = self.retry_job(job["id"])  # returns True if re-queued
-            except Exception:
+            except Exception as r_err:
+                logger.debug(f"retry_job failed: job_id={job['id']}, error={r_err}")
                 scheduled = False
 
             if not scheduled:
@@ -386,20 +389,20 @@ class JobManager:
                         "jobs.failures_total",
                         labels={"job_type": job_type.value, "reason": type(e).__name__},
                     )
-                except Exception:
-                    pass
+                except Exception as m_err:
+                    logger.debug(f"metrics increment failed (jobs.failures_total): error={m_err}")
             try:
                 self._refresh_gauges_for_type(job_type.value)
-            except Exception:
-                pass
+            except Exception as g_err:
+                logger.debug(f"refresh gauges failed after failure: job_type={job_type.value}, error={g_err}")
             
             raise
         finally:
             if lease_task is not None:
                 try:
                     lease_task.cancel()
-                except Exception:
-                    pass
+                except Exception as c_err:
+                    logger.debug(f"lease_task.cancel() failed in finally: error={c_err}")
             # Record duration histogram
             try:
                 duration = max(0.0, time.time() - started_at)
@@ -408,32 +411,34 @@ class JobManager:
                     duration,
                     labels={"job_type": job_type.value},
                 )
-            except Exception:
-                pass
+            except Exception as m_err:
+                logger.debug(f"observe jobs.duration_seconds failed in finally: error={m_err}")
 
     def _refresh_gauges_for_type(self, job_type: str) -> None:
         """Refresh queued and processing gauges for a given job type."""
         try:
             queued = int(self.db.count_jobs(status=JobStatus.QUEUED.value, job_type=job_type))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"count_jobs queued failed: job_type={job_type}, error={e}")
             queued = 0
         try:
             processing = int(self.db.count_jobs(status=JobStatus.PROCESSING.value, job_type=job_type))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"count_jobs processing failed: job_type={job_type}, error={e}")
             processing = 0
         # Update gauges
         try:
             self._metrics.update_job_queue_size(job_type, queued)
-        except Exception:
-            pass
+        except Exception as m_err:
+            logger.debug(f"update_job_queue_size failed: job_type={job_type}, error={m_err}")
         try:
             self._metrics.metrics_manager.set_gauge(
                 "jobs.processing",
                 float(processing),
                 labels={"job_type": job_type},
             )
-        except Exception:
-            pass
+        except Exception as m_err:
+            logger.debug(f"set_gauge jobs.processing failed: job_type={job_type}, error={m_err}")
         # Backlog gauge
         try:
             backlog = max(0, int(queued) - int(processing))
@@ -442,8 +447,8 @@ class JobManager:
                 float(backlog),
                 labels={"job_type": job_type},
             )
-        except Exception:
-            pass
+        except Exception as m_err:
+            logger.debug(f"set_gauge jobs.backlog failed: job_type={job_type}, error={m_err}")
         # Stale processing (aggregate)
         try:
             lease_stats = self.db.get_lease_stats()
@@ -451,8 +456,8 @@ class JobManager:
                 "jobs.stale_processing",
                 float(lease_stats.get("stale_processing", 0)),
             )
-        except Exception:
-            pass
+        except Exception as m_err:
+            logger.debug(f"set_gauge jobs.stale_processing failed: error={m_err}")
     
     async def start_processing(self, max_concurrent: int = 3):
         """

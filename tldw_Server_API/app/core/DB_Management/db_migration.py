@@ -412,8 +412,8 @@ class DatabaseMigrator:
                             str(e)
                         ))
                         conn.commit()
-                    except:
-                        pass
+                    except Exception as log_err:
+                        logger.debug(f"Failed to log migration failure: migration={migration.name}, error={log_err}")
                 
                 raise MigrationError(
                     f"Migration {migration.name} ({direction}) failed: {e}"

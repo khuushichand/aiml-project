@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from loguru import logger
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 try:
     import httpx
@@ -65,9 +66,9 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
                 if _allowed:
                     return True
                 # If not allowed, continue to fallback logic below for test-friendly match
-            except Exception:
+            except Exception as e:
                 # Fall back to explicit evaluate_url_policy with derived lists
-                pass
+                logger.debug(f"DLQ: is_webhook_url_allowed_for_tenant failed, falling back: {e}")
         # Fallback path: derive allow/deny lists and evaluate via core policy
         allow, deny = _get_lists_for_tenant(tenant_id)
         # Normalize wildcard patterns to bare host suffixes for policy evaluation
@@ -108,12 +109,20 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
                     except Exception:
                         return False
                 return False
-            except Exception:
+            except Exception as e:
+                logger.debug(f"DLQ: evaluate_url_policy failed: {e}")
                 return False
         # If policy module is missing, fail safe
         return False
     except Exception as e:
         logger.warning(f"DLQ egress policy check failed for url={url}: {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_exception_events_total",
+                labels={"component": "workflows_dlq", "event": "egress_policy_check_failed"},
+            )
+        except Exception:
+            logger.debug("metrics increment failed for workflows_dlq egress_policy_check_failed")
         return False
 
 
@@ -172,6 +181,13 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                 rows = db.list_webhook_dlq_due(limit=batch)
             except Exception as e:
                 logger.warning(f"DLQ fetch failed: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_exception_events_total",
+                        labels={"component": "workflows_dlq", "event": "fetch_failed"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for workflows_dlq fetch_failed")
                 rows = []
 
             if not rows:
@@ -190,7 +206,15 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                 attempts = int(r.get("attempts") or 0)
                 try:
                     body = json.loads(r.get("body_json") or "{}")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"DLQ: invalid body_json for id={dlq_id}: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "workflows_dlq", "event": "bad_body_json"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for workflows_dlq bad_body_json")
                     body = {}
 
                 if not _host_allowed(url, tenant_id):
@@ -209,6 +233,13 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                         db.delete_webhook_dlq(dlq_id=dlq_id)
                     except Exception as _e:
                         logger.warning(f"Failed to delete DLQ id={dlq_id} after success: {_e}")
+                        try:
+                            get_metrics_registry().increment(
+                                "app_warning_events_total",
+                                labels={"component": "workflows_dlq", "event": "delete_after_success_failed"},
+                            )
+                        except Exception:
+                            logger.debug("metrics increment failed for workflows_dlq delete_after_success_failed")
                     continue
 
                 # Failure: compute next backoff
@@ -216,7 +247,15 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                 try:
                     import datetime as _dt
                     next_at = (_dt.datetime.utcnow() + _dt.timedelta(seconds=next_delay)).isoformat()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"DLQ: failed to compute next_attempt_at for id={dlq_id}: {e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "workflows_dlq", "event": "next_attempt_compute_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for workflows_dlq next_attempt_compute_failed")
                     next_at = None
                 db.update_webhook_dlq_failure(
                     dlq_id=dlq_id,

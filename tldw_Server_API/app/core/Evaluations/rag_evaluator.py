@@ -660,7 +660,8 @@ class RAGEvaluator:
                 
                 relevance_scores.append(float(score_str.strip()) / 5.0)
                 
-            except:
+            except Exception as e:
+                logger.debug(f"Failed to parse LLM-provided relevance score; defaulting to 0. error={e}")
                 relevance_scores.append(0.0)
         
         # Calculate precision as average relevance

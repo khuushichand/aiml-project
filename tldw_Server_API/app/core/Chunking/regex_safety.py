@@ -119,8 +119,16 @@ def safe_search(compiled_pat: "re.Pattern", text: str, *, timeout_env: str = "CH
     # Try RE2 when available by recompiling pattern string
     t0 = time.perf_counter()
     timeout_s = 0.0
+    # Read timeout from config.txt [Chunking] regex_timeout_seconds; do not rely on env
     try:
-        timeout_s = float(os.getenv(timeout_env, "0") or 0.0)
+        from tldw_Server_API.app.core.config import load_comprehensive_config
+        _cp = load_comprehensive_config()
+        if hasattr(_cp, 'has_section') and _cp.has_section('Chunking'):
+            _val = _cp.get('Chunking', 'regex_timeout_seconds', fallback='0')
+            try:
+                timeout_s = float(str(_val) or 0.0)
+            except Exception:
+                timeout_s = 0.0
     except Exception:
         timeout_s = 0.0
     # Fast path: optional RE2 search (only when flags are zero to preserve semantics)
@@ -137,7 +145,7 @@ def safe_search(compiled_pat: "re.Pattern", text: str, *, timeout_env: str = "CH
         found = compiled_pat.search(text) is not None
         if timeout_s > 0 and (time.perf_counter() - t0) > timeout_s:
             # Consider this a timeout condition from caller's perspective
-            _logger.warning("Regex search exceeded CHUNKING_REGEX_TIMEOUT; treating as no match")
+            _logger.warning("Regex search exceeded configured timeout; treating as no match")
             return False
         return found
     except Exception:

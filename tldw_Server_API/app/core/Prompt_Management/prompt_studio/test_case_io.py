@@ -173,8 +173,9 @@ class TestCaseIO:
             try:
                 json_bytes = base64.b64decode(json_data)
                 json_data = json_bytes.decode('utf-8')
-            except:
-                pass  # Not base64, use as is
+            except Exception as e:
+                logger.debug(f"JSON import not base64 or decode failed: error={e}")
+                # Not base64 or decode error; proceed with original string
             
             # Parse JSON
             data = json.loads(json_data)
@@ -249,8 +250,9 @@ class TestCaseIO:
             try:
                 csv_bytes = base64.b64decode(csv_data)
                 csv_data = csv_bytes.decode('utf-8')
-            except:
-                pass  # Not base64, use as is
+            except Exception as e:
+                logger.debug(f"CSV import not base64 or decode failed: error={e}")
+                # Not base64 or decode error; proceed with original string
             
             # Parse CSV
             reader = csv.DictReader(StringIO(csv_data))
@@ -267,13 +269,15 @@ class TestCaseIO:
                             # Try to parse as JSON, otherwise use as string
                             try:
                                 inputs[field_name] = json.loads(value) if value else None
-                            except:
+                            except Exception as e:
+                                logger.debug(f"CSV input field JSON parse failed: field={field_name}, error={e}")
                                 inputs[field_name] = value
                         elif key.startswith("expected."):
                             field_name = key[9:]  # Remove "expected." prefix
                             try:
                                 expected_outputs[field_name] = json.loads(value) if value else None
-                            except:
+                            except Exception as e:
+                                logger.debug(f"CSV expected field JSON parse failed: field={field_name}, error={e}")
                                 expected_outputs[field_name] = value
                     
                     # Skip if no inputs

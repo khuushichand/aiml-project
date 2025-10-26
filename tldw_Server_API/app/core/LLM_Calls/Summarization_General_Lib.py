@@ -700,8 +700,8 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
             try:
                 error_detail = e.response.json()
                 logging.error(f"OpenAI: API error details: {error_detail}")
-            except:
-                pass
+            except Exception as parse_err:
+                logging.debug(f"OpenAI error JSON parse failed: error={parse_err}")
         return f"Error: OpenAI API request failed: {str(e)}"
     except Exception as e:
         logging.error(f"OpenAI: Unexpected error: {str(e)}", exc_info=True)

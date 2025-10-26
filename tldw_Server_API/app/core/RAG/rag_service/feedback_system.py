@@ -331,8 +331,8 @@ class FeedbackAnalyzer:
                     normalized = (relevance - 1) / 4  # Normalize to 0-1
                     score += normalized * 3.0  # Weight of 3
                     weight_sum += 3.0
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse relevance feedback value: error={e}")
                     
             elif feedback_type == "helpful":
                 # Helpful yes/no
@@ -340,8 +340,8 @@ class FeedbackAnalyzer:
                     helpful = json.loads(value) if isinstance(value, str) else value
                     score += (1.0 if helpful else 0.0) * 2.0  # Weight of 2
                     weight_sum += 2.0
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse helpful feedback value: error={e}")
                     
             elif feedback_type == "click":
                 # Click indicates interest
@@ -356,8 +356,8 @@ class FeedbackAnalyzer:
                     normalized = min(dwell / 30.0, 1.0)
                     score += normalized * 1.5  # Weight of 1.5
                     weight_sum += 1.5
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
         
         return score / weight_sum if weight_sum > 0 else 0.5
     
@@ -387,8 +387,8 @@ class FeedbackAnalyzer:
                 try:
                     score = float(json.loads(value) if isinstance(value, str) else value)
                     relevance_scores.append(score)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse relevance score for query document: error={e}")
                     
             elif feedback_type == "helpful":
                 try:
@@ -397,8 +397,8 @@ class FeedbackAnalyzer:
                         perf.helpful_count += 1
                     else:
                         perf.unhelpful_count += 1
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse helpful feedback value: error={e}")
                     
             elif feedback_type == "click":
                 perf.clicked_results += 1
@@ -407,8 +407,8 @@ class FeedbackAnalyzer:
                 try:
                     dwell = float(json.loads(value) if isinstance(value, str) else value)
                     dwell_times.append(dwell)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
         
         perf.total_results = len(unique_docs)
         perf.avg_relevance = np.mean(relevance_scores) if relevance_scores else 0.0
@@ -448,8 +448,8 @@ class FeedbackAnalyzer:
                             score = float(json.loads(entry["value"]) if isinstance(entry["value"], str) else entry["value"])
                             query_doc_score = (score - 1) / 4  # Normalize to 0-1
                             break
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse relevance score for query document: error={e}")
             
             # Combine document and query-specific scores
             combined_score = 0.7 * doc_score + 0.3 * query_doc_score

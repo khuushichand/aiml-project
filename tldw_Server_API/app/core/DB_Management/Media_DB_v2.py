@@ -7629,8 +7629,8 @@ def check_database_integrity(db_path): # Standalone check is fine
         if conn:
             try:
                 conn.close()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to close sqlite connection after integrity check: error={e}")
 
 
 # Utility Checks

@@ -103,7 +103,8 @@ async def check_status(config: SchedulerConfig) -> None:
             try:
                 await backend.execute("SELECT COUNT(*) FROM tasks")
                 exists = True
-            except:
+            except Exception as e:
+                logger.debug(f"Tasks table check failed (sqlite backend): error={e}")
                 exists = False
         
         if exists:

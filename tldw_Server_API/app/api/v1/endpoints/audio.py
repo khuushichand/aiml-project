@@ -61,6 +61,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_sing
 
 # For logging (if you use the same logger as in your PDF endpoint)
 from loguru import logger
+from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
@@ -78,8 +79,8 @@ def _rate_limit_key(request: _FastAPIRequest) -> str:
         uid = getattr(request.state, "user_id", None)
         if uid is not None:
             return f"user:{uid}"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"rate_limit_key: failed to read user_id from request.state: error={e}")
     return get_remote_address(request)
 
 # Use central limiter instance; override key_func per-route where needed
@@ -183,8 +184,8 @@ async def create_speech(
             tags=[str(request_data.model or ""), str(request_data.voice or "")],
             metadata={"stream": bool(getattr(request_data, 'stream', False)), "format": request_data.response_format},
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"usage_log audio.tts failed: error={e}")
 
     # V2 service handles model mapping internally via the adapter factory
     # No need for manual mapping here
@@ -430,8 +431,8 @@ async def create_transcription(
     try:
         await increment_jobs_started(current_user.id)
         acquired_job_slot = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to increment jobs started: user_id={current_user.id}, error={e}")
 
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
@@ -446,7 +447,8 @@ async def create_transcription(
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav as _convert_to_wav
             canonical_path = _convert_to_wav(temp_audio_path, offset=0, overwrite=False)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
             canonical_path = temp_audio_path
 
         # Load canonical audio
@@ -454,7 +456,8 @@ async def create_transcription(
         # Compute duration (seconds)
         try:
             duration_seconds = float(len(audio_data)) / float(sample_rate or 16000)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to compute audio duration; defaulting to 0: error={e}")
             duration_seconds = 0.0
         
         # Parse timestamp granularities (flexible: CSV or JSON array)
@@ -470,8 +473,9 @@ async def create_transcription(
                 else:
                     # Comma-separated string
                     granularity_tokens = {t.strip().lower() for t in s.split(',') if t.strip()}
-        except Exception:
+        except Exception as e:
             # Non-fatal: default to {'segment'}
+            logger.debug(f"Failed to parse timestamp_granularities; defaulting to 'segment': error={e}")
             granularity_tokens = {"segment"}
         if not granularity_tokens:
             granularity_tokens = {"segment"}
@@ -504,15 +508,16 @@ async def create_transcription(
         minutes_est = duration_seconds / 60.0
         try:
             allow, remaining_after = await check_daily_minutes_allow(current_user.id, minutes_est)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"check_daily_minutes_allow failed; allowing by default: user_id={current_user.id}, error={e}")
             allow = True
             remaining_after = None
         if not allow:
             # Release job slot before returning
             try:
                 await finish_job(current_user.id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}")
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Transcription quota exceeded (daily minutes)"
@@ -588,8 +593,8 @@ async def create_transcription(
         # On success, record minutes used
         try:
             await add_daily_minutes(current_user.id, minutes_est)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to record daily minutes: user_id={current_user.id}, error={e}")
 
         # Format response based on requested format
         if response_format == "text":
@@ -702,8 +707,12 @@ async def create_transcription(
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
                 os.remove(temp_audio_path)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to remove temp audio file: path={temp_audio_path}, error={e}")
+                try:
+                    increment_counter("app_warning_events_total", labels={"component": "audio", "event": "tempfile_remove_failed"})
+                except Exception as m_err:
+                    logger.debug(f"metrics increment failed (audio tempfile_remove_failed): error={m_err}")
 
 
 @router.post(
@@ -739,8 +748,8 @@ async def create_translation(
             tags=[str(model or "")],
             metadata={"filename": getattr(file, 'filename', None), "language": "en"},
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"usage_log audio.transcriptions failed: error={e}")
     # For translation, we'll use the transcription endpoint with language detection
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model
@@ -1400,12 +1409,12 @@ async def websocket_transcribe(
                         "quota": qe.quota,
                         "message": "Streaming transcription quota exceeded (daily minutes)"
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"WebSocket send_json quota error failed: error={e}")
                 try:
                     await websocket.close(code=4003, reason="quota_exceeded")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"WebSocket close (quota case) failed: error={e}")
         finally:
             await finish_stream(user_id_for_usage)
         
@@ -1430,19 +1439,31 @@ async def websocket_transcribe(
                 finally:
                     try:
                         await websocket.close(code=4003, reason="quota_exceeded")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"WebSocket close after quota exceeded failed: error={e}")
+                        try:
+                            increment_counter("app_warning_events_total", labels={"component": "audio", "event": "ws_close_quota_failed"})
+                        except Exception as m_err:
+                            logger.debug(f"metrics increment failed (audio ws_close_quota_failed): error={m_err}")
             else:
                 # Let inner handler's error payload (if any) be the authoritative one.
                 # Avoid sending a duplicate generic error frame that could race the client.
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Streaming transcription outer handler swallowed error: {e}")
+            try:
+                increment_counter("app_warning_events_total", labels={"component": "audio", "event": "stream_outer_handler_error"})
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (audio stream_outer_handler_error): error={m_err}")
     finally:
         try:
             await websocket.close()
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"WebSocket close failed: error={e}")
+            try:
+                increment_counter("app_warning_events_total", labels={"component": "audio", "event": "ws_close_failed"})
+            except Exception as m_err:
+                logger.debug(f"metrics increment failed (audio ws_close_failed): error={m_err}")
 
 
 @router.get("/stream/status", summary="Check streaming transcription availability")

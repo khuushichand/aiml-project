@@ -301,7 +301,8 @@ async def filter_characters_by_tags(
                 import json
                 try:
                     char_tags = json.loads(char_tags)
-                except:
+                except Exception as e:
+                    logger.debug(f"Failed to decode character tags JSON; skipping tags. error={e}")
                     char_tags = []
             
             if not char_tags:

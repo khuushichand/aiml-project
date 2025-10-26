@@ -312,8 +312,8 @@ def transcribe_with_parakeet_mlx(
             # Clean up temp file
             try:
                 os.remove(temp_audio_path)
-            except:
-                pass
+            except Exception as rm_err:
+                logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
         else:
             # Shouldn't happen, but handle gracefully
             return "[Error: Invalid audio data format]"
@@ -429,8 +429,8 @@ def unload_parakeet_mlx_model():
             try:
                 import mlx.core as mx
                 mx.metal.clear_cache()
-            except:
-                pass
+            except Exception as cache_err:
+                logging.debug(f"Failed to clear MLX cache: error={cache_err}")
             
             # Force garbage collection
             import gc

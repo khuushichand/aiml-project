@@ -208,7 +208,8 @@ class PIIDetector:
                         digit -= 9
                 checksum += digit
             return (checksum + digits[-1]) % 10 == 0
-        except:
+        except Exception as e:
+            logger.debug(f"Luhn checksum validation failed: value={card_number}, error={e}")
             return False
     
     def _get_confidence(self, pii_type: PIIType, text: str) -> float:
