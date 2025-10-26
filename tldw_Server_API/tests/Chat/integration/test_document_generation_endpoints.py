@@ -2,7 +2,7 @@ import datetime
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
-from tldw_Server_API.tests.Chat.conftest import get_auth_headers
+from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
 
 pytestmark = pytest.mark.usefixtures("setup_dependencies")
 

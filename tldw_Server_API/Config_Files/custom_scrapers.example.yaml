@@ -1,0 +1,19 @@
+domains:
+  medium.com:
+    backend: curl
+    handler: tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html
+    ua_profile: chrome_120_win
+    impersonate: chrome120
+    extra_headers:
+      Referer: https://www.google.com
+    respect_robots: true
+
+  "*.substack.com":
+    backend: curl
+    handler: tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html
+    ua_profile: chrome_120_win
+    impersonate: chrome120
+    url_patterns:
+      - ".*\\?output=1$"
+    respect_robots: true
+

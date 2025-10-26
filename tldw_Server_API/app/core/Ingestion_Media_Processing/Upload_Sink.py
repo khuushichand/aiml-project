@@ -81,13 +81,18 @@ CODE_FILE_EXTENSIONS: Set[str] = {
     '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js',
 }
 CODE_MIME_TYPES: Set[str] = {
-    'text/plain', 'text/x-python', 'application/x-python-code', 'text/x-c', 'text/x-c++src',
-    'text/javascript', 'application/javascript', 'application/x-javascript',
-    'application/ecmascript', 'text/ecmascript',
-    'text/x-java-source',
-    'text/x-kotlin', 'text/x-rust', 'text/x-go', 'text/x-ruby', 'text/x-php',
-    'text/x-perl', 'text/x-sql', 'text/yaml', 'application/x-yaml',
-    'application/x-toml', 'text/markdown', 'text/x-typescript',
+    'text/plain', 'text/markdown',
+    # Python
+    'text/x-python', 'application/x-python-code',
+    # C/C++ common variants
+    'text/x-c', 'text/x-csrc', 'text/x-chdr',
+    'text/x-c++', 'text/x-cpp', 'text/x-c++src', 'text/x-c++hdr',
+    # JavaScript/TypeScript
+    'text/javascript', 'application/javascript', 'application/x-javascript', 'application/ecmascript', 'text/ecmascript',
+    'text/x-typescript',
+    # Other languages
+    'text/x-java-source', 'text/x-kotlin', 'text/x-rust', 'text/x-go', 'text/x-ruby', 'text/x-php',
+    'text/x-perl', 'text/x-sql', 'text/yaml', 'application/x-yaml', 'application/x-toml',
 }
 
 # Default configurations for common media types

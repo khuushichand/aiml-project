@@ -126,6 +126,58 @@ class ConflictError(DatabaseError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+class _RowAdapter:
+    """Row adapter that supports both key and index access.
+
+    Wraps an underlying dict row and optional description metadata to preserve
+    column order for index-based access (row[0]). Behaves like a mapping so
+    dict(row) works and existing code expecting dict-like rows continues to work.
+    """
+
+    def __init__(self, row_dict: Dict[str, Any], description: Optional[List[tuple]] = None):
+        self._data = row_dict
+        # Build ordered column list from description when available
+        self._cols = [d[0] for d in (description or []) if d and len(d) > 0]
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            # Index-based access: prefer description ordering; fallback to dict order
+            if self._cols and 0 <= key < len(self._cols):
+                col = self._cols[key]
+                return self._data.get(col)
+            try:
+                return list(self._data.values())[key]
+            except Exception as e:
+                raise KeyError(key) from e
+        # String key access
+        return self._data[key]
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+    def __iter__(self):
+        # Iterate over keys so dict(row) behaves as expected
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def __repr__(self):
+        return f"RowAdapter({self._data!r})"
+
+
 class BackendCursorAdapter:
     """Adapter exposing QueryResult via a sqlite3-like cursor interface."""
 
@@ -136,15 +188,18 @@ class BackendCursorAdapter:
         self.lastrowid = result.lastrowid
         self.description = result.description
 
+    def _wrap(self, row: Dict[str, Any]):
+        return _RowAdapter(row, self.description)
+
     def fetchall(self):
-        return list(self._result.rows)
+        return [self._wrap(r) for r in self._result.rows]
 
     def fetchone(self):
         if self._index >= len(self._result.rows):
             return None
         row = self._result.rows[self._index]
         self._index += 1
-        return row
+        return self._wrap(row)
 
     def fetchmany(self, size: int | None = None):
         if size is None or size <= 0:
@@ -152,10 +207,10 @@ class BackendCursorAdapter:
         end = min(self._index + size, len(self._result.rows))
         rows = self._result.rows[self._index:end]
         self._index = end
-        return list(rows)
+        return [self._wrap(r) for r in rows]
 
     def __iter__(self):
-        return iter(self._result.rows)
+        return iter(self.fetchall())
 
     def close(self):
         self._result = QueryResult(rows=[], rowcount=0)
@@ -685,7 +740,8 @@ class MediaDatabase:
         self._persistent_conn = None
         # For SQLite in-memory databases, maintain a persistent connection so state persists
         if self.backend_type == BackendType.SQLITE and self.is_memory_db:
-            pc = sqlite3.connect(self.db_path_str, check_same_thread=False)
+            # Use autocommit for consistency with pooled connections
+            pc = sqlite3.connect(self.db_path_str, check_same_thread=False, isolation_level=None)
             try:
                 pc.row_factory = sqlite3.Row
                 pc.execute("PRAGMA foreign_keys = ON")
@@ -1035,8 +1091,12 @@ class MediaDatabase:
                     upper = prepared_query.strip().upper()
                     is_select = upper.startswith("SELECT")
                     has_returning = " RETURNING " in upper
-                    if commit:
-                        eph.commit()
+                    # Auto-commit DML/DDL when using ephemeral connection
+                    if commit or (not is_select and not has_returning):
+                        try:
+                            eph.commit()
+                        except Exception:
+                            pass
                     rows = []
                     if is_select or has_returning:
                         rows = [dict(r) for r in cur.fetchall()]
@@ -1140,8 +1200,11 @@ class MediaDatabase:
                     eph.row_factory = sqlite3.Row
                     cur = eph.cursor()
                     cur.executemany(prepared_query, prepared_params_list)
-                    if commit:
+                    # executemany implies DML; commit when using ephemeral connection
+                    try:
                         eph.commit()
+                    except Exception:
+                        pass
                     result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                     cur.close()
                     eph.close()
@@ -1265,39 +1328,50 @@ class MediaDatabase:
         # no-op: connection will be set by backend/transaction logic below
 
         if self.backend_type == BackendType.SQLITE:
-            # Dedicated connection for this transaction
-            conn = self._persistent_conn or self.backend.connect()
-            try:
-                conn.row_factory = sqlite3.Row
-            except Exception:
-                pass
-            try:
-                conn.execute("PRAGMA foreign_keys = ON")
-                conn.execute("PRAGMA busy_timeout = 10000")
-            except sqlite3.Error:
-                pass
-
-            try:
-                conn.execute("BEGIN")
-                self._txn_conn = conn
-                logging.debug("Started SQLite transaction.")
-                yield conn
-                conn.commit()
-                logging.debug("Committed SQLite transaction.")
-            except Exception as e:
-                logging.error("SQLite transaction failed, rolling back: %s", e)
+            # Nest-aware transaction handling for SQLite
+            outermost = self._txn_conn is None
+            if outermost:
+                # Dedicated connection for this transaction
+                conn = self._persistent_conn or self.backend.connect()
                 try:
-                    conn.rollback()
+                    conn.row_factory = sqlite3.Row
+                except Exception:
+                    pass
+                try:
+                    conn.execute("PRAGMA foreign_keys = ON")
+                    conn.execute("PRAGMA busy_timeout = 10000")
                 except sqlite3.Error:
                     pass
+            else:
+                conn = self._txn_conn
+
+            self._tx_depth += 1
+            try:
+                if outermost:
+                    conn.execute("BEGIN")
+                    self._txn_conn = conn
+                    logging.debug("Started SQLite transaction.")
+                yield conn
+                if outermost:
+                    conn.commit()
+                    logging.debug("Committed SQLite transaction.")
+            except Exception as e:
+                logging.error("SQLite transaction failed, rolling back: %s", e)
+                if outermost:
+                    try:
+                        conn.rollback()
+                    except sqlite3.Error:
+                        pass
                 raise
             finally:
-                self._txn_conn = None
-                if self._persistent_conn is None:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                self._tx_depth -= 1
+                if outermost:
+                    self._txn_conn = None
+                    if self._persistent_conn is None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
             return
 
         # PostgreSQL and others: reuse a single connection for nested transactions
@@ -3510,7 +3584,7 @@ class MediaDatabase:
         except Exception as e:
             logging.error(f"Metadata search failed: {e}", exc_info=True)
             raise DatabaseError(f"Failed metadata search: {e}")
-    def add_keyword(self, keyword: str) -> Tuple[Optional[int], Optional[str]]:
+    def add_keyword(self, keyword: str, conn: Optional[Any] = None) -> Tuple[Optional[int], Optional[str]]:
         """
         Adds a new keyword or undeletes an existing soft-deleted one.
 
@@ -3537,7 +3611,9 @@ class MediaDatabase:
         client_id = self.client_id
 
         try:
-            with self.transaction() as conn:
+            # If a connection is provided, perform all operations within that
+            # transaction to avoid nested write transactions on separate connections
+            if conn is not None:
                 existing = self._fetchone_with_connection(
                     conn,
                     'SELECT id, uuid, deleted, version FROM Keywords WHERE keyword = ?',
@@ -3608,6 +3684,79 @@ class MediaDatabase:
                     self._log_sync_event(conn, 'Keywords', new_uuid, 'create', new_version, payload_data)
                     self._update_fts_keyword(conn, kw_id, keyword)
                     return kw_id, new_uuid
+            else:
+                # No connection provided: create a transaction-scoped connection
+                with self.transaction() as tx_conn:
+                    existing = self._fetchone_with_connection(
+                        tx_conn,
+                        'SELECT id, uuid, deleted, version FROM Keywords WHERE keyword = ?',
+                        (keyword,),
+                    )
+
+                    if existing:
+                        kw_id = existing['id']
+                        kw_uuid = existing['uuid']
+                        is_deleted = existing['deleted']
+                        current_version = existing['version']
+                        if is_deleted:
+                            new_version = current_version + 1
+                            logger.info(f"Undeleting keyword '{keyword}' (ID: {kw_id}). New ver: {new_version}")
+                            update_cursor = self._execute_with_connection(
+                                tx_conn,
+                                "UPDATE Keywords SET deleted=0, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                                (current_time, new_version, client_id, kw_id, current_version),
+                            )
+                            if update_cursor.rowcount == 0:
+                                raise ConflictError("Keywords", kw_id)
+
+                            # Fetch data for payload AFTER update to get correct last_modified
+                            payload_data = self._fetchone_with_connection(
+                                tx_conn,
+                                "SELECT * FROM Keywords WHERE id=?",
+                                (kw_id,),
+                            ) or {}
+                            self._log_sync_event(tx_conn, 'Keywords', kw_uuid, 'update', new_version, payload_data)
+                            self._update_fts_keyword(tx_conn, kw_id, keyword)
+                            return kw_id, kw_uuid
+                        else:
+                            logger.debug(f"Keyword '{keyword}' already active.")
+                            return kw_id, kw_uuid
+                    else:
+                        new_uuid = self._generate_uuid()
+                        new_version = 1
+                        logger.info(f"Adding new keyword '{keyword}' UUID {new_uuid}")
+                        # Omit 'deleted' to rely on DEFAULT (FALSE) across backends
+                        insert_sql = (
+                            "INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id) "
+                            "VALUES (?, ?, ?, ?, ?)"
+                        )
+                        if self.backend_type == BackendType.POSTGRESQL:
+                            insert_sql += " RETURNING id"
+
+                        insert_cursor = self._execute_with_connection(
+                            tx_conn,
+                            insert_sql,
+                            (keyword, new_uuid, current_time, new_version, client_id),
+                        )
+
+                        if self.backend_type == BackendType.POSTGRESQL:
+                            inserted_row = insert_cursor.fetchone()
+                            kw_id = inserted_row["id"] if inserted_row else None
+                        else:
+                            kw_id = insert_cursor.lastrowid
+
+                        if not kw_id:
+                            raise DatabaseError("Failed to get last row ID for new keyword.")
+
+                        # Fetch data for payload AFTER insert to get correct last_modified
+                        payload_data = self._fetchone_with_connection(
+                            tx_conn,
+                            "SELECT * FROM Keywords WHERE id=?",
+                            (kw_id,),
+                        ) or {}
+                        self._log_sync_event(tx_conn, 'Keywords', new_uuid, 'create', new_version, payload_data)
+                        self._update_fts_keyword(tx_conn, kw_id, keyword)
+                        return kw_id, new_uuid
         except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error in add_keyword for '{keyword}': {e}", exc_info=isinstance(e, (DatabaseError, sqlite3.Error)))
             if isinstance(e, (InputError, ConflictError, DatabaseError)):
@@ -5288,7 +5437,9 @@ class MediaDatabase:
             target_keyword_data = {}
             if valid_keywords:
                 for kw_text in valid_keywords:
-                    kw_id, kw_uuid = self.add_keyword(kw_text)  # Handles create/undelete/logging/FTS for Keywords
+                    # Use per-keyword transaction to match legacy behavior and tests
+                    # When called inside an outer transaction, this nests without starting a new BEGIN
+                    kw_id, kw_uuid = self.add_keyword(kw_text)  # Handles create/undelete/logging/FTS
                     if kw_id and kw_uuid:
                         target_keyword_data[kw_id] = kw_uuid
                     else:

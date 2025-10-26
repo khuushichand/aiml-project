@@ -257,7 +257,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
             if chunk_text.strip():
                 text_chunks.append(chunk_text)
         
-        logger.info(f"Created {len(text_chunks)} structure-aware chunks")
+        logger.debug(f"Created {len(text_chunks)} structure-aware chunks")
         return text_chunks
     
     def _parse_document_structure(self, text: str, **options) -> List[DocumentElement]:

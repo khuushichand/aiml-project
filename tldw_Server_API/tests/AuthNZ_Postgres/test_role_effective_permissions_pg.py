@@ -4,9 +4,6 @@ import uuid as _uuid
 import pytest
 from fastapi.testclient import TestClient
 
-# Load shared Postgres fixtures from AuthNZ test suite
-pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
-
 
 @pytest.mark.integration
 @pytest.mark.asyncio

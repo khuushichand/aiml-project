@@ -10,7 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image as PILImage, PngImagePlugin  # Corrected PIL import
 # Third-party imports
-from hypothesis import given, strategies as st, settings, HealthCheck, assume
+from hypothesis import given, strategies as st, settings, HealthCheck, assume, event, Verbosity, note
+import os
 from unittest.mock import patch, MagicMock  # For unit tests
 from loguru import logger
 
@@ -599,9 +600,19 @@ class TestCharacterAPIIntegration:
 
 # ======================= PROPERTY-BASED TESTS (API) =========================
 
-@settings(deadline=None,
-          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.function_scoped_fixture],
-          max_examples=25)  # Reduced for faster debugging, increase later
+_PBT_DEBUG = os.getenv("PBT_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+_PBT_RELAX = os.getenv("PBT_RELAX", "").lower() in {"1", "true", "yes", "on"}
+
+@settings(
+    deadline=None,
+    suppress_health_check=[
+        HealthCheck.too_slow,
+        HealthCheck.data_too_large,
+        HealthCheck.function_scoped_fixture,
+    ],
+    max_examples=25,
+    verbosity=Verbosity.verbose if _PBT_DEBUG else Verbosity.normal,
+)
 @given(payload=st_character_create_payload_pbt())
 def test_pbt_create_character_api(client: TestClient, test_db: CharactersRAGDB, payload: Dict[str, Any]):
     # Ensure name is unique for each Hypothesis example if db is shared across examples within one PBT run
@@ -611,6 +622,9 @@ def test_pbt_create_character_api(client: TestClient, test_db: CharactersRAGDB, 
     # Avoid creating a character with a name that might already exist from a *previous* PBT example
     # if the DB is not perfectly clean for each example (it is not, for Hypothesis)
     if test_db.get_character_card_by_name(payload["name"]):
+        if _PBT_DEBUG:
+            event("skip:create-collision")
+            note(f"Create collision on name={payload['name']}")
         assume(False)  # Skip this example if name collides from previous example in same PBT run
 
     response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=payload)
@@ -655,10 +669,13 @@ def test_pbt_create_character_api(client: TestClient, test_db: CharactersRAGDB, 
 @settings(
     deadline=None,
     suppress_health_check=[
-        HealthCheck.too_slow, HealthCheck.data_too_large,
-        HealthCheck.function_scoped_fixture, HealthCheck.filter_too_much
+        HealthCheck.too_slow,
+        HealthCheck.data_too_large,
+        HealthCheck.function_scoped_fixture,
+        HealthCheck.filter_too_much,
     ],
-    max_examples=25  # Start with fewer examples
+    max_examples=25,
+    verbosity=Verbosity.verbose if _PBT_DEBUG else Verbosity.normal,
 )
 @given(initial_payload_gen=st_character_create_payload_pbt(), update_payload_diff_gen=st_character_update_payload_pbt())
 def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
@@ -668,9 +685,16 @@ def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
     initial_payload = initial_payload_gen.copy()  # Avoid modifying the generated dict directly
     initial_payload["name"] = f"{initial_payload['name']}_{uuid.uuid4().hex[:8]}"
     if test_db.get_character_card_by_name(initial_payload["name"]):
+        if _PBT_DEBUG:
+            event("skip:init-collision")
+            note(f"Initial collision on name={initial_payload['name']}")
         assume(False)  # Avoid collision for initial creation
 
     create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=initial_payload)
+    if create_response.status_code != 201:
+        if _PBT_DEBUG:
+            event("skip:create-failed")
+            note(f"Create failed: status={create_response.status_code} body={create_response.text}")
     assume(create_response.status_code == 201)  # If creation fails, skip this example
     created_char_data = create_response.json()  # This is CharacterResponse
     char_id = created_char_data["id"]
@@ -683,36 +707,71 @@ def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
     if "name" in update_payload_diff and update_payload_diff["name"] is not None:
         # Ensure new name is valid (non-empty) and unique if it's being changed
         if not str(update_payload_diff["name"]).strip():  # Invalid name (empty or whitespace)
-            assume(False)  # Pydantic should catch this, but we can assume valid generated name here
+            if _PBT_DEBUG:
+                event("skip:update-invalid-name-empty")
+                note(f"Update invalid name: {update_payload_diff['name']!r}")
+            if _PBT_RELAX:
+                # Replace with a minimal valid name
+                update_payload_diff["name"] = "X"
+            else:
+                assume(False)  # Pydantic should catch this, but we can assume valid generated name here
 
         updated_unique_name = f"{update_payload_diff['name']}_{uuid.uuid4().hex[:8]}"
         existing_with_new_name = test_db.get_character_card_by_name(updated_unique_name)
         if existing_with_new_name and existing_with_new_name['id'] != char_id:
-            assume(False)  # Avoid conflict with another existing character
+            if _PBT_DEBUG:
+                event("skip:update-name-collision")
+                note(f"Update name collision on {updated_unique_name}")
+            if _PBT_RELAX:
+                # Force uniqueness by appending more entropy
+                updated_unique_name = f"{updated_unique_name}_{uuid.uuid4().hex[:4]}"
+            else:
+                assume(False)  # Avoid conflict with another existing character
         update_payload_diff["name"] = updated_unique_name
     elif "name" in update_payload_diff and update_payload_diff["name"] is None:
         # Name is a required field in the database - cannot be NULL
         # Skip this test case as it would violate DB constraints
-        assume(False)
+        if _PBT_DEBUG:
+            event("skip:update-name-null")
+            note("Update payload attempted to set name=None")
+        if _PBT_RELAX:
+            update_payload_diff.pop("name", None)
+        else:
+            assume(False)
 
     # Use Pydantic model to see what `exclude_unset=True` would do.
     # This helps determine which fields were *actually* intended for update.
     try:
         pydantic_update_model = CharacterUpdate.model_validate(update_payload_diff)
-    except Exception:  # If Pydantic validation fails for the generated payload
+    except Exception as e:
+        if _PBT_DEBUG:
+            event("skip:update-pydantic-invalid")
+            note(f"Pydantic validation failed: {e} for payload={update_payload_diff}")
         assume(False)  # Skip this example as it's not a valid update payload for the API
         return
 
     payload_sent_to_lib = pydantic_update_model.model_dump(exclude_unset=True)
 
     if not payload_sent_to_lib:  # If all fields were unset or default after Pydantic processing
-        assume(False)  # This update wouldn't change anything, skip.
-        # Note: `st_character_update_payload_pbt` tries to ensure at least one field.
+        if _PBT_DEBUG:
+            event("skip:update-empty-after-validate")
+            note(f"Payload empty after Pydantic processing; original={update_payload_diff}")
+        if _PBT_RELAX:
+            # Inject a harmless change to ensure non-empty update
+            update_payload_diff["description"] = "pbt-relax"
+            pydantic_update_model = CharacterUpdate.model_validate(update_payload_diff)
+            payload_sent_to_lib = pydantic_update_model.model_dump(exclude_unset=True)
+        else:
+            assume(False)  # This update wouldn't change anything, skip.
+            # Note: `st_character_update_payload_pbt` tries to ensure at least one field.
 
     update_response = client.put(f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={current_version}",
                                  json=update_payload_diff)  # Send original generated diff
 
     if update_response.status_code == 422:  # Pydantic validation error from API
+        if _PBT_DEBUG:
+            event("skip:update-422")
+            note(f"Update 422: payload={update_payload_diff}, response={update_response.text}")
         assume(False)  # Generated data was invalid for the model, skip successful assertion part
         return
 

@@ -219,6 +219,10 @@ class TestEmbeddingsIntegration:
     )
     async def test_huggingface_embedding_dimension_override_reduce(self, setup):
         """Request a smaller dimension and verify adjust_dimensions(policy=reduce) and header are applied."""
+        # Explicitly enforce reduce policy to avoid leakage from other tests
+        prev_policy = os.environ.get("EMBEDDINGS_DIMENSION_POLICY")
+        os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "reduce"
+        try:
         async def override_user():
             return setup.test_user
         app.dependency_overrides[get_request_user] = override_user
@@ -239,6 +243,12 @@ class TestEmbeddingsIntegration:
         assert vec.shape[0] == 128
         # API normalizes float output after adjustment
         assert 0.95 < np.linalg.norm(vec) < 1.05
+        finally:
+            # Restore prior policy to prevent cross-test interference
+            if prev_policy is None:
+                os.environ.pop("EMBEDDINGS_DIMENSION_POLICY", None)
+            else:
+                os.environ["EMBEDDINGS_DIMENSION_POLICY"] = prev_policy
     
     @pytest.mark.integration
     @pytest.mark.asyncio

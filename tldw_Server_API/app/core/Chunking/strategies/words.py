@@ -72,7 +72,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         
         logger.debug(f"Chunking {len(tokens)} words with max_size={max_size}, overlap={overlap}")
         chunks = [record['text'] for record in records]
-        logger.info(f"Created {len(chunks)} chunks from {len(tokens)} words")
+        logger.debug(f"Created {len(chunks)} chunks from {len(tokens)} words")
         return chunks
     
     def _tokenize_text(self, text: str) -> List[str]:
@@ -436,5 +436,5 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             )
             results.append(ChunkResult(text=chunk_text, metadata=metadata))
         
-        logger.info(f"Created {len(results)} chunks with metadata from {len(tokens)} words")
+        logger.debug(f"Created {len(results)} chunks with metadata from {len(tokens)} words")
         return results

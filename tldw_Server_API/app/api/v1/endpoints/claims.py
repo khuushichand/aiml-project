@@ -175,7 +175,25 @@ def rebuild_all_media(
                     ")"
                 )
                 rows = query_db.execute_query(sql).fetchall()
-            mids = [int(r[0]) for r in rows]
+            # Support both dict-shaped rows and sequence rows
+            mids: list[int] = []
+            for r in rows:
+                try:
+                    mids.append(int(r["id"]))  # type: ignore[index]
+                except Exception:
+                    try:
+                        mids.append(int(r[0]))  # type: ignore[index]
+                    except Exception:
+                        # Fallback: first value in row mapping/sequence
+                        try:
+                            if isinstance(r, dict):
+                                first_val = next(iter(r.values()))
+                                mids.append(int(first_val))
+                            else:
+                                # Attempt generic indexing
+                                mids.append(int(r[0]))  # type: ignore[index]
+                        except Exception:
+                            continue
             for mid in mids:
                 svc.submit(media_id=mid, db_path=db_path)
             return {"status": "accepted", "enqueued": len(mids), "policy": policy}

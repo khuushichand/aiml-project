@@ -115,7 +115,7 @@ class LRUCache:
     Thread-safe LRU (Least Recently Used) cache implementation.
     """
     
-    def __init__(self, max_size: int = 100):
+    def __init__(self, max_size: int = 100, *, copy_on_access: bool = True):
         """
         Initialize the LRU cache.
         
@@ -127,6 +127,7 @@ class LRUCache:
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+        self.copy_on_access = bool(copy_on_access)
         
     def get(self, key: str) -> Optional[Any]:
         """
@@ -143,9 +144,12 @@ class LRUCache:
                 # Move to end (most recently used)
                 self.cache.move_to_end(key)
                 self.hits += 1
-                try:
-                    return copy.deepcopy(self.cache[key])
-                except Exception:
+                if self.copy_on_access:
+                    try:
+                        return copy.deepcopy(self.cache[key])
+                    except Exception:
+                        return self.cache[key]
+                else:
                     return self.cache[key]
             self.misses += 1
             return None
@@ -162,15 +166,21 @@ class LRUCache:
             if key in self.cache:
                 # Update existing and move to end
                 self.cache.move_to_end(key)
-                try:
-                    self.cache[key] = copy.deepcopy(value)
-                except Exception:
+                if self.copy_on_access:
+                    try:
+                        self.cache[key] = copy.deepcopy(value)
+                    except Exception:
+                        self.cache[key] = value
+                else:
                     self.cache[key] = value
             else:
                 # Add new item
-                try:
-                    self.cache[key] = copy.deepcopy(value)
-                except Exception:
+                if self.copy_on_access:
+                    try:
+                        self.cache[key] = copy.deepcopy(value)
+                    except Exception:
+                        self.cache[key] = value
+                else:
                     self.cache[key] = value
                 # Remove oldest if over capacity
                 if len(self.cache) > self.max_size:
@@ -230,12 +240,18 @@ class Chunker:
         self._register_strategy_factories()
         
         # Cache for processed results - using LRU cache
-        self._cache = LRUCache(max_size=self.config.cache_size) if self.config.enable_cache else None
+        self._cache = (
+            LRUCache(max_size=self.config.cache_size, copy_on_access=getattr(self.config, 'cache_copy_on_access', True))
+            if self.config.enable_cache else None
+        )
         
         # Security logger
         self._security_logger = get_security_logger()
         
-        logger.info(f"Chunker initialized with default method: {self.config.default_method.value}")
+        if getattr(self.config, 'verbose_logging', False):
+            logger.info(f"Chunker initialized with default method: {self.config.default_method.value}")
+        else:
+            logger.debug(f"Chunker initialized with default method: {self.config.default_method.value}")
 
     def _enforce_text_size(self, text: str, *, source: str) -> None:
         """Ensure text respects configured size limits."""
@@ -1410,7 +1426,10 @@ class Chunker:
                 except Exception:
                     pass
             
-            logger.info(f"Created {len(chunks)} chunks using {method} method")
+            if getattr(self.config, 'verbose_logging', False):
+                logger.info(f"Created {len(chunks)} chunks using {method} method")
+            else:
+                logger.debug(f"Created {len(chunks)} chunks using {method} method")
             return chunks
             
         except Exception as e:
@@ -1518,6 +1537,10 @@ class Chunker:
                     item.text = text[start_char:end_char]
                 except Exception:
                     continue
+        if getattr(self.config, 'verbose_logging', False):
+            logger.info(f"Created {len(results)} chunks with metadata using {method} method")
+        else:
+            logger.debug(f"Created {len(results)} chunks with metadata using {method} method")
         return results
     
     def chunk_text_generator(self,

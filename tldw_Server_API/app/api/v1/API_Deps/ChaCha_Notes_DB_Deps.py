@@ -129,6 +129,11 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
     db_file: Optional[Path] = None
     try:
         db_file = DatabasePaths.get_chacha_db_path(user_id)
+        # Extra safety: ensure parent exists even if upstream helpers change
+        try:
+            db_file.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as _mk_e:
+            logger.debug(f"Parent ensure for ChaChaNotes path failed softly: { _mk_e }")
         logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {db_file.parent}")
         return db_file
     except OSError as e:
@@ -243,6 +248,11 @@ async def get_chacha_db_for_user(
         db_path: Optional[Path] = None
         try:
             db_path = _get_chacha_db_path_for_user(user_id)
+            # Defensive: ensure directory exists in the exact resolved path
+            try:
+                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            except Exception as _mk2:
+                logger.debug(f"Secondary ensure for ChaChaNotes parent failed softly: {_mk2}")
             logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
 
             db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(current_user.id))

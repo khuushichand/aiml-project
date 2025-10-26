@@ -9,6 +9,9 @@ from tldw_Server_API.app.core.config import settings
 def test_vector_store_meta_db_concurrent_writes(tmp_path, monkeypatch):
     # Point USER_DB_BASE_DIR to a temp directory
     monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
+    # Ensure settings picks up the new env var (avoid using cached base dir)
+    from tldw_Server_API.app.core.config import clear_config_cache
+    clear_config_cache()
     # settings.get is resolved at runtime; ensure it reflects our env by reading it
     # Settings resolves USER_DB_BASE_DIR at import/init; if already set, this still writes to tmp_path above
 
@@ -37,4 +40,3 @@ def test_vector_store_meta_db_concurrent_writes(tmp_path, monkeypatch):
     stores = meta.list_stores(user_id)
     # We expect at least all the initial inserts to be present
     assert len(stores) >= 10
-

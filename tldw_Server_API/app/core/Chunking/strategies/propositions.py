@@ -100,7 +100,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             chunk_text = self._join_props(window)
             chunks.append(chunk_text)
 
-        logger.info(f"Created {len(chunks)} chunks from {len(propositions)} propositions")
+        logger.debug(f"Created {len(chunks)} chunks from {len(propositions)} propositions")
         return chunks
 
     # --- helpers ---

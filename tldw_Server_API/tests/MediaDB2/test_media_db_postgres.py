@@ -2,8 +2,8 @@ import os
 import urllib.parse
 
 import pytest
-
-pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
+# Import required AuthNZ fixtures directly to make them available to this module
+from tldw_Server_API.tests.AuthNZ.conftest import setup_test_database, clean_database  # noqa: F401
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig

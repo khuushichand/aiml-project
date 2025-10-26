@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import random
+import time
 import re
 import tempfile
 from typing import Any, Dict, List, Union, Optional, Tuple
@@ -53,6 +54,14 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_histogram, log_c
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimiter
+from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
+from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
+    build_browser_headers,
+    pick_ua_profile,
+)
+from tldw_Server_API.app.core.http_client import fetch as http_fetch
+from urllib.robotparser import RobotFileParser
+from pathlib import Path
 
 #
 #######################################################################################################################
@@ -61,6 +70,107 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimi
 
 # FIXME - Add a config file option/check for the user agent
 web_scraping_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+
+def _default_rules_path() -> str:
+    # Resolve project root: .../tldw_Server_API/app/core/Web_Scraping/Article_Extractor_Lib.py -> project root
+    here = Path(__file__).resolve()
+    project_root = here.parents[4]  # tldw_Server_API/ at index 3; repo root at 4
+    return str(project_root / "tldw_Server_API" / "Config_Files" / "custom_scrapers.yaml")
+
+
+def _merge_cookie_list_to_map(custom_cookies: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
+    cookies: Dict[str, str] = {}
+    if not custom_cookies:
+        return cookies
+    for c in custom_cookies:
+        if isinstance(c, dict) and "name" in c and "value" in c:
+            cookies[str(c["name"])] = str(c["value"])
+    return cookies
+
+
+def _robots_url_for(target_url: str) -> str:
+    p = urlparse(target_url)
+    return f"{p.scheme}://{p.netloc}/robots.txt"
+
+
+def _js_required(html: str, headers: Dict[str, Any]) -> bool:
+    """Heuristics to detect pages that require JS rendering.
+
+    Signals fallback to Playwright when:
+    - Contains noscript prompts to enable JavaScript
+    - Shows common interstitials (Cloudflare/CAPTCHA)
+    - HTML very small with many scripts
+    - Meta refresh redirect without content
+    """
+    try:
+        text = html.lower()
+        if not text:
+            return True
+        # Common phrases
+        js_phrases = (
+            "enable javascript",
+            "please enable javascript",
+            "requires javascript",
+            "enable your javascript",
+        )
+        if any(p in text for p in js_phrases):
+            return True
+        # Cloudflare / anti-bot hints
+        if "cf-chl-bypass" in text or "cloudflare" in text and "checking your browser" in text:
+            return True
+        # Meta refresh
+        if "http-equiv=\"refresh\"" in text or "http-equiv='refresh'" in text:
+            # if no body text present
+            if len(text) < 1200:
+                return True
+        # Script density heuristic
+        script_count = text.count("<script")
+        visible_len = len(BeautifulSoup(html, "html.parser").get_text(strip=True))
+        if script_count >= 20 and visible_len < 1200:
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def is_allowed_by_robots(url: str, user_agent: str, *, backend: str = "httpx", timeout: float = 5.0) -> bool:
+    """Check robots.txt for allow/deny. Fails open (allow) if robots not reachable.
+
+    Enforces egress policy via http_client.fetch().
+    """
+    try:
+        robots_url = _robots_url_for(url)
+        resp = http_fetch(robots_url, method="GET", backend=backend, timeout=timeout, allow_redirects=True)
+        if resp["status"] >= 400 or not resp["text"]:
+            return True  # treat missing/unreadable robots as allow
+        rp = RobotFileParser()
+        rp.parse(resp["text"].splitlines())
+        return bool(rp.can_fetch(user_agent, url))
+    except Exception:
+        # On any error, allow by default to avoid false negatives
+        return True
+
+
+async def is_allowed_by_robots_async(url: str, user_agent: str, *, backend: str = "httpx", timeout: float = 5.0) -> bool:
+    """Async robots.txt check using asyncio.to_thread for network fetch."""
+    try:
+        robots_url = _robots_url_for(url)
+        resp = await asyncio.to_thread(
+            http_fetch,
+            robots_url,
+            method="GET",
+            backend=backend,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        if resp["status"] >= 400 or not resp["text"]:
+            return True
+        rp = RobotFileParser()
+        rp.parse(resp["text"].splitlines())
+        return bool(rp.can_fetch(user_agent, url))
+    except Exception:
+        return True
 
 
 DEFAULT_BOILERPLATE_PATTERNS = [
@@ -218,6 +328,95 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             "extraction_successful": False,
             "error": f"Egress policy evaluation failed: {_e}"
         }
+    # Resolve scraper plan via router (configurable via YAML)
+    try:
+        rules_path = _default_rules_path()
+        rules = ScraperRouter.load_rules_from_yaml(rules_path)
+        router = ScraperRouter(rules, ua_mode="fixed")
+        plan = router.resolve(url)
+    except Exception:
+        # Safe default plan
+        class _P:  # minimal stand-in
+            backend = "auto"
+            ua_profile = pick_ua_profile("fixed")
+            impersonate = None
+            extra_headers = {}
+            cookies = {}
+            respect_robots = True
+
+        plan = _P()  # type: ignore
+
+    # Build effective headers from UA profile + extras
+    ua_headers = build_browser_headers(plan.ua_profile, accept_lang="en-US,en;q=0.9")
+    if isinstance(plan.extra_headers, dict) and plan.extra_headers:
+        ua_headers.update({str(k): str(v) for k, v in plan.extra_headers.items()})
+
+    # robots.txt enforcement (fail open if error)
+    effective_ua = ua_headers.get("User-Agent", web_scraping_user_agent)
+    if getattr(plan, "respect_robots", True):
+        if not await is_allowed_by_robots_async(url, effective_ua, backend="httpx"):
+            logging.warning("Robots policy disallows fetching this URL; skipping fetch")
+            try:
+                parsed = urlparse(url)
+                log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+            except Exception:
+                log_counter("scrape_blocked_by_robots_total", labels={})
+            return {
+                "url": url,
+                "title": "N/A",
+                "author": "N/A",
+                "date": "N/A",
+                "content": "",
+                "extraction_successful": False,
+                "error": "Blocked by robots policy",
+            }
+
+    # First try lightweight HTTP path (curl/httpx) before Playwright
+    try:
+        cookies_map = _merge_cookie_list_to_map(custom_cookies)
+        # Combine with plan cookies (plan cookies win)
+        if getattr(plan, "cookies", {}):
+            cookies_map.update({str(k): str(v) for k, v in plan.cookies.items()})
+
+        t0 = time.time()
+        resp = await asyncio.to_thread(
+            http_fetch,
+            url,
+            method="GET",
+            headers=ua_headers,
+            cookies=cookies_map or None,
+            backend=getattr(plan, "backend", "auto"),
+            impersonate=getattr(plan, "impersonate", None),
+            http2=True,
+            timeout=15.0,
+            allow_redirects=True,
+            proxies=getattr(plan, "proxies", None) or None,
+        )
+        elapsed = max(0.0, time.time() - t0)
+        log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": resp.get("backend", "unknown")})
+
+        if int(resp["status"]) < 400 and resp["text"]:
+            # JS-required detection heuristic: decide earlier fallback
+            if _js_required(resp["text"], resp.get("headers", {})):
+                log_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
+                raise RuntimeError("js_required_detected")
+            article_data = extract_article_data_from_html(resp["text"], url)
+            if article_data.get("extraction_successful"):
+                article_data["content"] = convert_html_to_markdown(article_data["content"])
+                logging.info(f"Article content length: {len(article_data['content'])}")
+                log_histogram("article_content_length", len(article_data["content"]), labels={"url": url})
+                log_counter("scrape_fetch_total", labels={"backend": resp.get("backend", "unknown"), "outcome": "success"})
+                return article_data
+        # No extractable content
+        log_counter("scrape_fetch_total", labels={"backend": resp.get("backend", "unknown"), "outcome": "no_extract"})
+    except Exception as _e:
+        logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
+        log_counter("scrape_fetch_total", labels={"backend": getattr(plan, "backend", "auto"), "outcome": "error"})
+        log_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
+    else:
+        # Falling back due to no extractable content
+        log_counter("scrape_playwright_fallback_total", labels={"reason": "no_extract"})
+
     async def fetch_html(url: str) -> str:
         # Load and log the configuration
         loaded_config = load_and_log_configs()
@@ -246,7 +445,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(headless=True)
                     context = await browser.new_context(
-                        user_agent=web_scraping_user_agent,
+                        user_agent=effective_ua,
                         # Simulating a normal browser window size for better compatibility
                         viewport={"width": 1280, "height": 720},
                     )

@@ -196,15 +196,12 @@ def merge_api_keys_for_provider(
     raw_dynamic = dynamic_keys.get(provider)
     raw_module = module_keys.get(provider) if module_keys else None
 
-    # Prefer dynamic/runtime configuration when present; fall back to module-level
-    # overrides (used heavily in tests) when runtime data is absent or intentionally blank.
-    if _normalize(raw_dynamic) is not None:
+    # Prefer dynamic/runtime keys (env/config) over module-level defaults.
+    # If dynamic is explicitly empty/None, fall back to module-level value.
+    if raw_dynamic is not None and str(raw_dynamic).strip() != "":
         raw_val = raw_dynamic
-    elif _normalize(raw_module) is not None:
-        raw_val = raw_module
     else:
-        # Preserve whichever raw value was set (even empty) so upstream validation can react.
-        raw_val = raw_dynamic if raw_dynamic is not None else raw_module
+        raw_val = raw_module
 
     norm_val = _normalize(raw_val)
 

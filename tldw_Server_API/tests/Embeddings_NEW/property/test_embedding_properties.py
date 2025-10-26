@@ -308,49 +308,30 @@ class TestChromaDBStorageProperties:
         query_embedding=valid_embedding_vector(dimension=64),
         stored_embeddings=st.lists(valid_embedding_vector(dimension=64), min_size=3, max_size=10)
     )
-    def test_similarity_search_ordering(self, query_embedding, stored_embeddings):
+    def test_similarity_search_ordering(self, query_embedding, stored_embeddings, chroma_client):
         """Property: Similarity search returns results in order of similarity."""
-        stub_before = os.environ.get("CHROMADB_FORCE_STUB")
-        tenant_before = os.environ.get("CHROMADB_DEFAULT_TENANT")
-        os.environ["CHROMADB_FORCE_STUB"] = "1"
-        os.environ["CHROMADB_DEFAULT_TENANT"] = "default_tenant"
-        client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
-        try:
-            client.reset()
-        except Exception:
-            pass
-        try:
-            collection_name = f"test_similarity_{uuid4().hex[:8]}"
-            collection = client.create_collection(collection_name)
+        collection_name = f"test_similarity_{uuid4().hex[:8]}"
+        collection = chroma_client.create_collection(collection_name)
 
-            ids = [f"doc_{i}" for i in range(len(stored_embeddings))]
-            docs = [f"Document {i}" for i in range(len(stored_embeddings))]
+        ids = [f"doc_{i}" for i in range(len(stored_embeddings))]
+        docs = [f"Document {i}" for i in range(len(stored_embeddings))]
 
-            collection.add(
-                embeddings=stored_embeddings,
-                documents=docs,
-                ids=ids
-            )
+        collection.add(
+            embeddings=stored_embeddings,
+            documents=docs,
+            ids=ids
+        )
 
-            # Search
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=min(5, len(stored_embeddings))
-            )
+        # Search
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(5, len(stored_embeddings))
+        )
 
-            if len(results["distances"][0]) > 1:
-                distances = results["distances"][0]
-                # Distances should be in ascending order (most similar first)
-                assert all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
-        finally:
-            if stub_before is None:
-                os.environ.pop("CHROMADB_FORCE_STUB", None)
-            else:
-                os.environ["CHROMADB_FORCE_STUB"] = stub_before
-            if tenant_before is None:
-                os.environ.pop("CHROMADB_DEFAULT_TENANT", None)
-            else:
-                os.environ["CHROMADB_DEFAULT_TENANT"] = tenant_before
+        if len(results["distances"][0]) > 1:
+            distances = results["distances"][0]
+            # Distances should be in ascending order (most similar first)
+            assert all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
             try:
                 if hasattr(client, "close"):
                     client.close()  # type: ignore[attr-defined]

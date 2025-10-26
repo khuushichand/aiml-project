@@ -26,6 +26,29 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 from functools import lru_cache
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
+from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
+    build_browser_headers,
+    pick_ua_profile,
+)
+
+
+def _websearch_browser_headers(
+    *, accept_lang: str = "en-US,en;q=0.5", referer: str = "https://www.google.com/", restrict_encodings_for_requests: bool = True
+):
+    """Build realistic browser headers for web search endpoints.
+
+    Uses centralized UA profiles so providers do not hard-code User-Agent.
+    """
+    profile = pick_ua_profile("fixed")
+    base = build_browser_headers(profile=profile, accept_lang=accept_lang)
+    if restrict_encodings_for_requests:
+        # requests doesn't decode br/zstd by default; restrict to gzip,deflate
+        base["Accept-Encoding"] = "gzip, deflate"
+    base.update({
+        "Referer": referer,
+        "Connection": "keep-alive",
+    })
+    return base
 
 
 @lru_cache(maxsize=1)
@@ -1969,15 +1992,8 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         except Exception as _e:
             raise requests.RequestException(f"Egress policy evaluation failed: {_e}")
 
-        # Mimic browser headers
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.google.com/',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        }
+        # Mimic browser headers via centralized UA builder
+        headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5", restrict_encodings_for_requests=True)
 
         # Add a random delay to mimic human behavior
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
@@ -2117,10 +2133,11 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
 
     # Perform the search request
     try:
-        headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'
-        }
+        headers = {"Content-Type": "application/json"}
+        # Add UA from centralized builder
+        ua_only = build_browser_headers(pick_ua_profile("fixed"))
+        if "User-Agent" in ua_only:
+            headers["User-Agent"] = ua_only["User-Agent"]
 
         response = requests.post(tavily_api_url, headers=headers, data=json.dumps(payload), timeout=15)
         response.raise_for_status()

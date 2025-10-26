@@ -337,11 +337,13 @@ class ChunkerConfig:
                  language: str = 'en',
                  enable_cache: bool = True,
                  cache_size: int = 100,
+                 cache_copy_on_access: bool = True,
                  cache_max_text_length: int = 2_000_000,
                  min_text_length_to_cache: int = 0,
                  max_text_length_to_cache: int = 2_000_000,
                  max_text_size: int = 100_000_000,  # 100MB
                  enable_metrics: bool = True,
+                 verbose_logging: bool = False,
                  # Execution/concurrency knobs (used by AsyncChunker; optional here)
                  max_workers: int = 4,
                  max_concurrent: int = 10):
@@ -394,16 +396,39 @@ class ChunkerConfig:
         self.language = language
         self.enable_cache = enable_cache
         self.cache_size = cache_size
+        self.cache_copy_on_access = bool(cache_copy_on_access)
         self.cache_max_text_length = cache_max_text_length
         # New cache policy thresholds (preferred)
         self.min_text_length_to_cache = min_text_length_to_cache
         self.max_text_length_to_cache = max_text_length_to_cache
         self.max_text_size = max_text_size
         self.enable_metrics = enable_metrics
+        self.verbose_logging = bool(verbose_logging)
         # Execution/concurrency knobs (used by AsyncChunker)
         self.max_workers = max_workers
         self.max_concurrent = max_concurrent
         
+        # Allow config.txt overrides for selected settings (no ENV toggles)
+        try:
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            cp = load_comprehensive_config()
+            if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
+                try:
+                    v = cp.get('Chunking', 'cache_copy_on_access', fallback=None)
+                    if v is not None:
+                        self.cache_copy_on_access = str(v).strip().lower() in {"1","true","yes","on"}
+                except Exception:
+                    pass
+                try:
+                    v = cp.get('Chunking', 'verbose_logging', fallback=None)
+                    if v is not None:
+                        self.verbose_logging = str(v).strip().lower() in {"1","true","yes","on"}
+                except Exception:
+                    pass
+        except Exception:
+            # Config loading is optional here; safe to ignore
+            pass
+
         logger.info(f"ChunkerConfig initialized with method={self.default_method.value if hasattr(self.default_method, 'value') else self.default_method}, "
                    f"max_size={default_max_size}, overlap={default_overlap}")
 

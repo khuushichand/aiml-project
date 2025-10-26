@@ -64,35 +64,73 @@ async def fetch_usage_daily(
         # Normalize
         out: List[Dict[str, Any]] = []
         for r in rows:
-            d = dict(r)
+            # asyncpg.Record supports dict(), sqlite rows don't reliably;
+            # build a name-keyed dict defensively.
+            try:
+                d = dict(r)
+            except Exception:
+                d = {k: r[k] for k in r.keys()} if hasattr(r, "keys") else {}
             if not has_in:
                 d.setdefault("bytes_in_total", None)
             out.append(d)
         return out, int(total or 0), has_in
     # SQLite
-    cur = await db.execute(f"SELECT COUNT(*) FROM usage_daily{where_clause}", params)
-    total_row = await cur.fetchone()
-    total = int(total_row[0] if total_row else 0)
+    # Prefer pool-style helpers when available (e.g., DatabasePool in tests)
+    if hasattr(db, "fetchval"):
+        total = int(
+            (await db.fetchval(f"SELECT COUNT(*) FROM usage_daily{where_clause}", params))
+            or 0
+        )
+    else:
+        cur = await db.execute(f"SELECT COUNT(*) FROM usage_daily{where_clause}", params)
+        total_row = await cur.fetchone()
+        total = int(total_row[0] if total_row else 0)
     has_in = True
     try:
         sql = (
             f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
             f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
         )
-        cur = await db.execute(sql, params + [limit, offset])
-        rows = await cur.fetchall()
+        if hasattr(db, "fetchall"):
+            rows = await db.fetchall(sql, params + [limit, offset])
+        else:
+            cur = await db.execute(sql, params + [limit, offset])
+            rows = await cur.fetchall()
     except Exception:
         has_in = False
         sql = (
             f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
             f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
         )
-        cur = await db.execute(sql, params + [limit, offset])
-        rows = await cur.fetchall()
+        if hasattr(db, "fetchall"):
+            rows = await db.fetchall(sql, params + [limit, offset])
+        else:
+            cur = await db.execute(sql, params + [limit, offset])
+            rows = await cur.fetchall()
     out = []
     for r in rows:
         if hasattr(r, 'keys'):
-            d = dict(r)
+            # sqlite3.Row supports key access but not get(); avoid dict(r)
+            if has_in:
+                d = {
+                    "user_id": r["user_id"],
+                    "day": r["day"],
+                    "requests": r["requests"],
+                    "errors": r["errors"],
+                    "bytes_total": r["bytes_total"],
+                    "bytes_in_total": r.get("bytes_in_total") if hasattr(r, "get") else r["bytes_in_total"],
+                    "latency_avg_ms": r["latency_avg_ms"],
+                }
+            else:
+                d = {
+                    "user_id": r["user_id"],
+                    "day": r["day"],
+                    "requests": r["requests"],
+                    "errors": r["errors"],
+                    "bytes_total": r["bytes_total"],
+                    "bytes_in_total": None,
+                    "latency_avg_ms": r["latency_avg_ms"],
+                }
         else:
             if has_in:
                 d = {"user_id": r[0], "day": r[1], "requests": r[2], "errors": r[3], "bytes_total": r[4], "bytes_in_total": r[5], "latency_avg_ms": r[6]}
@@ -159,16 +197,63 @@ async def fetch_usage_top(
         sql = (
             f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
         )
-        cur = await db.execute(sql, params + [limit])
-        rows = await cur.fetchall()
-        return [{"user_id": r[0], "requests": r[1], "errors": r[2], "bytes_total": r[3], "bytes_in_total": r[4], "latency_avg_ms": r[5]} for r in rows]
+        if hasattr(db, "fetchall"):
+            rows = await db.fetchall(sql, params + [limit])
+        else:
+            cur = await db.execute(sql, params + [limit])
+            rows = await cur.fetchall()
+        out_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            if hasattr(r, "keys"):
+                # sqlite3.Row: use key access, not .get
+                out_rows.append({
+                    "user_id": r["user_id"],
+                    "requests": r["requests"],
+                    "errors": r["errors"],
+                    "bytes_total": r["bytes_total"],
+                    "bytes_in_total": r["bytes_in_total"],
+                    "latency_avg_ms": r["latency_avg_ms"],
+                })
+            else:
+                out_rows.append({
+                    "user_id": r[0],
+                    "requests": r[1],
+                    "errors": r[2],
+                    "bytes_total": r[3],
+                    "bytes_in_total": r[4],
+                    "latency_avg_ms": r[5],
+                })
+        return out_rows
     except Exception:
         sql = (
             f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
         )
-        cur = await db.execute(sql, params + [limit])
-        rows = await cur.fetchall()
-        return [{"user_id": r[0], "requests": r[1], "errors": r[2], "bytes_total": r[3], "bytes_in_total": None, "latency_avg_ms": r[4]} for r in rows]
+        if hasattr(db, "fetchall"):
+            rows = await db.fetchall(sql, params + [limit])
+        else:
+            cur = await db.execute(sql, params + [limit])
+            rows = await cur.fetchall()
+        out_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            if hasattr(r, "keys"):
+                out_rows.append({
+                    "user_id": r["user_id"],
+                    "requests": r["requests"],
+                    "errors": r["errors"],
+                    "bytes_total": r["bytes_total"],
+                    "bytes_in_total": None,
+                    "latency_avg_ms": r["latency_avg_ms"],
+                })
+            else:
+                out_rows.append({
+                    "user_id": r[0],
+                    "requests": r[1],
+                    "errors": r[2],
+                    "bytes_total": r[3],
+                    "bytes_in_total": None,
+                    "latency_avg_ms": r[4],
+                })
+        return out_rows
 
 
 async def export_usage_top_csv_text(db, *, start: Optional[str], end: Optional[str], limit: int, metric: str) -> str:

@@ -97,9 +97,10 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
 @router.get(
     "/health",
     summary="Notes service health",
-    tags=["notes"]
+    tags=["notes"],
+    openapi_extra={"security": []},
 )
-async def notes_health(current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
+async def notes_health() -> Dict[str, Any]:
     """Lightweight health endpoint for the Notes subsystem, scoped to the current user."""
     import os
     user_base: Optional[Path] = None
@@ -118,8 +119,9 @@ async def notes_health(current_user: User = Depends(get_request_user)) -> Dict[s
     }
 
     try:
-        # Resolve per-user base directory and DB path without forcing DB initialization
-        user_base = DatabasePaths.get_user_base_directory(int(current_user.id))
+        # Resolve base directory using configured single-user ID to avoid auth dependency
+        user_id = DatabasePaths.get_single_user_id()
+        user_base = DatabasePaths.get_user_base_directory(user_id)
         chacha_db_path = user_base / DatabasePaths.CHACHA_DB_NAME
 
         exists = user_base.exists()

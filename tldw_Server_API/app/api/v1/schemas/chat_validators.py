@@ -274,18 +274,12 @@ def validate_request_size(request_data: Any) -> bool:
         ValueError: If request is too large
     """
     try:
-        # If it's already a JSON string, try to parse + sanitize structurally;
-        # fall back to conservative regex redaction if parse fails.
+        # If it's already a JSON string, avoid re-serializing: redact via regex only.
         if isinstance(request_data, str):
-            try:
-                obj = json.loads(request_data)
-                sanitized_obj = _sanitize_value_for_size(obj)
-                request_json = json.dumps(sanitized_obj)
-            except Exception:
-                # Regex: replace base64 payload until next quote/space with <redacted>
-                # Pattern: (data:image... ,)<base64>
-                pattern = re.compile(r'(data:image[^,]*,)[^"\s]+')
-                request_json = pattern.sub(r'\1<redacted>', request_data)
+            # Regex: replace base64 payload until next quote/space with <redacted>
+            # Pattern: (data:image... ,)<base64>
+            pattern = re.compile(r'(data:image[^,]*,)[^"\s]+')
+            request_json = pattern.sub(r'\1<redacted>', request_data)
         else:
             # Convert to a serializable dict and sanitize recursively
             if hasattr(request_data, 'model_dump'):

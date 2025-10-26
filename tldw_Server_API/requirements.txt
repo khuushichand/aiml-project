@@ -118,6 +118,9 @@ Requests
 tenacity
 trafilatura
 argon2-cffi==25.1.0
+curl_cffi
+brotli
+zstandard
 
 # OCR (optional)
 # To enable the dots.ocr backend, install per upstream instructions:

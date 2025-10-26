@@ -241,41 +241,54 @@ async def process_code_endpoint(
                             )
                         else:
                             # Structure-aware code chunking via core Chunker with metadata
+                            # On failure, fall back to simple line-based chunking and downgrade status to Warning.
                             from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
                             from dataclasses import asdict
-                            chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
-                            crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
-                            total = len(crs)
-                            chunks = []
-                            for idx, cr in enumerate(crs):
-                                md = asdict(cr.metadata)
-                                # Flatten options into metadata top-level for ease of use
-                                opts = md.pop('options', {}) or {}
-                                md.update(opts)
-                                md.setdefault('chunk_method', 'code')
-                                md.setdefault('language', language)
-                                # Ensure top-level start/end lines exist for convenience
-                                if md.get('start_line') is None or md.get('end_line') is None:
-                                    try:
-                                        blocks = md.get('blocks') or []
-                                        starts = [b.get('start_line') for b in blocks if isinstance(b, dict) and b.get('start_line') is not None]
-                                        ends = [b.get('end_line') for b in blocks if isinstance(b, dict) and b.get('end_line') is not None]
-                                        if starts:
-                                            md['start_line'] = int(min(starts))
-                                        if ends:
-                                            md['end_line'] = int(max(ends))
-                                    except Exception:
-                                        pass
-                                md['chunk_index'] = idx + 1
-                                md['total_chunks'] = total
-                                chunks.append({"text": cr.text, "metadata": md})
+                            try:
+                                chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
+                                crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
+                                total = len(crs)
+                                chunks = []
+                                for idx, cr in enumerate(crs):
+                                    md = asdict(cr.metadata)
+                                    # Flatten options into metadata top-level for ease of use
+                                    opts = md.pop('options', {}) or {}
+                                    md.update(opts)
+                                    md.setdefault('chunk_method', 'code')
+                                    md.setdefault('language', language)
+                                    # Ensure top-level start/end lines exist for convenience
+                                    if md.get('start_line') is None or md.get('end_line') is None:
+                                        try:
+                                            blocks = md.get('blocks') or []
+                                            starts = [b.get('start_line') for b in blocks if isinstance(b, dict) and b.get('start_line') is not None]
+                                            ends = [b.get('end_line') for b in blocks if isinstance(b, dict) and b.get('end_line') is not None]
+                                            if starts:
+                                                md['start_line'] = int(min(starts))
+                                            if ends:
+                                                md['end_line'] = int(max(ends))
+                                        except Exception:
+                                            pass
+                                    md['chunk_index'] = idx + 1
+                                    md['total_chunks'] = total
+                                    chunks.append({"text": cr.text, "metadata": md})
+                                op_status = "Success"
+                                op_warnings = None
+                            except Exception as _code_chunk_err:
+                                # Fallback: simple line-based chunking
+                                chunks = _chunk_code_lines(
+                                    text, form_data.chunk_size, form_data.chunk_overlap, language
+                                )
+                                op_status = "Warning"
+                                op_warnings = [f"Structure-aware code chunker failed; fell back to line chunking: {_code_chunk_err}"]
                     else:
                         chunks = []
+                        op_status = "Success"
+                        op_warnings = None
                     batch["results"].append({
-                        "status": "Success", "input_ref": filename, "processing_source": str(local_path),
+                        "status": op_status, "input_ref": filename, "processing_source": str(local_path),
                         "media_type": "code", "content": text, "metadata": {
                             "language": language, "filename": filename, "lines": text.count('\n') + 1
-                        }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": None,
+                        }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": op_warnings,
                         "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
                     })
                     batch["processed_count"] += 1
@@ -2493,18 +2506,34 @@ async def _save_uploaded_files(
                 # Optionally skip deep archive scanning (e.g., for email containers where
                 # child-level guardrails are handled during processing).
                 archive_exts = {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'}
+                is_pst_ost = file_extension in {'.pst', '.ost'}
+                # When PST/OST are explicitly allowed by the caller (e.g., emails endpoint with accept_pst),
+                # allow them through validation even if MIME is unknown, so the downstream handler can return
+                # the expected feature-flag message and keywords.
+                pst_accepted = normalized_allowed_extensions is not None and ('.pst' in normalized_allowed_extensions or '.ost' in normalized_allowed_extensions)
+
                 if skip_archive_scanning and file_extension in archive_exts:
                     validation_result = validator.validate_file(
                         local_file_path,
                         original_filename=original_filename,
                         media_type_key='archive'
                     )
+                elif is_pst_ost and pst_accepted:
+                    # Relax MIME enforcement: pass an empty allowlist to skip MIME gating; rely on extension
+                    validation_result = validator.validate_file(
+                        local_file_path,
+                        original_filename=original_filename,
+                        media_type_key='email',
+                        allowed_mimetypes_override=set()
+                    )
                 else:
+                    # Prefer contextual media-type override inferred from the filename when available
+                    media_key_override = inferred_media_key or expected_media_type_key
                     validation_result = process_and_validate_file(
                         local_file_path,
                         validator,
                         original_filename=original_filename,
-                        media_type_key_override=expected_media_type_key
+                        media_type_key_override=media_key_override
                     )
             except FileValidationError as validation_err:
                 issues = getattr(validation_err, "issues", None) or [str(validation_err)]

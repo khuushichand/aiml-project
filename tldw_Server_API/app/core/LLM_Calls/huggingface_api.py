@@ -9,7 +9,19 @@ from typing import Dict, List, Optional, Any, Callable
 from pathlib import Path
 import httpx
 from loguru import logger
+from tldw_Server_API.app.core.config import load_and_log_configs
 import json
+
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+async def _async_retry_sleep(delay: float, attempt: int) -> None:
+    if delay > 0:
+        await asyncio.sleep(delay * (attempt + 1))
+
+
+def _is_retryable_status_code(status: Optional[int]) -> bool:
+    return status in _RETRYABLE_STATUS
 
 
 class HuggingFaceAPI:
@@ -25,10 +37,26 @@ class HuggingFaceAPI:
         Args:
             token: Optional HuggingFace API token for private repos
         """
-        self.token = token or os.environ.get("HUGGINGFACE_API_KEY", "")
+        cfg = load_and_log_configs() or {}
+        hf_cfg = cfg.get("huggingface_api", {})
+        # Prefer config.txt, fallback to env if not provided
+        self.token = token or hf_cfg.get("api_key") or os.environ.get("HUGGINGFACE_API_KEY", "")
         self.headers = {}
         if self.token:
             self.headers["Authorization"] = f"Bearer {self.token}"
+        # Retry/timeout settings (config.txt only as requested)
+        try:
+            self.api_retries = int(hf_cfg.get("api_retries", 2))
+        except Exception:
+            self.api_retries = 2
+        try:
+            self.api_retry_delay = float(hf_cfg.get("api_retry_delay", 0.5))
+        except Exception:
+            self.api_retry_delay = 0.5
+        try:
+            self.api_timeout = float(hf_cfg.get("api_timeout", 30.0))
+        except Exception:
+            self.api_timeout = 30.0
     
     async def search_models(
         self, 
@@ -75,18 +103,30 @@ class HuggingFaceAPI:
             params["filter"] = filters
         
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.API_BASE}/models",
-                    params=params,
-                    headers=self.headers,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPError as e:
-                logger.error(f"Error searching models: {e}")
-                return []
+            retries, backoff = self.api_retries, self.api_retry_delay
+            for attempt in range(retries + 1):
+                try:
+                    response = await client.get(
+                        f"{self.API_BASE}/models",
+                        params=params,
+                        headers=self.headers,
+                        timeout=self.api_timeout,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Error searching models: {e}")
+                    return []
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Network error searching models: {e}")
+                    return []
     
     async def get_model_info(self, repo_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -99,17 +139,29 @@ class HuggingFaceAPI:
             Model information dictionary or None if error
         """
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.API_BASE}/models/{repo_id}",
-                    headers=self.headers,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPError as e:
-                logger.error(f"Error getting model info for {repo_id}: {e}")
-                return None
+            retries, backoff = self.api_retries, self.api_retry_delay
+            for attempt in range(retries + 1):
+                try:
+                    response = await client.get(
+                        f"{self.API_BASE}/models/{repo_id}",
+                        headers=self.headers,
+                        timeout=self.api_timeout,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Error getting model info for {repo_id}: {e}")
+                    return None
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Network error getting model info for {repo_id}: {e}")
+                    return None
     
     async def list_model_files(self, repo_id: str, path: str = "") -> List[Dict[str, Any]]:
         """
@@ -123,27 +175,35 @@ class HuggingFaceAPI:
             List of file information dictionaries
         """
         async with httpx.AsyncClient() as client:
-            try:
-                # Use the tree endpoint to get all files
-                response = await client.get(
-                    f"{self.API_BASE}/models/{repo_id}/tree/main",
-                    headers=self.headers,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                files = response.json()
-                
-                # Filter by path if specified
-                if path:
-                    files = [f for f in files if f.get("path", "").startswith(path)]
-                
-                # Filter for GGUF files
-                gguf_files = [f for f in files if f.get("path", "").endswith(".gguf")]
-                
-                return gguf_files
-            except httpx.HTTPError as e:
-                logger.error(f"Error listing files for {repo_id}: {e}")
-                return []
+            retries, backoff = self.api_retries, self.api_retry_delay
+            for attempt in range(retries + 1):
+                try:
+                    # Use the tree endpoint to get all files
+                    response = await client.get(
+                        f"{self.API_BASE}/models/{repo_id}/tree/main",
+                        headers=self.headers,
+                        timeout=self.api_timeout,
+                    )
+                    response.raise_for_status()
+                    files = response.json()
+
+                    if path:
+                        files = [f for f in files if f.get("path", "").startswith(path)]
+                    gguf_files = [f for f in files if f.get("path", "").endswith(".gguf")]
+                    return gguf_files
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Error listing files for {repo_id}: {e}")
+                    return []
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"Network error listing files for {repo_id}: {e}")
+                    return []
     
     async def get_download_url(self, repo_id: str, filename: str, revision: str = "main") -> Optional[str]:
         """
@@ -191,47 +251,78 @@ class HuggingFaceAPI:
         temp_file = destination.with_suffix(".tmp")
         
         async with httpx.AsyncClient() as client:
+            retries, backoff = self.api_retries, self.api_retry_delay
             try:
-                # Get file size first
-                head_response = await client.head(url, headers=self.headers, follow_redirects=True)
-                total_size = int(head_response.headers.get("content-length", 0))
-                
+                # Get file size first (with retries)
+                total_size = 0
+                for attempt in range(retries + 1):
+                    try:
+                        head_response = await client.head(
+                            url, headers=self.headers, follow_redirects=True, timeout=self.api_timeout
+                        )
+                        head_response.raise_for_status()
+                        total_size = int(head_response.headers.get("content-length", 0))
+                        break
+                    except httpx.HTTPStatusError as e:
+                        sc = getattr(e.response, "status_code", None)
+                        if _is_retryable_status_code(sc) and attempt < retries:
+                            await _async_retry_sleep(backoff, attempt)
+                            continue
+                        logger.error(f"HEAD failed for {filename}: {e}")
+                        return False
+                    except httpx.RequestError as e:
+                        if attempt < retries:
+                            await _async_retry_sleep(backoff, attempt)
+                            continue
+                        logger.error(f"HEAD network error for {filename}: {e}")
+                        return False
+
                 # Check if file already exists and has the right size
-                if destination.exists() and destination.stat().st_size == total_size:
+                if destination.exists() and total_size > 0 and destination.stat().st_size == total_size:
                     logger.info(f"File {filename} already exists with correct size, skipping download")
                     return True
-                
-                # Download with progress
-                downloaded = 0
-                
-                async with client.stream("GET", url, headers=self.headers, follow_redirects=True) as response:
-                    response.raise_for_status()
-                    
-                    with open(temp_file, "wb") as f:
-                        async for chunk in response.aiter_bytes(chunk_size):
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            
-                            if progress_callback:
-                                progress_callback(downloaded, total_size)
-                
-                # Move temp file to final destination
-                temp_file.rename(destination)
-                logger.info(f"Successfully downloaded {filename} to {destination}")
-                return True
-                
-            except httpx.HTTPError as e:
-                logger.error(f"Error downloading {filename}: {e}")
-                # Clean up temp file if exists
-                if temp_file.exists():
-                    temp_file.unlink()
-                return False
-            except Exception as e:
-                logger.error(f"Unexpected error downloading {filename}: {e}")
-                if temp_file.exists():
-                    temp_file.unlink()
-                return False
-    
+
+                # Download with progress (with retries for connection setup)
+                for attempt in range(retries + 1):
+                    downloaded = 0
+                    try:
+                        async with client.stream(
+                            "GET", url, headers=self.headers, follow_redirects=True, timeout=self.api_timeout
+                        ) as response:
+                            response.raise_for_status()
+                            with open(temp_file, "wb") as f:
+                                async for chunk in response.aiter_bytes(chunk_size):
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                                    if progress_callback:
+                                        progress_callback(downloaded, total_size)
+                        # Move temp file to final destination
+                        temp_file.rename(destination)
+                        logger.info(f"Successfully downloaded {filename} to {destination}")
+                        return True
+                    except httpx.HTTPStatusError as e:
+                        sc = getattr(e.response, "status_code", None)
+                        if _is_retryable_status_code(sc) and attempt < retries:
+                            await _async_retry_sleep(backoff, attempt)
+                            continue
+                        logger.error(f"Error downloading {filename}: {e}")
+                        if temp_file.exists():
+                            temp_file.unlink()
+                        return False
+                    except httpx.RequestError as e:
+                        if attempt < retries:
+                            await _async_retry_sleep(backoff, attempt)
+                            continue
+                        logger.error(f"Network error downloading {filename}: {e}")
+                        if temp_file.exists():
+                            temp_file.unlink()
+                        return False
+                    except Exception as e:
+                        logger.error(f"Unexpected error downloading {filename}: {e}")
+                        if temp_file.exists():
+                            temp_file.unlink()
+                        return False
+            
     async def get_model_readme(self, repo_id: str) -> Optional[str]:
         """
         Get the README content for a model.
@@ -245,18 +336,42 @@ class HuggingFaceAPI:
         url = f"{self.BASE_URL}/{repo_id}/raw/main/README.md"
         
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=self.headers, timeout=30.0)
-                response.raise_for_status()
-                return response.text
-            except httpx.HTTPError:
-                # Try without .md extension
+            retries, backoff = 2, 0.5
+            # Try README.md first
+            for attempt in range(retries + 1):
                 try:
-                    url = f"{self.BASE_URL}/{repo_id}/raw/main/README"
                     response = await client.get(url, headers=self.headers, timeout=30.0)
                     response.raise_for_status()
                     return response.text
-                except httpx.HTTPError as e:
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    break
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    break
+            # Fallback to README (no extension)
+            alt = f"{self.BASE_URL}/{repo_id}/raw/main/README"
+            for attempt in range(retries + 1):
+                try:
+                    response = await client.get(alt, headers=self.headers, timeout=30.0)
+                    response.raise_for_status()
+                    return response.text
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.debug(f"No README found for {repo_id}: {e}")
+                    return None
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
                     logger.debug(f"No README found for {repo_id}: {e}")
                     return None
     
@@ -273,13 +388,25 @@ class HuggingFaceAPI:
         url = f"{self.BASE_URL}/{repo_id}/raw/main/config.json"
         
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=self.headers, timeout=30.0)
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPError as e:
-                logger.debug(f"No config.json found for {repo_id}: {e}")
-                return None
+            retries, backoff = 2, 0.5
+            for attempt in range(retries + 1):
+                try:
+                    response = await client.get(url, headers=self.headers, timeout=30.0)
+                    response.raise_for_status()
+                    return response.json()
+                except httpx.HTTPStatusError as e:
+                    sc = getattr(e.response, "status_code", None)
+                    if _is_retryable_status_code(sc) and attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.debug(f"No config.json found for {repo_id}: {e}")
+                    return None
+                except httpx.RequestError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.debug(f"No config.json found for {repo_id}: {e}")
+                    return None
     
     async def search_gguf_models(
         self,
@@ -406,12 +533,18 @@ async def download_gguf_model(
     
     destination = destination_dir / model_file
     
+    last_pct = {"v": -10.0}
+
     def progress_callback(downloaded: int, total: int):
         if show_progress and total > 0:
             percent = (downloaded / total) * 100
-            mb_downloaded = downloaded / (1024 * 1024)
-            mb_total = total / (1024 * 1024)
-            print(f"\rDownloading: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end="")
+            if percent - last_pct["v"] >= 10.0 or downloaded >= total:
+                last_pct["v"] = percent
+                mb_downloaded = downloaded / (1024 * 1024)
+                mb_total = total / (1024 * 1024)
+                logger.info(
+                    f"Downloading {model_file}: {percent:.0f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)"
+                )
     
     success = await api.download_file(
         repo_id=repo_id,
@@ -419,8 +552,5 @@ async def download_gguf_model(
         destination=destination,
         progress_callback=progress_callback if show_progress else None
     )
-    
-    if show_progress:
-        print()  # New line after progress
     
     return success

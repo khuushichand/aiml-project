@@ -346,7 +346,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 logger.warning(f"Failed to decode chunk at position {i}: {e}")
                 continue
         
-        logger.info(f"Created {len(chunks)} token-based chunks")
+        logger.debug(f"Created {len(chunks)} token-based chunks")
         return chunks
     
     def _chunk_with_fallback(self, 
@@ -560,7 +560,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             )
             results.append(ChunkResult(text=chunk_text, metadata=md))
 
-        logger.info(f"Created {len(results)} token-based chunks with metadata")
+        logger.debug(f"Created {len(results)} token-based chunks with metadata")
         return results
 
     # ------------------------ helpers for offsets ------------------------

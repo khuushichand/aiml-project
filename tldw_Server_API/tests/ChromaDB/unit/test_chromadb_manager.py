@@ -104,9 +104,14 @@ class TestCollectionManagement:
         collection = chromadb_manager.get_or_create_collection(collection_name)
         assert collection == mock_collection
     
+    @pytest.mark.legacy_skip
+    @pytest.mark.xfail(strict=False, reason="Collection name validation not implemented in current API. TODO(#chroma-collection-name-validation)")
     def test_get_or_create_collection_with_invalid_name(self, chromadb_manager):
-        """Name sanitation not enforced in current API; skipping."""
-        pytest.skip("Collection name validation not implemented in current API")
+        """
+        TODO(#chroma-collection-name-validation): Implement name sanitation in API then convert to a real test.
+        """
+        # This test is intentionally marked legacy_skip/xfail; it targets behavior not yet implemented.
+        pass
     
     def test_reset_collection(self, chromadb_manager, mock_chroma_client):
         """Test resetting a collection."""
@@ -499,7 +504,8 @@ class TestContentProcessing:
 
 
 @pytest.mark.unit
-@pytest.mark.skip(reason="Tests target internal helpers not present in current API")
+@pytest.mark.legacy_skip
+@pytest.mark.xfail(strict=False, reason="Tests target internal helpers not present in current API. TODO(#chroma-security-internals)")
 class TestSecurityValidation:
     """Test security and input validation."""
     
@@ -581,7 +587,8 @@ class TestSecurityValidation:
 
 
 @pytest.mark.unit
-@pytest.mark.skip(reason="Connection retry internals not exposed in current API")
+@pytest.mark.legacy_skip
+@pytest.mark.xfail(strict=False, reason="Connection retry internals not exposed in current API. TODO(#chroma-connection-retry)")
 class TestErrorHandlingAndRecovery:
     """Test error handling and recovery mechanisms."""
     
@@ -643,7 +650,8 @@ class TestErrorHandlingAndRecovery:
 
 
 @pytest.mark.unit
-@pytest.mark.skip(reason="Resource limit helpers not implemented in current API")
+@pytest.mark.legacy_skip
+@pytest.mark.xfail(strict=False, reason="Resource limit helpers not implemented in current API. TODO(#chroma-resource-limits)")
 class TestResourceManagement:
     """Test resource management and limits."""
     
@@ -712,7 +720,8 @@ class TestResourceManagement:
 
 
 @pytest.mark.unit
-@pytest.mark.skip(reason="Audit logger class not used in current API; events handled differently")
+@pytest.mark.legacy_skip
+@pytest.mark.xfail(strict=False, reason="Audit logger not used in current API; events handled differently. TODO(#chroma-audit-integration)")
 class TestAuditingAndLogging:
     """Test audit logging functionality."""
     

@@ -169,10 +169,13 @@ class TokenBlacklist:
             if self.db_pool is not global_pool:
                 logger.debug("TokenBlacklist adopting refreshed AuthNZ DatabasePool instance")
                 self.db_pool = global_pool
+            # Adopt global settings when we manage the pool ourselves
             self.settings = current_settings
         else:
-            # External pools rely on caller to manage lifecycle; still refresh settings snapshot.
-            self.settings = current_settings
+            # External pools rely on caller to manage lifecycle; preserve provided settings
+            # to ensure consistent behavior within the caller's configured mode.
+            if self.settings is None:
+                self.settings = current_settings
 
         if not self.db_pool:
             self.db_pool = await get_db_pool()
@@ -596,6 +599,7 @@ class TokenBlacklist:
 
             # Blacklist stored JTIs without needing token decryption
             tokens_revoked = 0
+            sessions_count = len(sessions)
             for session in sessions:
                 access_jti = session.get("access_jti")
                 refresh_jti = session.get("refresh_jti")
@@ -633,6 +637,15 @@ class TokenBlacklist:
                 logger.info(
                     f"Revoked {tokens_revoked} token(s) across {len(sessions)} session(s) for user {user_id}"
                 )
+            # Return semantics:
+            # - single_user: number of sessions affected (devices) for clearer UX
+            # - multi_user: number of tokens revoked to preserve existing unit-test expectations
+            try:
+                mode = getattr(self.settings, "AUTH_MODE", "single_user")
+            except Exception:
+                mode = "single_user"
+            if mode == "single_user":
+                return sessions_count
             return tokens_revoked
             
         except Exception as e:

@@ -46,3 +46,35 @@ def client_user_only(client_with_single_user):
     """Shorthand fixture that returns only the TestClient from client_with_single_user."""
     client, _ = client_with_single_user
     return client
+
+
+# Global session teardown to prevent test-run hangs from lingering executors/threads
+@pytest.fixture(scope="session", autouse=True)
+def _shutdown_executors_and_evaluations_pool():
+    """Ensure global executors and the Evaluations connection pool are shut down at session end.
+
+    Prevents pytest from hanging due to non-daemon worker threads started by
+    CPU-bound helpers and background maintenance in the Evaluations module when
+    app lifespan teardown is not exercised during tests.
+    """
+    yield
+    # Best-effort shutdown of registered executors (thread/process pools)
+    try:
+        from tldw_Server_API.app.core.Utils.executor_registry import (
+            shutdown_all_registered_executors_sync,
+        )
+        shutdown_all_registered_executors_sync(wait=True, cancel_futures=True)
+    except Exception:
+        pass
+    # Explicit CPU pools cleanup (idempotent)
+    try:
+        from tldw_Server_API.app.core.Utils.cpu_bound_handler import cleanup_pools
+        cleanup_pools()
+    except Exception:
+        pass
+    # Stop Evaluations connection pool maintenance thread and close connections
+    try:
+        from tldw_Server_API.app.core.Evaluations.connection_pool import connection_manager
+        connection_manager.shutdown()
+    except Exception:
+        pass

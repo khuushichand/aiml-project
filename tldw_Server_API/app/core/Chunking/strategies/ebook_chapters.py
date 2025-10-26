@@ -433,7 +433,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 else:
                     chunks.append(chapter_text)
             
-            logger.info(f"Created {len(chunks)} chapter-based chunks")
+            logger.debug(f"Created {len(chunks)} chapter-based chunks")
             return chunks
             
         except Exception as e:
@@ -642,7 +642,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     chunks.append(ChunkResult(text=chapter_text, metadata=metadata))
                     chunk_index += 1
             
-            logger.info(f"Created {len(chunks)} chapter-based chunks with metadata")
+            logger.debug(f"Created {len(chunks)} chapter-based chunks with metadata")
             return chunks
             
         except Exception as e:

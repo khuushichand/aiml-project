@@ -79,8 +79,9 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'temp': 'temp',
         'system_message': 'system_message',
         'streaming': 'streaming',
-        # Accept normalized top-p generic param
+        # Accept normalized top-p generic param and legacy 'maxp'
         'topp': 'maxp',
+        'maxp': 'maxp',
         'model': 'model',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
@@ -106,8 +107,9 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'temp': 'temp',
         'system_message': 'system_message',
         'streaming': 'streaming',
-        # Accept normalized top-p generic param
+        # Accept normalized top-p generic param and legacy 'maxp'
         'topp': 'topp',
+        'maxp': 'topp',
         'model': 'model',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
@@ -191,6 +193,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'system_message': 'system_message',
         'streaming': 'streaming',
         'topp': 'maxp',
+        'maxp': 'maxp',
         'model': 'model',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
@@ -216,6 +219,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'streaming': 'streaming',
         # OpenRouter uses top_p/top_k/min_p naming
         'topp': 'top_p',
+        'maxp': 'top_p',
         'topk': 'top_k',
         'minp': 'min_p',
         'model':'model',
@@ -238,6 +242,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'system_message': 'system_message',
         'streaming': 'streaming',
         'topp': 'maxp',
+        'maxp': 'maxp',
         'model': 'model',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
@@ -259,6 +264,7 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'system_message': 'system_message',
         'streaming': 'streaming',
         'topp': 'maxp',
+        'maxp': 'maxp',
         'model': 'model',
         'tools': 'tools',
         'max_tokens': 'max_tokens',

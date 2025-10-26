@@ -97,7 +97,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         if not combined_sentences or not records:
             return []
         chunks = [record['text'] for record in records]
-        logger.info(f"Created {len(chunks)} chunks from {len(combined_sentences)} sentences")
+        logger.debug(f"Created {len(chunks)} chunks from {len(combined_sentences)} sentences")
         return chunks
     
     def _split_sentences(self, text: str) -> List[str]:
@@ -489,5 +489,5 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             )
             results.append(ChunkResult(text=chunk_text, metadata=metadata))
         
-        logger.info(f"Created {len(results)} chunks with metadata from {len(combined)} sentences")
+        logger.debug(f"Created {len(results)} chunks with metadata from {len(combined)} sentences")
         return results

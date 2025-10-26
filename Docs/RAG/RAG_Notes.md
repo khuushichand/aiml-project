@@ -12,6 +12,8 @@ Unsorted
 https://www.jeremykun.com/2015/04/06/markov-chain-monte-carlo-without-all-the-bullshit/
 https://medium.com/ai-exploration-journey/how-hirag-turns-data-chaos-into-structured-knowledge-magic-ai-innovations-and-insights-35-d637b9a58d80
 https://arxiv.org/pdf/2506.00054
+https://huggingface.co/datasets/isaacus/open-australian-legal-corpus
+https://huggingface.co/blog/adlumal/lightning-fast-vector-search-for-legal-documents
 https://github.com/hhy-huang/HiRAG
 https://archive.is/W64q3
 https://github.com/trustgraph-ai/trustgraph

@@ -92,7 +92,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
                 # Move to next chunk with overlap
                 i += max_size - overlap if overlap > 0 else max_size
             
-            logger.info(f"Created {len(chunks)} paragraph-based chunks")
+            logger.debug(f"Created {len(chunks)} paragraph-based chunks")
             return chunks
             
         except Exception as e:
@@ -203,7 +203,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
                 results.append(ChunkResult(text=chunk_text, metadata=metadata))
                 chunk_index += 1
 
-            logger.info(f"Created {len(results)} paragraph-based chunks with metadata")
+            logger.debug(f"Created {len(results)} paragraph-based chunks with metadata")
             return results
 
         except Exception as e:

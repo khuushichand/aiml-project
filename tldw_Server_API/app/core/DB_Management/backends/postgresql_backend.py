@@ -296,7 +296,12 @@ class PostgreSQLBackend(DatabaseBackend):
 
         # Gate role switching behind explicit configuration and whitelist.
         # Default: disabled; rely on set_config GUCs and row-level security predicates.
-        allow_role_switch = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower() in {"1", "true", "yes", "on"}
+        # Default to allowing role switch when a session_role is provided, unless explicitly disabled via env.
+        _role_env = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower()
+        if _role_env == "":
+            allow_role_switch = True
+        else:
+            allow_role_switch = _role_env in {"1", "true", "yes", "on"}
         allowed_roles_env = os.getenv("TLDW_CONTENT_PG_ROLE_WHITELIST", "").strip()
         allowed_roles = {r.strip() for r in allowed_roles_env.split(',') if r.strip()}
         if not allow_role_switch or not session_role or (allowed_roles and session_role not in allowed_roles):

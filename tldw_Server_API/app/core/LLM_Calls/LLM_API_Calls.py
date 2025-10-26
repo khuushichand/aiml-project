@@ -44,8 +44,6 @@ from typing import List, Any, Optional, Tuple, Dict, Union, Iterable
 #
 # Import 3rd-Party Libraries
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import httpx
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
