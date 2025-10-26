@@ -21,10 +21,14 @@ def _make_test_app() -> FastAPI:
     return app
 
 
-client = TestClient(_make_test_app())
+@pytest.fixture
+def client():
+    app = _make_test_app()
+    with TestClient(app) as c:
+        yield c
 
 
-def test_track_metrics_autoregisters_metrics():
+def test_track_metrics_autoregisters_metrics(client):
     # Use a unique base name to avoid interference
     @track_metrics(name="test_auto_reg.myop")
     def sample_op():
@@ -42,4 +46,3 @@ def test_track_metrics_autoregisters_metrics():
     # Ensure both counter and histogram appear in exposition
     assert "test_auto_reg.myop_calls_total" in text
     assert "test_auto_reg.myop_duration_seconds_bucket" in text
-

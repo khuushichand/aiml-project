@@ -25,6 +25,7 @@ from email.utils import getaddresses
 
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import DEFAULT_MEDIA_TYPE_CONFIG
 
 try:
@@ -110,6 +111,13 @@ def _addresses_from_header(msg: Message, header_name: str) -> str:
         return ", ".join(emails)
     except Exception as e:
         logging.debug(f"Failed to parse addresses from {header_name}: {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_warning_events_total",
+                labels={"component": "email_ingest", "event": "addresses_parse_failed"},
+            )
+        except Exception:
+            pass
         return ""
 
 
@@ -217,6 +225,13 @@ def parse_eml_bytes(
                             child_emls.append((child_bytes, child_name))
                     except Exception as ce:
                         logging.debug(f"Failed to capture nested EML bytes: {ce}")
+                        try:
+                            get_metrics_registry().increment(
+                                "app_warning_events_total",
+                                labels={"component": "email_ingest", "event": "nested_eml_capture_failed"},
+                            )
+                        except Exception:
+                            pass
                 continue
 
             if ctype == "text/plain":
@@ -321,6 +336,13 @@ def process_email_task(
                 result["chunks"] = chunks
             except Exception as e:
                 logging.error(f"Email chunking failed for {filename}: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_exception_events_total",
+                        labels={"component": "email_ingest", "event": "chunking_failed"},
+                    )
+                except Exception:
+                    pass
                 result["warnings"].append(f"Chunking failed: {e}")
                 result["chunks"] = [{"text": content_text, "metadata": {"chunk_num": 0, "error": str(e)}}]
         elif content_text:
@@ -343,6 +365,13 @@ def process_email_task(
                     result["analysis"] = analysis_text
             except Exception as e:
                 logging.warning(f"Email analysis failed for {filename}: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "email_ingest", "event": "analysis_failed"},
+                    )
+                except Exception:
+                    pass
                 result["warnings"].append(f"Analysis failed: {e}")
 
         # Optionally parse nested email attachments recursively (children are returned in 'children' key)
@@ -370,6 +399,13 @@ def process_email_task(
                     children_results.append(child_res)
                 except Exception as ce:
                     logging.debug(f"Failed to process child EML '{child_name}': {ce}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "email_ingest", "event": "child_process_failed"},
+                        )
+                    except Exception:
+                        pass
             if children_results:
                 result["children"] = children_results
 
@@ -636,6 +672,13 @@ def process_mbox_bytes(
         results.extend(staged)
     except Exception as e:
         logging.error(f"Invalid or unreadable MBOX '{mbox_name}': {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_exception_events_total",
+                labels={"component": "email_ingest", "event": "mbox_read_failed"},
+            )
+        except Exception:
+            pass
         return [{
             "status": "Error",
             "input_ref": mbox_name,
@@ -649,14 +692,26 @@ def process_mbox_bytes(
             if mbox is not None:
                 mbox.close()
         except Exception:
-            pass
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "email_ingest", "event": "mbox_close_failed"},
+                )
+            except Exception:
+                pass
         # Cleanup temp file
         try:
             if tmp_path:
                 import os
                 os.unlink(tmp_path)
         except Exception:
-            pass
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "email_ingest", "event": "mbox_tmp_cleanup_failed"},
+                )
+            except Exception:
+                pass
 
     return results
 
@@ -1078,6 +1133,13 @@ def process_pst_bytes(
         }]
     except Exception as e:
         logging.error(f"Invalid or unreadable PST/OST '{pst_name}': {e}")
+        try:
+            get_metrics_registry().increment(
+                "app_exception_events_total",
+                labels={"component": "email_ingest", "event": "pst_read_failed"},
+            )
+        except Exception:
+            pass
         return [{
             "status": "Error",
             "input_ref": pst_name,
@@ -1092,8 +1154,22 @@ def process_pst_bytes(
                 pst.close()
             except Exception as close_err:
                 logging.warning(f"Failed to close PST/OST reader for '{pst_name}': {close_err}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "email_ingest", "event": "pst_close_failed"},
+                    )
+                except Exception:
+                    pass
         try:
             if tmp_path:
                 os.unlink(tmp_path)
         except Exception as cleanup_err:
             logging.warning(f"Failed to remove temporary PST/OST file '{tmp_path}': {cleanup_err}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "email_ingest", "event": "pst_tmp_cleanup_failed"},
+                )
+            except Exception:
+                pass

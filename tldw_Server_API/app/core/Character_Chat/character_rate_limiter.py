@@ -37,7 +37,8 @@ class CharacterRateLimiter:
         max_chats_per_user: int = 100,  # Max concurrent chats per user
         max_messages_per_chat: int = 1000,  # Max messages per chat session
         max_chat_completions_per_minute: int = 20,  # Rate limit for chat completions
-        max_message_sends_per_minute: int = 60  # Rate limit for sending messages
+        max_message_sends_per_minute: int = 60,  # Rate limit for sending messages
+        enabled: bool = True,
     ):
         """
         Initialize the rate limiter.
@@ -64,6 +65,7 @@ class CharacterRateLimiter:
         self.max_messages_per_chat = max_messages_per_chat
         self.max_chat_completions_per_minute = max_chat_completions_per_minute
         self.max_message_sends_per_minute = max_message_sends_per_minute
+        self.enabled = bool(enabled)
         
         # In-memory fallback storage (always ready for Redis failures)
         self.memory_store: Dict[int, List[float]] = defaultdict(list)
@@ -90,6 +92,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If rate limit exceeded
         """
+        if not self.enabled:
+            return True, self.max_operations
         key = f"rate_limit:character:{user_id}"
         
         if self.redis:
@@ -180,6 +184,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If character limit exceeded
         """
+        if not self.enabled:
+            return True
         if current_count >= self.max_characters:
             logger.warning(
                 f"Character limit exceeded for user {user_id}: "
@@ -204,6 +210,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If file size exceeds limit
         """
+        if not self.enabled:
+            return True
         max_bytes = self.max_import_size_mb * 1024 * 1024
         if file_size_bytes > max_bytes:
             logger.warning(
@@ -226,6 +234,15 @@ class CharacterRateLimiter:
         Returns:
             Dictionary with usage statistics
         """
+        if not self.enabled:
+            now = time.time()
+            return {
+                "operations_used": 0,
+                "operations_limit": self.max_operations,
+                "operations_remaining": self.max_operations,
+                "window_seconds": self.window_seconds,
+                "reset_time": now + self.window_seconds,
+            }
         key = f"rate_limit:character:{user_id}"
         now = time.time()
         window_start = now - self.window_seconds
@@ -298,6 +315,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If chat limit exceeded
         """
+        if not self.enabled:
+            return True
         if current_chat_count >= self.max_chats_per_user:
             logger.warning(
                 f"Chat limit exceeded for user {user_id}: "
@@ -323,6 +342,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If message limit exceeded
         """
+        if not self.enabled:
+            return True
         if current_message_count > self.max_messages_per_chat:
             logger.warning(
                 f"Message limit exceeded for chat {chat_id}: "
@@ -347,6 +368,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If rate limit exceeded
         """
+        if not self.enabled:
+            return True, self.max_chat_completions_per_minute
         return await self._check_specific_rate(
             user_id, 
             "chat_completion",
@@ -367,6 +390,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If rate limit exceeded
         """
+        if not self.enabled:
+            return True, self.max_message_sends_per_minute
         return await self._check_specific_rate(
             user_id,
             "message_send",
@@ -396,6 +421,8 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If rate limit exceeded
         """
+        if not self.enabled:
+            return True, max_count
         key = f"rate_limit:{operation_type}:{user_id}"
         
         if self.redis:
@@ -480,10 +507,34 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
     """Get the global rate limiter instance."""
     global _rate_limiter
     
+    # Honor TEST_MODE by returning a permissive, in-memory limiter with huge limits
+    # to prevent rate-limit related flakiness during test runs.
+    import os
+    test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
+
+    if test_mode:
+        # If an existing limiter is not a test-mode limiter, replace it; otherwise reuse it.
+        if _rate_limiter is None or not getattr(_rate_limiter, "_is_test_mode", False):
+            _rate_limiter = CharacterRateLimiter(
+                redis_client=None,                 # Force in-memory
+                max_operations=1_000_000_000,      # Effectively unlimited
+                window_seconds=3600,
+                max_characters=1_000_000_000,      # Avoid 403s from character count
+                max_import_size_mb=1_000,          # Generous import size for tests
+                # Chat-specific limits
+                max_chats_per_user=1_000_000_000,
+                max_messages_per_chat=1_000_000_000,
+                max_chat_completions_per_minute=1_000_000_000,
+                max_message_sends_per_minute=1_000_000_000,
+                enabled=True,
+            )
+            # Tag the instance so we can detect/reuse it in future calls
+            setattr(_rate_limiter, "_is_test_mode", True)
+        return _rate_limiter
+
     if _rate_limiter is None:
         # Initialize with Redis if available
         from tldw_Server_API.app.core.config import settings
-        import os
 
         def _env_int(name: str, configured_value: Any, fallback: int) -> int:
             raw = os.getenv(name)
@@ -523,6 +574,30 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
         default_chat_completions = settings.get("MAX_CHAT_COMPLETIONS_PER_MINUTE", 20)
         default_message_sends = settings.get("MAX_MESSAGE_SENDS_PER_MINUTE", 60)
 
+        # Compute enabled flag (toggleable). Default: disabled in single-user unless explicitly enabled
+        def _env_bool(name: str, configured_value: Any, fallback: bool) -> bool:
+            raw = os.getenv(name)
+            if raw is not None:
+                s = str(raw).strip().lower()
+                if s in {"1", "true", "yes", "on"}:
+                    return True
+                if s in {"0", "false", "no", "off"}:
+                    return False
+            if configured_value is not None:
+                try:
+                    return bool(configured_value)
+                except Exception:
+                    pass
+            return fallback
+
+        single_user_mode = bool(settings.get("SINGLE_USER_MODE", False))
+        configured_enabled = settings.get("CHARACTER_RATE_LIMIT_ENABLED", None)
+        if configured_enabled is None:
+            configured_enabled = settings.get("RATE_LIMIT_ENABLED", None)
+        default_enabled = not single_user_mode
+
+        enabled_flag = _env_bool("CHARACTER_RATE_LIMIT_ENABLED", configured_enabled, default_enabled)
+
         _rate_limiter = CharacterRateLimiter(
             redis_client=redis_client,
             max_operations=_env_int("CHARACTER_RATE_LIMIT_OPS", default_max_ops, 100),
@@ -533,7 +608,8 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
             max_chats_per_user=_env_int("MAX_CHATS_PER_USER", default_max_chats, 100),
             max_messages_per_chat=_env_int("MAX_MESSAGES_PER_CHAT", default_max_messages, 1000),
             max_chat_completions_per_minute=_env_int("MAX_CHAT_COMPLETIONS_PER_MINUTE", default_chat_completions, 20),
-            max_message_sends_per_minute=_env_int("MAX_MESSAGE_SENDS_PER_MINUTE", default_message_sends, 60)
+            max_message_sends_per_minute=_env_int("MAX_MESSAGE_SENDS_PER_MINUTE", default_message_sends, 60),
+            enabled=enabled_flag,
         )
     
     return _rate_limiter

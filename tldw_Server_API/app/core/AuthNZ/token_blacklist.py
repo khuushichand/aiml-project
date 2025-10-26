@@ -342,8 +342,16 @@ class TokenBlacklist:
         
         normalized_expiry = self._normalize_expiry_for_storage(expires_at)
 
-        # Add to local cache (LRU) with expiry
-        self._cache_add(jti, normalized_expiry)
+        # Add to local cache (LRU) with a small grace buffer to account for
+        # initialization/IO latency so that immediate post-revocation checks
+        # reliably observe the blacklisted state even for very short expiries.
+        # This is conservative (tokens remain blacklisted slightly longer).
+        now_utc = datetime.utcnow()
+        min_grace = timedelta(seconds=1)
+        effective_cache_expiry = (
+            now_utc + min_grace if normalized_expiry <= now_utc + min_grace else normalized_expiry
+        )
+        self._cache_add(jti, effective_cache_expiry)
         
         # Add to Redis if available
         if self.redis_client:

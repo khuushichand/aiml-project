@@ -24,10 +24,18 @@ Key fields:
 - `stream` (bool): If true, returns Server-Sent Events (SSE) for streaming.
 - `api_provider` (string, optional): Overrides provider selection. Server default used if omitted.
 - `prompt_template_name` (string, optional): Apply a named prompt template (alphanumeric, `_`, `-`).
+- Conversation history controls (optional):
+  - `history_message_limit` (int): How many past messages to load (default set by server; see Chat-Module config).
+  - `history_message_order` (`asc`|`desc`): Oldest-first vs newest-first ordering when loading history.
 - Common sampling params (provider-dependent): `temperature`, `top_p`, `max_tokens`, `n`, `frequency_penalty`, `presence_penalty`, `logprobs`, `top_logprobs`, `logit_bias`.
 - Tools: `tools`, `tool_choice` (provider-dependent tool/function calling).
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
 - Chat extensions: `character_id`, `conversation_id` (context hooks), `save_to_db` (persistence toggle).
+
+Provider-specific extensions:
+- Bedrock guardrails:
+  - `extra_headers`: include Bedrock guardrail headers like `X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, optional `X-Amzn-Bedrock-Trace`.
+  - `extra_body`: include `amazon-bedrock-guardrailConfig` object when needed.
 
 Minimal example (non‑streaming):
 ```bash
@@ -204,6 +212,11 @@ Configurable under `[Chat-Module]` in `Config_Files/config.txt`:
 - `rate_limit_tokens_per_minute`
 When exceeded, the endpoint returns `429`.
 
+Queued execution (optional):
+- Enable job-queue processing for chat calls to smooth bursts.
+- Env: `CHAT_QUEUED_EXECUTION=1` or config `[Chat-Module] queued_execution = True`
+- Related settings when enabled: `max_queue_size`, `max_concurrent_requests`
+
 ## Observability
 - Metrics: Tracks request size, LLM latency, streaming chunks/heartbeats, DB transactions, and image processing.
 - Audit: When enabled, logs API request metadata (user_id, request_id, model/provider, streaming) via the unified audit service.
@@ -235,7 +248,7 @@ Supporting endpoints for discovering providers and models:
 - `GET /api/v1/llm/models/metadata` – Flattened model capability metadata
 
 ## Commercial Tests
-- Scope: Optional integration tests for commercial providers (OpenAI, Anthropic, Cohere, Groq, OpenRouter, DeepSeek, Mistral, Google, HuggingFace, Qwen, Moonshot, Z.AI). Disabled by default to avoid accidental network calls.
+- Scope: Optional integration tests for supported providers (OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, Qwen, HuggingFace, Mistral, Bedrock, OpenRouter) and local backends (llama.cpp, Kobold, Ollama, Oobabooga, TabbyAPI, vLLM). Disabled by default to avoid accidental network calls. The exact set is determined at runtime from configuration.
 - Opt-in flag: Set `RUN_COMMERCIAL_CHAT_TESTS=true` in your environment or `.env`.
 - Keys: Provide real API keys via env, `.env`/`.ENV` (repo root or `tldw_Server_API/Config_Files/`), or `Config_Files/config.txt` `[API]` entries. Mock/test keys (e.g., `sk-mock...`, `test-...`) are ignored by the tests.
 - Network: Ensure outbound network access when running these tests.

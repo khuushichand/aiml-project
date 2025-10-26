@@ -20,6 +20,7 @@ from pathlib import Path
 
 from loguru import logger
 import numpy as np
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 class FeedbackType(Enum):
@@ -333,6 +334,13 @@ class FeedbackAnalyzer:
                     weight_sum += 3.0
                 except Exception as e:
                     logger.debug(f"Failed to parse relevance feedback value: error={e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "rag", "event": "feedback_parse_relevance_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for rag feedback_parse_relevance_failed")
                     
             elif feedback_type == "helpful":
                 # Helpful yes/no
@@ -342,6 +350,13 @@ class FeedbackAnalyzer:
                     weight_sum += 2.0
                 except Exception as e:
                     logger.debug(f"Failed to parse helpful feedback value: error={e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "rag", "event": "feedback_parse_helpful_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for rag feedback_parse_helpful_failed")
                     
             elif feedback_type == "click":
                 # Click indicates interest
@@ -358,6 +373,13 @@ class FeedbackAnalyzer:
                     weight_sum += 1.5
                 except Exception as e:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "rag", "event": "feedback_parse_dwell_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for rag feedback_parse_dwell_failed")
         
         return score / weight_sum if weight_sum > 0 else 0.5
     
@@ -563,6 +585,13 @@ class FeedbackSystem:
             
         except Exception as e:
             logger.error(f"Failed to submit feedback: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_exception_events_total",
+                    labels={"component": "rag", "event": "feedback_submit_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for rag feedback_submit_failed")
             return False
     
     async def submit_relevance_score(

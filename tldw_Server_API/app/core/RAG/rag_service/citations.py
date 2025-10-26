@@ -19,6 +19,7 @@ from datetime import datetime
 
 import numpy as np
 from loguru import logger
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 from .types import Document, Citation, CitationType
 
@@ -442,8 +443,15 @@ class AcademicCitationFormatter:
                 # Try common date formats
                 dt = datetime.fromisoformat(str(date))
             except Exception as e:
-                # Fallback to string representation
+                # Fallback to string representation with a warning metric
                 logger.debug(f"Citation date parse failed; returning raw. value={date}, error={e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "rag", "event": "citation_date_parse_failed"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for rag citation_date_parse_failed")
                 return str(date)
         
         if style == "mla":

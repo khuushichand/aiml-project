@@ -17,6 +17,7 @@ from pathlib import Path
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 @dataclass
@@ -44,8 +45,15 @@ class PersonalizationConsolidationService:
         if self._task:
             try:
                 await self._task
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Personalization consolidation stop wait failed: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "personalization", "event": "stop_wait_failed"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for personalization stop_wait_failed")
         logger.info("Personalization consolidation service stopped (scaffold)")
 
     async def trigger_consolidation(self, user_id: Optional[str] = None) -> bool:
@@ -63,6 +71,13 @@ class PersonalizationConsolidationService:
             return True
         except Exception as e:
             logger.debug(f"Consolidation trigger failed: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "personalization", "event": "trigger_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for personalization trigger_failed")
             return False
 
     async def _run_loop(self):
@@ -80,6 +95,13 @@ class PersonalizationConsolidationService:
                     pass
             except Exception as e:
                 logger.warning(f"Consolidation loop error (scaffold): {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_exception_events_total",
+                        labels={"component": "personalization", "event": "loop_error"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for personalization loop_error")
             try:
                 await asyncio.wait_for(self._shutdown.wait(), timeout=self.config.interval_seconds)
             except asyncio.TimeoutError:
@@ -152,7 +174,13 @@ def PersonalizationConsolidationService__consolidate_user(self, user_id: str) ->
         try:
             db.upsert_topic(user_id, label, score)
         except Exception:
-            pass
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "personalization", "event": "upsert_topic_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for personalization upsert_topic_failed")
 
     # Mark completion time for status
     try:

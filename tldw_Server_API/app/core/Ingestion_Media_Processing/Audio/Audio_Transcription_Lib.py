@@ -2043,6 +2043,14 @@ def speech_to_text(
             options["word_timestamps"] = True
 
         transcribe_options = dict(task="transcribe", **options)
+        # Inject custom vocabulary as initial prompt if enabled
+        try:
+            from .Audio_Custom_Vocabulary import initial_prompt_if_enabled
+            _init_prompt = initial_prompt_if_enabled()
+            if _init_prompt:
+                transcribe_options["initial_prompt"] = _init_prompt
+        except Exception as _cv_err:
+            logging.debug(f"Custom vocab initial_prompt injection skipped: {_cv_err}")
 
         # Check if model needs downloading first
         model_result = get_whisper_model(whisper_model, processing_choice, check_download_status=True)
@@ -2095,6 +2103,13 @@ def speech_to_text(
                     # Non-fatal if words parsing fails
                     pass
             logging.debug(f"Segment: {chunk}")
+            # Post-process with custom vocabulary replacements if enabled
+            try:
+                from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                chunk["Text"] = postprocess_text_if_enabled(chunk["Text"]) or chunk["Text"]
+            except Exception:
+                # Non-fatal if replacement fails
+                pass
             segments.append(chunk)
             # Log with limited precision for readability
             logging.debug(f"Segment: [{chunk['start_seconds']:.2f}-{chunk['end_seconds']:.2f}] {chunk['Text'][:100]}...")

@@ -177,10 +177,20 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
     
     # Add helper method for authenticated requests
     def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
-        headers = {
-            "X-CSRF-Token": csrf_token,
-            "Token": auth_token
-        }
+        # In single-user mode, the API expects X-API-KEY to match settings.
+        # Keep legacy 'Token' header for backward compatibility in tests.
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        _settings = _get_settings()
+        headers = {"X-CSRF-Token": csrf_token}
+        # Always include X-API-KEY for single-user auth
+        try:
+            api_key = _settings.SINGLE_USER_API_KEY or ""
+            if api_key:
+                headers["X-API-KEY"] = api_key
+        except Exception:
+            pass
+        # Also provide deprecated Token header used by some tests/utilities
+        headers["Token"] = auth_token
         return client.post(url, json=json_data, headers=headers)
     
     client.post_with_auth = post_with_auth
@@ -238,10 +248,16 @@ def integration_test_client(isolated_db, mock_server_url):
             
             # Add helper for authenticated requests
             def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
-                headers = {
-                    "X-CSRF-Token": csrf_token,
-                    "Token": auth_token
-                }
+                from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+                _settings = _get_settings()
+                headers = {"X-CSRF-Token": csrf_token}
+                try:
+                    api_key = _settings.SINGLE_USER_API_KEY or ""
+                    if api_key:
+                        headers["X-API-KEY"] = api_key
+                except Exception:
+                    pass
+                headers["Token"] = auth_token
                 return client.post(url, json=json_data, headers=headers)
             
             client.post_with_auth = post_with_auth

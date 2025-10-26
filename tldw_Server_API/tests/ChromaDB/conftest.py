@@ -75,6 +75,19 @@ class AuditLogger:  # type: ignore
     def log_admin_operation(self, *args, **kwargs):
         return None
 
+# Ensure unit tests in this package use the patched PersistentClient path,
+# not the internal in-memory stub forced via env in other suites.
+@pytest.fixture(autouse=True)
+def _disable_chromadb_force_stub_for_chromadb_unit_tests(monkeypatch):
+    """Unset CHROMADB_FORCE_STUB so ChromaDBManager uses the patched client.
+
+    Some other test packages enable CHROMADB_FORCE_STUB globally; that causes
+    ChromaDBManager to bypass chromadb.PersistentClient, defeating our mocks.
+    Unsetting here ensures unit tests exercise the expected client path.
+    """
+    monkeypatch.delenv("CHROMADB_FORCE_STUB", raising=False)
+    yield
+
 # =====================================================================
 # Test Markers
 # =====================================================================
@@ -216,8 +229,11 @@ def mock_chroma_client():
 @pytest.fixture
 def chromadb_manager(mock_chroma_client, temp_media_db):
     """Create a ChromaDBManager instance with mocked dependencies."""
-    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as mock_pclient:
-        mock_pclient.return_value = mock_chroma_client
+    # Patch both Client (current) and PersistentClient (legacy) so manager.client uses the mock
+    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.Client') as _mock_client_cls, \
+         patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as _mock_pclient_cls:
+        _mock_client_cls.return_value = mock_chroma_client
+        _mock_pclient_cls.return_value = mock_chroma_client
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
         manager = ChromaDBManager(
             user_id="test_user",

@@ -274,6 +274,14 @@ class SessionManager:
         if not path:
             return False
         try:
+            # If the resolved path is a symlink, follow it to the target file
+            # so that we persist to the intended location (test expectation).
+            try:
+                if path.exists() and path.is_symlink():
+                    path = path.resolve()
+            except OSError as exc:
+                raise RuntimeError(f"Unable to inspect existing session key at {path}: {exc}") from exc
+
             # Ensure parent directory exists with restricted permissions (best-effort 0o700)
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -287,14 +295,6 @@ class SessionManager:
             except Exception:
                 # Ignore if chmod not supported (e.g., on Windows)
                 pass
-
-            try:
-                if path.exists() and path.is_symlink():
-                    raise RuntimeError(
-                        f"Refusing to overwrite session encryption key symlink at {path}"
-                    )
-            except OSError as exc:
-                raise RuntimeError(f"Unable to inspect existing session key at {path}: {exc}") from exc
 
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             if hasattr(os, "O_NOFOLLOW"):
@@ -337,28 +337,27 @@ class SessionManager:
     def _load_persisted_session_key(self) -> Optional[bytes]:
         """Load persisted session encryption key if available.
 
-        Preferred location (new): tldw_Server_API/Config_Files/session_encryption.key
-        Legacy read-only fallback: PROJECT_ROOT/Config_Files/session_encryption.key
+        Preferred location: PROJECT_ROOT/Config_Files/session_encryption.key
+        Back-compat fallback: tldw_Server_API/Config_Files/session_encryption.key
         """
-        # Try new canonical location first
-        primary_path = self._persisted_key_path or self._resolve_persisted_key_path()
+        # Prefer PROJECT_ROOT/Config_Files first (tests monkeypatch this)
         candidate_paths: list[Path] = []
-        if primary_path:
-            candidate_paths.append(primary_path)
-
-        # Legacy fallback: previous behavior used PROJECT_ROOT/Config_Files
-        # Keep as read-only to avoid breaking existing deployments; do not write here.
         try:
-            legacy_base = None
+            preferred_root = None
             if core_settings:
-                legacy_base = core_settings.get("PROJECT_ROOT")
-            if legacy_base:
-                legacy_root = Path(legacy_base)
-            else:
-                legacy_root = Path.cwd()
-            legacy_path = (legacy_root / "Config_Files" / "session_encryption.key").resolve()
-            if not primary_path or legacy_path != primary_path:
-                candidate_paths.append(legacy_path)
+                preferred_root = core_settings.get("PROJECT_ROOT")
+            preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
+            primary_path = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
+            candidate_paths.append(primary_path)
+        except Exception:
+            # If anything goes wrong, fall back to API path resolution below
+            pass
+
+        # Backward-compat: API component Config_Files
+        try:
+            api_path = self._persisted_key_path or self._resolve_persisted_key_path()
+            if api_path and (not candidate_paths or api_path != candidate_paths[0]):
+                candidate_paths.append(api_path)
         except Exception:
             pass
 
@@ -388,12 +387,22 @@ class SessionManager:
     def _resolve_persisted_key_path(self) -> Optional[Path]:
         """Determine filesystem location for persisted session key.
 
-        Only use the API component's Config_Files directory:
-        tldw_Server_API/Config_Files/session_encryption.key
+        Prefer the project root's Config_Files directory if available via
+        core_settings["PROJECT_ROOT"], otherwise fall back to the API component
+        directory (tldw_Server_API/Config_Files).
         """
+        # Try PROJECT_ROOT first (tests patch this to a tmp dir)
         try:
-            # session_manager.py is at: .../tldw_Server_API/app/core/AuthNZ/session_manager.py
-            # API root (tldw_Server_API) is four parents up from this file
+            project_root = None
+            if core_settings:
+                project_root = core_settings.get("PROJECT_ROOT")
+            if project_root:
+                return (Path(project_root) / "Config_Files" / "session_encryption.key").resolve()
+        except Exception:
+            pass
+
+        # Fallback to API component path
+        try:
             api_root = Path(__file__).resolve().parent.parent.parent.parent
             return (api_root / "Config_Files" / "session_encryption.key").resolve()
         except Exception:

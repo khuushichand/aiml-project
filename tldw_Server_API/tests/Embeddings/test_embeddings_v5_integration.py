@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - optional dependency
     redis = None  # type: ignore
 
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -425,7 +425,7 @@ class TestEmbeddingsIntegration:
         app.dependency_overrides[get_request_user] = override_user
         
         async def make_real_request(idx):
-            async with AsyncClient(app=app, base_url="http://test", timeout=30.0) as ac:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=30.0) as ac:
                 # Set CSRF token in cookie
                 ac.cookies.set("csrf_token", "test-csrf-token-12345")
                 response = await ac.post(

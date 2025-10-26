@@ -346,9 +346,22 @@ def mock_user_db(tmp_path):
 
 @pytest.fixture
 def mock_chacha_db(tmp_path):
-    """Create a temporary ChaChaNotes DB with a default character."""
-    db_path = str(tmp_path / "ChaChaNotes.db")
-    db = CharactersRAGDB(db_path, client_id="pytest_client")
+    """Create a temporary ChaChaNotes DB with a default character.
+
+    Align the DB path with the API's dependency resolution so even without
+    dependency overrides the server sees the same file:
+      USER_DB_BASE_DIR = <tmp_path>
+      DB path = <tmp_path>/1/ChaChaNotes.db (single-user id=1)
+    """
+    # Ensure API dependency resolves to our tmp_path base directory
+    os.environ["USER_DB_BASE_DIR"] = str(tmp_path)
+
+    # In single-user mode, the request user id is 1
+    user_dir = tmp_path / "1"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    db_path = user_dir / "ChaChaNotes.db"
+
+    db = CharactersRAGDB(str(db_path), client_id="pytest_client")
 
     # Ensure at least one default character exists
     char_id = db.add_character_card({
@@ -365,7 +378,7 @@ def mock_chacha_db(tmp_path):
 
     # Cleanup
     try:
-        os.unlink(db_path)
+        os.unlink(str(db_path))
     except Exception:
         pass
 
@@ -441,29 +454,50 @@ def client(setup_dependencies):
 
 
 @pytest.fixture
-def authenticated_client(client, auth_token):
-    """Create an authenticated test client."""
+def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db):
+    """Create an authenticated test client and harden dependency overrides per-request.
+
+    - Ensures auth headers and CSRF are attached
+    - Reapplies ChaCha DB override before each request to avoid cross-test resets
+    """
     settings = get_settings()
 
-    # Add authentication to all requests
+    # Base methods we will wrap
     original_post = client.post
+    original_get = client.get
 
-    def authenticated_post(url, **kwargs):
-        headers = kwargs.pop("headers", {})
+    def _apply_auth_and_overrides(headers: dict) -> dict:
         # Include CSRF token if available on the client
         csrf_token = getattr(client, "csrf_token", None)
         if csrf_token and "X-CSRF-Token" not in headers:
             headers["X-CSRF-Token"] = csrf_token
 
+        # Attach auth header based on mode
         if settings.AUTH_MODE == "multi_user":
-            headers["Authorization"] = auth_token
+            headers.setdefault("Authorization", auth_token)
         else:
-            # Single-user mode: chat endpoint expects X-API-KEY
-            headers["X-API-KEY"] = auth_token
+            headers.setdefault("X-API-KEY", auth_token)
 
+        # Re-apply the DB override defensively to ensure the API uses the same DB
+        # instance the test created data in, even if other tests reset overrides.
+        try:
+            app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
+        except Exception:
+            pass
+        return headers
+
+    def authenticated_post(url, **kwargs):
+        headers = kwargs.pop("headers", {}) or {}
+        headers = _apply_auth_and_overrides(headers)
         return original_post(url, headers=headers, **kwargs)
 
+    def authenticated_get(url, **kwargs):
+        headers = kwargs.pop("headers", {}) or {}
+        headers = _apply_auth_and_overrides(headers)
+        return original_get(url, headers=headers, **kwargs)
+
     client.post = authenticated_post
+    client.get = authenticated_get
     return client
 
 

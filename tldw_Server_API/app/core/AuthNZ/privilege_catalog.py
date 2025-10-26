@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
+from functools import lru_cache
 
 from loguru import logger
 from pydantic import AnyUrl, BaseModel, Field, ValidationError, model_validator, validator
@@ -187,6 +188,7 @@ class PrivilegeCatalog(BaseModel):
             seen.add(value)
 
 
+@lru_cache(maxsize=8)
 def load_catalog(path: Optional[Path] = None) -> PrivilegeCatalog:
     """
     Load and validate the privilege catalog from YAML.
@@ -213,3 +215,11 @@ def load_catalog(path: Optional[Path] = None) -> PrivilegeCatalog:
     except ValidationError as exc:
         logger.error("Privilege catalog validation failed: {}", exc)
         raise
+
+
+def clear_privilege_catalog_cache() -> None:
+    """Clear the load_catalog() LRU cache (used in tests or hot-reload scenarios)."""
+    try:
+        load_catalog.cache_clear()
+    except Exception:
+        pass

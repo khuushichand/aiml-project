@@ -1,11 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
-
 from tldw_Server_API.app.main import app
 
 
 @pytest.mark.unit
-def test_batch_endpoint_adds_rate_headers(disable_heavy_startup, admin_user, monkeypatch):
+def test_batch_endpoint_adds_rate_headers(disable_heavy_startup, admin_user, monkeypatch, test_client):
     # Patch backpressure/quotas checker to inject rate limit state
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
 
@@ -25,8 +24,7 @@ def test_batch_endpoint_adds_rate_headers(disable_heavy_startup, admin_user, mon
 
     monkeypatch.setattr(emb_mod, "create_embeddings_batch_async", _stub_batch)
 
-    client = TestClient(app)
-    resp = client.post("/api/v1/embeddings/batch", json={
+    resp = test_client.post("/api/v1/embeddings/batch", json={
         "texts": ["a", "b"],
         "model": "text-embedding-3-small",
         "provider": "openai"

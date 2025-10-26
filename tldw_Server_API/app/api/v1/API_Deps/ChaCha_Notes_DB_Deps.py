@@ -8,6 +8,7 @@ from loguru import logger
 from typing import Dict, Optional, List
 
 from fastapi import Depends, HTTPException, status
+import inspect
 from cachetools import LRUCache
 #
 #    logging.warning("cachetools not found. ChaChaNotes DB instance cache will grow indefinitely. "
@@ -126,21 +127,28 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
     - This per-user layout is intentional to isolate data and simplify backups.
     - A fallback path is used only when USER_DB_BASE_DIR is misconfigured; logs at CRITICAL/ERROR.
     """
-    db_file: Optional[Path] = None
+    # Build path from the current effective base directory, preferring env override.
+    base_dir = _resolve_main_user_base_dir()
+    user_dir = Path(base_dir) / str(user_id)
     try:
-        db_file = DatabasePaths.get_chacha_db_path(user_id)
-        # Extra safety: ensure parent exists even if upstream helpers change
-        try:
-            db_file.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as _mk_e:
-            logger.debug(f"Parent ensure for ChaChaNotes path failed softly: { _mk_e }")
-        logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {db_file.parent}")
-        return db_file
+        user_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         logger.error(
-            f"Could not create ChaChaNotes DB directory for user_id {user_id} at {db_file}: {e}",
-            exc_info=True)
-        raise IOError(f"Could not initialize ChaChaNotes storage directory for user {user_id}.") from e
+            f"Failed to create user directory for ChaChaNotes at {user_dir}: {e}",
+            exc_info=True,
+        )
+        raise IOError(
+            f"Could not initialize ChaChaNotes storage directory for user {user_id}."
+        ) from e
+
+    db_file = user_dir / DatabasePaths.CHACHA_DB_NAME
+    # Extra safety: ensure parent exists even if upstream helpers change
+    try:
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as _mk_e:
+        logger.debug(f"Parent ensure for ChaChaNotes path failed softly: { _mk_e }")
+    logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {db_file.parent}")
+    return db_file
 
 def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
     """
@@ -207,6 +215,26 @@ async def get_chacha_db_for_user(
     FastAPI dependency to get the CharactersRAGDB instance for the identified user.
     Handles caching, initialization, and schema checks.
     """
+    # Respect FastAPI dependency overrides explicitly if they exist.
+    # Some test environments reset overrides aggressively; checking here ensures
+    # we still honor an override bound to this callable.
+    try:
+        from tldw_Server_API.app.main import app as _app  # Local import to avoid import cycles at module load
+        override_fn = _app.dependency_overrides.get(get_chacha_db_for_user)
+        if override_fn is not None:
+            try:
+                result = override_fn()
+                if inspect.isawaitable(result):
+                    result = await result  # type: ignore[func-returns-value]
+                if isinstance(result, CharactersRAGDB):
+                    return result
+            except Exception:
+                # Fall back to standard resolution on any override execution issue
+                pass
+    except Exception:
+        # If importing app or inspecting overrides fails, proceed normally
+        pass
+
     logger.info("<<<<< ACTUAL get_chacha_db_for_user CALLED >>>>>")
     if not current_user or not isinstance(current_user.id, int):  # Ensure user_id is an int
         logger.error("get_chacha_db_for_user called without a valid User object or user.id is not int.")

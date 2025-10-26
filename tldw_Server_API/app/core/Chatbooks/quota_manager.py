@@ -8,16 +8,18 @@ Quota Manager for Chatbook Operations
 Manages user quotas for storage, export/import operations, and rate limits.
 """
 
-import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, Any
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
 from loguru import logger
+
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 class QuotaManager:
     """Manages user quotas and usage limits."""
-    
+
     # Default quotas (can be overridden per user tier)
     DEFAULT_QUOTAS = {
         'max_storage_mb': 1000,  # 1GB default storage
@@ -27,7 +29,7 @@ class QuotaManager:
         'max_concurrent_jobs': 2,
         'max_chatbooks': 50
     }
-    
+
     # Premium user quotas
     PREMIUM_QUOTAS = {
         'max_storage_mb': 5000,  # 5GB for premium users
@@ -37,7 +39,7 @@ class QuotaManager:
         'max_concurrent_jobs': 5,
         'max_chatbooks': 200
     }
-    
+
     def __init__(self, user_id: str, user_tier: str = 'free', db: Optional[Any] = None):
         """
         Initialize quota manager for a user.
@@ -50,10 +52,10 @@ class QuotaManager:
         self.user_tier = user_tier
         self.quotas = self._get_quotas_for_tier(user_tier)
         self.db = db  # Optional DB handle for persistent quota checks
-        
+
         # Usage tracking (in production, use database)
         self.usage_cache: Dict[str, any] = {}
-    
+
     def _get_quotas_for_tier(self, tier: str) -> Dict[str, int]:
         """Get quota limits based on user tier."""
         if tier == 'premium':
@@ -70,7 +72,7 @@ class QuotaManager:
             }
         else:
             return self.DEFAULT_QUOTAS.copy()
-    
+
     async def check_storage_quota(self, additional_bytes: int = 0) -> Tuple[bool, str]:
         """
         Check if user has enough storage quota.
@@ -83,13 +85,13 @@ class QuotaManager:
         """
         current_usage = await self._get_current_storage_usage()
         max_bytes = self.quotas['max_storage_mb'] * 1024 * 1024
-        
+
         if current_usage + additional_bytes > max_bytes:
             remaining_mb = (max_bytes - current_usage) / (1024 * 1024)
             return False, f"Storage quota exceeded. You have {remaining_mb:.1f}MB remaining."
-        
+
         return True, "Storage quota OK"
-    
+
     async def check_export_quota(self) -> Tuple[bool, str]:
         """
         Check if user can perform another export today.
@@ -98,12 +100,12 @@ class QuotaManager:
             Tuple of (allowed, message)
         """
         exports_today = await self._get_operations_count_today('export')
-        
+
         if exports_today >= self.quotas['max_exports_per_day']:
             return False, f"Daily export limit ({self.quotas['max_exports_per_day']}) reached. Try again tomorrow."
-        
+
         return True, "Export quota OK"
-    
+
     async def check_import_quota(self) -> Tuple[bool, str]:
         """
         Check if user can perform another import today.
@@ -112,12 +114,12 @@ class QuotaManager:
             Tuple of (allowed, message)
         """
         imports_today = await self._get_operations_count_today('import')
-        
+
         if imports_today >= self.quotas['max_imports_per_day']:
             return False, f"Daily import limit ({self.quotas['max_imports_per_day']}) reached. Try again tomorrow."
-        
+
         return True, "Import quota OK"
-    
+
     async def check_file_size(self, file_size_bytes: int) -> Tuple[bool, str]:
         """
         Check if file size is within limits.
@@ -129,12 +131,12 @@ class QuotaManager:
             Tuple of (allowed, message)
         """
         max_bytes = self.quotas['max_file_size_mb'] * 1024 * 1024
-        
+
         if file_size_bytes > max_bytes:
             return False, f"File too large. Maximum size is {self.quotas['max_file_size_mb']}MB"
-        
+
         return True, "File size OK"
-    
+
     async def check_concurrent_jobs(self) -> Tuple[bool, str]:
         """
         Check if user can start another concurrent job.
@@ -143,12 +145,12 @@ class QuotaManager:
             Tuple of (allowed, message)
         """
         active_jobs = await self._get_active_jobs_count()
-        
+
         if active_jobs >= self.quotas['max_concurrent_jobs']:
             return False, f"Maximum concurrent jobs ({self.quotas['max_concurrent_jobs']}) reached. Wait for current jobs to complete."
-        
+
         return True, "Concurrent jobs OK"
-    
+
     async def record_operation(self, operation_type: str, size_bytes: int = 0):
         """
         Record an operation for quota tracking.
@@ -159,7 +161,7 @@ class QuotaManager:
         """
         # In production, this would update database
         logger.info(f"Recording {operation_type} operation for user {self.user_id} ({size_bytes} bytes)")
-    
+
     async def get_usage_summary(self) -> Dict[str, any]:
         """
         Get current usage summary for the user.
@@ -171,7 +173,7 @@ class QuotaManager:
         exports_today = await self._get_operations_count_today('export')
         imports_today = await self._get_operations_count_today('import')
         active_jobs = await self._get_active_jobs_count()
-        
+
         return {
             'storage': {
                 'used_mb': storage_used / (1024 * 1024),
@@ -192,7 +194,7 @@ class QuotaManager:
             },
             'tier': self.user_tier
         }
-    
+
     async def _get_current_storage_usage(self) -> int:
         """Get current storage usage in bytes."""
         # In production, query database for actual usage
@@ -200,7 +202,7 @@ class QuotaManager:
         try:
             import os
             import tempfile
-            
+
             # Use environment variable, or temp dir for testing, or system default
             if os.environ.get('TLDW_USER_DATA_PATH'):
                 base_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
@@ -208,9 +210,9 @@ class QuotaManager:
                 base_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
             else:
                 base_dir = Path('/var/lib/tldw/user_data')
-            
+
             user_dir = base_dir / 'users' / str(self.user_id)
-            
+
             if user_dir.exists():
                 total_size = 0
                 for path in user_dir.rglob('*'):
@@ -221,7 +223,7 @@ class QuotaManager:
         except Exception as e:
             logger.error(f"Error calculating storage usage: {e}")
             return 0
-    
+
     async def _get_operations_count_today(self, operation_type: str) -> int:
         """Get count of operations performed today."""
         # Prefer database-backed counts when available
@@ -270,10 +272,17 @@ class QuotaManager:
                 return 0
         except Exception as e:
             logger.debug(f"QuotaManager DB count fallback due to error: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "chatbooks_quota", "event": "db_count_fallback"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for chatbooks_quota db_count_fallback")
         # Fallback to cached value
         cache_key = f"{operation_type}_count_{datetime.now().date()}"
         return self.usage_cache.get(cache_key, 0)
-    
+
     async def _get_active_jobs_count(self) -> int:
         """Get count of currently active jobs."""
         # Prefer database-backed counts when available
@@ -300,8 +309,15 @@ class QuotaManager:
                 return _to_int(c1) + _to_int(c2)
         except Exception as e:
             logger.debug(f"QuotaManager DB active job count fallback: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "chatbooks_quota", "event": "db_active_count_fallback"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for chatbooks_quota db_active_count_fallback")
         return self.usage_cache.get('active_jobs', 0)
-    
+
     def cleanup_expired_files(self, days_old: int = 7) -> int:
         """
         Clean up old export files to free up space.
@@ -315,7 +331,7 @@ class QuotaManager:
         try:
             import os
             import tempfile
-            
+
             # Use environment variable, or temp dir for testing, or system default
             if os.environ.get('TLDW_USER_DATA_PATH'):
                 base_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
@@ -323,15 +339,15 @@ class QuotaManager:
                 base_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
             else:
                 base_dir = Path('/var/lib/tldw/user_data')
-            
+
             user_export_dir = base_dir / 'users' / str(self.user_id) / 'chatbooks' / 'exports'
-            
+
             if not user_export_dir.exists():
                 return 0
-            
+
             cutoff_date = datetime.now() - timedelta(days=days_old)
             deleted_count = 0
-            
+
             for file_path in user_export_dir.glob('*.zip'):
                 if file_path.stat().st_mtime < cutoff_date.timestamp():
                     try:
@@ -340,11 +356,25 @@ class QuotaManager:
                         logger.info(f"Deleted old export: {file_path}")
                     except Exception as e:
                         logger.error(f"Failed to delete {file_path}: {e}")
-            
+                        try:
+                            get_metrics_registry().increment(
+                                "app_warning_events_total",
+                                labels={"component": "chatbooks_quota", "event": "export_delete_failed"},
+                            )
+                        except Exception:
+                            logger.debug("metrics increment failed for chatbooks_quota export_delete_failed")
+
             return deleted_count
-            
+
         except Exception as e:
             logger.error(f"Error cleaning up old files: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_exception_events_total",
+                    labels={"component": "chatbooks_quota", "event": "cleanup_error"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for chatbooks_quota cleanup_error")
             return 0
 
 

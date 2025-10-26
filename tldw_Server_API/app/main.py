@@ -424,6 +424,12 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     _HAS_UNIFIED_EVALUATIONS = False
+    # Minimal chat/character endpoints to support lightweight tests
+    # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
+    from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+    from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
+    from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 else:
     # Research Endpoint
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
@@ -2467,6 +2473,11 @@ if _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
+    # Include lightweight chat/character routes needed by tests
+    app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
+    app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
 else:
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router

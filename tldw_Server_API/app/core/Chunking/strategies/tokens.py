@@ -334,7 +334,12 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             
             # Decode tokens back to text
             try:
-                chunk_text = self.tokenizer.decode(chunk_tokens)
+                if hasattr(self.tokenizer, 'decode'):
+                    chunk_text = self.tokenizer.decode(chunk_tokens)
+                elif hasattr(self.tokenizer, 'tokenizer') and hasattr(self.tokenizer.tokenizer, 'decode'):
+                    chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
+                else:
+                    raise AttributeError('No decode() available on tokenizer or underlying implementation')
 
                 # Trim trailing newline artifacts without disturbing leading indentation
                 chunk_text = chunk_text.rstrip("\r\n")
@@ -457,8 +462,14 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         try:
             if hasattr(self.tokenizer, 'tokenizer'):
                 tok = self.tokenizer.tokenizer
-                # Prefer wrapper decode to ensure skip_special_tokens=True consistently
-                decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                # Choose an available decode: prefer wrapper.decode if present,
+                # otherwise fall back to the underlying tokenizer's decode.
+                if hasattr(self.tokenizer, 'decode'):
+                    decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                elif hasattr(tok, 'decode'):
+                    decode_fn = lambda ids: tok.decode(ids)
+                else:
+                    decode_fn = None
                 try:
                     enc = tok(
                         text,
@@ -474,8 +485,11 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     offsets = None
             else:
                 token_ids = self.tokenizer.encode(text)
-                # Wrapper decode defaults to skip_special_tokens=True; pass explicitly
-                decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                # Generic tokenizer path (e.g., tiktoken or simple mocks): use plain decode(ids)
+                if hasattr(self.tokenizer, 'decode'):
+                    decode_fn = lambda ids: self.tokenizer.decode(ids)
+                else:
+                    decode_fn = None
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
         except Exception as e:
             logger.error(f"Tokenization failed: {e}")

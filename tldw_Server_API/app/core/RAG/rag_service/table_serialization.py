@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from loguru import logger
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 class TableFormat(Enum):
@@ -114,6 +115,13 @@ class TableParser:
                 return TableFormat.JSON
         except Exception as e:
             logger.debug(f"Table JSON detection failed: error={e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "rag", "event": "table_json_detect_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for rag table_json_detect_failed")
         
         # Check for CSV/TSV
         first_line = lines[0]
@@ -486,6 +494,13 @@ class TableProcessor:
             return self.serializer.serialize_for_rag(table, self.serialize_method)
         except Exception as e:
             logger.warning(f"Failed to process table: {e}")
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "rag", "event": "table_process_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for rag table_process_failed")
             return {
                 "error": str(e),
                 "original": table_text,
@@ -569,6 +584,13 @@ class TableProcessor:
                 
             except Exception as e:
                 logger.warning(f"Failed to process table: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "rag", "event": "table_process_failed"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for rag table_process_failed")
                 continue
         
         if table_metadata:

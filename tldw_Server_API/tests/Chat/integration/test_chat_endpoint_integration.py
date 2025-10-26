@@ -11,7 +11,7 @@ import tempfile
 import os
 import threading
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -165,7 +165,7 @@ import pytest_asyncio
 @pytest_asyncio.fixture
 async def async_test_client():
     """Create async test client for the actual FastAPI app."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
 

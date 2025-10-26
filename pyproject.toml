@@ -586,6 +586,14 @@ line-length = 120
 target-version = "py39"
 src = ["tldw_Server_API"]
 extend-include = ["*.ipynb"]
+exclude = [
+  "migrations",
+  "__pycache__",
+  "*.egg-info",
+  "build",
+  "dist",
+  "tests",
+]
 
 [tool.ruff.lint]
 select = [
@@ -608,14 +616,7 @@ ignore = [
     "N802", # function name should be lowercase
     "N806", # variable in function should be lowercase
 ]
-exclude = [
-    "migrations",
-    "__pycache__",
-    "*.egg-info",
-    "build",
-    "dist",
-    "tests",
-]
+exclude = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["tldw_Server_API"]

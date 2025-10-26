@@ -581,7 +581,7 @@ async def create_transcription(
                     await finish_job(current_user.id)
             except Exception:
                 pass
-        
+
         # Check for errors in transcription
         if transcribed_text.startswith("[Error") or transcribed_text.startswith("[Transcription error"):
             logger.error(f"Transcription failed: {transcribed_text}")
@@ -589,6 +589,15 @@ async def create_transcription(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Transcription failed. Please try again or use a different model."
             )
+
+        # Apply custom vocabulary post-replacements (all providers)
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Custom_Vocabulary import (
+                postprocess_text_if_enabled as _cv_post,
+            )
+            transcribed_text = _cv_post(transcribed_text)
+        except Exception:
+            pass
         
         # On success, record minutes used
         try:

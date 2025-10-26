@@ -488,6 +488,22 @@ buffered_chunk_duration = 20.0
 buffered_total_buffer = 25.0
 buffered_merge_algo = lcs
 
+# --- Custom Vocabulary (optional) ---
+# Path to a file with domain terms (one per line) or JSON list.
+# Used to prime Whisper via initial_prompt.
+custom_vocab_terms_file = 
+# Path to a JSON mapping of misheard->correct replacements.
+# Applied as post-processing across all STT providers.
+custom_vocab_replacements_file = 
+# Enable/disable using the terms list to build a Whisper initial_prompt
+custom_vocab_initial_prompt_enable = True
+# Enable/disable post-processing replacements
+custom_vocab_postprocess_enable = True
+# Optional template for the initial prompt. "{terms}" is replaced with a comma-separated list.
+custom_vocab_prompt_template = Domain terms: {terms}.
+# When True, replacements are case-sensitive
+custom_vocab_case_sensitive = False
+
 [external_providers]
 
 [TTS-Settings]

@@ -8,6 +8,8 @@ Registers shared test plugins and provides common fixtures.
 pytest_plugins = (
     "tldw_Server_API.tests._plugins.chat_fixtures",
     "tldw_Server_API.tests._plugins.authnz_fixtures",
+    # Expose isolated Chat fixtures (unit_test_client, isolated_db, etc.) globally
+    "tldw_Server_API.tests.Chat.integration.conftest_isolated",
 )
 
 import os
@@ -17,6 +19,25 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
+
+
+# Bump file-descriptor limit for macOS/Linux test runs to avoid spurious
+# 'Too many open files' and SQLite 'unable to open database file' errors
+# caused by module-level TestClient instances in some test modules.
+@pytest.fixture(scope="session", autouse=True)
+def _raise_fd_limit():  # pragma: no cover - platform-dependent behavior
+    try:
+        import resource  # POSIX only
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        # Aim for at least 4096 if permitted by the hard limit
+        target = 4096
+        new_soft = min(max(soft, target), hard if hard > 0 else target)
+        if new_soft > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except Exception:
+        # On platforms without 'resource' (e.g., Windows) or when permissions
+        # disallow raising limits, silently continue.
+        pass
 
 class _TestUsageLogger:
     def __init__(self):

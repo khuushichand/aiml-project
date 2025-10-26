@@ -7,7 +7,8 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
-- Standard limits apply; real-time WebSocket transcription enforces per-connection and per-minute usage.
+- Transcriptions/Translations: 20 requests/minute, keyed per user when authenticated (falls back to IP).
+- Real-time WebSocket transcription: per-user concurrent stream limits and daily minutes quotas enforced.
 
 ## Table of Contents
 - [Features](#features)
@@ -84,8 +85,8 @@ Transcribe audio into text.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| file | file | Yes | The audio file to transcribe (max 25MB) |
-| model | string | No | Model to use: `whisper-1`, `parakeet`, `canary`, `qwen2audio` (default: `whisper-1`) |
+| file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
+| model | string | No | Model to use: `whisper-1` (`whisper` alias), `parakeet`, `canary`, `qwen2audio` (default: `whisper-1`) |
 | language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es') |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
@@ -100,6 +101,10 @@ Transcribe audio into text.
 | seg_embeddings_model | string | No | Embeddings model override (optional) |
 
 When `timestamp_granularities` includes `word` (Whisper only), each segment includes a `words` array with `{start, end, word}` entries.
+
+Accepted Content-Types:
+- `audio/wav`, `audio/x-wav`, `audio/mpeg`, `audio/mp3`, `audio/mp4`, `audio/m4a`, `audio/x-m4a`, `audio/flac`, `audio/ogg`, `audio/opus`, `audio/webm`.
+Unsupported types return 415.
 
 **Response (JSON format):**
 ```json
@@ -124,6 +129,10 @@ When `timestamp_granularities` includes `word` (Whisper only), each segment incl
   ]
 }
 ```
+
+Notes:
+- For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
+- For `response_format: verbose_json`, the response includes `task` and `duration` fields.
 
 ### Word-level Timestamps Example (Whisper only)
 
@@ -189,7 +198,7 @@ nemo_cache_dir = ./models/nemo
 
 ### Environment Variables
 
-Note: In the current codebase, STT configuration is read from `Config_Files/config.txt`. Environment variable overrides for STT (e.g., default transcriber, Nemo device, cache dir) are not wired up yet. Use `config.txt` to change these settings.
+Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change default transcriber, Nemo device, model variant, and cache dir.
 
 ## Live Transcription
 
@@ -198,7 +207,8 @@ Note: In the current codebase, STT configuration is read from `Config_Files/conf
 - Endpoint: `ws://localhost:8000/api/v1/audio/stream/transcribe`
 - Authentication:
   - Single-user: `?token=<SINGLE_USER_API_KEY>` in the query OR first message `{ "type": "auth", "token": "<SINGLE_USER_API_KEY>" }`
-  - Multi-user JWT: supported via `Authorization: Bearer <JWT>` header on the WebSocket upgrade request, or in the first message `{ "type": "auth", "token": "<JWT>" }`.
+  - Multi-user JWT: `Authorization: Bearer <JWT>` on the upgrade request, or first message `{ "type": "auth", "token": "<JWT>" }`.
+  - Multi-user API Keys: `X-API-KEY` header supported; keys can be scoped to endpoints (must include `audio.stream.transcribe`) and optionally path-prefixed allowlists. Quotas may be enforced per key.
 - Protocol:
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
@@ -216,7 +226,7 @@ Note: In the current codebase, STT configuration is read from `Config_Files/conf
   - Metadata fields (`segment_id`, `segment_start`, `segment_end`, `chunk_start`, `chunk_end`, `overlap`) allow clients to align transcripts on a timeline or build diarization overlays.
 
 Helper endpoints
-- `GET /api/v1/audio/stream/status` → returns availability and supported models/variants
+- `GET /api/v1/audio/stream/status` → returns availability and supported models/variants and features
 - `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
 
 Examples (wscat)
@@ -523,6 +533,10 @@ except KeyboardInterrupt:
 - Language detection: When `language` is omitted and Whisper is used, the API returns the detected language in the JSON response.
 - Authentication: Single-user mode uses `X-API-KEY`. The OpenAI Python client defaults to Bearer; pass `default_headers={"X-API-KEY": "..."}`.
 - SRT/VTT outputs are basic placeholders without precise per-segment timings.
+- File size limit is quota-aware; defaults to 25MB but can be increased/decreased per user tier. Requests over the limit return 413.
+- Daily minutes are enforced for both batch and streaming transcription. When exceeded:
+  - Batch/file transcription returns 402 (Payment Required) with `"Transcription quota exceeded (daily minutes)"`.
+  - WebSocket streaming emits a structured error and closes with code 4003.
 
 ## Troubleshooting
 
@@ -559,9 +573,16 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## API Rate Limits
 
-- Transcription endpoint: 20 requests/minute per IP
-- Translation endpoint: 20 requests/minute per IP
-- File size limit: 25MB per request
+- Transcription endpoint: 20 requests/minute (per user when authenticated; falls back to IP)
+- Translation endpoint: 20 requests/minute (per user when authenticated; falls back to IP)
+- File size limit: 25MB per request (tier-adjusted)
+
+WebSocket limits
+- Per-user concurrent streams and daily minutes enforced (exact values depend on server quotas). Structured errors emitted when quotas are exceeded.
+
+TTS
+- `POST /api/v1/audio/speech`: 10 requests/minute; OpenAI-compatible request with `model`, `input`, `voice`, `response_format` (mp3, opus, aac, flac, wav, pcm).
+- `GET /api/v1/audio/voices/catalog`: Lists available TTS voices across providers; optional `provider` filter.
 
 ## Security Considerations
 
@@ -588,3 +609,10 @@ logging.basicConfig(level=logging.DEBUG)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
 - TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
 - If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.
+- Errors:
+  - 400: No file, invalid params, or bad `timestamp_granularities`
+  - 402: Daily minutes quota exceeded
+  - 413: File too large
+  - 415: Unsupported media type
+  - 429: Rate limit exceeded
+  - 500: Transcription failed

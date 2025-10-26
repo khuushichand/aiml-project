@@ -549,6 +549,44 @@ def load_settings():
 
     content_backend_mode = os.getenv("TLDW_CONTENT_DB_BACKEND", "sqlite").strip().lower()
 
+    # Character-Chat rate limiting knobs from config.txt (env will still override later)
+    try:
+        _cp = load_comprehensive_config()
+        def _cc_int(key: str, fb: int) -> int:
+            try:
+                return int(str(_cp.get('Character-Chat', key, fallback=str(fb))))
+            except Exception:
+                return fb
+        def _cc_bool_present(key: str) -> tuple[bool, bool]:
+            try:
+                if _cp.has_section('Character-Chat') and _cp.has_option('Character-Chat', key):
+                    raw = str(_cp.get('Character-Chat', key)).strip().lower()
+                    return True, raw in {"1","true","yes","on"}
+            except Exception:
+                pass
+            return False, False
+        _character_rate_limit_ops = _cc_int('CHARACTER_RATE_LIMIT_OPS', 100)
+        _character_rate_limit_window = _cc_int('CHARACTER_RATE_LIMIT_WINDOW', 3600)
+        _max_characters_per_user = _cc_int('MAX_CHARACTERS_PER_USER', 1000)
+        _max_character_import_size_mb = _cc_int('MAX_CHARACTER_IMPORT_SIZE_MB', 10)
+        # Optional chat-specific knobs if present
+        _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100)
+        _max_messages_per_chat = _cc_int('MAX_MESSAGES_PER_CHAT', 1000)
+        _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
+        _max_message_sends_per_minute = _cc_int('MAX_MESSAGE_SENDS_PER_MINUTE', 60)
+        _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('RATE_LIMIT_ENABLED')
+    except Exception:
+        _character_rate_limit_ops = 100
+        _character_rate_limit_window = 3600
+        _max_characters_per_user = 1000
+        _max_character_import_size_mb = 10
+        _max_chats_per_user = 100
+        _max_messages_per_chat = 1000
+        _max_chat_completions_per_minute = 20
+        _max_message_sends_per_minute = 60
+        _has_char_rl_enabled = False
+        _char_rl_enabled_bool = False
+
     config_dict = {
         # General App
         "APP_MODE_STR": single_user_mode_str,
@@ -577,7 +615,16 @@ def load_settings():
         "REDIS_URL": redis_url,
         "CACHE_TTL": cache_ttl,
         "REDIS_ENABLED": redis_enabled,
-
+        # Character-Chat (rate limiting) – file-backed defaults; env may override later
+        "CHARACTER_RATE_LIMIT_OPS": _character_rate_limit_ops,
+        "CHARACTER_RATE_LIMIT_WINDOW": _character_rate_limit_window,
+        "MAX_CHARACTERS_PER_USER": _max_characters_per_user,
+        "MAX_CHARACTER_IMPORT_SIZE_MB": _max_character_import_size_mb,
+        "MAX_CHATS_PER_USER": _max_chats_per_user,
+        "MAX_MESSAGES_PER_CHAT": _max_messages_per_chat,
+        "MAX_CHAT_COMPLETIONS_PER_MINUTE": _max_chat_completions_per_minute,
+        "MAX_MESSAGE_SENDS_PER_MINUTE": _max_message_sends_per_minute,
+    
         # Chat Configuration - Load from config file with default
         "CHAT_DICT_MAX_TOKENS": int(
             comprehensive_config.get('Chat-Dictionaries', {}).get('max_tokens', '5000')
@@ -897,6 +944,12 @@ def load_settings():
             _cp.getboolean('persona.rbac', 'allow_delete', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
         ))(load_comprehensive_config()),
     }
+    # Only include explicit Character-Chat RATE_LIMIT_ENABLED if present in config.txt
+    try:
+        if _has_char_rl_enabled:
+            config_dict["CHARACTER_RATE_LIMIT_ENABLED"] = _char_rl_enabled_bool
+    except Exception:
+        pass
 
     # Surface provider-specific configuration blocks for orchestrator callers.
     provider_keys = [
@@ -1832,6 +1885,13 @@ def load_and_log_configs():
         nemo_model_variant = config_parser_object.get('STT-Settings', 'nemo_model_variant', fallback='standard')
         nemo_device = config_parser_object.get('STT-Settings', 'nemo_device', fallback='cuda')
         nemo_cache_dir = config_parser_object.get('STT-Settings', 'nemo_cache_dir', fallback='./models/nemo')
+        # STT custom vocabulary (optional)
+        stt_custom_vocab_terms_file = config_parser_object.get('STT-Settings', 'custom_vocab_terms_file', fallback='')
+        stt_custom_vocab_replacements_file = config_parser_object.get('STT-Settings', 'custom_vocab_replacements_file', fallback='')
+        stt_custom_vocab_initial_prompt_enable = config_parser_object.get('STT-Settings', 'custom_vocab_initial_prompt_enable', fallback='True')
+        stt_custom_vocab_postprocess_enable = config_parser_object.get('STT-Settings', 'custom_vocab_postprocess_enable', fallback='True')
+        stt_custom_vocab_prompt_template = config_parser_object.get('STT-Settings', 'custom_vocab_prompt_template', fallback='')
+        stt_custom_vocab_case_sensitive = config_parser_object.get('STT-Settings', 'custom_vocab_case_sensitive', fallback='False')
 
         # TTS Settings
         # FIXME
@@ -2360,6 +2420,13 @@ def load_and_log_configs():
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                # Custom vocabulary settings
+                'custom_vocab_terms_file': stt_custom_vocab_terms_file,
+                'custom_vocab_replacements_file': stt_custom_vocab_replacements_file,
+                'custom_vocab_initial_prompt_enable': stt_custom_vocab_initial_prompt_enable,
+                'custom_vocab_postprocess_enable': stt_custom_vocab_postprocess_enable,
+                'custom_vocab_prompt_template': stt_custom_vocab_prompt_template,
+                'custom_vocab_case_sensitive': stt_custom_vocab_case_sensitive,
             },
             # Also provide with hyphen for backward compatibility
             'STT-Settings': {
@@ -2368,6 +2435,13 @@ def load_and_log_configs():
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                # Custom vocabulary settings
+                'custom_vocab_terms_file': stt_custom_vocab_terms_file,
+                'custom_vocab_replacements_file': stt_custom_vocab_replacements_file,
+                'custom_vocab_initial_prompt_enable': stt_custom_vocab_initial_prompt_enable,
+                'custom_vocab_postprocess_enable': stt_custom_vocab_postprocess_enable,
+                'custom_vocab_prompt_template': stt_custom_vocab_prompt_template,
+                'custom_vocab_case_sensitive': stt_custom_vocab_case_sensitive,
             },
             'tts_settings': {
                 'default_tts_provider': default_tts_provider,

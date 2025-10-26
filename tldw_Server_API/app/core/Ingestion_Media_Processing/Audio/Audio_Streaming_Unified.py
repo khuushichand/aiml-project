@@ -471,6 +471,12 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 self.last_partial_time = current_time
                 
                 if text:
+                    # Apply custom vocabulary post-replacements if enabled
+                    try:
+                        from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                        text = postprocess_text_if_enabled(text)
+                    except Exception:
+                        pass
                     metadata = self._prepare_partial_metadata(buffer_duration)
                     result = {
                         "type": "partial",
@@ -510,6 +516,12 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 )
                 
                 if text:
+                    # Apply custom vocabulary post-replacements if enabled
+                    try:
+                        from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                        text = postprocess_text_if_enabled(text)
+                    except Exception:
+                        pass
                     self.transcription_history.append(text)
                     chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
                     metadata = self._prepare_final_metadata(chunk_duration)
@@ -583,6 +595,12 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                 self.last_partial_time = current_time
                 
                 if text:
+                    # Apply custom vocabulary post-replacements if enabled
+                    try:
+                        from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                        text = postprocess_text_if_enabled(text)
+                    except Exception:
+                        pass
                     # Detect language if auto-detection is enabled
                     detected_language = self.config.language
                     if self.config.auto_detect_language:
@@ -621,11 +639,17 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                 )
                 
                 if text:
+                    # Apply custom vocabulary post-replacements if enabled
+                    try:
+                        from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                        text = postprocess_text_if_enabled(text)
+                    except Exception:
+                        pass
                     # Detect language if auto-detection is enabled
                     detected_language = self.config.language
                     if self.config.auto_detect_language:
                         detected_language = self._detect_language(text)
-                    
+
                     self.transcription_history.append(text)
                     chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
                     metadata = self._prepare_final_metadata(chunk_duration)
@@ -700,6 +724,15 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             
             if self.config.language and not self.config.auto_detect_language:
                 self.transcribe_options['language'] = self.config.language
+            # Inject custom vocabulary initial prompt if configured
+            try:
+                from .Audio_Custom_Vocabulary import initial_prompt_if_enabled
+                _init_prompt = initial_prompt_if_enabled()
+                if _init_prompt:
+                    self.transcribe_options['initial_prompt'] = _init_prompt
+                    logger.info("Applied custom vocabulary initial_prompt for Whisper streaming")
+            except Exception as _cv_err:
+                logger.debug(f"Whisper streaming initial_prompt skipped: {_cv_err}")
             
             # Whisper works better with longer audio chunks
             self.min_chunk_duration = 1.0  # Minimum 1 second of audio
@@ -825,6 +858,12 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 
                 # Join all text parts
                 text = " ".join(text_parts)
+                # Apply custom vocabulary post-replacements if enabled
+                try:
+                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                    text = postprocess_text_if_enabled(text)
+                except Exception:
+                    pass
                 
                 # Log detected language if auto-detecting
                 if self.config.auto_detect_language and hasattr(info, 'language'):

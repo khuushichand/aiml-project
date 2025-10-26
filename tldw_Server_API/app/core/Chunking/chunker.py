@@ -2489,6 +2489,18 @@ class Chunker:
                     if len(buffer) >= flush_threshold:
                         # Find a good split point (end of sentence/paragraph)
                         split_point = self._find_split_point(buffer, flush_threshold)
+                        # For text-like streaming (words, sentences), avoid cutting in the
+                        # middle of a token when the split lands at the end of the current
+                        # buffer. Prefer the last whitespace before the end, and leave the
+                        # trailing partial token for the next iteration so it joins correctly
+                        # with the next segment.
+                        if method_lower in ('words', 'sentences') and split_point >= len(buffer):
+                            k = len(buffer) - 1
+                            # Walk back to the previous whitespace boundary, if any
+                            while k > 0 and not buffer[k - 1].isspace():
+                                k -= 1
+                            if 0 < k < len(buffer):
+                                split_point = k
 
                         # Process the first part
                         to_process = buffer[:split_point]

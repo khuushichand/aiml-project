@@ -30,10 +30,14 @@ def _make_test_app() -> FastAPI:
     return a
 
 
-client = TestClient(_make_test_app())
+@pytest.fixture
+def client():
+    app = _make_test_app()
+    with TestClient(app) as c:
+        yield c
 
 
-def test_prometheus_metrics_contains_http_and_chunking_fields():
+def test_prometheus_metrics_contains_http_and_chunking_fields(client):
     # Make a simple request to ensure HTTP middleware increments counters
     r = client.get("/favicon.ico")
     assert r.status_code in (200, 404)
@@ -60,7 +64,7 @@ def test_prometheus_metrics_contains_http_and_chunking_fields():
     assert "chunk_time_seconds_bucket" in text
 
 
-def test_chat_metrics_json_shape_basic():
+def test_chat_metrics_json_shape_basic(client):
     resp = client.get("/api/v1/metrics/chat")
     assert resp.status_code == 200
     data = resp.json()
