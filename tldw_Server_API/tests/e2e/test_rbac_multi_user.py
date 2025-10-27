@@ -412,6 +412,357 @@ class TestAdminMintedVirtualKeyConstraints:
             assert isinstance(details["allowed_endpoints"], list)
         # We cannot directly introspect metadata.allowed_paths here; enforcement is validated elsewhere
 
+    def test_22_virtual_key_org_only_propagation(self, api_client):
+        _require_multi_user(api_client)
+        admin_token = os.getenv("E2E_ADMIN_BEARER")
+        if not admin_token:
+            pytest.skip("E2E_ADMIN_BEARER not set; skipping org-only propagation test")
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+        u = APIClient(base)
+        creds = {"username": f"vk_org_only_{int(time.time())}", "email": f"vk_org_only_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        try:
+            u.register(**creds)
+        except httpx.HTTPStatusError:
+            pass
+        u.login(creds["username"], creds["password"])  # bearer for /auth/me
+        uid = u.get_current_user().get("id")
+
+        # Create org only
+        org = api_client.client.post("/api/v1/admin/orgs", json={"name": f"VK OrgOnly {uuid.uuid4().hex[:6]}"}, headers=headers)
+        assert org.status_code == 200, org.text
+        org_id = org.json().get("id")
+
+        # Mint key with only org_id
+        mk = api_client.client.post(
+            f"/api/v1/admin/users/{uid}/virtual-keys",
+            json={"name": "vk-org-only", "expires_in_days": 1, "org_id": org_id},
+            headers=headers,
+        )
+        assert mk.status_code == 200, mk.text
+        key_id = mk.json().get("id")
+        assert key_id
+
+        log = api_client.client.get(f"/api/v1/admin/api-keys/{key_id}/audit-log", headers=headers)
+        assert log.status_code == 200
+        items = log.json().get("items", [])
+        assert items
+        created = next((e for e in items if (e.get("action") or "").startswith("created")), items[0])
+        details = created.get("details")
+        if isinstance(details, str):
+            try:
+                import json as _json
+                details = _json.loads(details)
+            except Exception:
+                details = {}
+        assert isinstance(details, dict)
+        assert details.get("org_id") == org_id
+        # team_id may be absent or None
+        assert ("team_id" not in details) or details.get("team_id") is None
+
+    def test_23_virtual_key_team_only_propagation(self, api_client):
+        _require_multi_user(api_client)
+        admin_token = os.getenv("E2E_ADMIN_BEARER")
+        if not admin_token:
+            pytest.skip("E2E_ADMIN_BEARER not set; skipping team-only propagation test")
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+        u = APIClient(base)
+        creds = {"username": f"vk_team_only_{int(time.time())}", "email": f"vk_team_only_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        try:
+            u.register(**creds)
+        except httpx.HTTPStatusError:
+            pass
+        u.login(creds["username"], creds["password"])  # bearer for /auth/me
+        uid = u.get_current_user().get("id")
+
+        # Create org + team
+        org = api_client.client.post("/api/v1/admin/orgs", json={"name": f"VK OrgForTeam {uuid.uuid4().hex[:6]}"}, headers=headers)
+        assert org.status_code == 200, org.text
+        org_id = org.json().get("id")
+        team = api_client.client.post(
+            f"/api/v1/admin/orgs/{org_id}/teams",
+            json={"name": f"VK TeamOnly {uuid.uuid4().hex[:4]}"},
+            headers=headers,
+        )
+        assert team.status_code == 200, team.text
+        team_id = team.json().get("id")
+
+        # Mint key with only team_id
+        mk = api_client.client.post(
+            f"/api/v1/admin/users/{uid}/virtual-keys",
+            json={"name": "vk-team-only", "expires_in_days": 1, "team_id": team_id},
+            headers=headers,
+        )
+        assert mk.status_code == 200, mk.text
+        key_id = mk.json().get("id")
+        assert key_id
+
+        log = api_client.client.get(f"/api/v1/admin/api-keys/{key_id}/audit-log", headers=headers)
+        assert log.status_code == 200
+        items = log.json().get("items", [])
+        assert items
+        created = next((e for e in items if (e.get("action") or "").startswith("created")), items[0])
+        details = created.get("details")
+        if isinstance(details, str):
+            try:
+                import json as _json
+                details = _json.loads(details)
+            except Exception:
+                details = {}
+        assert isinstance(details, dict)
+        # org_id may be None; team_id should be present
+        assert details.get("team_id") == team_id
+
+    def test_24_virtual_key_path_mismatch_blocks_audio_and_chat(self, api_client):
+        _require_multi_user(api_client)
+        admin_token = os.getenv("E2E_ADMIN_BEARER")
+        if not admin_token:
+            pytest.skip("E2E_ADMIN_BEARER not set; skipping path mismatch tests")
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+        u = APIClient(base)
+        creds = {"username": f"vk_mismatch_{int(time.time())}", "email": f"vk_mismatch_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        try:
+            u.register(**creds)
+        except httpx.HTTPStatusError:
+            pass
+        u.login(creds["username"], creds["password"])  # bearer for /auth/me
+        uid = u.get_current_user().get("id")
+
+        # Mint key only for rag path
+        mk = api_client.client.post(
+            f"/api/v1/admin/users/{uid}/virtual-keys",
+            json={"name": "vk-rag-only", "expires_in_days": 1, "allowed_paths": ["/api/v1/rag"], "allowed_methods": ["POST"]},
+            headers=headers,
+        )
+        assert mk.status_code == 200, mk.text
+        key = mk.json().get("key")
+        assert key
+
+        # Chat should be blocked (path not allowed)
+        r_chat = u.client.post(
+            "/api/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hello"}], "model": "noop"},
+            headers={"X-API-KEY": key},
+        )
+        assert r_chat.status_code in (401, 403)
+
+        # Audio TTS should be blocked (path not allowed)
+        r_tts = u.client.post(
+            "/api/v1/audio/speech",
+            json={"model": "tts-1", "input": "hello world", "voice": "alloy", "response_format": "mp3"},
+            headers={"X-API-KEY": key},
+        )
+        assert r_tts.status_code in (401, 403)
+
+    def test_25_team_scoped_key_non_member_access_patterns(self, api_client):
+        """Team-scoped API key for a user not in the team: endpoints that rely on team membership use JWT and deny accordingly.
+
+        Note:
+        - /api/v1/teams/{team_id}/mcp/tool_catalogs (and related MCP catalog endpoints) use get_current_user (JWT-only)
+          and perform explicit role checks via list_team_members. These routes do not accept X-API-KEY.
+          As a result, X-API-KEY requests return 401/403, while a valid JWT bearer with the required manager role
+          (owner/admin/lead) returns 200.
+        - Virtual API keys can carry org_id/team_id metadata, but membership/role checks are enforced against the
+          authenticated user’s memberships, not the key metadata.
+        """
+        _require_multi_user(api_client)
+        admin_token = os.getenv("E2E_ADMIN_BEARER")
+        if not admin_token:
+            pytest.skip("E2E_ADMIN_BEARER not set; skipping team membership access pattern test")
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+        u = APIClient(base)
+        creds = {"username": f"vk_team_nm_{int(time.time())}", "email": f"vk_team_nm_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        try:
+            u.register(**creds)
+        except httpx.HTTPStatusError:
+            pass
+        u.login(creds["username"], creds["password"])  # bearer for user
+        uid = u.get_current_user().get("id")
+
+        # Create org and a team; do NOT add the user to team
+        org = api_client.client.post("/api/v1/admin/orgs", json={"name": f"VK Org TNonMem {uuid.uuid4().hex[:6]}"}, headers=headers)
+        assert org.status_code == 200, org.text
+        org_id = org.json().get("id")
+        team = api_client.client.post(
+            f"/api/v1/admin/orgs/{org_id}/teams",
+            json={"name": f"VK Team TNonMem {uuid.uuid4().hex[:4]}"},
+            headers=headers,
+        )
+        assert team.status_code == 200, team.text
+        team_id = team.json().get("id")
+
+        # Mint a team-scoped key for the user (user is not a team member)
+        mk = api_client.client.post(
+            f"/api/v1/admin/users/{uid}/virtual-keys",
+            json={"name": "vk-team-nonmember", "expires_in_days": 1, "team_id": team_id, "allowed_paths": ["/api/v1/rag"], "allowed_methods": ["POST"]},
+            headers=headers,
+        )
+        assert mk.status_code == 200, mk.text
+        key = mk.json().get("key")
+        assert key
+
+        # Team-managed endpoint (MCP catalogs) requires JWT + team manager membership; X-API-KEY is unsupported and should 401
+        r_xkey = u.client.get(f"/api/v1/teams/{team_id}/mcp/tool_catalogs", headers={"X-API-KEY": key})
+        assert r_xkey.status_code in (401, 403)
+
+        # With user's bearer (non-manager, non-member): expect 403
+        r_bearer = u.client.get(f"/api/v1/teams/{team_id}/mcp/tool_catalogs")
+        assert r_bearer.status_code == 403
+
+        # Now add user to the team as lead and verify access becomes 200
+        add_team = api_client.client.post(
+            f"/api/v1/admin/teams/{team_id}/members",
+            json={"user_id": uid, "role": "lead"},
+            headers=headers,
+        )
+        assert add_team.status_code == 200, add_team.text
+        r_bearer2 = u.client.get(f"/api/v1/teams/{team_id}/mcp/tool_catalogs")
+        assert r_bearer2.status_code == 200
+
+    def test_27_admin_promote_demote_team_role_toggles_access(self, api_client):
+        """Admin removes and re-adds a user's team membership to change role; access toggles accordingly.
+
+        Flow:
+        - Add user as 'member' => GET team catalogs forbidden (403)
+        - Promote to 'lead' (remove + add with role lead) => GET team catalogs allowed (200)
+        - Demote back to 'member' (remove + add as member) => GET team catalogs forbidden (403)
+        """
+        _require_multi_user(api_client)
+        admin_token = os.getenv("E2E_ADMIN_BEARER")
+        if not admin_token:
+            pytest.skip("E2E_ADMIN_BEARER not set; skipping promote/demote test")
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+        u = APIClient(base)
+        creds = {"username": f"vk_team_role_{int(time.time())}", "email": f"vk_team_role_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        try:
+            u.register(**creds)
+        except httpx.HTTPStatusError:
+            pass
+        u.login(creds["username"], creds["password"])  # bearer
+        uid = u.get_current_user().get("id")
+
+        # Create org + team
+        org = api_client.client.post("/api/v1/admin/orgs", json={"name": f"VK Org Role {uuid.uuid4().hex[:6]}"}, headers=headers)
+        assert org.status_code == 200, org.text
+        org_id = org.json().get("id")
+        team = api_client.client.post(
+            f"/api/v1/admin/orgs/{org_id}/teams",
+            json={"name": f"VK Team Role {uuid.uuid4().hex[:4]}"},
+            headers=headers,
+        )
+        assert team.status_code == 200, team.text
+        team_id = team.json().get("id")
+
+        # 1) Add as member
+        add_member = api_client.client.post(
+            f"/api/v1/admin/teams/{team_id}/members",
+            json={"user_id": uid, "role": "member"},
+            headers=headers,
+        )
+        assert add_member.status_code == 200, add_member.text
+        r1 = u.client.get(f"/api/v1/teams/{team_id}/mcp/tool_catalogs")
+        assert r1.status_code == 403
+
+        # 2) Promote to lead
+        rem = api_client.client.delete(f"/api/v1/admin/teams/{team_id}/members/{uid}", headers=headers)
+        assert rem.status_code in (200, 204)
+        add_lead = api_client.client.post(
+            f"/api/v1/admin/teams/{team_id}/members",
+            json={"user_id": uid, "role": "lead"},
+            headers=headers,
+        )
+        assert add_lead.status_code == 200, add_lead.text
+        r2 = u.client.get(f"/api/v1/teams/{team_id}/mcp/tool_catalogs")
+        assert r2.status_code == 200
+
+        # 3) Demote back to member
+        rem2 = api_client.client.delete(f"/api/v1/admin/teams/{team_id}/members/{uid}", headers=headers)
+        assert rem2.status_code in (200, 204)
+        add_member2 = api_client.client.post(
+            f"/api/v1/admin/teams/{team_id}/members",
+            json={"user_id": uid, "role": "member"},
+            headers=headers,
+        )
+        assert add_member2.status_code == 200, add_member2.text
+        r3 = u.client.get(f"/api/v1/teams/{team_id}/mcp/tool_catalogs")
+        assert r3.status_code == 403
+
+    def test_26_admin_list_api_keys_fields_no_org_team(self, api_client):
+        """Explicitly confirm admin list API keys does not expose org_id/team_id; rely on audit log for those."""
+        _require_multi_user(api_client)
+        admin_token = os.getenv("E2E_ADMIN_BEARER")
+        if not admin_token:
+            pytest.skip("E2E_ADMIN_BEARER not set; skipping admin list API keys field test")
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+        u = APIClient(base)
+        creds = {"username": f"vk_list_{int(time.time())}", "email": f"vk_list_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        try:
+            u.register(**creds)
+        except httpx.HTTPStatusError:
+            pass
+        u.login(creds["username"], creds["password"])  # bearer for /auth/me
+        uid = u.get_current_user().get("id")
+
+        # Mint key with org/team
+        # Create org and team
+        org = api_client.client.post("/api/v1/admin/orgs", json={"name": f"VK Org List {uuid.uuid4().hex[:6]}"}, headers=headers)
+        assert org.status_code == 200, org.text
+        org_id = org.json().get("id")
+        team = api_client.client.post(
+            f"/api/v1/admin/orgs/{org_id}/teams",
+            json={"name": f"VK Team List {uuid.uuid4().hex[:4]}"},
+            headers=headers,
+        )
+        assert team.status_code == 200, team.text
+        team_id = team.json().get("id")
+
+        mk = api_client.client.post(
+            f"/api/v1/admin/users/{uid}/virtual-keys",
+            json={"name": "vk-list-metadata", "expires_in_days": 1, "org_id": org_id, "team_id": team_id},
+            headers=headers,
+        )
+        assert mk.status_code == 200, mk.text
+        key_id = mk.json().get("id")
+        assert key_id
+
+        # Admin list user API keys does not include org_id/team_id in APIKeyMetadata schema
+        listing = api_client.client.get(f"/api/v1/admin/users/{uid}/api-keys", headers=headers)
+        assert listing.status_code == 200, listing.text
+        items = listing.json()
+        assert isinstance(items, list) and len(items) >= 1
+        # Ensure keys in response do not include org_id/team_id
+        sample = items[0]
+        assert "org_id" not in sample and "team_id" not in sample
+
+        # Rely on audit log for org/team confirmation
+        log = api_client.client.get(f"/api/v1/admin/api-keys/{key_id}/audit-log", headers=headers)
+        assert log.status_code == 200
+        entries = log.json().get("items", [])
+        assert entries
+        created = next((e for e in entries if (e.get("action") or "").startswith("created")), entries[0])
+        details = created.get("details")
+        if isinstance(details, str):
+            try:
+                import json as _json
+                details = _json.loads(details)
+            except Exception:
+                details = {}
+        assert isinstance(details, dict)
+        assert details.get("org_id") == org_id
+        if team_id is not None:
+            assert details.get("team_id") == team_id
+
 
 class TestOrgsTeamsRBAC:
     """Admin creates org/team and manages memberships; verifies listings reflect assignments."""

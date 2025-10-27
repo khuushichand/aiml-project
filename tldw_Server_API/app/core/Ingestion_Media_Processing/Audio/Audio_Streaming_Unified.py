@@ -692,10 +692,13 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                    f"language={self.config.language}, task={self.config.task}")
         
         try:
-            # Import Whisper functions from the existing library
-            logger.debug("Importing get_whisper_model from Audio_Transcription_Lib")
-            from .Audio_Transcription_Lib import get_whisper_model
-            logger.debug("Successfully imported get_whisper_model")
+            # Prefer a module-level override (tests may monkeypatch this symbol on
+            # Audio_Streaming_Unified) and fall back to the library import.
+            get_whisper_model = globals().get('get_whisper_model')  # type: ignore[assignment]
+            if get_whisper_model is None:
+                logger.debug("Importing get_whisper_model from Audio_Transcription_Lib")
+                from .Audio_Transcription_Lib import get_whisper_model  # type: ignore[no-redef]
+                logger.debug("Successfully imported get_whisper_model")
             
             # Determine device and compute type
             import torch
@@ -707,7 +710,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             logger.info(f"Loading Whisper model: {self.config.whisper_model_size} on {device} with compute_type: {compute_type}")
             
             # Load the model using existing function
-            self.model = get_whisper_model(self.config.whisper_model_size, device)
+            self.model = get_whisper_model(self.config.whisper_model_size, device)  # type: ignore[misc]
             
             if self.model is None:
                 raise RuntimeError(f"Failed to load Whisper model: {self.config.whisper_model_size}")

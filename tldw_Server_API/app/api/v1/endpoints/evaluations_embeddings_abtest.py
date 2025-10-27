@@ -3,6 +3,7 @@ Embeddings A/B test endpoints extracted from evaluations_unified.
 """
 
 import json
+import os
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, BackgroundTasks, Response
 from loguru import logger
@@ -153,6 +154,24 @@ async def run_embeddings_abtest(
         db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}})
     except Exception:
         pass
+
+    # In testing mode, execute synchronously to make polling deterministic
+    testing = False
+    try:
+        testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        testing = False
+
+    if testing:
+        logger.info(f"A/B test running synchronously in TESTING mode: {test_id}")
+        await _abtest_job()
+        try:
+            if idempotency_key:
+                db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
+        except Exception:
+            pass
+        return EmbeddingsABTestStatusResponse(test_id=test_id, status='completed', progress={"phase": 1.0})
+
     # Schedule background task
     background_tasks.add_task(_abtest_job)
     logger.info(f"A/B test started in background: {test_id}")

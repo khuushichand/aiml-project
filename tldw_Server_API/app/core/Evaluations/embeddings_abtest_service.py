@@ -308,6 +308,11 @@ async def run_vector_search_and_score(
             else:
                 qvec = qvecs[q_idx]
                 collection = manager.get_or_create_collection(collection_name)
+                ids: List[List[str]] = [[]]
+                metadatas: List[List[Dict[str, Any]]] = [[]]
+                documents: List[List[str]] = [[]]
+                distances: List[List[float]] = [[]]
+                ranked: List[str] = []
                 try:
                     # Chroma include: valid keys are documents, embeddings, metadatas, distances, uris, data
                     # 'ids' are returned by default and not a valid include key on some versions.
@@ -316,14 +321,14 @@ async def run_vector_search_and_score(
                         n_results=k,
                         include=["documents", "metadatas", "distances"]
                     )
+                    ids = res.get("ids") or [[]]
+                    metadatas = res.get("metadatas") or [[]]
+                    documents = res.get("documents") or [[]]
+                    distances = res.get("distances") or [[]]
+                    ranked = [str(x) for x in (ids[0] if ids else [])]
                 except Exception as e:
-                    logger.error(f"Vector search failed for {collection_name}: {e}")
-                    continue
-                ids = res.get("ids") or [[]]
-                metadatas = res.get("metadatas") or [[]]
-                documents = res.get("documents") or [[]]
-                distances = res.get("distances") or [[]]
-                ranked = [str(x) for x in (ids[0] if ids else [])]
+                    # Fallback: no results but still proceed, so toggle-on rerank can persist baseline scores
+                    logger.warning(f"Vector search failed for {collection_name}; proceeding with empty results: {e}")
                 # Optional rerank controlled by toggle
                 rerank_scores_out: Optional[List[float]] = None
                 if getattr(config.retrieval, 're_ranker', None) and bool(getattr(config.retrieval, 'apply_reranker', False)):
@@ -389,8 +394,9 @@ async def run_vector_search_and_score(
                             new_scores.append(float(getattr(sd, 'rerank_score', 0.0)))
                         ranked = new_ranked
                         # overwrite distances with normalized 1 - score ordering surrogate
-                        distances = [[1.0 - s for s in new_scores]]
-                        rerank_scores_out = list(new_scores)
+                        if new_scores:
+                            distances = [[1.0 - s for s in new_scores]]
+                            rerank_scores_out = list(new_scores)
                     except Exception as e:
                         logger.warning(f"Reranking failed; using original ordering: {e}")
             elapsed = (time.time() - start) * 1000.0

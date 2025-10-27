@@ -597,9 +597,18 @@ class Settings(BaseSettings):
 
             # Detect test contexts where the server should expose a stable key so client tests can authenticate
             # Only rely on environment of the server process, never trust request headers
+            # Detect test contexts eagerly. Some test suites import the app before
+            # setting TEST_MODE or PYTEST_CURRENT_TEST, so also check for the
+            # presence of the pytest module and the TESTING flag.
+            try:
+                import sys as _sys  # Local import to avoid module-level cost
+            except Exception:
+                _sys = None
             in_test_context = (
                 os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
+                or os.getenv("TESTING", "").lower() in ("true", "1", "yes")
                 or os.getenv("PYTEST_CURRENT_TEST") is not None
+                or (isinstance(_sys, object) and ("pytest" in getattr(_sys, "modules", {})))
                 or os.getenv("E2E_TEST_BASE_URL") is not None
             )
 

@@ -1259,6 +1259,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Outputs purge scheduler: {e}")
 
+    # Start Connectors worker (scaffold; opt-in via env)
+    try:
+        from tldw_Server_API.app.services.connectors_worker import start_connectors_worker
+        _conn_task = await start_connectors_worker()
+        if _conn_task:
+            logger.info("Connectors worker started")
+        else:
+            logger.info("Connectors worker disabled (CONNECTORS_WORKER_ENABLED != true)")
+    except Exception as e:
+        logger.warning(f"Failed to start Connectors worker: {e}")
+
     # Start AuthNZ scheduler (retention/cleanup tasks) with env guard
     _authnz_sched_started = False
     try:
@@ -2528,6 +2539,12 @@ else:
         logger.warning(f"Outputs endpoint not available: {_e}")
     app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
     app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    # External connectors (Drive/Notion) scaffold
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.connectors import router as connectors_router
+        app.include_router(connectors_router, prefix=f"{API_V1_PREFIX}", tags=["connectors"])
+    except Exception as _conn_e:
+        logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
     app.include_router(claims_router, prefix=f"{API_V1_PREFIX}")
     app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
     try:

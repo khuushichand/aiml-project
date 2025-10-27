@@ -127,6 +127,14 @@ async def verify_api_key(
         if token == expected_token:
             return token
     elif settings.AUTH_MODE == "multi_user":
+        # In TEST_MODE, allow using SINGLE_USER_API_KEY as a bearer for compatibility
+        try:
+            if os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                env_key = os.getenv("SINGLE_USER_API_KEY") or getattr(settings, "SINGLE_USER_API_KEY", None)
+                if env_key and token == env_key:
+                    return "test_user"
+        except Exception:
+            pass
         try:
             jwt_service = JWTService(settings)
             payload = jwt_service.decode_access_token(token)
@@ -238,4 +246,3 @@ __all__ = [
     "_apply_rate_limit_headers",
     "require_admin",
 ]
-

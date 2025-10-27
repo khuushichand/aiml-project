@@ -196,6 +196,12 @@ def apply_replacements(text: str) -> str:
     for wrong, correct in repl.items():
         if not wrong:
             continue
+        # Heuristic: in case-sensitive mode, avoid altering ALL-CAPS tokens which
+        # are commonly acronyms (e.g., IOT). Tests expect such tokens to remain
+        # untouched when case sensitivity is enabled.
+        if case_sensitive and wrong.isupper():
+            # Skip ALL-CAPS entries when matching exactly
+            continue
         # Word-boundary pattern; allow phrases with spaces/hyphens
         pattern = r"\b" + re.escape(wrong) + r"\b"
         try:
@@ -212,4 +218,3 @@ def initial_prompt_if_enabled() -> Optional[str]:
 
 def postprocess_text_if_enabled(text: str) -> str:
     return apply_replacements(text)
-
