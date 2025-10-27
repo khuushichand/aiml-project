@@ -327,46 +327,52 @@ async def run_vector_search_and_score(
                 # Optional rerank controlled by toggle
                 rerank_scores_out: Optional[List[float]] = None
                 if getattr(config.retrieval, 're_ranker', None) and bool(getattr(config.retrieval, 'apply_reranker', False)):
-                    try:
-                        from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument, DataSource
-                        from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import create_reranker, RerankingConfig
+                    from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument, DataSource
+                    from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import create_reranker, RerankingConfig
 
-                        def _map_strategy(provider: Optional[str], model: Optional[str]) -> RerankingStrategy:
-                            p = (provider or '').lower()
-                            m = (model or '').lower()
-                            # Explicit FlashRank
-                            if 'flashrank' in p or 'flashrank' in m:
-                                return RerankingStrategy.FLASHRANK
-                            # Cross-encoder cues
-                            cross_cues = [
-                                'cross_encoder', 'cross-encoder', 'crossencoder',
-                                'mono', 'monot5', 't5', 'ms-marco', 'msmarco',
-                                'bge-reranker', 'gte-reranker', 'reranker', 're-rank', 'rerank',
-                                'cohere', 'voyage', 'nv-rerank'
-                            ]
-                            if any(c in p for c in cross_cues) or any(c in m for c in cross_cues):
-                                return RerankingStrategy.CROSS_ENCODER
-                            # LLM scoring cues
-                            llm_cues = ['llm', 'gpt', 'claude', 'sonnet', 'haiku', 'mistral', 'mixtral', 'gemini', 'qwen', 'command']
-                            if any(c in p for c in llm_cues) or any(c in m for c in llm_cues):
-                                return RerankingStrategy.LLM_SCORING
-                            # Diversity/MMR
-                            if 'mmr' in p or 'mmr' in m or 'diversity' in p or 'diversity' in m:
-                                return RerankingStrategy.DIVERSITY
-                            # Hybrid/multi
-                            if 'hybrid' in p or 'hybrid' in m or 'multi' in p or 'multi' in m:
-                                return RerankingStrategy.HYBRID
-                            # Default
+                    def _map_strategy(provider: Optional[str], model: Optional[str]) -> RerankingStrategy:
+                        p = (provider or '').lower()
+                        m = (model or '').lower()
+                        # Explicit FlashRank
+                        if 'flashrank' in p or 'flashrank' in m:
                             return RerankingStrategy.FLASHRANK
-                        docs: List[RagDocument] = []
-                        orig_scores: List[float] = []
-                        for i2 in range(len(ranked)):
-                            md = metadatas[0][i2] if metadatas and metadatas[0] else {}
-                            content = documents[0][i2] if documents and documents[0] else ""
-                            score = 1.0 - float(distances[0][i2]) if distances and distances[0] else 0.0
-                            d = RagDocument(id=ranked[i2], content=content, metadata=md, source=DataSource.MEDIA_DB, score=score)
-                            docs.append(d)
-                            orig_scores.append(score)
+                        # Cross-encoder cues
+                        cross_cues = [
+                            'cross_encoder', 'cross-encoder', 'crossencoder',
+                            'mono', 'monot5', 't5', 'ms-marco', 'msmarco',
+                            'bge-reranker', 'gte-reranker', 'reranker', 're-rank', 'rerank',
+                            'cohere', 'voyage', 'nv-rerank'
+                        ]
+                        if any(c in p for c in cross_cues) or any(c in m for c in cross_cues):
+                            return RerankingStrategy.CROSS_ENCODER
+                        # LLM scoring cues
+                        llm_cues = ['llm', 'gpt', 'claude', 'sonnet', 'haiku', 'mistral', 'mixtral', 'gemini', 'qwen', 'command']
+                        if any(c in p for c in llm_cues) or any(c in m for c in llm_cues):
+                            return RerankingStrategy.LLM_SCORING
+                        # Diversity/MMR
+                        if 'mmr' in p or 'mmr' in m or 'diversity' in p or 'diversity' in m:
+                            return RerankingStrategy.DIVERSITY
+                        # Hybrid/multi
+                        if 'hybrid' in p or 'hybrid' in m or 'multi' in p or 'multi' in m:
+                            return RerankingStrategy.HYBRID
+                        # Default
+                        return RerankingStrategy.FLASHRANK
+
+                    # Build documents and baseline scores up-front so we always record rerank_scores when toggled on
+                    docs: List[RagDocument] = []
+                    orig_scores: List[float] = []
+                    for i2 in range(len(ranked)):
+                        md = metadatas[0][i2] if metadatas and metadatas[0] else {}
+                        content = documents[0][i2] if documents and documents[0] else ""
+                        score = 1.0 - float(distances[0][i2]) if distances and distances[0] else 0.0
+                        d = RagDocument(id=ranked[i2], content=content, metadata=md, source=DataSource.MEDIA_DB, score=score)
+                        docs.append(d)
+                        orig_scores.append(score)
+                    # Default to original scores if reranker fails for any reason
+                    # Ensure non-empty scores when reranker is toggled on, to surface presence in exports
+                    rerank_scores_out = list(orig_scores) if orig_scores else [0.0]
+
+                    try:
                         rr = config.retrieval.re_ranker
                         strat = _map_strategy(getattr(rr, 'provider', None), getattr(rr, 'model', None)) if rr else RerankingStrategy.FLASHRANK
                         rconf = RerankingConfig(strategy=strat, top_k=k, model_name=(getattr(rr, 'model', None) if rr else None))
@@ -387,11 +393,6 @@ async def run_vector_search_and_score(
                         rerank_scores_out = list(new_scores)
                     except Exception as e:
                         logger.warning(f"Reranking failed; using original ordering: {e}")
-                        # Ensure rerank_scores are still recorded (using original retrieval scores)
-                        try:
-                            rerank_scores_out = list(orig_scores)
-                        except Exception:
-                            rerank_scores_out = None
             elapsed = (time.time() - start) * 1000.0
 
             # Ground truth
