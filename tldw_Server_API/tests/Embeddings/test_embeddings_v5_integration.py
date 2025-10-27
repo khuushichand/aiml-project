@@ -124,8 +124,6 @@ class TestEmbeddingsIntegration:
         async def override_user():
             return setup.test_user
         app.dependency_overrides[get_request_user] = override_user
-        async def override_user():
-            return setup.test_user
         
         app.dependency_overrides[get_request_user] = override_user
         
@@ -223,26 +221,26 @@ class TestEmbeddingsIntegration:
         prev_policy = os.environ.get("EMBEDDINGS_DIMENSION_POLICY")
         os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "reduce"
         try:
-        async def override_user():
-            return setup.test_user
-        app.dependency_overrides[get_request_user] = override_user
-        resp = setup.client.post(
-            "/api/v1/embeddings",
-            headers={**setup.auth_headers, "x-provider": "huggingface"},
-            json={
-                "input": "Dimension override reduce policy",
-                "model": "sentence-transformers/all-MiniLM-L6-v2",
-                "dimensions": 128
-            }
-        )
-        assert resp.status_code == 200
-        dim_policy = (resp.headers.get("X-Embeddings-Dimensions-Policy") or "").lower()
-        if dim_policy:
-            assert dim_policy in {"reduce", "pad", "ignore"}
-        vec = np.asarray(resp.json()["data"][0]["embedding"], dtype=float)
-        assert vec.shape[0] == 128
-        # API normalizes float output after adjustment
-        assert 0.95 < np.linalg.norm(vec) < 1.05
+            async def override_user():
+                return setup.test_user
+            app.dependency_overrides[get_request_user] = override_user
+            resp = setup.client.post(
+                "/api/v1/embeddings",
+                headers={**setup.auth_headers, "x-provider": "huggingface"},
+                json={
+                    "input": "Dimension override reduce policy",
+                    "model": "sentence-transformers/all-MiniLM-L6-v2",
+                    "dimensions": 128
+                }
+            )
+            assert resp.status_code == 200
+            dim_policy = (resp.headers.get("X-Embeddings-Dimensions-Policy") or "").lower()
+            if dim_policy:
+                assert dim_policy in {"reduce", "pad", "ignore"}
+            vec = np.asarray(resp.json()["data"][0]["embedding"], dtype=float)
+            assert vec.shape[0] == 128
+            # API normalizes float output after adjustment
+            assert 0.95 < np.linalg.norm(vec) < 1.05
         finally:
             # Restore prior policy to prevent cross-test interference
             if prev_policy is None:

@@ -743,8 +743,11 @@ class UnifiedAuditService:
         """Initialize database and start background tasks"""
         self._owner_loop = asyncio.get_running_loop()
         await self._init_database()
-        # Open persistent connection for reuse
-        await self._ensure_db_pool()
+        # In test mode, avoid opening a persistent pooled connection to prevent
+        # lingering aiosqlite worker threads that can keep the interpreter alive.
+        # Non-test mode uses a pooled connection for performance.
+        if not self._test_mode:
+            await self._ensure_db_pool()
         # Avoid starting background tasks in test environments where asyncio.sleep
         # may be monkeypatched to return immediately, which would otherwise cause
         # tight loops and starve the event loop.
@@ -847,6 +850,9 @@ class UnifiedAuditService:
 
     async def _ensure_db_pool(self) -> aiosqlite.Connection:
         """Ensure a persistent aiosqlite connection is available."""
+        # In test mode, prefer ephemeral connections; callers of this method are
+        # adjusted to bypass pooling when self._test_mode is True. Keep behavior
+        # here for non-test callers.
         async with self._pool_lock:
             if self._db_pool is None:
                 self._db_pool = await aiosqlite.connect(self.db_path)
@@ -1119,35 +1125,77 @@ class UnifiedAuditService:
             last_error: Optional[Exception] = None
             for attempt in range(max_retries):
                 try:
-                    db = await self._ensure_db_pool()
-                    async with self._db_lock:
-                        # Prepare batch data
-                        records = [event.to_dict() for event in events]
-
-                        # Batch insert
-                        await db.executemany("""
-                            INSERT OR IGNORE INTO audit_events (
-                                event_id, timestamp, category, event_type, severity,
-                                context_request_id, context_correlation_id, context_session_id,
-                                context_user_id, context_api_key_hash, context_ip_address,
-                                context_user_agent, context_endpoint, context_method,
-                                resource_type, resource_id, action, result, error_message,
-                                duration_ms, tokens_used, estimated_cost, result_count,
-                                risk_score, pii_detected, compliance_flags, metadata
-                            ) VALUES (
-                                :event_id, :timestamp, :category, :event_type, :severity,
-                                :context_request_id, :context_correlation_id, :context_session_id,
-                                :context_user_id, :context_api_key_hash, :context_ip_address,
-                                :context_user_agent, :context_endpoint, :context_method,
-                                :resource_type, :resource_id, :action, :result, :error_message,
-                                :duration_ms, :tokens_used, :estimated_cost, :result_count,
-                                :risk_score, :pii_detected, :compliance_flags, :metadata
+                    if self._test_mode:
+                        # Ephemeral connection per flush in tests to avoid persistent threads
+                        async with aiosqlite.connect(self.db_path) as db:
+                            try:
+                                await db.execute("PRAGMA journal_mode=WAL;")
+                                await db.execute("PRAGMA synchronous=NORMAL;")
+                                await db.execute("PRAGMA temp_store=MEMORY;")
+                                await db.execute("PRAGMA foreign_keys=ON;")
+                                await db.execute("PRAGMA busy_timeout=5000;")
+                                db.row_factory = aiosqlite.Row
+                            except Exception:
+                                pass
+                            # Prepare batch data
+                            records = [event.to_dict() for event in events]
+                            await db.executemany(
+                                """
+                                INSERT OR IGNORE INTO audit_events (
+                                    event_id, timestamp, category, event_type, severity,
+                                    context_request_id, context_correlation_id, context_session_id,
+                                    context_user_id, context_api_key_hash, context_ip_address,
+                                    context_user_agent, context_endpoint, context_method,
+                                    resource_type, resource_id, action, result, error_message,
+                                    duration_ms, tokens_used, estimated_cost, result_count,
+                                    risk_score, pii_detected, compliance_flags, metadata
+                                ) VALUES (
+                                    :event_id, :timestamp, :category, :event_type, :severity,
+                                    :context_request_id, :context_correlation_id, :context_session_id,
+                                    :context_user_id, :context_api_key_hash, :context_ip_address,
+                                    :context_user_agent, :context_endpoint, :context_method,
+                                    :resource_type, :resource_id, :action, :result, :error_message,
+                                    :duration_ms, :tokens_used, :estimated_cost, :result_count,
+                                    :risk_score, :pii_detected, :compliance_flags, :metadata
+                                )
+                                """,
+                                records,
                             )
-                        """, records)
+                            await self._update_daily_stats(db, events)
+                            await db.commit()
+                    else:
+                        db = await self._ensure_db_pool()
+                        async with self._db_lock:
+                            # Prepare batch data
+                            records = [event.to_dict() for event in events]
 
-                        # Update daily statistics
-                        await self._update_daily_stats(db, events)
-                        await db.commit()
+                            # Batch insert
+                            await db.executemany(
+                                """
+                                INSERT OR IGNORE INTO audit_events (
+                                    event_id, timestamp, category, event_type, severity,
+                                    context_request_id, context_correlation_id, context_session_id,
+                                    context_user_id, context_api_key_hash, context_ip_address,
+                                    context_user_agent, context_endpoint, context_method,
+                                    resource_type, resource_id, action, result, error_message,
+                                    duration_ms, tokens_used, estimated_cost, result_count,
+                                    risk_score, pii_detected, compliance_flags, metadata
+                                ) VALUES (
+                                    :event_id, :timestamp, :category, :event_type, :severity,
+                                    :context_request_id, :context_correlation_id, :context_session_id,
+                                    :context_user_id, :context_api_key_hash, :context_ip_address,
+                                    :context_user_agent, :context_endpoint, :context_method,
+                                    :resource_type, :resource_id, :action, :result, :error_message,
+                                    :duration_ms, :tokens_used, :estimated_cost, :result_count,
+                                    :risk_score, :pii_detected, :compliance_flags, :metadata
+                                )
+                                """,
+                                records,
+                            )
+
+                            # Update daily statistics
+                            await self._update_daily_stats(db, events)
+                            await db.commit()
 
                     # Success
                     self.stats["events_flushed"] += len(events)
@@ -1382,10 +1430,17 @@ class UnifiedAuditService:
         params.extend([limit, offset])
         
         try:
-            db = await self._ensure_db_pool()
-            async with db.execute(query, params) as cursor:
-                rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
+            if self._test_mode:
+                async with aiosqlite.connect(self.db_path) as db:
+                    db.row_factory = aiosqlite.Row
+                    async with db.execute(query, params) as cursor:
+                        rows = await cursor.fetchall()
+                        return [dict(row) for row in rows]
+            else:
+                db = await self._ensure_db_pool()
+                async with db.execute(query, params) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to query audit events: {e}")
             return []
@@ -1447,10 +1502,17 @@ class UnifiedAuditService:
             query += " AND risk_score >= ?"
             params.append(min_risk_score)
         try:
-            db = await self._ensure_db_pool()
-            async with db.execute(query, params) as cursor:
-                row = await cursor.fetchone()
-                return int(row[0]) if row else 0
+            if self._test_mode:
+                async with aiosqlite.connect(self.db_path) as db:
+                    db.row_factory = aiosqlite.Row
+                    async with db.execute(query, params) as cursor:
+                        row = await cursor.fetchone()
+                        return int(row[0]) if row else 0
+            else:
+                db = await self._ensure_db_pool()
+                async with db.execute(query, params) as cursor:
+                    row = await cursor.fetchone()
+                    return int(row[0]) if row else 0
         except Exception as e:
             logger.error(f"Failed to count audit events: {e}")
             return 0

@@ -126,7 +126,7 @@ class TestEmbeddingVectorProperties:
         assert all(len(v) == dimension for v in vectors)
     
     @pytest.mark.property
-    @settings(suppress_health_check=[HealthCheck.large_base_example])
+    @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
     @given(vector=valid_embedding_vector())
     def test_embedding_vector_bounds(self, vector):
         """Property: Embedding values are within reasonable bounds."""
@@ -142,7 +142,7 @@ class TestEmbeddingVectorProperties:
         assert 0.1 < norm < 10.0
     
     @pytest.mark.property
-    @settings(suppress_health_check=[HealthCheck.large_base_example])
+    @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
     @given(
         vector1=valid_embedding_vector(dimension=384),
         vector2=valid_embedding_vector(dimension=384)
@@ -161,7 +161,7 @@ class TestEmbeddingVectorProperties:
             assert -1.01 <= cosine_sim <= 1.01  # Small tolerance for floating point
     
     @pytest.mark.property
-    @settings(suppress_health_check=[HealthCheck.large_base_example])
+    @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
     @given(vectors=st.lists(valid_embedding_vector(dimension=384), min_size=2, max_size=10))
     def test_embedding_distance_triangle_inequality(self, vectors):
         """Property: Distances satisfy triangle inequality."""
@@ -273,6 +273,7 @@ class TestChromaDBStorageProperties:
     """Test properties of ChromaDB storage."""
     
     @pytest.mark.property
+    @settings(suppress_health_check=[HealthCheck.data_too_large, HealthCheck.function_scoped_fixture])
     @given(
         embeddings=st.lists(valid_embedding_vector(dimension=384), min_size=1, max_size=10),
         texts=st.lists(valid_text_for_embedding(), min_size=1, max_size=10)
@@ -303,7 +304,7 @@ class TestChromaDBStorageProperties:
         assert len(results["documents"]) == len(texts)
     
     @pytest.mark.property
-    @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
+    @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large, HealthCheck.function_scoped_fixture])
     @given(
         query_embedding=valid_embedding_vector(dimension=64),
         stored_embeddings=st.lists(valid_embedding_vector(dimension=64), min_size=3, max_size=10)
@@ -333,10 +334,10 @@ class TestChromaDBStorageProperties:
             # Distances should be in ascending order (most similar first)
             assert all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
             try:
-                if hasattr(client, "close"):
-                    client.close()  # type: ignore[attr-defined]
+                if hasattr(chroma_client, "close"):
+                    chroma_client.close()  # type: ignore[attr-defined]
                 else:
-                    system = getattr(client, "_system", None)
+                    system = getattr(chroma_client, "_system", None)
                     stop_fn = getattr(system, "stop", None) if system else None
                     if callable(stop_fn):
                         stop_fn()

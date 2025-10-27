@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Dict, Optional
+import os
+import atexit
 
 from loguru import logger
 
@@ -87,6 +89,13 @@ async def _emit(
             result=result,
             metadata=metadata,
         )
+        # In test environments, flush immediately to make events visible to queries
+        # without relying on background flush loops.
+        try:
+            if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE") or os.getenv("TLDW_TEST_MODE"):
+                await svc.flush()
+        except Exception:
+            pass
     except Exception as e:
         logger.debug(f"Embeddings audit emit failed (ignored): {e}")
 
@@ -162,3 +171,26 @@ async def shutdown_audit_adapter_services() -> None:
     except Exception:
         # Best-effort shutdown; ignore errors
         pass
+
+
+# Ensure services are shutdown at interpreter exit to avoid hanging tests
+def _shutdown_on_exit() -> None:
+    try:
+        # Prefer running in a fresh loop if no loop is running
+        try:
+            loop = asyncio.get_running_loop()
+            # Schedule but do not await; at exit there may be no time to run
+            try:
+                loop.create_task(shutdown_audit_adapter_services())
+            except Exception:
+                pass
+        except RuntimeError:
+            try:
+                asyncio.run(shutdown_audit_adapter_services())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_on_exit)

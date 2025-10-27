@@ -206,8 +206,10 @@ class ChromaDBManager:
         # Option: force use of internal in-memory stub (useful for CI/sandboxed tests)
         try:
             # Only enable stub when explicitly requested via environment variable.
-            # Do NOT auto-enable in test mode to allow tests to patch PersistentClient.
-            if os.getenv("CHROMADB_FORCE_STUB", "").lower() in ("true", "1", "yes"):
+            # In test mode, prefer allowing tests to patch chromadb.Client/PersistentClient;
+            # therefore ignore the force-stub flag when a test is running.
+            force_stub = os.getenv("CHROMADB_FORCE_STUB", "").lower() in ("true", "1", "yes")
+            if force_stub and not _is_test_mode():
                 # Scope the stub client key by user and base dir to avoid cross-test leakage.
                 stub_key = f"{self.user_id}::{str(user_db_base_path)}"
                 cli = _TEST_STUB_CLIENTS.get(stub_key)
@@ -232,6 +234,8 @@ class ChromaDBManager:
                     f"(Provider: {model_details.get('provider', 'N/A')}, Name: {model_details.get('model_name_or_path', 'N/A')})"
                 )
                 return
+            elif force_stub and _is_test_mode():
+                logger.debug("CHROMADB_FORCE_STUB set but ignored in test mode to allow client patching.")
         except Exception:
             pass
 
@@ -243,7 +247,9 @@ class ChromaDBManager:
         )
 
         try:
-            self.client = chromadb.Client(
+            # Prefer PersistentClient so patched tests that key by 'path' share a single in-memory client
+            self.client = chromadb.PersistentClient(
+                path=str(self.user_chroma_path),
                 settings=client_settings,
             )
         except Exception as e:  # Catch broader exceptions during client initialization

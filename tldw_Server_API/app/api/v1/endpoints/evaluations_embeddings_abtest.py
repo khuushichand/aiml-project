@@ -147,6 +147,13 @@ async def run_embeddings_abtest(
             except Exception:
                 pass
 
+    # Mark as running before scheduling to avoid race where clients
+    # observe previous 'completed' state before the job flips it.
+    try:
+        db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}})
+    except Exception:
+        pass
+    # Schedule background task
     background_tasks.add_task(_abtest_job)
     logger.info(f"A/B test started in background: {test_id}")
     try:

@@ -193,11 +193,17 @@ def test_env_vars():
                 pass
 
         if storage_dir_present:
-            settings["EMBEDDINGS_MODEL_STORAGE_DIR"] = original_storage_dir_setting
+            try:
+                settings["EMBEDDINGS_MODEL_STORAGE_DIR"] = original_storage_dir_setting
+            except Exception:
+                pass
         else:
             try:
-                del settings["EMBEDDINGS_MODEL_STORAGE_DIR"]
-            except AttributeError:
+                # Only attempt deletion if present to avoid KeyError under
+                # concurrent config cache resets in other test packages.
+                if "EMBEDDINGS_MODEL_STORAGE_DIR" in settings:
+                    del settings["EMBEDDINGS_MODEL_STORAGE_DIR"]
+            except Exception:
                 pass
 
         # Restore original environment

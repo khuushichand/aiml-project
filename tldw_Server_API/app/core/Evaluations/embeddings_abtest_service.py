@@ -325,6 +325,7 @@ async def run_vector_search_and_score(
                 distances = res.get("distances") or [[]]
                 ranked = [str(x) for x in (ids[0] if ids else [])]
                 # Optional rerank controlled by toggle
+                rerank_scores_out: Optional[List[float]] = None
                 if getattr(config.retrieval, 're_ranker', None) and bool(getattr(config.retrieval, 'apply_reranker', False)):
                     try:
                         from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument, DataSource
@@ -383,13 +384,14 @@ async def run_vector_search_and_score(
                         ranked = new_ranked
                         # overwrite distances with normalized 1 - score ordering surrogate
                         distances = [[1.0 - s for s in new_scores]]
+                        rerank_scores_out = list(new_scores)
                     except Exception as e:
                         logger.warning(f"Reranking failed; using original ordering: {e}")
                         # Ensure rerank_scores are still recorded (using original retrieval scores)
                         try:
-                            new_scores = list(orig_scores)
+                            rerank_scores_out = list(orig_scores)
                         except Exception:
-                            new_scores = []
+                            rerank_scores_out = None
             elapsed = (time.time() - start) * 1000.0
 
             # Ground truth
@@ -417,7 +419,7 @@ async def run_vector_search_and_score(
                 ranked_distances=(distances[0] if distances and distances[0] else None),
                 ranked_metadatas=(metadatas[0] if metadatas and metadatas[0] else None),
                 ranked_documents=(documents[0] if documents and documents[0] else None),
-                rerank_scores=(new_scores if 'new_scores' in locals() else None),
+                rerank_scores=rerank_scores_out,
             )
 
         # Aggregate
