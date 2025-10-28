@@ -119,7 +119,11 @@ jobs:
           SERVER_LABEL: single
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py stop
+          if [ -f "tldw_Server_API/scripts/server_lifecycle.py" ]; then
+            python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          else
+            echo "server_lifecycle.py not found; skipping stop for '${SERVER_LABEL}'";
+          fi
 
       - name: Print server log (single-user)
         if: failure()
@@ -171,7 +175,11 @@ jobs:
           SERVER_LABEL: multi
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py stop
+          if [ -f "tldw_Server_API/scripts/server_lifecycle.py" ]; then
+            python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          else
+            echo "server_lifecycle.py not found; skipping stop for '${SERVER_LABEL}'";
+          fi
 
       - name: Print server log (multi-user)
         if: failure()

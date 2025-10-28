@@ -1,0 +1,92 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope, reset_scope
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _test_env(monkeypatch, tmp_path):
+    # Offline behavior and isolated DBs
+    monkeypatch.setenv("TEST_MODE", "1")
+    base_dir = Path.cwd() / "Databases" / "test_user_dbs_include_org_default"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+
+    # Isolate AuthNZ DB as well
+    auth_db_path = Path.cwd() / "Databases" / "authnz_org_default.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{auth_db_path}")
+
+    # Ensure AuthNZ tables exist
+    ensure_authnz_tables(auth_db_path)
+    yield
+
+
+@pytest.mark.asyncio
+async def test_include_only_gating_enabled_by_org_default():
+    # Create organization with metadata enabling require_include_default
+    pool = await get_db_pool()
+    metadata = {"watchlists": {"require_include_default": True}}
+    await pool.execute(
+        "INSERT INTO organizations (name, slug, metadata) VALUES (?, ?, ?)",
+        ("OrgA", "orga", json.dumps(metadata)),
+    )
+    row = await pool.fetchone("SELECT id FROM organizations WHERE slug = ?", "orga")
+    org_id = int(row["id"] if isinstance(row, dict) else row[0])
+
+    # Establish scope with this organization so pipeline picks org default
+    user_id = 904
+    scope_token = set_scope(user_id=user_id, org_ids=[org_id], team_ids=[], is_admin=False)
+    try:
+        db = WatchlistsDatabase.for_user(user_id)
+
+        # RSS source (test mode yields 1 item with title/summary containing 'Test')
+        src = db.create_source(
+            name="Feed",
+            url="https://example.com/feed.xml",
+            source_type="rss",
+            active=True,
+            settings_json=json.dumps({"limit": 1}),
+            tags=["gated"],
+            group_ids=[],
+        )
+
+        # Job with an include rule that does NOT match the test item → expect filtered, not ingested
+        job = db.create_job(
+            name="IncludeOnlyByOrg",
+            description=None,
+            scope_json=json.dumps({"sources": [src.id]}),
+            schedule_expr=None,
+            schedule_timezone="UTC",
+            active=True,
+            max_concurrency=None,
+            per_host_delay_ms=None,
+            retry_policy_json=None,
+            output_prefs_json=None,
+            job_filters_json=json.dumps({
+                # no require_include in payload; org default should enforce include-only gating
+                "filters": [
+                    {"type": "keyword", "action": "include", "value": {"keywords": ["NoMatch"], "match": "any"}},
+                ]
+            }),
+        )
+
+        res = await run_watchlist_job(user_id, job.id)
+        assert res.get("items_found", 0) >= 1
+        assert res.get("items_ingested", 0) == 0  # include-only gating blocked ingestion
+
+        items, total = db.list_items(run_id=None, job_id=job.id, status=None, limit=50, offset=0)
+        assert total >= 1
+        # All should be filtered since include didn't match
+        assert all(i.status == "filtered" for i in items)
+    finally:
+        reset_scope(scope_token)
+

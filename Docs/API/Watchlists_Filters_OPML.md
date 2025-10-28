@@ -42,6 +42,31 @@ Run details include:
 - `items_found`, `items_ingested`
 - When filters are used: `filters_matched`, `filters_include`, `filters_exclude`, `filters_flag`
 
+## Bulk JSON Create (Sources)
+
+- `POST /api/v1/watchlists/sources/bulk` — create multiple sources in one request.
+  - Request body: `{ sources: SourceCreateRequest[] }`
+  - Response body:
+    - `items[]`: `{ name, url, id?, status: "created"|"error", error?, source_type? }`
+    - `total`, `created`, `errors`
+  - Validation:
+    - When `source_type="rss"` and the URL is a YouTube link, only canonical RSS feeds are accepted, e.g. `https://www.youtube.com/feeds/videos.xml?channel_id=...`.
+    - Non-feed YouTube URLs are rejected with `invalid_youtube_rss_url`.
+
+Example response with mixed valid/invalid entries:
+```
+{
+  "items": [
+    {"name":"YT Bad","url":"https://youtu.be/abc","status":"error","error":"invalid_youtube_rss_url: use canonical feed URLs; channel → https://www.youtube.com/feeds/videos.xml?channel_id=..., playlist → https://www.youtube.com/feeds/videos.xml?playlist_id=...","source_type":"rss"},
+    {"name":"YT Good","url":"https://www.youtube.com/feeds/videos.xml?channel_id=UC...","id":201,"status":"created","source_type":"rss"},
+    {"name":"Site A","url":"https://a.example.com/","id":202,"status":"created","source_type":"site"}
+  ],
+  "total": 3,
+  "created": 2,
+  "errors": 1
+}
+```
+
 ## OPML Import/Export
 
 - `POST /api/v1/watchlists/sources/import` — multipart upload, supports defaults:
@@ -52,4 +77,3 @@ Run details include:
   - `type=rss` (default), `tag=...` (multi), etc.
 
 Examples are available via the tests under `tldw_Server_API/tests/Watchlists/`.
-

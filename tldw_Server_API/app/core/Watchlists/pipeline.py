@@ -30,6 +30,8 @@ from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncat
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
 from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_article, fetch_site_items_with_rules
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evaluate_filters
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
 
 def _utcnow_iso() -> str:
@@ -129,21 +131,60 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
 
     # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
     job_filters: List[Dict[str, Any]] = []
-    require_include: bool = False
+    job_require_include: Optional[bool] = None
     try:
         if getattr(job, "job_filters_json", None):
             raw = json.loads(job.job_filters_json or "{}")
             job_filters = normalize_filters(raw)
-            try:
-                require_include = bool(raw.get("require_include"))
-            except Exception:
-                require_include = False
+            if isinstance(raw, dict) and "require_include" in raw:
+                try:
+                    job_require_include = bool(raw.get("require_include"))
+                except Exception:
+                    job_require_include = None
     except Exception:
         job_filters = []
-        require_include = False
+        job_require_include = None
+
+    async def _org_require_include_default() -> bool:
+        # Read from active org metadata when available; fallback to env var
+        try:
+            scope = get_scope()
+            org_id = getattr(scope, "effective_org_id", None) if scope else None
+            if org_id is not None:
+                pool = await get_db_pool()
+                row = await pool.fetchone("SELECT metadata FROM organizations WHERE id = ?", int(org_id))
+                if row is not None:
+                    meta = row.get("metadata")
+                    try:
+                        import json as _json
+                        if isinstance(meta, str):
+                            meta_dict = _json.loads(meta)
+                        elif isinstance(meta, (dict,)):
+                            meta_dict = meta
+                        else:
+                            meta_dict = None
+                        if isinstance(meta_dict, dict):
+                            # Accept either nested or flat key
+                            if isinstance(meta_dict.get("watchlists"), dict):
+                                val = meta_dict.get("watchlists", {}).get("require_include_default")
+                                if isinstance(val, bool):
+                                    return val
+                            flat = meta_dict.get("watchlists_require_include_default")
+                            if isinstance(flat, bool):
+                                return flat
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            return str(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "")).strip().lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            return False
 
     include_rules_exist = any((str(f.get("action")) == "include") for f in job_filters)
-    include_gating_active = bool(require_include and include_rules_exist)
+    org_default = await _org_require_include_default()
+    effective_require_include = job_require_include if (job_require_include is not None) else org_default
+    include_gating_active = bool(effective_require_include and include_rules_exist)
 
     # Filter evaluation statistics
     filter_stats: Dict[str, Any] = {

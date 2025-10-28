@@ -691,7 +691,38 @@ async def delete_source(
     return {"success": True}
 
 
-@router.post("/sources/bulk", response_model=SourcesBulkCreateResponse, summary="Bulk create sources with per-entry status")
+@router.post(
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    "/sources/bulk",
+    response_model=SourcesBulkCreateResponse,
+    summary="Bulk create sources with per-entry status",
+    description=(
+        "Creates multiple sources and returns per-entry status. "
+        "Each item is either created or returns an error with reason.\n\n"
+        "Validation: When `source_type=\"rss\"` and the URL is a YouTube link, only canonical RSS feeds "
+        "are accepted (e.g., https://www.youtube.com/feeds/videos.xml?channel_id=..., playlist_id=..., user=...). "
+        "Non-feed YouTube URLs are rejected per-entry with error `invalid_youtube_rss_url`."
+    ),
+)
 async def bulk_create_sources(
     payload: SourcesBulkCreateRequest,
     current_user: User = Depends(get_request_user),

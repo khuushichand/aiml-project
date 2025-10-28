@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import secrets
 import string
 import os
+import json
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
@@ -121,6 +122,8 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgMemberRoleUpdateRequest,
     OrgMemberListItem,
     OrgMembershipItem,
+    OrganizationWatchlistsSettingsUpdate,
+    OrganizationWatchlistsSettingsResponse,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
@@ -452,9 +455,9 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
 
 
 @router.get("/orgs", response_model=List[OrganizationResponse])
-async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)) -> list[OrganizationResponse]:
+async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), q: Optional[str] = Query(None)) -> list[OrganizationResponse]:
     try:
-        rows = await list_organizations(limit=limit, offset=offset)
+        rows = await list_organizations(limit=limit, offset=offset, q=q)
         return [OrganizationResponse(**r) for r in rows]
     except Exception as e:
         logger.error(f"Failed to list organizations: {e}")
@@ -479,6 +482,80 @@ async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), 
     except Exception as e:
         logger.error(f"Failed to list teams: {e}")
         raise HTTPException(status_code=500, detail="Failed to list teams")
+
+
+@router.patch("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)
+async def admin_update_org_watchlists_settings(
+    org_id: int,
+    payload: OrganizationWatchlistsSettingsUpdate,
+    db=Depends(get_db_transaction),
+):
+    """Update watchlists-related organization settings (metadata).
+
+    Currently supports:
+      - require_include_default: default include-only gating for jobs in this org
+    """
+    try:
+        row = await db.fetchone("SELECT metadata FROM organizations WHERE id = ?", org_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="organization_not_found")
+        meta_raw = row.get("metadata") if isinstance(row, dict) else (row[0] if row else None)
+        meta: Dict[str, Any]
+        try:
+            meta = json.loads(meta_raw) if meta_raw else {}
+            if not isinstance(meta, dict):
+                meta = {}
+        except Exception:
+            meta = {}
+
+        wl = meta.get("watchlists") if isinstance(meta.get("watchlists"), dict) else {}
+        changed = False
+        if payload.require_include_default is not None:
+            wl["require_include_default"] = bool(payload.require_include_default)
+            changed = True
+        if changed:
+            meta["watchlists"] = wl
+            await db.execute(
+                "UPDATE organizations SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                json.dumps(meta), org_id,
+            )
+        return OrganizationWatchlistsSettingsResponse(
+            org_id=org_id,
+            require_include_default=wl.get("require_include_default"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update org watchlists settings for org {org_id}: {e}")
+        raise HTTPException(status_code=500, detail="failed_to_update_org_watchlists_settings")
+
+
+@router.get("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)
+async def admin_get_org_watchlists_settings(org_id: int, db=Depends(get_db_transaction)) -> OrganizationWatchlistsSettingsResponse:
+    """Fetch watchlists-related organization settings (from metadata)."""
+    try:
+        row = await db.fetchone("SELECT metadata FROM organizations WHERE id = ?", org_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="organization_not_found")
+        meta_raw = row.get("metadata") if isinstance(row, dict) else (row[0] if row else None)
+        require_include_default = None
+        if meta_raw:
+            try:
+                meta = json.loads(meta_raw)
+                if isinstance(meta, dict):
+                    wl = meta.get("watchlists") if isinstance(meta.get("watchlists"), dict) else None
+                    if isinstance(wl, dict) and isinstance(wl.get("require_include_default"), bool):
+                        require_include_default = bool(wl.get("require_include_default"))
+                    elif isinstance(meta.get("watchlists_require_include_default"), bool):
+                        require_include_default = bool(meta.get("watchlists_require_include_default"))
+            except Exception:
+                pass
+        return OrganizationWatchlistsSettingsResponse(org_id=org_id, require_include_default=require_include_default)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch org watchlists settings for org {org_id}: {e}")
+        raise HTTPException(status_code=500, detail="failed_to_fetch_org_watchlists_settings")
 
 
 @router.post("/teams/{team_id}/members", response_model=TeamMemberResponse)

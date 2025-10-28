@@ -98,3 +98,19 @@ class OrgMemberListItem(BaseModel):
 class OrgMembershipItem(BaseModel):
     org_id: int
     role: str
+
+
+# ============================
+# Organization settings: Watchlists
+# ============================
+
+class OrganizationWatchlistsSettingsUpdate(BaseModel):
+    require_include_default: Optional[bool] = Field(
+        default=None,
+        description="When true, include-only gating is enabled by default for jobs in this organization",
+    )
+
+
+class OrganizationWatchlistsSettingsResponse(BaseModel):
+    org_id: int
+    require_include_default: Optional[bool] = None

@@ -1,8 +1,8 @@
 # PRD: Code Interpreter Sandbox & LSP
 
 Owner: tldw_server Core Team  
-Status: Draft v0.2  
-Last updated: 2025-10-27
+Status: In Progress v0.2  
+Last updated: 2025-10-28
 
 ## 1) Summary
 
@@ -175,7 +175,7 @@ Endpoints
     - `{ "type": "event", "event": "phase"|"start"|"end"|"error", "data": { ... } }`
     - `{ "type": "heartbeat", "ts": "ISO" }`
     - `{ "type": "truncated", "reason": "log_cap" }`
-  - Limits: max message size 64KB; server enforces per-run log cap (e.g., 10 MB) and backpressure with buffered ring.
+  - Limits: max message size 64KB; server enforces per-run log cap (e.g., 10 MB) and backpressure with buffered ring. Implemented.
 
 - GET `/runs/{run_id}/artifacts`
   - List artifact files with sizes and signed download URLs (or direct GET with auth).
@@ -187,12 +187,13 @@ Endpoints
   - Early destroy; reclaims resources and workspace.
 
 - GET `/runtimes`
-  - Feature discovery for host: which runtimes available, default images (with digests when possible), per-runtime limits (max CPU/mem per run), `max_upload_mb`, `workspace_cap_mb`, and `artifact_ttl_hours`.
+  - Feature discovery for host: which runtimes available, default images (with digests when possible), per-runtime limits (max CPU/mem per run), `max_upload_mb`, `workspace_cap_mb`, `artifact_ttl_hours`, and `supported_spec_versions`. Implemented.
 
 Error Model
 - All error responses use a standard envelope:
   - `{ "error": { "code": "string", "message": "human readable", "details": {"...": "..."} } }`
 - Common codes: `invalid_request`, `not_found`, `unauthorized`, `forbidden`, `rate_limited`, `quota_exceeded`, `timeout`, `canceled`, `runtime_unavailable`.
+ - Additional: `idempotency_conflict` when `Idempotency-Key` is replayed with a different request body.
  - Optional compatibility: if client sets `Accept: application/problem+json`, the server MAY return RFC 7807 responses mapping `code`→`type` and `message`→`title`/`detail`; `details` is preserved via problem `extensions`.
 
 Spec Versioning
@@ -539,6 +540,13 @@ Configuration Keys (examples)
 - `SANDBOX_MAX_LOG_BYTES`
 - `SANDBOX_PIDS_LIMIT`
 - `SANDBOX_MAX_CPU` / `SANDBOX_MAX_MEM_MB`
+- `SANDBOX_WORKSPACE_CAP_MB`
+- `SANDBOX_SUPPORTED_SPEC_VERSIONS`
+- `SANDBOX_IDEMPOTENCY_TTL_SEC`
+- `SANDBOX_ENABLE_EXECUTION` (false by default)
+- `SANDBOX_BACKGROUND_EXECUTION` (false by default)
+- `SANDBOX_DOCKER_SECCOMP` (path to seccomp JSON)
+- `SANDBOX_DOCKER_APPARMOR_PROFILE`
 
 Feature Discovery Payload (example)
 ```
@@ -627,6 +635,15 @@ Phase 4: Approvals & Secrets (opt‑in)
 - Tests: unit (runners, policy), integration (happy paths, timeouts, quotas), and security (archive traversal prevention, resource caps enforced).
 - Documentation: API reference, IDE setup, admin policy examples.
 
+Implementation Status (v0.2)
+- Implemented: `/sessions` (Idempotency-Key), `/sessions/{id}/files` (safe tar/zip/plain; traversal protection; workspace cap), `/runs` (Idempotency-Key), `/runs/{id}`, `WS /runs/{id}/stream`, `/runs/{id}/artifacts`, `/runs/{id}/artifacts/{path}`, `/runtimes`.
+- Runner: Docker create → cp (workspace + inline) → start → logs (WS) → wait → cp artifacts → remove; read-only root, drop caps, no-new-privileges, tmpfs workdir, non-root user, deny_all by default.
+- Idempotency: TTL store (default 600s); conflicting replay returns 409 `idempotency_conflict`.
+- WS streaming: heartbeats, backpressure, log caps, start/end events; fake-exec test added.
+- Discovery: Includes `workspace_cap_mb`, `artifact_ttl_hours`, `supported_spec_versions`.
+- Policy hash included in run status; image digest collected best-effort post-run.
+- Background: Optional via `SANDBOX_BACKGROUND_EXECUTION`.
+
 
 ## 21) Risks & Mitigations
 
@@ -657,9 +674,35 @@ Phase 4: Approvals & Secrets (opt‑in)
 - Dependencies
   - Reuse existing AuthNZ, rate limits, logging (loguru), and error handling patterns.
   - No external network calls in tests; mock runners.
+  - Execution behind `SANDBOX_ENABLE_EXECUTION`; CI uses fake exec (`TLDW_SANDBOX_DOCKER_FAKE_EXEC=1`).
 
 - Config
   - Add config keys under `Config_Files/config.txt` and/or env vars: runtime defaults, quotas, artifact TTLs, max upload size.
+  - Additional keys: `SANDBOX_WORKSPACE_CAP_MB`, `SANDBOX_SUPPORTED_SPEC_VERSIONS`, `SANDBOX_IDEMPOTENCY_TTL_SEC`, `SANDBOX_ENABLE_EXECUTION`, `SANDBOX_BACKGROUND_EXECUTION`, `SANDBOX_DOCKER_SECCOMP`, `SANDBOX_DOCKER_APPARMOR_PROFILE`.
+
+Local Run (Dev)
+- Enable execution (optional fake mode):
+  - `export SANDBOX_ENABLE_EXECUTION=true`
+  - Optional background: `export SANDBOX_BACKGROUND_EXECUTION=true`
+  - CI/dev without Docker: `export TLDW_SANDBOX_DOCKER_FAKE_EXEC=1`
+- Launch API:
+  - `python -m uvicorn tldw_Server_API.app.main:app --reload`
+- Typical flow:
+  - `POST /api/v1/sandbox/sessions` (store returned `session_id`)
+  - `POST /api/v1/sandbox/sessions/{session_id}/files` (tar/zip/plain)
+  - `POST /api/v1/sandbox/runs` with `{ session_id, command, capture_patterns }`
+  - `WS /api/v1/sandbox/runs/{run_id}/stream` for live logs and events
+  - `GET /api/v1/sandbox/runs/{run_id}/artifacts` → download via `/artifacts/{path}`
+
+Testing
+- Run sandbox tests only:
+  - `pytest -q tldw_Server_API/tests/sandbox`
+- WS stream (fake exec) verifies start/end events:
+  - Test: `tests/sandbox/test_ws_stream_fake.py`
+- Idempotency behavior (sessions/runs):
+  - Tests: `tests/sandbox/test_sandbox_api.py` (replay same key/body returns original; conflict → 409)
+- Docker fake execution path:
+  - Test: `tests/sandbox/test_docker_runner_fake.py`
 
 
 ## 24) Firecracker vs Docker (Appendix)

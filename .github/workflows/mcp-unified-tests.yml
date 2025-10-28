@@ -30,6 +30,10 @@ jobs:
             python-version: "3.12"
           - os: ubuntu-latest
             python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     env:
       PYTHONUNBUFFERED: '1'
       TEST_MODE: 'true'

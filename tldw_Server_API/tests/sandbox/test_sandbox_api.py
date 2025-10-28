@@ -45,10 +45,18 @@ def test_create_session_scaffold() -> None:
             "base_image": "python:3.11-slim",
             "timeout_sec": 60,
         }
-        r = client.post("/api/v1/sandbox/sessions", json=body)
+        r = client.post("/api/v1/sandbox/sessions", json=body, headers={"Idempotency-Key": "abc-123"})
         assert r.status_code == 200
         j = r.json()
         assert "id" in j and j["runtime"] in {"docker", "firecracker"}
+        # Replay with same key/body returns same id
+        r2 = client.post("/api/v1/sandbox/sessions", json=body, headers={"Idempotency-Key": "abc-123"})
+        assert r2.status_code == 200
+        assert r2.json()["id"] == j["id"]
+        # Change body with same key triggers 409
+        body2 = {**body, "timeout_sec": 61}
+        r3 = client.post("/api/v1/sandbox/sessions", json=body2, headers={"Idempotency-Key": "abc-123"})
+        assert r3.status_code == 409
 
 
 def test_start_run_scaffold_returns_completed_with_metadata() -> None:
@@ -60,7 +68,7 @@ def test_start_run_scaffold_returns_completed_with_metadata() -> None:
             "command": ["python", "-c", "print('hello')"],
             "timeout_sec": 5,
         }
-        r = client.post("/api/v1/sandbox/runs", json=body)
+        r = client.post("/api/v1/sandbox/runs", json=body, headers={"Idempotency-Key": "idem-run-1"})
         assert r.status_code == 200
         j = r.json()
         assert j["phase"] == "completed"
@@ -70,4 +78,11 @@ def test_start_run_scaffold_returns_completed_with_metadata() -> None:
         # policy_hash may be present; if provided, must be non-empty
         if "policy_hash" in j and j["policy_hash"] is not None:
             assert isinstance(j["policy_hash"], str) and len(j["policy_hash"]) > 0
-
+        # Replay with same key/body returns same run id
+        r2 = client.post("/api/v1/sandbox/runs", json=body, headers={"Idempotency-Key": "idem-run-1"})
+        assert r2.status_code == 200
+        assert r2.json()["id"] == j["id"]
+        # Change body with same key triggers 409
+        body2 = {**body, "timeout_sec": 6}
+        r3 = client.post("/api/v1/sandbox/runs", json=body2, headers={"Idempotency-Key": "idem-run-1"})
+        assert r3.status_code == 409

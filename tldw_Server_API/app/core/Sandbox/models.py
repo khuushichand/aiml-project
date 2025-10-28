@@ -71,3 +71,4 @@ class RunStatus:
     finished_at: Optional[datetime] = None
     message: Optional[str] = None
     resource_usage: Optional[Dict[str, int]] = None
+    artifacts: Optional[Dict[str, bytes]] = None

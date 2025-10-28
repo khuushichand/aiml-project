@@ -189,6 +189,16 @@ export default function WatchlistsPage() {
   const [runningJobId, setRunningJobId] = useState<number | null>(null);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [settings, setSettings] = useState<WatchlistSettings>({});
+  // Admin: org-level defaults
+  const [orgIdInput, setOrgIdInput] = useState<string>("");
+  const [orgRequireInclude, setOrgRequireInclude] = useState<boolean>(false);
+  const [orgSaving, setOrgSaving] = useState<boolean>(false);
+  const [showOrgPicker, setShowOrgPicker] = useState<boolean>(false);
+  const [orgsList, setOrgsList] = useState<{ id: number; name: string; slug?: string | null }[]>([]);
+  const [loadingOrgsList, setLoadingOrgsList] = useState<boolean>(false);
+  const [orgsPage, setOrgsPage] = useState<number>(1);
+  const [orgsSize, setOrgsSize] = useState<number>(10);
+  const [orgsFilter, setOrgsFilter] = useState<string>("");
   const [forms, setForms] = useState<Record<number, JobFormState>>({});
   const [sources, setSources] = useState<WatchlistSource[]>([]);
   const [loadingSources, setLoadingSources] = useState(false);
@@ -395,6 +405,67 @@ export default function WatchlistsPage() {
       URL.revokeObjectURL(url);
     } catch (error: any) {
       show({ title: 'Export failed', description: error?.message, variant: 'danger' });
+    }
+  };
+
+  const saveOrgDefaults = async () => {
+    const trimmed = orgIdInput.trim();
+    if (!trimmed) {
+      show({ title: 'Enter an organization ID', variant: 'warning' });
+      return;
+    }
+    const idNum = Number(trimmed);
+    if (!Number.isFinite(idNum) || idNum <= 0) {
+      show({ title: 'Invalid organization ID', variant: 'warning' });
+      return;
+    }
+    setOrgSaving(true);
+    try {
+      await apiClient.patch(`/admin/orgs/${idNum}/watchlists/settings`, { require_include_default: orgRequireInclude });
+      show({ title: 'Org defaults saved', description: `Org ${idNum}: require_include_default=${orgRequireInclude}`, variant: 'success' });
+    } catch (error: any) {
+      show({ title: 'Failed to save org defaults', description: error?.message, variant: 'danger' });
+    } finally {
+      setOrgSaving(false);
+    }
+  };
+
+  const loadOrgDefaults = async () => {
+    const trimmed = orgIdInput.trim();
+    if (!trimmed) {
+      show({ title: 'Enter an organization ID', variant: 'warning' });
+      return;
+    }
+    const idNum = Number(trimmed);
+    if (!Number.isFinite(idNum) || idNum <= 0) {
+      show({ title: 'Invalid organization ID', variant: 'warning' });
+      return;
+    }
+    try {
+      const data = await apiClient.get<{ org_id: number; require_include_default?: boolean }>(`/admin/orgs/${idNum}/watchlists/settings`);
+      setOrgRequireInclude(Boolean(data?.require_include_default || false));
+      show({ title: 'Loaded org defaults', description: `Org ${idNum}: require_include_default=${Boolean(data?.require_include_default || false)}`, variant: 'success' });
+    } catch (error: any) {
+      show({ title: 'Failed to load org defaults', description: error?.message, variant: 'danger' });
+    }
+  };
+
+  const fetchOrgListInline = async () => {
+    setLoadingOrgsList(true);
+    try {
+      const offset = (orgsPage - 1) * orgsSize;
+      const params: any = { limit: orgsSize, offset };
+      if (orgsFilter.trim()) params.q = orgsFilter.trim();
+      const data = await apiClient.get<{ id: number; name: string; slug?: string | null }[]>(
+        '/admin/orgs',
+        { params }
+      );
+      setOrgsList(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setOrgsList([]);
+      show({ title: 'Failed to load organizations', description: error?.message, variant: 'danger' });
+    } finally {
+      setLoadingOrgsList(false);
     }
   };
 
@@ -643,6 +714,171 @@ export default function WatchlistsPage() {
           <p className="mt-1 text-sm text-gray-600">
             Configure watchlist jobs, default templates, and delivery preferences for generated outputs.
           </p>
+        </div>
+
+        <div className="grid gap-6 rounded-md border border-gray-200 bg-white p-6 shadow-sm md:grid-cols-2">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">Org Defaults (Admin)</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Set default include-only gating for jobs in a specific organization.
+            </p>
+          </div>
+          <div className="grid gap-3">
+            <Input
+              label="Organization ID"
+              value={orgIdInput}
+              onChange={(e) => {
+                const cleaned = e.target.value.replace(/[^0-9]/g, '');
+                setOrgIdInput(cleaned);
+              }}
+              placeholder="e.g., 1"
+              type="number"
+              min={1}
+              inputMode="numeric"
+            />
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={orgRequireInclude}
+                onChange={(checked) => setOrgRequireInclude(checked)}
+                label="Default: Require include match"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  setShowOrgPicker((prev) => !prev);
+                  if (!showOrgPicker) {
+                    await fetchOrgListInline();
+                  }
+                }}
+              >
+                {showOrgPicker ? 'Hide orgs' : 'Browse orgs'}
+              </Button>
+              <Button type="button" size="sm" variant="secondary" onClick={loadOrgDefaults} disabled={!orgIdInput || Number(orgIdInput) <= 0}>
+                Load
+              </Button>
+              <Button type="button" size="sm" variant="primary" onClick={saveOrgDefaults} disabled={orgSaving || !orgIdInput || Number(orgIdInput) <= 0}>
+                {orgSaving ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+            {showOrgPicker && (
+              <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+                <div className="mb-2 flex items-center justify-between text-xs text-gray-600">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>Organizations</span>
+                    <Input
+                      label=""
+                      value={orgsFilter}
+                      onChange={(e) => setOrgsFilter(e.target.value)}
+                      placeholder="Filter by name, slug, or ID"
+                    />
+                    <label className="flex items-center gap-1">
+                      <span>Page size</span>
+                      <select
+                        className="rounded-md border border-gray-300 bg-white px-1 py-[2px] text-xs"
+                        value={orgsSize}
+                        onChange={async (e) => {
+                          const v = Number(e.target.value);
+                          setOrgsSize(Number.isFinite(v) && v > 0 ? v : 10);
+                          setOrgsPage(1);
+                          await fetchOrgListInline();
+                        }}
+                      >
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                      </select>
+                    </label>
+                    <span>Page {orgsPage}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button type="button" size="xs" variant="secondary" onClick={async () => { setOrgsPage((p) => Math.max(1, p - 1)); await fetchOrgListInline(); }} disabled={loadingOrgsList || orgsPage <= 1}>
+                      Prev
+                    </Button>
+                    <Button type="button" size="xs" variant="secondary" onClick={async () => { setOrgsPage((p) => p + 1); await fetchOrgListInline(); }} disabled={loadingOrgsList || orgsList.length < orgsSize}>
+                      Next
+                    </Button>
+                    <Button type="button" size="xs" variant="secondary" onClick={fetchOrgListInline} disabled={loadingOrgsList}>
+                      {loadingOrgsList ? 'Refreshing…' : 'Refresh'}
+                    </Button>
+                  </div>
+                </div>
+                {loadingOrgsList && (
+                  <div className="text-xs text-gray-500">Loading…</div>
+                )}
+                {!loadingOrgsList && orgsList.length === 0 && (
+                  <div className="text-xs text-gray-500">No organizations found.</div>
+                )}
+                {!loadingOrgsList && orgsList.length > 0 && (
+                  <ul className="divide-y divide-gray-200 text-sm">
+                    {orgsList
+                      .filter((o) => {
+                        const q = orgsFilter.trim().toLowerCase();
+                        if (!q) return true;
+                        const name = (o.name || '').toLowerCase();
+                        const slug = (o.slug || '').toLowerCase();
+                        return name.includes(q) || slug.includes(q) || String(o.id).includes(q);
+                      })
+                      .map((o) => (
+                      <li key={o.id} className="flex items-center justify-between py-1">
+                        <div className="truncate text-gray-700">
+                          <span className="font-medium text-gray-900">{o.id}</span> · {o.name}
+                          {o.slug ? <span className="text-gray-500"> ({o.slug})</span> : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="secondary"
+                            onClick={() => {
+                              setOrgIdInput(String(o.id));
+                              show({ title: 'Selected organization', description: `Org ID ${o.id}`, variant: 'success' });
+                            }}
+                          >
+                            Use
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(String(o.id));
+                                show({ title: 'Copied ID', description: String(o.id), variant: 'success' });
+                              } catch (e: any) {
+                                show({ title: 'Copy failed', description: e?.message, variant: 'danger' });
+                              }
+                            }}
+                          >
+                            Copy ID
+                          </Button>
+                          {o.slug && (
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="ghost"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(String(o.slug));
+                                  show({ title: 'Copied slug', description: String(o.slug), variant: 'success' });
+                                } catch (e: any) {
+                                  show({ title: 'Copy failed', description: e?.message, variant: 'danger' });
+                                }
+                              }}
+                            >
+                              Copy slug
+                            </Button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="space-y-6 rounded-md border border-gray-200 bg-white p-6 shadow-sm">

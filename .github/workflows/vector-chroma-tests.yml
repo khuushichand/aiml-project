@@ -21,12 +21,23 @@ permissions:
 
 jobs:
   chroma:
-    runs-on: ubuntu-latest
+    name: Vector Chroma - ${{ matrix.os }} - Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11','3.12','3.13']
+        include:
+          - os: ubuntu-latest
+            python-version: '3.11'
+          - os: ubuntu-latest
+            python-version: '3.12'
+          - os: ubuntu-latest
+            python-version: '3.13'
+          - os: macos-latest
+            python-version: '3.12'
+          - os: windows-latest
+            python-version: '3.12'
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
       - name: Setup Python and deps (with uv)
@@ -62,4 +73,3 @@ jobs:
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
           files: vector-chroma-*.xml
-

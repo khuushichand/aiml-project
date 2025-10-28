@@ -105,6 +105,7 @@ nav:
       - RAG API Guide: API-related/RAG-API-Guide.md
       - Transcript Segmentation API: API-related/Transcript_Segmentation_API.md
       - User Registration API: API-related/User_Registration_API_Documentation.md
+      - Watchlists API: API-related/Watchlists_API.md
   - Code:
       - Overview: Code_Documentation/index.md
       - Chat Developer Guide: Code_Documentation/Chat_Developer_Guide.md

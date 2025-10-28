@@ -215,7 +215,7 @@ Reading
 
 Watchlists
 - `POST /watchlists/sources` | `GET /watchlists/sources` | `GET/PATCH/DELETE /watchlists/sources/{id}`
-- `POST /watchlists/sources/bulk`
+- `POST /watchlists/sources/bulk` (per-entry status + errors)
 - `POST /watchlists/groups` | `POST /watchlists/tags` and assign to sources
 - `POST /watchlists/sources/{id}/test` → dry‑run preview
 - `POST /watchlists/jobs` | `GET /watchlists/jobs` | `GET/PATCH/DELETE /watchlists/jobs/{id}`

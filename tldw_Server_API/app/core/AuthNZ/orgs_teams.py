@@ -146,20 +146,46 @@ async def create_organization(
             }
 
 
-async def list_organizations(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+async def list_organizations(limit: int = 100, offset: int = 0, q: Optional[str] = None) -> List[Dict[str, Any]]:
     pool = await get_db_pool()
     if pool.pool:
-        rows = await pool.fetchall(
-            "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            limit, offset,
-        )
+        if q:
+            like = f"%{str(q).lower()}%"
+            rows = await pool.fetchall(
+                """
+                SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
+                FROM organizations
+                WHERE LOWER(name) LIKE $1 OR LOWER(COALESCE(slug, '')) LIKE $1 OR CAST(id AS TEXT) LIKE $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                like, limit, offset,
+            )
+        else:
+            rows = await pool.fetchall(
+                "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                limit, offset,
+            )
         return rows
     else:
         async with pool.acquire() as conn:
-            cursor = await conn.execute(
-                "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            )
+            if q:
+                like = f"%{str(q).lower()}%"
+                cursor = await conn.execute(
+                    """
+                    SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
+                    FROM organizations
+                    WHERE LOWER(name) LIKE ? OR LOWER(COALESCE(slug, '')) LIKE ? OR CAST(id AS TEXT) LIKE ?
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (like, like, like, limit, offset),
+                )
+            else:
+                cursor = await conn.execute(
+                    "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
             rows = await cursor.fetchall()
             return [
                 {

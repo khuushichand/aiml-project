@@ -587,6 +587,82 @@ def load_settings():
         _has_char_rl_enabled = False
         _char_rl_enabled_bool = False
 
+    # -------------------------
+    # Sandbox (Code Interpreter) Settings
+    # -------------------------
+    try:
+        cp = load_comprehensive_config()
+    except Exception:
+        cp = None
+
+    def _sbx_get(key: str, fallback: Optional[str] = None) -> Optional[str]:
+        try:
+            if cp and hasattr(cp, "has_section") and cp.has_section('Sandbox'):
+                # type: ignore[no-untyped-call]
+                return cp.get('Sandbox', key, fallback=fallback)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        return fallback
+
+    def _sbx_env_or_cfg(env_key: str, cfg_key: str, default: str) -> str:
+        return os.getenv(env_key) or _sbx_get(cfg_key, default) or default
+
+    def _sbx_int(env_key: str, cfg_key: str, default: int) -> int:
+        raw = os.getenv(env_key) or _sbx_get(cfg_key, str(default)) or str(default)
+        try:
+            return int(str(raw))
+        except Exception:
+            return default
+
+    def _sbx_float(env_key: str, cfg_key: str, default: float) -> float:
+        raw = os.getenv(env_key) or _sbx_get(cfg_key, str(default)) or str(default)
+        try:
+            return float(str(raw))
+        except Exception:
+            return default
+
+    def _sbx_list(env_key: str, cfg_key: str, default: list[str]) -> list[str]:
+        raw_env = os.getenv(env_key)
+        if raw_env is not None:
+            try:
+                if raw_env.strip().startswith("["):
+                    import json as _json
+                    vals = _json.loads(raw_env)
+                    return [str(v).strip() for v in vals if str(v).strip()]
+            except Exception:
+                pass
+            return [s.strip() for s in raw_env.split(',') if s.strip()]
+        raw_cfg = _sbx_get(cfg_key, None)
+        if raw_cfg is not None:
+            try:
+                if raw_cfg.strip().startswith("["):
+                    import json as _json
+                    vals = _json.loads(raw_cfg)
+                    return [str(v).strip() for v in vals if str(v).strip()]
+            except Exception:
+                pass
+            return [s.strip() for s in str(raw_cfg).split(',') if s.strip()]
+        return default
+
+    SANDBOX_DEFAULT_RUNTIME = _sbx_env_or_cfg("SANDBOX_DEFAULT_RUNTIME", "default_runtime", "docker").lower()
+    SANDBOX_NETWORK_DEFAULT = _sbx_env_or_cfg("SANDBOX_NETWORK_DEFAULT", "network_default", "deny_all").lower()
+    SANDBOX_MAX_UPLOAD_MB = _sbx_int("SANDBOX_MAX_UPLOAD_MB", "max_upload_mb", 64)
+    SANDBOX_ARTIFACT_TTL_HOURS = _sbx_int("SANDBOX_ARTIFACT_TTL_HOURS", "artifact_ttl_hours", 24)
+    SANDBOX_MAX_CONCURRENT_RUNS = _sbx_int("SANDBOX_MAX_CONCURRENT_RUNS", "max_concurrent_runs", 8)
+    SANDBOX_MAX_LOG_BYTES = _sbx_int("SANDBOX_MAX_LOG_BYTES", "max_log_bytes", 10 * 1024 * 1024)
+    SANDBOX_PIDS_LIMIT = _sbx_int("SANDBOX_PIDS_LIMIT", "pids_limit", 256)
+    SANDBOX_MAX_CPU = _sbx_float("SANDBOX_MAX_CPU", "max_cpu", 4.0)
+    SANDBOX_MAX_MEM_MB = _sbx_int("SANDBOX_MAX_MEM_MB", "max_mem_mb", 8192)
+    SANDBOX_WORKSPACE_CAP_MB = _sbx_int("SANDBOX_WORKSPACE_CAP_MB", "workspace_cap_mb", 256)
+    SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0"])
+    SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
+        os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"
+    )
+    SANDBOX_BACKGROUND_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
+        os.getenv("SANDBOX_BACKGROUND_EXECUTION") or _sbx_get("background_execution", "false") or "false"
+    )
+    SANDBOX_IDEMPOTENCY_TTL_SEC = _sbx_int("SANDBOX_IDEMPOTENCY_TTL_SEC", "idempotency_ttl_sec", 600)
+
     config_dict = {
         # General App
         "APP_MODE_STR": single_user_mode_str,
@@ -666,6 +742,21 @@ def load_settings():
                 if isinstance(comprehensive_config, dict) else None
             )
         ),
+        # Sandbox settings (code interpreter)
+        "SANDBOX_DEFAULT_RUNTIME": SANDBOX_DEFAULT_RUNTIME,
+        "SANDBOX_NETWORK_DEFAULT": SANDBOX_NETWORK_DEFAULT,
+        "SANDBOX_MAX_UPLOAD_MB": SANDBOX_MAX_UPLOAD_MB,
+        "SANDBOX_ARTIFACT_TTL_HOURS": SANDBOX_ARTIFACT_TTL_HOURS,
+        "SANDBOX_MAX_CONCURRENT_RUNS": SANDBOX_MAX_CONCURRENT_RUNS,
+        "SANDBOX_MAX_LOG_BYTES": SANDBOX_MAX_LOG_BYTES,
+        "SANDBOX_PIDS_LIMIT": SANDBOX_PIDS_LIMIT,
+        "SANDBOX_MAX_CPU": SANDBOX_MAX_CPU,
+        "SANDBOX_MAX_MEM_MB": SANDBOX_MAX_MEM_MB,
+        "SANDBOX_WORKSPACE_CAP_MB": SANDBOX_WORKSPACE_CAP_MB,
+        "SANDBOX_SUPPORTED_SPEC_VERSIONS": SANDBOX_SUPPORTED_SPEC_VERSIONS,
+        "SANDBOX_IDEMPOTENCY_TTL_SEC": SANDBOX_IDEMPOTENCY_TTL_SEC,
+        "SANDBOX_ENABLE_EXECUTION": SANDBOX_ENABLE_EXECUTION,
+        "SANDBOX_BACKGROUND_EXECUTION": SANDBOX_BACKGROUND_EXECUTION,
         # --- HYDE/doc2query (per-chunk) feature flags ---
         "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
         "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),

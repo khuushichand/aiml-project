@@ -72,14 +72,43 @@ All examples assume single-user mode using `X-API-KEY`. Adjust `Authorization: B
 
 ### 5A. Import sources (Bulk JSON) — Available Now
 
-Endpoint: `POST /api/v1/watchlists/sources/bulk` (see `tldw_Server_API/app/api/v1/endpoints/watchlists.py:353`)
+Endpoint: `POST /api/v1/watchlists/sources/bulk` (see `tldw_Server_API/app/api/v1/endpoints/watchlists.py:647`)
 
+Request shape:
+```
+{
+  "sources": [
+    {"name":"Site A","url":"https://a.example.com/","source_type":"site","tags":["alpha"]},
+    {"name":"RSS B","url":"https://b.example.com/feed","source_type":"rss","tags":["beta"]}
+  ]
+}
+```
+
+Response shape (per-entry status):
+```
+{
+  "items": [
+    {"name":"Site A","url":"https://a.example.com/","id":101,"status":"created","source_type":"site"},
+    {"name":"RSS B","url":"https://b.example.com/feed","id":102,"status":"created","source_type":"rss"}
+  ],
+  "total": 2,
+  "created": 2,
+  "errors": 0
+}
+```
+
+Notes:
+- Invalid entries return `status:"error"` with `error` message; valid entries are created.
+- YouTube-as-RSS: When `source_type="rss"`, non-feed YouTube URLs (e.g., `watch`, `shorts`, `@handle`) are rejected with
+  `invalid_youtube_rss_url`. Accepted forms are canonical feeds, e.g. `https://www.youtube.com/feeds/videos.xml?channel_id=...`.
+
+Example:
 ```
 curl -sS -X POST \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   --data @sources_bulk.json \
-  http://127.0.0.1:8000/api/v1/watchlists/sources
+  http://127.0.0.1:8000/api/v1/watchlists/sources/bulk
 ```
 
 Verify:

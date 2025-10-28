@@ -75,7 +75,7 @@ Base prefix remains: `/api/v1/watchlists`
 - `GET /watchlists/sources/{id}` (get)
 - `PATCH /watchlists/sources/{id}` (update)
 - `DELETE /watchlists/sources/{id}` (delete)
-- `POST /watchlists/sources/bulk` (bulk create)
+- `POST /watchlists/sources/bulk` (bulk create; returns per-entry status with `created|error` and `error` message; strict backend validation for YouTube-as-RSS)
 - `POST /watchlists/sources/import` (OPML multipart; fields: `file`, optional defaults: `active`, `tags`, `group_id`)
 - `GET /watchlists/sources/export` (OPML; optional filters to scope export)
 
@@ -124,7 +124,7 @@ Notes:
 Optional client-side UX (recommended):
 - When users paste a non-feed YouTube URL:
   - If it is a channel page (`/channel/<CHANNEL_ID>`) or playlist page (`?list=<PLAYLIST_ID>`), normalize it to the canonical feed URL automatically and confirm the change in the UI.
-  - Otherwise, reject with an actionable error that shows the accepted patterns (above) and how to locate `channel_id`.
+  - Otherwise, reject with an actionable error that shows the accepted patterns (above) and how to locate `channel_id`. The bulk JSON API surfaces this as per-entry `status:"error"` with `error:"invalid_youtube_rss_url"`.
   - This aligns with “optionally reject non-feed YouTube URLs with actionable error” (see this section).
 
 ## 8) OPML Import/Export

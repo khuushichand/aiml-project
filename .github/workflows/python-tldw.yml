@@ -304,21 +304,19 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install system dependencies (Ubuntu)
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
+
+      - name: Install PortAudio (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
+          sudo apt-get install -y portaudio19-dev python3-all-dev
 
-      - name: Install system dependencies (macOS)
+      - name: Install PortAudio (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install portaudio ffmpeg
-
-      - name: Install system dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install ffmpeg -y
+          brew install portaudio || true
 
       - name: Install Python dependencies
         run: |
@@ -394,17 +392,12 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install system deps (ffmpeg, pg client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg postgresql-client
-      - name: Wait for Postgres service
-        uses: ./.github/actions/wait-for-postgres
+      - name: Install ffmpeg + pg client and wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
         with:
           host: localhost
           port: ${{ env.POSTGRES_TEST_PORT }}
           user: tldw
-          install-client: 'false'
 
       - name: Install additional Python dependencies
         run: |
@@ -470,6 +463,7 @@ jobs:
       TLDW_PS_TC_COUNT: "250"
       TLDW_PS_ITERATIONS: "5"
       TLDW_PS_OPT_COUNT: "3"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -483,17 +477,12 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install system deps (ffmpeg, pg client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg postgresql-client
-      - name: Wait for Postgres service
-        uses: ./.github/actions/wait-for-postgres
+      - name: Install ffmpeg + pg client and wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
         with:
           host: localhost
           port: ${{ env.POSTGRES_TEST_PORT }}
           user: tldw
-          install-client: 'false'
 
       - name: Install Python dependencies
         run: |
@@ -560,17 +549,12 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install system deps (ffmpeg, pg client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg postgresql-client
-      - name: Wait for Postgres service
-        uses: ./.github/actions/wait-for-postgres
+      - name: Install ffmpeg + pg client and wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
         with:
           host: localhost
           port: ${{ env.TEST_DB_PORT }}
           user: ${{ env.TEST_DB_USER }}
-          install-client: 'false'
 
       - name: Install Python dependencies
         run: |
@@ -622,10 +606,13 @@ jobs:
             pyproject.toml
             uv.lock
           
-      - name: Install system dependencies
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
+          sudo apt-get install -y portaudio19-dev python3-all-dev
           
       - name: Install Python dependencies
         run: |
@@ -666,10 +653,13 @@ jobs:
             pyproject.toml
             uv.lock
           
-      - name: Install system dependencies
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
+          sudo apt-get install -y portaudio19-dev python3-all-dev
           
       - name: Install Python dependencies
         run: |
@@ -994,7 +984,11 @@ jobs:
         if: always()
         run: |
           export SERVER_LABEL=mcp
-          python tldw_Server_API/scripts/server_lifecycle.py stop
+          if [ -f "tldw_Server_API/scripts/server_lifecycle.py" ]; then
+            python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          else
+            echo "server_lifecycle.py not found; skipping stop for '${SERVER_LABEL}'";
+          fi
 
   mcp-tests:
     name: MCP Tests (gated)
@@ -1008,6 +1002,7 @@ jobs:
       DISABLE_HEAVY_STARTUP: "1"
       MCP_JWT_SECRET: test_secret_key_for_ci_only_32_chars_minimum
       MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
