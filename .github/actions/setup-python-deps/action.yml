@@ -47,7 +47,7 @@ runs:
       shell: bash
       run: |
         # Install editable with extras
-        uv pip install -e ".[${{ inputs.extras }}]"
+        uv pip install --system -e ".[${{ inputs.extras }}]"
 
     - name: Install from requirements (uv)
       if: inputs.use-uv == 'true' && inputs.requirements-files != ''
@@ -55,7 +55,7 @@ runs:
       run: |
         while IFS= read -r req; do
           [ -n "$req" ] || continue
-          uv pip install -r "$req"
+          uv pip install --system -r "$req"
         done << 'REQS'
         ${{ inputs.requirements-files }}
         REQS
