@@ -92,6 +92,7 @@ dependencies = [
   "PyJWT>=2.8.0",
   "python-jose[cryptography]>=3.3.0",
   "yara-python>=4.3.0",
+  "pyotp",
   
   # Audio/Video Processing
   "faster-whisper>=0.10.0",
