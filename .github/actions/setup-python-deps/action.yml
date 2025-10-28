@@ -57,8 +57,8 @@ runs:
           [ -n "$req" ] || continue
           uv pip install -r "$req"
         done << 'REQS'
-${{ inputs.requirements-files }}
-REQS
+        ${{ inputs.requirements-files }}
+        REQS
 
     - name: Install project (pip)
       if: inputs.use-uv != 'true' && inputs.requirements-files == ''
@@ -74,11 +74,10 @@ REQS
           [ -n "$req" ] || continue
           pip install -r "$req"
         done << 'REQS'
-${{ inputs.requirements-files }}
-REQS
+        ${{ inputs.requirements-files }}
+        REQS
 
     - name: Enforce pytest plugin isolation
       shell: bash
       run: |
         echo "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" >> "$GITHUB_ENV"
-
