@@ -1,12 +1,12 @@
 name: "Setup FFmpeg"
 description: "Install FFmpeg across platforms; optionally install PortAudio"
-runs:
-  using: "composite"
 inputs:
   install-portaudio:
     description: "Also install PortAudio (Linux/macOS)"
     required: false
     default: 'false'
+runs:
+  using: "composite"
   steps:
     - name: Install FFmpeg (Linux)
       if: runner.os == 'Linux'

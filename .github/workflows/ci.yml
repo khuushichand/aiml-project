@@ -50,11 +50,25 @@ jobs:
           mypy tldw_Server_API/
           set -e
 
-  unit-tests:
-    name: Unit Tests (Ubuntu, Py3.12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+  full-suite:
+    name: Full Test Suite (${{ matrix.os }} / Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.11'
+          - os: ubuntu-latest
+            python: '3.12'
+          - os: ubuntu-latest
+            python: '3.13'
+          - os: windows-latest
+            python: '3.12'
+          - os: macos-latest
+            python: '3.12'
     env:
       PYTHONPATH: ./tldw_Server_API
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
@@ -64,29 +78,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
-          python-version: '3.12'
-          cache: pip
+          python-version: ${{ matrix.python }}
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
-            tldw_Server_API/requirements.txt
+            uv.lock
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r tldw_Server_API/requirements.txt
-          pip install pytest pytest-xdist pytest-asyncio email-validator
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
 
-      - name: Run unit tests
+      - name: Run full test suite
         run: |
-          pytest -m "unit" -v --junit-xml=test-results-unit.xml --timeout=600
+          pytest -q --maxfail=1 --disable-warnings --junit-xml=test-results-${{ matrix.os }}-${{ matrix.python }}.xml
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-results
-          path: test-results-unit.xml
-
+          name: full-suite-${{ matrix.os }}-py${{ matrix.python }}
+          path: test-results-${{ matrix.os }}-${{ matrix.python }}.xml
