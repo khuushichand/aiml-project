@@ -1,21 +1,9 @@
 name: E2E Smoke Workflows
 
 on:
-  push:
-    branches: [ main, dev ]
-    paths:
-      - 'tldw_Server_API/**'
-      - '.github/workflows/e2e-smoke.yml'
-      - 'pyproject.toml'
-      - 'uv.lock'
-  pull_request:
-    branches: [ main, dev ]
-    paths:
-      - 'tldw_Server_API/**'
-      - '.github/workflows/e2e-smoke.yml'
-      - 'pyproject.toml'
-      - 'uv.lock'
   workflow_dispatch: {}
+  schedule:
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read

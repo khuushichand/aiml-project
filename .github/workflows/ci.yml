@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            tldw_Server_API/requirements.txt
+
+      - name: Install linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black mypy
+
+      - name: Black (check)
+        run: black --check --diff tldw_Server_API/
+
+      - name: Ruff (lint)
+        run: ruff check tldw_Server_API/
+
+      - name: MyPy (non-blocking)
+        run: |
+          set +e
+          mypy tldw_Server_API/
+          set -e
+
+  unit-tests:
+    name: Unit Tests (Ubuntu, Py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: lint
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            tldw_Server_API/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tldw_Server_API/requirements.txt
+          pip install pytest pytest-xdist pytest-asyncio email-validator
+
+      - name: Run unit tests
+        run: |
+          pytest -m "unit" -v --junit-xml=test-results-unit.xml --timeout=600
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: test-results-unit.xml
+

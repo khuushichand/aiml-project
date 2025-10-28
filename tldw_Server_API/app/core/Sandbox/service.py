@@ -23,6 +23,16 @@ from .runners.firecracker_runner import firecracker_available
 from .runners.docker_runner import DockerRunner
 from tldw_Server_API.app.core.config import settings as app_settings
 import threading
+import asyncio
+
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    UnifiedAuditService,
+    AuditEventType,
+    AuditEventCategory,
+    AuditSeverity,
+    AuditContext,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 class SandboxService:
@@ -43,6 +53,73 @@ class SandboxService:
             "node:20-alpine",
             # generic shell base left for future: e.g., "ubuntu:24.04"
         ]
+
+    def _audit_run_completion(self, *, user_id: str | int | None, run_id: str, status: RunStatus, spec_version: str, session_id: str | None) -> None:
+        """Log a completion audit event in a fire-and-forget manner."""
+        try:
+            uid_int = None
+            try:
+                uid_int = int(str(user_id)) if user_id is not None else None
+            except Exception:
+                uid_int = None
+            if uid_int is not None:
+                db_path = DatabasePaths.get_audit_db_path(uid_int)
+            else:
+                db_path = None
+
+            async def _alog() -> None:
+                svc = UnifiedAuditService(db_path=str(db_path) if db_path else None)
+                await svc.initialize()
+                try:
+                    ctx = AuditContext(
+                        user_id=(str(user_id) if user_id is not None else None),
+                        session_id=session_id,
+                        method="INTERNAL",
+                        endpoint="/api/v1/sandbox/runs (background)",
+                    )
+                    outcome = (
+                        "success" if status.phase in (RunPhase.completed,) and (status.exit_code or 0) == 0 else
+                        "timeout" if status.phase == RunPhase.timed_out else
+                        "killed" if status.phase == RunPhase.killed else
+                        "failed" if status.phase == RunPhase.failed else
+                        status.phase.value
+                    )
+                    dur_ms = None
+                    try:
+                        if status.started_at and status.finished_at:
+                            dur_ms = max(0.0, (status.finished_at - status.started_at).total_seconds() * 1000.0)
+                    except Exception:
+                        dur_ms = None
+                    await svc.log_event(
+                        event_type=AuditEventType.API_RESPONSE,
+                        category=AuditEventCategory.API_CALL,
+                        severity=(AuditSeverity.INFO if outcome == "success" else AuditSeverity.WARNING),
+                        context=ctx,
+                        resource_type="sandbox.run",
+                        resource_id=run_id,
+                        action="run",
+                        result=("success" if outcome == "success" else outcome),
+                        duration_ms=dur_ms,
+                        metadata={
+                            "runtime": status.runtime.value if status.runtime else None,
+                            "base_image": status.base_image,
+                            "image_digest": status.image_digest,
+                            "policy_hash": status.policy_hash,
+                            "exit_code": status.exit_code,
+                            "spec_version": spec_version,
+                        },
+                    )
+                finally:
+                    await svc.stop()
+
+            # Run now; if we're already in an event loop, schedule task
+            try:
+                asyncio.run(_alog())
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+                loop.create_task(_alog())
+        except Exception as e:
+            logger.debug(f"audit(run.completion) failed: {e}")
         # Defaults pulled from policy cfg (wired to env/config)
         max_cpu = self.policy.cfg.max_cpu
         max_mem_mb = self.policy.cfg.max_mem_mb
@@ -139,6 +216,12 @@ class SandboxService:
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
+                            # Ensure policy hash is present (compute if missing)
+                            if not status.policy_hash:
+                                policy_material = f"{self.policy.cfg.default_runtime}|{self.policy.cfg.network_default}|{self.policy.cfg.artifact_ttl_hours}|{self.policy.cfg.max_upload_mb}"
+                                status.policy_hash = hashlib.sha256(policy_material.encode()).hexdigest()[:16]
+                            # Audit completion
+                            self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except Exception as e:
                             logger.warning(f"Background docker execution failed: {e}")
                     threading.Thread(target=_worker, daemon=True).start()
@@ -156,6 +239,11 @@ class SandboxService:
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
+                    # Audit completion (sync path)
+                    try:
+                        self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning(f"Docker execution failed; keeping enqueue status. Error: {e}")
         else:
