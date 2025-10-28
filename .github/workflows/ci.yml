@@ -81,12 +81,10 @@ jobs:
       DISABLE_HEAVY_STARTUP: '1'
       # Expose Postgres service to tests
       POSTGRES_TEST_HOST: 127.0.0.1
-      POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
       POSTGRES_TEST_DB: tldw_content
       POSTGRES_TEST_USER: tldw
       POSTGRES_TEST_PASSWORD: tldw
       TEST_DB_HOST: 127.0.0.1
-      TEST_DB_PORT: ${{ job.services.postgres.ports[5432] }}
       TEST_DB_USER: tldw
       TEST_DB_PASSWORD: tldw
       TLDW_TEST_POSTGRES_REQUIRED: '1'
@@ -107,9 +105,15 @@ jobs:
         uses: ./.github/actions/ffmpeg-pg-wait
         with:
           host: 127.0.0.1
-          port: ${{ env.POSTGRES_TEST_PORT }}
+          port: ${{ job.services.postgres.ports[5432] }}
           user: tldw
           install-portaudio: 'true'
+
+      - name: Export PG env vars
+        shell: bash
+        run: |
+          echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+          echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
 
       - name: Install additional deps for PG tests
         run: |
