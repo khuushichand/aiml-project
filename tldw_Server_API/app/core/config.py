@@ -662,6 +662,12 @@ def load_settings():
         os.getenv("SANDBOX_BACKGROUND_EXECUTION") or _sbx_get("background_execution", "false") or "false"
     )
     SANDBOX_IDEMPOTENCY_TTL_SEC = _sbx_int("SANDBOX_IDEMPOTENCY_TTL_SEC", "idempotency_ttl_sec", 600)
+    # Security hardening knobs
+    SANDBOX_ULIMIT_NOFILE = _sbx_int("SANDBOX_ULIMIT_NOFILE", "ulimit_nofile", 1024)
+    SANDBOX_ULIMIT_NPROC = _sbx_int("SANDBOX_ULIMIT_NPROC", "ulimit_nproc", 512)
+    # Optional: path to seccomp JSON and AppArmor profile name
+    SANDBOX_DOCKER_SECCOMP = os.getenv("SANDBOX_DOCKER_SECCOMP") or _sbx_get("docker_seccomp", None)
+    SANDBOX_DOCKER_APPARMOR_PROFILE = os.getenv("SANDBOX_DOCKER_APPARMOR_PROFILE") or _sbx_get("docker_apparmor_profile", None)
 
     config_dict = {
         # General App
@@ -757,6 +763,10 @@ def load_settings():
         "SANDBOX_IDEMPOTENCY_TTL_SEC": SANDBOX_IDEMPOTENCY_TTL_SEC,
         "SANDBOX_ENABLE_EXECUTION": SANDBOX_ENABLE_EXECUTION,
         "SANDBOX_BACKGROUND_EXECUTION": SANDBOX_BACKGROUND_EXECUTION,
+        "SANDBOX_ULIMIT_NOFILE": SANDBOX_ULIMIT_NOFILE,
+        "SANDBOX_ULIMIT_NPROC": SANDBOX_ULIMIT_NPROC,
+        "SANDBOX_DOCKER_SECCOMP": SANDBOX_DOCKER_SECCOMP,
+        "SANDBOX_DOCKER_APPARMOR_PROFILE": SANDBOX_DOCKER_APPARMOR_PROFILE,
         # --- HYDE/doc2query (per-chunk) feature flags ---
         "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
         "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),

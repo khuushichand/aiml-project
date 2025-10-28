@@ -348,7 +348,18 @@ class MCPServer:
                     })
                     logger.info("TEST_MODE auto-enabled MediaModule for deterministic tool catalogs")
 
-            # (no additional built-in modules)
+            # 5) Optional: Sandbox module (code interpreter) — disabled by default
+            if os.getenv("MCP_ENABLE_SANDBOX_MODULE", "").lower() in {"1", "true", "yes", "on"}:
+                modules_to_load.append({
+                    "id": "sandbox",
+                    "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.sandbox_module:SandboxModule",
+                    "enabled": True,
+                    "name": "Sandbox Engine",
+                    "version": "1.0.0",
+                    "department": "management",
+                    "settings": {},
+                })
+                logger.info("MCP_ENABLE_SANDBOX_MODULE=true; queuing SandboxModule for registration")
 
             # Register all specified modules
             from .modules.base import ModuleConfig  # Local import to avoid cycles

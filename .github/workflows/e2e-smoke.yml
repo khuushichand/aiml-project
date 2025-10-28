@@ -66,17 +66,10 @@ jobs:
           requirements-files: |
             tldw_Server_API/requirements.txt
 
-      - name: Install FFmpeg (multi-OS)
+      - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg
-      - name: Install PortAudio (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev
-      - name: Install PortAudio (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install portaudio || true
+        with:
+          install-portaudio: 'true'
 
       - name: Install additional test deps
         run: |

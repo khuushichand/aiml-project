@@ -441,6 +441,12 @@ Expose an MCP tool named `sandbox.run` with schema:
 ```
 Policy and RBAC are enforced server-side; agent invocations are auditable. When `session_id` is not provided, `base_image` is required; when `session_id` is provided, `base_image` is derived from the session. Responses include `run_id`, optional `log_stream_url` (WS), and may include `policy_hash` for reproducibility across environments.
 
+Implementation (stub)
+- MCP Unified module now exposes `sandbox.run` (management tool) via a stub Sandbox module.
+- Tool schema with `oneOf` is returned by MCP; module validates arguments (session vs one‑shot) and executes via internal SandboxService.
+- Result includes `policy_hash` and `image_digest` when available. For logs and artifacts, use REST/WS endpoints directly.
+- Enable module at runtime with `MCP_ENABLE_SANDBOX_MODULE=1`.
+
 
 ## 12) Security Model
 
@@ -450,7 +456,7 @@ Threats
 Controls (MVP)
 - Default deny egress; no inbound network; optional allowlist (future) with explicit domain/IP rules; DNS resolution pinned at run start.
 - No host mounts; ephemeral workspace only; read-only root FS where possible; writable tmpfs workdir mounted with `noexec,nodev,nosuid`.
-- Resource quotas per run and per user; hard wall-clock timeouts; pids limit; `nofile` ulimit; swap disabled; optional per-process CPU time cap.
+- Resource quotas per run and per user; hard wall-clock timeouts; pids limit; enforced `ulimit` values (`nofile`, `nproc`); swap disabled; optional per-process CPU time cap.
 - Docker: rootless engine if supported; hardened seccomp profile; AppArmor; drop all capabilities; `no-new-privileges`; read-only root.
 - Firecracker: one microVM per run/session; minimal device exposure; cgroups; snapshot-based immutable root; no tap interface by default.
 - Secrets: Not injected by default. If enabled later, mount via tmpfs at well-known path `/run/secrets`; scoped to run; lifecycle-bound; redact values in logs; denylist `/run/secrets/**` from artifact capture.
@@ -462,7 +468,8 @@ Operational Safeguards
 
 User Identity & Default Limits
 - Processes run as non-root random UID/GID per run; no supplemental groups.
-- Default hard limits (configurable): `pids=256`, `nofile=1024`, `max_log_bytes=10MB`.
+- Default hard limits (configurable): `pids=256`, `nofile=1024`, `nproc=512`, `max_log_bytes=10MB`.
+  - Docker runner enforces `--ulimit nofile=1024:1024`, `--ulimit nproc=512:512`, and `--ulimit core=0:0`.
 - CPU time cap: enforce RLIMIT_CPU ≈ `timeout_sec + 2s grace` when available.
 
 
@@ -547,6 +554,8 @@ Configuration Keys (examples)
 - `SANDBOX_BACKGROUND_EXECUTION` (false by default)
 - `SANDBOX_DOCKER_SECCOMP` (path to seccomp JSON)
 - `SANDBOX_DOCKER_APPARMOR_PROFILE`
+- `SANDBOX_ULIMIT_NOFILE` (default 1024)
+- `SANDBOX_ULIMIT_NPROC` (default 512)
 
 Feature Discovery Payload (example)
 ```
@@ -599,6 +608,11 @@ Network Allowlist Rules (vNext)
 
 - IDE: command palette “Run in Sandbox”; code lens over main() or test files; diagnostics showing exit code and error lines; logs panel; open artifacts.
 - Web UI: panel in tldw WebUI to submit code, view live logs, download artifacts, and copy reproducible run spec.
+
+LSP / VS Code Stub
+- A minimal VS Code extension stub is provided at `Helper_Scripts/IDE/vscode-sandbox/`.
+- Command: `tldw.sandbox.run` prompts for a command array and posts to `/sandbox/runs`.
+- Configure `tldw.sandbox.serverUrl` and `tldw.sandbox.apiKey`.
 
 Stack Trace Mapping
 - Python: parse Traceback frames; map to workspace files by relative path; otherwise show sandbox path hint.
@@ -684,7 +698,11 @@ Local Run (Dev)
 - Enable execution (optional fake mode):
   - `export SANDBOX_ENABLE_EXECUTION=true`
   - Optional background: `export SANDBOX_BACKGROUND_EXECUTION=true`
-  - CI/dev without Docker: `export TLDW_SANDBOX_DOCKER_FAKE_EXEC=1`
+- CI/dev without Docker: `export TLDW_SANDBOX_DOCKER_FAKE_EXEC=1`
+- Hardened defaults shipped:
+  - Seccomp: `tldw_Server_API/Config_Files/sandbox/seccomp_default.json`. Enable via `export SANDBOX_DOCKER_SECCOMP=.../seccomp_default.json` (enabled by default when present).
+  - AppArmor (example): `tldw_Server_API/Config_Files/sandbox/apparmor/tldw-sandbox.profile`. Load with `apparmor_parser` and set `SANDBOX_DOCKER_APPARMOR_PROFILE=tldw-sandbox`.
+  - Egress is denied by default (`--network none`).
 - Launch API:
   - `python -m uvicorn tldw_Server_API.app.main:app --reload`
 - Typical flow:

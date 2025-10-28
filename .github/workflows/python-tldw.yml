@@ -114,18 +114,10 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-      - name: Install FFmpeg (multi-OS)
+      - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg
-      - name: Install system dependencies (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev
-          
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install portaudio || true
+        with:
+          install-portaudio: 'true'
           
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
@@ -231,18 +223,10 @@ jobs:
             pyproject.toml
             uv.lock
             
-      - name: Install FFmpeg (multi-OS)
+      - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg
-      - name: Install system dependencies (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev
-
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install portaudio || true
+        with:
+          install-portaudio: 'true'
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
@@ -304,19 +288,10 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install FFmpeg (multi-OS)
+      - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg
-
-      - name: Install PortAudio (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev
-
-      - name: Install PortAudio (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install portaudio || true
+        with:
+          install-portaudio: 'true'
 
       - name: Install Python dependencies
         run: |
@@ -606,13 +581,10 @@ jobs:
             pyproject.toml
             uv.lock
           
-      - name: Install FFmpeg (multi-OS)
+      - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev
+        with:
+          install-portaudio: 'true'
           
       - name: Install Python dependencies
         run: |
@@ -653,13 +625,10 @@ jobs:
             pyproject.toml
             uv.lock
           
-      - name: Install FFmpeg (multi-OS)
+      - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev
+        with:
+          install-portaudio: 'true'
           
       - name: Install Python dependencies
         run: |

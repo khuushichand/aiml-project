@@ -313,6 +313,59 @@ class MetricsRegistry:
                 labels=["component", "event"],
             )
         )
+
+        # Sandbox (code interpreter) metrics
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_sessions_created_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox sessions created",
+                labels=["runtime"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_runs_started_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox runs started",
+                labels=["runtime"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_runs_completed_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox runs finished",
+                labels=["runtime", "outcome"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_run_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Sandbox run duration in seconds",
+                unit="s",
+                labels=["runtime", "outcome"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 60, 120, 300]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_upload_bytes_total",
+                type=MetricType.COUNTER,
+                description="Total bytes uploaded to sandbox workspaces",
+                unit="bytes",
+                labels=["kind"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_upload_files_total",
+                type=MetricType.COUNTER,
+                description="Total files uploaded to sandbox workspaces",
+                labels=["kind"],
+            )
+        )
         
         self.register_metric(
             MetricDefinition(

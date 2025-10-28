@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Header, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Header, File, UploadFile, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import StreamingResponse
 import asyncio
 import os
@@ -24,6 +24,9 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 
 
 router = APIRouter(prefix="/sandbox", tags=["sandbox"])
@@ -42,6 +45,8 @@ async def create_session(
     payload: SandboxSessionCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxSession:
     spec = SessionSpec(
         runtime=CoreRuntimeType(payload.runtime) if payload.runtime else None,
@@ -72,6 +77,44 @@ async def create_session(
                 }
             })
         raise
+    # Metrics
+    try:
+        increment_counter(
+            "sandbox_sessions_created_total",
+            labels={"runtime": session.runtime.value},
+        )
+    except Exception:
+        logger.debug("metrics: sandbox_sessions_created_total failed")
+
+    # Audit
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else "/api/v1/sandbox/sessions",
+                method=(request.method if request else "POST"),
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.API_REQUEST,
+                category=AuditEventCategory.API_CALL,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="sandbox.session",
+                resource_id=session.id,
+                action="create",
+                metadata={
+                    "runtime": session.runtime.value,
+                    "base_image": session.base_image,
+                    "spec_version": payload.spec_version,
+                    "labels": payload.labels or {},
+                },
+            )
+    except Exception as e:
+        logger.debug(f"sandbox audit(session.create) failed: {e}")
+
     return SandboxSession(id=session.id, runtime=session.runtime.value, base_image=session.base_image, expires_at=session.expires_at)
 
 
@@ -91,6 +134,8 @@ async def upload_files(
     session_id: str = Path(..., min_length=1),
     files: list[UploadFile] = File(...),
     current_user: User = Depends(get_request_user),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxFileUploadResponse:
     ws_root = _service.get_session_workspace_path(session_id)
     if not ws_root:
@@ -176,6 +221,40 @@ async def upload_files(
             written += len(content)
             count += 1
 
+    # Metrics
+    try:
+        if written:
+            increment_counter("sandbox_upload_bytes_total", value=float(written), labels={"kind": "session_upload"})
+        if count:
+            increment_counter("sandbox_upload_files_total", value=float(count), labels={"kind": "session_upload"})
+    except Exception:
+        logger.debug("metrics: sandbox upload counters failed")
+
+    # Audit
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else f"/api/v1/sandbox/sessions/{session_id}/files",
+                method=(request.method if request else "POST"),
+                session_id=session_id,
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.API_REQUEST,
+                category=AuditEventCategory.API_CALL,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="sandbox.session",
+                resource_id=session_id,
+                action="upload",
+                metadata={"bytes_received": written, "file_count": count},
+            )
+    except Exception as e:
+        logger.debug(f"sandbox audit(session.upload) failed: {e}")
+
     return SandboxFileUploadResponse(session_id=session_id, bytes_received=written, file_count=count)
 
 
@@ -184,6 +263,8 @@ async def start_run(
     payload: SandboxRunCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
     files_inline = _service.parse_inline_files([f.dict() for f in (payload.files or [])])
     spec = RunSpec(
@@ -201,6 +282,13 @@ async def start_run(
     )
     # Scaffold: return immediate completed status without real execution
     try:
+        # Metrics: started
+        try:
+            rt = (spec.runtime.value if spec.runtime else (payload.runtime or "unknown"))
+            increment_counter("sandbox_runs_started_total", labels={"runtime": str(rt)})
+        except Exception:
+            logger.debug("metrics: sandbox_runs_started_total failed")
+
         status = _service.start_run_scaffold(
             user_id=current_user.id,
             spec=spec,
@@ -219,6 +307,101 @@ async def start_run(
                 }
             })
         raise
+    # Metrics and audit post-run (if completed)
+    try:
+        if status.started_at and status.finished_at:
+            duration = max(0.0, (status.finished_at - status.started_at).total_seconds())
+            outcome = (
+                "success" if status.phase.value == "completed" and (status.exit_code or 0) == 0 else
+                "timeout" if status.phase.value == "timed_out" else
+                "killed" if status.phase.value == "killed" else
+                "failed" if status.phase.value == "failed" else
+                status.phase.value
+            )
+            # Metrics: completion + duration
+            try:
+                increment_counter(
+                    "sandbox_runs_completed_total",
+                    labels={"runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")), "outcome": outcome},
+                )
+            except Exception:
+                logger.debug("metrics: sandbox_runs_completed_total failed")
+            try:
+                observe_histogram(
+                    "sandbox_run_duration_seconds",
+                    value=float(duration),
+                    labels={"runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")), "outcome": outcome},
+                )
+            except Exception:
+                logger.debug("metrics: sandbox_run_duration_seconds failed")
+
+            # Audit: run completion
+            try:
+                if audit_service:
+                    ctx = AuditContext(
+                        request_id=(request.headers.get("X-Request-ID") if request else None),
+                        user_id=str(current_user.id),
+                        ip_address=(request.client.host if request and request.client else None),
+                        user_agent=(request.headers.get("user-agent") if request else None),
+                        endpoint=str(request.url.path) if request else "/api/v1/sandbox/runs",
+                        method=(request.method if request else "POST"),
+                        session_id=payload.session_id,
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.API_RESPONSE,
+                        category=AuditEventCategory.API_CALL,
+                        severity=AuditSeverity.INFO if outcome == "success" else AuditSeverity.WARNING,
+                        context=ctx,
+                        resource_type="sandbox.run",
+                        resource_id=status.id,
+                        action="run",
+                        result=("success" if outcome == "success" else outcome),
+                        duration_ms=duration * 1000.0,
+                        metadata={
+                            "runtime": status.runtime.value if status.runtime else None,
+                            "base_image": status.base_image,
+                            "image_digest": status.image_digest,
+                            "policy_hash": status.policy_hash,
+                            "exit_code": status.exit_code,
+                            "spec_version": payload.spec_version,
+                            "capture_patterns": payload.capture_patterns or [],
+                        },
+                    )
+            except Exception as e:
+                logger.debug(f"sandbox audit(run.complete) failed: {e}")
+        else:
+            # Audit: run started (background or queued)
+            try:
+                if audit_service:
+                    ctx = AuditContext(
+                        request_id=(request.headers.get("X-Request-ID") if request else None),
+                        user_id=str(current_user.id),
+                        ip_address=(request.client.host if request and request.client else None),
+                        user_agent=(request.headers.get("user-agent") if request else None),
+                        endpoint=str(request.url.path) if request else "/api/v1/sandbox/runs",
+                        method=(request.method if request else "POST"),
+                        session_id=payload.session_id,
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.API_REQUEST,
+                        category=AuditEventCategory.API_CALL,
+                        severity=AuditSeverity.INFO,
+                        context=ctx,
+                        resource_type="sandbox.run",
+                        resource_id=status.id,
+                        action="start",
+                        metadata={
+                            "runtime": status.runtime.value if status.runtime else None,
+                            "base_image": status.base_image or payload.base_image,
+                            "policy_hash": status.policy_hash,
+                            "spec_version": payload.spec_version,
+                        },
+                    )
+            except Exception as e:
+                logger.debug(f"sandbox audit(run.start) failed: {e}")
+    except Exception:
+        logger.debug("sandbox metrics/audit post-run block failed")
+
     return SandboxRunStatus(
         id=status.id,
         spec_version=payload.spec_version,

@@ -108,13 +108,41 @@ class DockerRunner:
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true",
         ]
-        # Optional seccomp/AppArmor (if configured)
-        seccomp = os.getenv("SANDBOX_DOCKER_SECCOMP")
+        # Optional seccomp/AppArmor (if configured). If no env is provided for seccomp,
+        # try bundled default profile path.
+        seccomp = os.getenv("SANDBOX_DOCKER_SECCOMP") or getattr(app_settings, "SANDBOX_DOCKER_SECCOMP", None)
+        if not seccomp:
+            try:
+                project_root = getattr(app_settings, "PROJECT_ROOT", None)
+                if project_root:
+                    default_seccomp = os.path.join(project_root, "tldw_Server_API", "Config_Files", "sandbox", "seccomp_default.json")
+                    if os.path.exists(default_seccomp):
+                        seccomp = default_seccomp
+            except Exception:
+                seccomp = None
+        security_opts: List[str] = []
         if seccomp:
-            cmd += ["--security-opt", f"seccomp={seccomp}"]
-        apparmor_prof = os.getenv("SANDBOX_DOCKER_APPARMOR_PROFILE")
+            security_opts += ["--security-opt", f"seccomp={seccomp}"]
+        apparmor_prof = os.getenv("SANDBOX_DOCKER_APPARMOR_PROFILE") or getattr(app_settings, "SANDBOX_DOCKER_APPARMOR_PROFILE", None)
         if apparmor_prof:
-            cmd += ["--security-opt", f"apparmor={apparmor_prof}"]
+            security_opts += ["--security-opt", f"apparmor={apparmor_prof}"]
+        cmd += security_opts
+
+        # Ulimits (soft=hard)
+        try:
+            ul_nofile = int(getattr(app_settings, "SANDBOX_ULIMIT_NOFILE", 1024))
+        except Exception:
+            ul_nofile = 1024
+        try:
+            ul_nproc = int(getattr(app_settings, "SANDBOX_ULIMIT_NPROC", 512))
+        except Exception:
+            ul_nproc = 512
+        # Always disable core dumps by default
+        cmd += [
+            "--ulimit", f"nofile={ul_nofile}:{ul_nofile}",
+            "--ulimit", f"nproc={ul_nproc}:{ul_nproc}",
+            "--ulimit", "core=0:0",
+        ]
 
         # Random non-root UID/GID and tmpfs mounts with owners
         import random
@@ -159,7 +187,16 @@ class DockerRunner:
         except FileNotFoundError:
             raise RuntimeError("docker binary not found in PATH")
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"docker create failed: {e}")
+            # If security opts were provided, retry without them for portability (e.g., profile not loaded)
+            if security_opts:
+                try:
+                    logger.warning(f"docker create failed with security options; retrying without them: {e}")
+                    cmd_wo_sec = [c for c in cmd if c not in security_opts]
+                    cid = subprocess.check_output(cmd_wo_sec, text=True).strip()
+                except subprocess.CalledProcessError as e2:
+                    raise RuntimeError(f"docker create failed (without security opts): {e2}")
+            else:
+                raise RuntimeError(f"docker create failed: {e}")
 
         # Step 2: copy session workspace and inline files using docker cp
         try:

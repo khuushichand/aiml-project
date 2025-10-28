@@ -1,22 +1,33 @@
 name: "Setup FFmpeg"
-description: "Install FFmpeg across platforms"
+description: "Install FFmpeg across platforms; optionally install PortAudio"
 runs:
   using: "composite"
+inputs:
+  install-portaudio:
+    description: "Also install PortAudio (Linux/macOS)"
+    required: false
+    default: 'false'
   steps:
     - name: Install FFmpeg (Linux)
       if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        if [ "${{ inputs.install-portaudio }}" = "true" ]; then
+          sudo apt-get install -y ffmpeg portaudio19-dev python3-all-dev
+        else
+          sudo apt-get install -y ffmpeg
+        fi
     - name: Install FFmpeg (macOS)
       if: runner.os == 'macOS'
       shell: bash
       run: |
         brew install ffmpeg || true
+        if [ "${{ inputs.install-portaudio }}" = "true" ]; then
+          brew install portaudio || true
+        fi
     - name: Install FFmpeg (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
         choco install ffmpeg -y || choco upgrade ffmpeg -y || true
-
