@@ -491,6 +491,8 @@ Workspace inputs
 
 - Per-run ephemeral workspace with size cap (e.g., 256 MB by default, configurable).
 - Artifact capture by glob allowlist (e.g., `dist/**`, `coverage/**`, `results.json`).
+- Persistence: artifacts are copied back and stored on disk under `tmp_dir/sandbox/<user_id>/runs/<run_id>/artifacts/`.
+- Byte caps: per-run and per-user total artifact bytes enforced via `SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB` and `SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB`.
 - Retention policy: default 24h; admin-configurable; hard max size per user/day.
 - Download via authorized URLs; support HTTP Range for resumable/partial downloads; server-side streaming for large artifacts; gzip-compress text artifacts on the fly when accepted by client.
 
@@ -501,11 +503,22 @@ Storage Layout (reference)
 - Per-run: `<sandbox_root>/<user_id>/runs/<run_id>/{workspace,artifacts,logs}/`
 - GC: periodic sweeper deletes expired sessions/runs; deletes are scoped to these roots with strict path normalization.
 
+Store & Metadata (current)
+- Default pluggable store: SQLite (`SANDBOX_STORE_BACKEND=sqlite`) persists runs and idempotency; `memory` backend for dev/tests.
+- SQLite path defaults to `<PROJECT_ROOT>/tmp_dir/sandbox/meta/sandbox_store.db` (override with `SANDBOX_STORE_DB_PATH`).
+- Stored fields: run id, owner, spec_version, runtime, base_image, phase, exit_code, timestamps, message, image_digest, policy_hash; idempotency fingerprints with TTL.
+
 
 ## 15) Observability
 
 Metrics
 - Runs started/completed/failed; queue wait time; start latency; runtime; resource usage; cancellations; timeouts; artifact sizes; per-runtime breakdown.
+- Sandbox metrics (current):
+  - `sandbox_sessions_created_total{runtime}`
+  - `sandbox_runs_started_total{runtime}`
+  - `sandbox_runs_completed_total{runtime,outcome}`
+  - `sandbox_run_duration_seconds{runtime,outcome}` (histogram)
+  - `sandbox_upload_bytes_total{kind}` and `sandbox_upload_files_total{kind}`
 
 Logs
 - Structured JSON logs with trace_id, user_id, run_id, runtime, image, command, exit_code, error class, and policy decisions.
@@ -513,6 +526,9 @@ Logs
 Tracing
 - Optional OpenTelemetry spans for API → orchestrator → runtime; link to originating chat/thread and LSP session.
  - Reproducibility: persist base image digest, runtime version, policy hash, and `spec_version` with run metadata.
+
+Auditing
+- API request/response audit events include policy and reproducibility metadata. Run completion events record `policy_hash` and `image_digest` when available (both sync and background paths).
 
 
 ## 16) Performance Targets (MVP)
@@ -556,6 +572,10 @@ Configuration Keys (examples)
 - `SANDBOX_DOCKER_APPARMOR_PROFILE`
 - `SANDBOX_ULIMIT_NOFILE` (default 1024)
 - `SANDBOX_ULIMIT_NPROC` (default 512)
+- `SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB` (default 32)
+- `SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB` (default 128)
+- `SANDBOX_STORE_BACKEND` (sqlite|memory; default sqlite)
+- `SANDBOX_STORE_DB_PATH` (optional explicit SQLite path)
 
 Feature Discovery Payload (example)
 ```
@@ -651,12 +671,20 @@ Phase 4: Approvals & Secrets (opt‑in)
 
 Implementation Status (v0.2)
 - Implemented: `/sessions` (Idempotency-Key), `/sessions/{id}/files` (safe tar/zip/plain; traversal protection; workspace cap), `/runs` (Idempotency-Key), `/runs/{id}`, `WS /runs/{id}/stream`, `/runs/{id}/artifacts`, `/runs/{id}/artifacts/{path}`, `/runtimes`.
-- Runner: Docker create → cp (workspace + inline) → start → logs (WS) → wait → cp artifacts → remove; read-only root, drop caps, no-new-privileges, tmpfs workdir, non-root user, deny_all by default.
-- Idempotency: TTL store (default 600s); conflicting replay returns 409 `idempotency_conflict`.
-- WS streaming: heartbeats, backpressure, log caps, start/end events; fake-exec test added.
+- Runner: Docker create → cp (workspace + inline) → start → logs (WS) → wait → cp artifacts → remove; read-only root, drop caps, `no-new-privileges`, tmpfs workdir, non-root user, deny_all by default; optional seccomp/AppArmor and enforced ulimits.
+- Idempotency: Persistent via default SQLite store (TTL 600s); conflicting replay returns 409 `idempotency_conflict`.
+- WS streaming: heartbeats, backpressure, log caps, start/end events; fake-exec test added. Sequence numbers planned.
 - Discovery: Includes `workspace_cap_mb`, `artifact_ttl_hours`, `supported_spec_versions`.
+- Artifacts: Persisted to filesystem; per-run and per-user byte caps enforced; list and download endpoints; new test covers list+download.
 - Policy hash included in run status; image digest collected best-effort post-run.
-- Background: Optional via `SANDBOX_BACKGROUND_EXECUTION`.
+- Background: Optional via `SANDBOX_BACKGROUND_EXECUTION`; background run completion now emits audit events with policy_hash/image_digest.
+- Store: Pluggable store for runs/idempotency (default SQLite, dev memory) with optional DB path override.
+
+Known Limitations (v0.2)
+- Cancel endpoint is a stub; killing active runs not wired to Docker yet.
+- WS frames do not include `seq` yet; schema includes it for vNext.
+- Startup vs execution timeout split not fully enforced (single `timeout_sec` in runner).
+- Orchestrator store is single-node SQLite; multi-worker scaling requires a shared DB and artifact bucket.
 
 
 ## 21) Risks & Mitigations
@@ -692,7 +720,7 @@ Implementation Status (v0.2)
 
 - Config
   - Add config keys under `Config_Files/config.txt` and/or env vars: runtime defaults, quotas, artifact TTLs, max upload size.
-  - Additional keys: `SANDBOX_WORKSPACE_CAP_MB`, `SANDBOX_SUPPORTED_SPEC_VERSIONS`, `SANDBOX_IDEMPOTENCY_TTL_SEC`, `SANDBOX_ENABLE_EXECUTION`, `SANDBOX_BACKGROUND_EXECUTION`, `SANDBOX_DOCKER_SECCOMP`, `SANDBOX_DOCKER_APPARMOR_PROFILE`.
+  - Additional keys: `SANDBOX_WORKSPACE_CAP_MB`, `SANDBOX_SUPPORTED_SPEC_VERSIONS`, `SANDBOX_IDEMPOTENCY_TTL_SEC`, `SANDBOX_ENABLE_EXECUTION`, `SANDBOX_BACKGROUND_EXECUTION`, `SANDBOX_DOCKER_SECCOMP`, `SANDBOX_DOCKER_APPARMOR_PROFILE`, `SANDBOX_ULIMIT_NOFILE`, `SANDBOX_ULIMIT_NPROC`, `SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB`, `SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB`, `SANDBOX_STORE_BACKEND`, `SANDBOX_STORE_DB_PATH`.
 
 Local Run (Dev)
 - Enable execution (optional fake mode):
@@ -772,3 +800,85 @@ Runner Interface (reference)
 ---
 
 End of PRD v0.2
+ 
+## 26) Admin: Inspecting the SQLite Store (Appendix)
+
+This section provides quick, copy‑paste snippets to inspect the default SQLite store used by the sandbox service.
+
+Defaults
+- Location (default): `<PROJECT_ROOT>/tmp_dir/sandbox/meta/sandbox_store.db`
+- Override via: `SANDBOX_STORE_DB_PATH`
+
+Open the DB
+```
+sqlite3 tmp_dir/sandbox/meta/sandbox_store.db
+```
+
+List recent runs (last 20)
+```
+SELECT id, user_id, runtime, base_image, phase, exit_code, started_at, finished_at
+FROM sandbox_runs
+ORDER BY COALESCE(finished_at, started_at) DESC
+LIMIT 20;
+```
+
+Show a single run (by id)
+```
+SELECT * FROM sandbox_runs WHERE id = '<run_id>';
+```
+
+Count idempotency entries (by endpoint)
+```
+SELECT endpoint, COUNT(*) AS entries
+FROM sandbox_idempotency
+GROUP BY endpoint
+ORDER BY entries DESC;
+```
+
+Inspect idempotency fingerprint (one row)
+```
+SELECT endpoint, user_key, key, LENGTH(response_body) AS resp_bytes, datetime(created_at, 'unixepoch') AS created
+FROM sandbox_idempotency
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+Per‑user artifact bytes
+```
+SELECT user_id, artifact_bytes FROM sandbox_usage ORDER BY artifact_bytes DESC;
+```
+
+Cleanup expired idempotency (manual)
+```
+-- TTL enforcement runs automatically; to force cleanup:
+DELETE FROM sandbox_idempotency WHERE created_at < strftime('%s','now') - 600; -- 600s or match SANDBOX_IDEMPOTENCY_TTL_SEC
+```
+
+Notes
+- The store is single‑node and intended for a single server process. For multi‑worker or multi‑node, migrate to a shared SQL database and a shared artifact bucket.
+- Timestamps in `sandbox_runs` are ISO‑8601 strings; prefer lexicographical order for recency.
+
+## 27) Store Data Model (Appendix)
+
+Tables (current)
+- `sandbox_runs`
+  - Keys: `id` (PK)
+  - Columns: `user_id`, `spec_version`, `runtime`, `base_image`, `phase`, `exit_code`, `started_at`, `finished_at`, `message`, `image_digest`, `policy_hash`.
+  - Purpose: Authoritative run status/metadata; updated on transitions and completion.
+
+- `sandbox_idempotency`
+  - Keys: `(endpoint, user_key, key)` (PK)
+  - Columns: `fingerprint` (SHA‑256 of canonical request body), `object_id` (run/session id), `response_body` (JSON), `created_at` (epoch seconds).
+  - Purpose: Dedupe client retries across `/sessions` and `/runs`.
+  - TTL: Old rows pruned by TTL (config: `SANDBOX_IDEMPOTENCY_TTL_SEC`).
+
+- `sandbox_usage`
+  - Keys: `user_id` (PK)
+  - Columns: `artifact_bytes` (cumulative snapshot updated by orchestrator).
+  - Purpose: Enforce per‑user artifact byte caps.
+
+Relationships & Notes
+- `sandbox_runs.user_id` is a string identifier; no foreign key to an auth table.
+- Idempotency rows are independent; `object_id` may reference `sandbox_runs.id` or a session id.
+- Cleanup jobs should combine DB row deletion with on‑disk artifact retention policy (`SANDBOX_ARTIFACT_TTL_HOURS`).
+- For HA scenarios, use a shared SQL DB and a shared filesystem/object store for artifacts.

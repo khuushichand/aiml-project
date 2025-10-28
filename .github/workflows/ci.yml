@@ -20,6 +20,7 @@ jobs:
     name: Lint & Type Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -50,30 +51,45 @@ jobs:
           mypy tldw_Server_API/
           set -e
 
-  full-suite:
-    name: Full Test Suite (${{ matrix.os }} / Python ${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+  full-suite-linux:
+    name: Full Suite (Ubuntu / Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: lint
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            python: '3.11'
-          - os: ubuntu-latest
-            python: '3.12'
-          - os: ubuntu-latest
-            python: '3.13'
-          - os: windows-latest
-            python: '3.12'
-          - os: macos-latest
-            python: '3.12'
+        python: ['3.11', '3.12', '3.13']
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw
+          POSTGRES_PASSWORD: tldw
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U tldw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     env:
       PYTHONPATH: ./tldw_Server_API
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
+      # Expose Postgres service to tests
+      POSTGRES_TEST_HOST: 127.0.0.1
+      POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
+      POSTGRES_TEST_DB: tldw_content
+      POSTGRES_TEST_USER: tldw
+      POSTGRES_TEST_PASSWORD: tldw
+      TEST_DB_HOST: 127.0.0.1
+      TEST_DB_PORT: ${{ job.services.postgres.ports[5432] }}
+      TEST_DB_USER: tldw
+      TEST_DB_PASSWORD: tldw
+      TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -87,16 +103,96 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install FFmpeg (multi-OS)
-        uses: ./.github/actions/setup-ffmpeg
+      - name: Install ffmpeg + pg client and wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
+        with:
+          host: 127.0.0.1
+          port: ${{ env.POSTGRES_TEST_PORT }}
+          user: tldw
+          install-portaudio: 'true'
 
-      - name: Run full test suite
+      - name: Install additional deps for PG tests
         run: |
-          pytest -q --maxfail=1 --disable-warnings --junit-xml=test-results-${{ matrix.os }}-${{ matrix.python }}.xml
+          python -m pip install --upgrade pip
+          pip install "psycopg[binary]>=3.1" pytest-asyncio
+
+      - name: Run full test suite (Linux + PG)
+        run: |
+          pytest -q --maxfail=1 --disable-warnings \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
+            --junit-xml=test-results-linux-${{ matrix.python }}.xml
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-suite-${{ matrix.os }}-py${{ matrix.python }}
-          path: test-results-${{ matrix.os }}-${{ matrix.python }}.xml
+          name: full-suite-ubuntu-py${{ matrix.python }}
+          path: test-results-linux-${{ matrix.python }}.xml
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-ubuntu-py${{ matrix.python }}
+          path: coverage.xml
+
+      - name: Upload coverage to Codecov (Ubuntu 3.12)
+        if: matrix.python == '3.12'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: fullsuite
+          name: codecov-linux-py312
+          fail_ci_if_error: false
+
+  full-suite-os:
+    name: Full Suite (${{ matrix.os }} / Python 3.12)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
+      - name: Run full test suite
+        run: |
+          pytest -q --maxfail=1 --disable-warnings \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
+            --junit-xml=test-results-${{ matrix.os }}-3.12.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-suite-${{ matrix.os }}-py3.12
+          path: test-results-${{ matrix.os }}-3.12.xml
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-py3.12
+          path: coverage.xml

@@ -11,6 +11,7 @@ from loguru import logger
 
 from .models import RunPhase, RunSpec, RunStatus, Session, SessionSpec
 from .policy import SandboxPolicy, SandboxPolicyConfig
+from .store import get_store, IdempotencyConflict as StoreIdemConflict
 from tldw_Server_API.app.core.config import settings as app_settings
 from pathlib import Path
 import os
@@ -56,8 +57,8 @@ class SandboxOrchestrator:
         self.policy = policy or SandboxPolicy(cfg)
         self._lock = threading.RLock()
         self._sessions: Dict[str, Session] = {}
-        self._runs: Dict[str, RunStatus] = {}
-        self._idem: Dict[Tuple[str, str, str], _IdemRecord] = {}
+        # Store backend for runs/idempotency/usage
+        self._store = get_store()
         self._queue: list[str] = []  # simple in-memory run queue (run_ids)
         try:
             self._idem_ttl_sec = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
@@ -65,9 +66,6 @@ class SandboxOrchestrator:
             self._idem_ttl_sec = 600
         self._session_roots: Dict[str, str] = {}
         self._artifacts: Dict[str, Dict[str, bytes]] = {}
-        # Owner and usage tracking for artifact caps
-        self._run_owners: Dict[str, str] = {}
-        self._user_artifact_bytes: Dict[str, int] = {}
 
     # -----------------
     # Idempotency Core
@@ -88,46 +86,13 @@ class SandboxOrchestrator:
             self._idem.pop(k, None)
 
     def _check_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Return stored response if idempotent replay matches, raise if conflicts, else None."""
-        if not idem_key:
-            return None
-        with self._lock:
-            self._cleanup_idem()
-            fp = _fingerprint_body(body)
-            user_key = self._user_key(user_id)
-            idx = (endpoint, user_key, idem_key)
-            rec = self._idem.get(idx)
-            if rec is None:
-                # No record yet
-                return None
-            # TTL check already performed by cleanup
-            if rec.fingerprint == fp:
-                logger.debug(f"Idempotent replay matched for endpoint={endpoint} key={idem_key}")
-                return rec.response_body
-            logger.info(
-                f"Idempotent replay conflict for endpoint={endpoint} key={idem_key}:\n"
-                f"existing_fp={rec.fingerprint} new_fp={fp}"
-            )
-            raise IdempotencyConflict(rec.object_id, "Idempotency-Key conflict for different request body")
+        try:
+            return self._store.check_idempotency(endpoint, user_id, idem_key, body)
+        except StoreIdemConflict as e:
+            raise IdempotencyConflict(e.original_id)
 
     def _store_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
-        if not idem_key:
-            return
-        with self._lock:
-            fp = _fingerprint_body(body)
-            user_key = self._user_key(user_id)
-            idx = (endpoint, user_key, idem_key)
-            # Only store if not present (race-safe behavior)
-            if idx not in self._idem:
-                self._idem[idx] = _IdemRecord(
-                    key=idem_key,
-                    endpoint=endpoint,
-                    user_key=user_key,
-                    fingerprint=fp,
-                    object_id=object_id,
-                    response_body=response,
-                    created_at=time.time(),
-                )
+        self._store.store_idempotency(endpoint, user_id, idem_key, body, object_id, response)
 
     # -----------------
     # Sessions
@@ -171,33 +136,37 @@ class SandboxOrchestrator:
         rid = str(uuid.uuid4())
         status = RunStatus(id=rid, phase=RunPhase.completed, spec_version=spec_version, runtime=spec.runtime, base_image=spec.base_image, exit_code=0)
         with self._lock:
-            self._runs[rid] = status
             self._queue.append(rid)
-            # Track run owner for artifact caps and paths
-            try:
-                self._run_owners[rid] = str(user_id)
-            except Exception:
-                self._run_owners[rid] = ""
-            self._store_idem("runs", user_id, idem_key, body, rid, {
-                "id": rid,
-                "phase": status.phase.value,
-                "spec_version": spec_version,
-                "runtime": spec.runtime.value if spec.runtime else None,
-                "base_image": spec.base_image,
-                "exit_code": status.exit_code,
-            })
+        # Persist run
+        try:
+            self._store.put_run(user_id, status)
+        except Exception as e:
+            logger.debug(f"store.put_run failed: {e}")
+        self._store_idem("runs", user_id, idem_key, body, rid, {
+            "id": rid,
+            "phase": status.phase.value,
+            "spec_version": spec_version,
+            "runtime": spec.runtime.value if spec.runtime else None,
+            "base_image": spec.base_image,
+            "exit_code": status.exit_code,
+        })
         return status
 
     # -----------------
     # Lookups (stubs)
     # -----------------
     def get_run(self, run_id: str) -> Optional[RunStatus]:
-        with self._lock:
-            return self._runs.get(run_id)
+        try:
+            return self._store.get_run(run_id)
+        except Exception as e:
+            logger.debug(f"store.get_run failed: {e}")
+            return None
 
     def update_run(self, run_id: str, status: RunStatus) -> None:
-        with self._lock:
-            self._runs[run_id] = status
+        try:
+            self._store.update_run(status)
+        except Exception as e:
+            logger.debug(f"store.update_run failed: {e}")
 
     # -----------------
     # Artifacts
@@ -231,8 +200,10 @@ class SandboxOrchestrator:
     def store_artifacts(self, run_id: str, items: Dict[str, bytes]) -> None:
         # Enforce caps and persist to filesystem under run's artifacts directory
         owner = None
-        with self._lock:
-            owner = self._run_owners.get(run_id, "")
+        try:
+            owner = self._store.get_run_owner(run_id)
+        except Exception:
+            owner = None
         owner = owner or "unknown"
         # Caps (bytes)
         try:
@@ -245,8 +216,10 @@ class SandboxOrchestrator:
             cap_user = 128 * 1024 * 1024
 
         # Determine remaining budget
-        with self._lock:
-            current_user_bytes = int(self._user_artifact_bytes.get(owner, 0))
+        try:
+            current_user_bytes = int(self._store.get_user_artifact_bytes(owner))
+        except Exception:
+            current_user_bytes = 0
 
         selected: Dict[str, bytes] = {}
         total_run = 0
@@ -280,14 +253,19 @@ class SandboxOrchestrator:
 
         with self._lock:
             self._artifacts[run_id] = selected
-            self._user_artifact_bytes[owner] = current_user_bytes
+        try:
+            self._store.increment_user_artifact_bytes(owner, 0)  # noop ensures row exists
+        except Exception:
+            pass
 
     def list_artifacts(self, run_id: str) -> Dict[str, int]:
         # Try filesystem, fallback to memory
         owner = None
-        with self._lock:
-            owner = self._run_owners.get(run_id, "")
-        art_dir = self._artifact_dir(owner or "unknown", run_id)
+        try:
+            owner = self._store.get_run_owner(run_id)
+        except Exception:
+            owner = None
+        art_dir = self._artifact_dir((owner or "unknown"), run_id)
         result: Dict[str, int] = {}
         if art_dir.exists():
             for root, _dirs, files in os.walk(art_dir):
@@ -306,9 +284,11 @@ class SandboxOrchestrator:
 
     def get_artifact(self, run_id: str, path: str) -> Optional[bytes]:
         owner = None
-        with self._lock:
-            owner = self._run_owners.get(run_id, "")
-        art_dir = self._artifact_dir(owner or "unknown", run_id)
+        try:
+            owner = self._store.get_run_owner(run_id)
+        except Exception:
+            owner = None
+        art_dir = self._artifact_dir((owner or "unknown"), run_id)
         if path:
             rel = self._safe_rel(path)
             full = art_dir / rel

@@ -671,6 +671,9 @@ def load_settings():
     # Optional: path to seccomp JSON and AppArmor profile name
     SANDBOX_DOCKER_SECCOMP = os.getenv("SANDBOX_DOCKER_SECCOMP") or _sbx_get("docker_seccomp", None)
     SANDBOX_DOCKER_APPARMOR_PROFILE = os.getenv("SANDBOX_DOCKER_APPARMOR_PROFILE") or _sbx_get("docker_apparmor_profile", None)
+    # Store backend (sqlite|memory) and path
+    SANDBOX_STORE_BACKEND = _sbx_env_or_cfg("SANDBOX_STORE_BACKEND", "store_backend", "sqlite").lower()
+    SANDBOX_STORE_DB_PATH = _sbx_get("store_db_path", None)
 
     config_dict = {
         # General App
@@ -772,6 +775,8 @@ def load_settings():
         "SANDBOX_ULIMIT_NPROC": SANDBOX_ULIMIT_NPROC,
         "SANDBOX_DOCKER_SECCOMP": SANDBOX_DOCKER_SECCOMP,
         "SANDBOX_DOCKER_APPARMOR_PROFILE": SANDBOX_DOCKER_APPARMOR_PROFILE,
+        "SANDBOX_STORE_BACKEND": SANDBOX_STORE_BACKEND,
+        "SANDBOX_STORE_DB_PATH": SANDBOX_STORE_DB_PATH,
         # --- HYDE/doc2query (per-chunk) feature flags ---
         "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
         "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),
