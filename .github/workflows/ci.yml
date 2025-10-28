@@ -92,6 +92,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
         with:
@@ -101,13 +106,12 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install ffmpeg + pg client and wait for PG
-        uses: ./.github/actions/ffmpeg-pg-wait
+      - name: Install pg client and wait for PG
+        uses: ./.github/actions/wait-for-postgres
         with:
           host: 127.0.0.1
           port: ${{ job.services.postgres.ports[5432] }}
           user: tldw
-          install-portaudio: 'true'
 
       - name: Export PG env vars
         shell: bash
