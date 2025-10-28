@@ -172,6 +172,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
         with:
@@ -180,11 +185,6 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-
-      - name: Install FFmpeg (multi-OS)
-        uses: ./.github/actions/setup-ffmpeg
-        with:
-          install-portaudio: 'true'
 
       - name: Run full test suite
         run: |
