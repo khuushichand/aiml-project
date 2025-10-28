@@ -17,16 +17,17 @@ on:
 jobs:
   authnz:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ '3.11', '3.12' ]
+        python-version: [ '3.11', '3.12', '3.13' ]
 
     services:
       postgres:
         image: postgres:18-bookworm
         ports:
-          - 5432:5432
+          - 5432/tcp
         env:
           POSTGRES_USER: tldw_user
           POSTGRES_PASSWORD: TestPassword123!
@@ -42,21 +43,23 @@ jobs:
       TLDW_TEST_POSTGRES_REQUIRED: '1'
       # Point tests to the service container
       TEST_DB_HOST: 127.0.0.1
-      TEST_DB_PORT: '5432'
+      TEST_DB_PORT: ${{ job.services.postgres.ports[5432] }}
       TEST_DB_USER: tldw_user
       TEST_DB_PASSWORD: TestPassword123!
       # Keep slow suite disabled by default (pytest.ini)
       PYTHONWARNINGS: default
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
+
 
       - name: Install minimal dependencies for AuthNZ tests
         run: |
@@ -84,13 +87,12 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for Postgres
-        run: |
-          for i in {1..30}; do
-            if pg_isready -h 127.0.0.1 -p 5432 -U tldw_user; then
-              echo "Postgres is ready"; break; fi; 
-            echo "Waiting for Postgres..."; sleep 2; 
-          done
+      - name: Install ffmpeg + pg client + wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
+        with:
+          host: 127.0.0.1
+          port: ${{ env.TEST_DB_PORT }}
+          user: tldw_user
 
       - name: Run AuthNZ SQLite tests
         run: |
@@ -99,3 +101,5 @@ jobs:
       - name: Run AuthNZ Postgres tests (includes real-audit tests)
         run: |
           python -m pytest -q tldw_Server_API/tests/AuthNZ_Postgres -m "integration or real_audit"
+permissions:
+  contents: read

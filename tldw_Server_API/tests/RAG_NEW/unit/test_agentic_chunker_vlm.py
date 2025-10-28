@@ -56,7 +56,9 @@ async def test_agentic_vlm_late_chunking_smoke(monkeypatch):
             return StubBackend()
         # Monkeypatch the import indirection: create a fake module with get_backend
         import sys
-        m = types.SimpleNamespace(get_backend=fake_get_backend)
+        # Use a real module object to avoid inserting unhashable objects into sys.modules
+        m = types.ModuleType("vlm_registry_stub")
+        setattr(m, "get_backend", fake_get_backend)
         sys.modules[vlm_mod_path] = m
 
         res = await agentic_rag_pipeline(
@@ -82,4 +84,3 @@ async def test_agentic_vlm_late_chunking_smoke(monkeypatch):
             os.remove(pdf_path)
         except Exception:
             pass
-

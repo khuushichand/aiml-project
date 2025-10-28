@@ -1,0 +1,84 @@
+name: "Setup Python and install deps"
+description: "Setup Python with pip cache and install project deps (optionally via uv)."
+inputs:
+  python-version:
+    description: "Python version to use"
+    required: true
+  cache-dependency-path:
+    description: "Files to key pip cache (newline-separated)"
+    required: false
+    default: |
+      pyproject.toml
+      uv.lock
+  use-uv:
+    description: "Use uv for installs (faster)"
+    required: false
+    default: 'true'
+  requirements-files:
+    description: "Optional newline-separated requirements files to install"
+    required: false
+    default: ''
+  extras:
+    description: "Optional extras to install, e.g., 'dev'"
+    required: false
+    default: 'dev'
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+
+    - name: Setup uv
+      if: inputs.use-uv == 'true'
+      uses: astral-sh/setup-uv@v3
+
+    - name: Upgrade pip
+      if: inputs.use-uv != 'true'
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+
+    - name: Install project (uv)
+      if: inputs.use-uv == 'true' && inputs.requirements-files == ''
+      shell: bash
+      run: |
+        # Install editable with extras
+        uv pip install -e ".[${{ inputs.extras }}]"
+
+    - name: Install from requirements (uv)
+      if: inputs.use-uv == 'true' && inputs.requirements-files != ''
+      shell: bash
+      run: |
+        while IFS= read -r req; do
+          [ -n "$req" ] || continue
+          uv pip install -r "$req"
+        done << 'REQS'
+${{ inputs.requirements-files }}
+REQS
+
+    - name: Install project (pip)
+      if: inputs.use-uv != 'true' && inputs.requirements-files == ''
+      shell: bash
+      run: |
+        pip install -e ".[${{ inputs.extras }}]"
+
+    - name: Install from requirements (pip)
+      if: inputs.use-uv != 'true' && inputs.requirements-files != ''
+      shell: bash
+      run: |
+        while IFS= read -r req; do
+          [ -n "$req" ] || continue
+          pip install -r "$req"
+        done << 'REQS'
+${{ inputs.requirements-files }}
+REQS
+
+    - name: Enforce pytest plugin isolation
+      shell: bash
+      run: |
+        echo "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" >> "$GITHUB_ENV"
+

@@ -3,8 +3,13 @@ from httpx import AsyncClient, ASGITransport
 import sys, types
 
 # Stub heavy modules before importing the full app
-sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
-sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
+torch_stub = types.ModuleType("torch")
+setattr(torch_stub, "__spec__", None)
+sys.modules.setdefault('torch', torch_stub)
+
+dill_stub = types.ModuleType("dill")
+setattr(dill_stub, "__spec__", None)
+sys.modules.setdefault('dill', dill_stub)
 
 
 class _FakeConn:

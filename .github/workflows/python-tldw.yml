@@ -13,9 +13,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
-  checks: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -26,24 +23,19 @@ jobs:
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: "3.12"
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-            
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install email-validator
-          pip install -e ".[dev]"
 
       - name: Run Black formatter check (non-blocking)
         run: |
@@ -88,11 +80,21 @@ jobs:
   unit-tests:
     name: Unit Tests - ${{ matrix.os }} - Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     
     env:
       PYTHONPATH: ./tldw_Server_API
@@ -102,39 +104,38 @@ jobs:
       
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-            
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
+          sudo apt-get install -y portaudio19-dev python3-all-dev
           
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install portaudio ffmpeg
+          brew install portaudio || true
           
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install ffmpeg -y
+          echo "Windows FFmpeg installed via setup-ffmpeg"
           
-      - name: Install Python dependencies
+      - name: Install additional Python dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install email-validator
           pip install pytest-xdist  # Install test parallelization
-          pip install -e ".[dev]"
           # Install platform-specific dependencies
           if [ "${{ runner.os }}" = "Windows" ]; then
             pip install -e ".[audio_recording_windows]"
@@ -170,32 +171,41 @@ jobs:
       - name: Check coverage threshold
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
-          # Extract coverage percentage from the XML report
-          coverage_percent=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(float(root.attrib.get('line-rate', '0')) * 100)" 2>/dev/null || echo "0")
-          echo "Current coverage: ${coverage_percent}%"
-          
-          # Set minimum coverage threshold (adjust as needed)
-          MIN_COVERAGE=50
-          
-          if (( $(echo "$coverage_percent < $MIN_COVERAGE" | bc -l 2>/dev/null || echo 1) )); then
-            echo "⚠️ Coverage ${coverage_percent}% is below minimum threshold of ${MIN_COVERAGE}%"
-            # Don't fail the build for now, just warn
-            # exit 1
-          else
-            echo "✅ Coverage ${coverage_percent}% meets minimum threshold of ${MIN_COVERAGE}%"
-          fi
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          try:
+              pct = float(ET.parse('coverage.xml').getroot().attrib.get('line-rate','0')) * 100.0
+          except Exception:
+              pct = 0.0
+          print(f"Current coverage: {pct:.2f}%")
+          MIN_COVERAGE = 50.0
+          if pct < MIN_COVERAGE:
+              print(f"\u26a0\ufe0f Coverage {pct:.2f}% is below minimum threshold of {MIN_COVERAGE}%")
+          else:
+              print(f"\u2705 Coverage {pct:.2f}% meets minimum threshold of {MIN_COVERAGE}%")
+          PY
         shell: bash
         continue-on-error: true
 
   integration-tests:
     name: Integration Tests - ${{ matrix.os }} - Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     needs: unit-tests
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     env:
       PYTHONPATH: ./tldw_Server_API
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -210,39 +220,39 @@ jobs:
       
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
             
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
+          sudo apt-get install -y portaudio19-dev python3-all-dev
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install portaudio ffmpeg
+          brew install portaudio || true
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install ffmpeg -y
+          echo "Windows FFmpeg installed via setup-ffmpeg"
           
-      - name: Install Python dependencies
+      - name: Install additional Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install email-validator
-          python -m pip install pytest-xdist  # Install test parallelization
-          python -m pip install -e ".[dev]"
+          pip install email-validator
+          pip install pytest-xdist  # Install test parallelization
         shell: bash
           
       - name: Run integration tests
@@ -262,24 +272,34 @@ jobs:
   property-tests:
     name: Property Tests - ${{ matrix.os }} - Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     needs: unit-tests
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     env:
       PYTHONPATH: ./tldw_Server_API
       TEST_MODE: "true"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
@@ -343,7 +363,7 @@ jobs:
           POSTGRES_PASSWORD: tldw
           POSTGRES_DB: tldw_content
         ports:
-          - 5432:5432
+          - 5432/tcp
         options: >-
           --health-cmd "pg_isready -U tldw"
           --health-interval 10s
@@ -363,28 +383,33 @@ jobs:
       TLDW_PS_OPT_COUNT: "3"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
 
-      - name: Install system dependencies
+      - name: Install system deps (ffmpeg, pg client)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg postgresql-client
+      - name: Wait for Postgres service
+        uses: ./.github/actions/wait-for-postgres
+        with:
+          host: localhost
+          port: ${{ env.POSTGRES_TEST_PORT }}
+          user: tldw
+          install-client: 'false'
 
-      - name: Install Python dependencies
+      - name: Install additional Python dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install email-validator
           pip install pytest-xdist
-          pip install -e ".[dev]"
 
       - name: Run PostgreSQL-backed tests (serialized)
         run: |
@@ -427,7 +452,7 @@ jobs:
           POSTGRES_PASSWORD: tldw
           POSTGRES_DB: tldw_content
         ports:
-          - 5432:5432
+          - 5432/tcp
         options: >-
           --health-cmd "pg_isready -U tldw"
           --health-interval 10s
@@ -447,7 +472,7 @@ jobs:
       TLDW_PS_OPT_COUNT: "3"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -458,10 +483,17 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Install system dependencies
+      - name: Install system deps (ffmpeg, pg client)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg postgresql-client
+      - name: Wait for Postgres service
+        uses: ./.github/actions/wait-for-postgres
+        with:
+          host: localhost
+          port: ${{ env.POSTGRES_TEST_PORT }}
+          user: tldw
+          install-client: 'false'
 
       - name: Install Python dependencies
         run: |
@@ -501,7 +533,7 @@ jobs:
           POSTGRES_PASSWORD: tldw
           POSTGRES_DB: tldw_content
         ports:
-          - 5432:5432
+          - 5432/tcp
         options: >-
           --health-cmd "pg_isready -U tldw"
           --health-interval 10s
@@ -517,21 +549,28 @@ jobs:
       TEST_MODE: "true"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
 
-      - name: Install system dependencies
+      - name: Install system deps (ffmpeg, pg client)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg postgresql-client
+      - name: Wait for Postgres service
+        uses: ./.github/actions/wait-for-postgres
+        with:
+          host: localhost
+          port: ${{ env.TEST_DB_PORT }}
+          user: ${{ env.TEST_DB_USER }}
+          install-client: 'false'
 
       - name: Install Python dependencies
         run: |
@@ -556,7 +595,8 @@ jobs:
     name: External API Tests
     runs-on: ubuntu-latest
     needs: unit-tests
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+    timeout-minutes: 30
     env:
       PYTHONPATH: ./tldw_Server_API
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -612,6 +652,7 @@ jobs:
     name: Server Startup Test
     runs-on: ubuntu-latest
     needs: [unit-tests, code-quality]
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -665,6 +706,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [unit-tests, integration-tests, code-quality, server-test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -698,6 +740,7 @@ jobs:
     name: Docker Build and Test
     runs-on: ubuntu-latest
     needs: [unit-tests, code-quality]
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -756,6 +799,7 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch'
     env:
       PYTHONPATH: ./tldw_Server_API
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -807,6 +851,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [unit-tests, integration-tests, code-quality]
     if: always()
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    timeout-minutes: 10
     steps:
       - name: Download all test results
         uses: actions/download-artifact@v4
@@ -829,32 +878,57 @@ jobs:
           echo "Test results processed"
           # Here you could update a badge in README or create a gist
 
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Write module status summary
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'MD'
+          ## Module Status Overview
+
+          Quick links to per-module CI badges (main branch):
+
+          - AuthNZ: ![AuthNZ](https://github.com/rmusser01/tldw_server/actions/workflows/authnz-tests.yml/badge.svg?branch=main)
+          - Embeddings: ![Embeddings](https://github.com/rmusser01/tldw_server/actions/workflows/embeddings-tests.yml/badge.svg?branch=main)
+          - Prompt Studio: ![Prompt Studio](https://github.com/rmusser01/tldw_server/actions/workflows/prompt-studio.yml/badge.svg?branch=main)
+          - LLM/Chat: ![LLM/Chat](https://github.com/rmusser01/tldw_server/actions/workflows/llm-tests.yml/badge.svg?branch=main)
+          - RAG: ![RAG](https://github.com/rmusser01/tldw_server/actions/workflows/rag-tests.yml/badge.svg?branch=main)
+          - Media: ![Media](https://github.com/rmusser01/tldw_server/actions/workflows/media-tests.yml/badge.svg?branch=main)
+          - DB Management: ![DB](https://github.com/rmusser01/tldw_server/actions/workflows/db-tests.yml/badge.svg?branch=main)
+          - Audio/STT/TTS: ![Audio/TTS](https://github.com/rmusser01/tldw_server/actions/workflows/audio-tts-tests.yml/badge.svg?branch=main)
+          - MCP Unified: ![MCP](https://github.com/rmusser01/tldw_server/actions/workflows/mcp-unified-tests.yml/badge.svg?branch=main)
+          - Workflows: ![Workflows](https://github.com/rmusser01/tldw_server/actions/workflows/workflows-tests.yml/badge.svg?branch=main)
+          - WebUI: ![WebUI](https://github.com/rmusser01/tldw_server/actions/workflows/webui-tests.yml/badge.svg?branch=main)
+          - E2E Smoke: ![E2E](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg?branch=main)
+          MD
+
   pgvector-live-tests:
     name: PGVector Live Tests
     runs-on: ubuntu-latest
     needs: unit-tests
-    if: ${{ secrets.PG_TEST_DSN != '' }}
+    if: ${{ secrets.PG_TEST_DSN != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
     env:
       PYTHONPATH: ./tldw_Server_API
       PG_TEST_DSN: ${{ secrets.PG_TEST_DSN }}
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: "3.12"
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-
-      - name: Install Python dependencies
+      - name: Install additional deps
         run: |
-          python -m pip install --upgrade pip
           pip install email-validator
-          pip install -e ".[dev]"
           pip install "psycopg[binary,pool]"
 
       - name: Run pg_integration tests
@@ -870,19 +944,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: '3.12'
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r tldw_Server_API/requirements.txt
+            tldw_Server_API/requirements.txt
+          requirements-files: |
+            tldw_Server_API/requirements.txt
 
       - name: Start server (background)
         env:

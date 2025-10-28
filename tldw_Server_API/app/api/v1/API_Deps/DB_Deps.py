@@ -146,6 +146,14 @@ async def get_media_db_for_user(
     # Read lock implicitly handled by context manager
     with _user_db_lock:
         db_instance = _user_db_instances.get(user_id)
+    # TEST_MODE: log cache hit/miss visibility for debugging
+    try:
+        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+            logger.warning(
+                f"TEST_MODE: DB_Deps cache {'hit' if db_instance else 'miss'} for user_id={user_id}"
+            )
+    except Exception:
+        pass
 
     if db_instance:
         # Optional: Add connection check if needed, though Database class might handle it
@@ -160,6 +168,12 @@ async def get_media_db_for_user(
         db_instance = _user_db_instances.get(user_id)
         if db_instance:
             logger.debug(f"DB instance for user {user_id} created concurrently.")
+            try:
+                if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+                    _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
+                    logger.warning(f"TEST_MODE: DB_Deps returning concurrently-created cached instance user_id={user_id} db_path={_dbp}")
+            except Exception:
+                pass
             return db_instance
 
         # --- Get Path and Initialize ---
@@ -184,6 +198,12 @@ async def get_media_db_for_user(
             # --- Store in Cache ---
             _user_db_instances[user_id] = db_instance
             logger.info(f"Database instance created and cached successfully for user {user_id}")
+            try:
+                if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+                    _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
+                    logger.warning(f"TEST_MODE: DB_Deps cached new instance user_id={user_id} db_path={_dbp} shared_backend={use_shared_backend}")
+            except Exception:
+                pass
 
         except (DatabaseError, SchemaError) as e:
             log_path = db_path or f"directory for user_id {user_id}"

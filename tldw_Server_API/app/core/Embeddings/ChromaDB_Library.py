@@ -203,6 +203,36 @@ class ChromaDBManager:
                 pass
             return False
 
+        # In test mode, prefer a stable in-memory stub to avoid flaky embedded backends
+        try:
+            if _is_test_mode():
+                # Scope the stub client key by user and base dir to avoid cross-test leakage
+                stub_key = f"{self.user_id}::{str(user_db_base_path)}"
+                cli = _TEST_STUB_CLIENTS.get(stub_key)
+                if cli is None:
+                    cli = _InMemoryChromaClient()
+                    _TEST_STUB_CLIENTS[stub_key] = cli
+                self.client = cli
+                logger.warning(
+                    f"TEST_MODE: Using internal in-memory Chroma client for user '{self.user_id}'."
+                )
+                # Continue setup without touching PersistentClient, but ensure embedding config is set
+                if not self.default_embedding_model_id:
+                    logger.warning(
+                        f"User '{self.user_id}': No 'default_model_id' found in 'embedding_config'. "
+                        "Operations will require explicit 'embedding_model_id_override'."
+                    )
+                model_details = self.embedding_config.get("models", {}).get(self.default_embedding_model_id, {})
+                logger.info(
+                    f"User '{self.user_id}' ChromaDBManager configured. "
+                    f"Default Embedding Model ID: {self.default_embedding_model_id or 'Not Set (Override Required)'} "
+                    f"(Provider: {model_details.get('provider', 'N/A')}, Name: {model_details.get('model_name_or_path', 'N/A')})"
+                )
+                return
+        except Exception:
+            # If test-mode detection fails for any reason, continue with normal flow below
+            pass
+
         # Option: force use of internal in-memory stub (useful for CI/sandboxed tests)
         try:
             # Only enable stub when explicitly requested via environment variable.

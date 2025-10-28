@@ -68,7 +68,41 @@ def pgvector_dsn() -> Optional[str]:
             _ensure_extension(conn)
     except Exception as e:
         pytest.skip(f"pgvector DSN unreachable: {e}")
-    return dsn
+
+    # Expose the resolved DSN to the environment and app settings so endpoints default to PG
+    prev_pgvector_dsn = os.getenv("PGVECTOR_DSN")
+    os.environ["PGVECTOR_DSN"] = dsn
+    # Patch app settings to use pgvector by default for these tests
+    try:
+        from tldw_Server_API.app.core.config import settings as app_settings
+        prev_rag = app_settings.get("RAG", None)
+        rag_cfg = dict(prev_rag or {})
+        rag_cfg["vector_store_type"] = "pgvector"
+        pg_cfg = dict(rag_cfg.get("pgvector", {})) if isinstance(rag_cfg.get("pgvector"), dict) else {}
+        pg_cfg["dsn"] = dsn
+        rag_cfg["pgvector"] = pg_cfg
+        app_settings["RAG"] = rag_cfg
+    except Exception:
+        prev_rag = None
+    try:
+        yield dsn
+    finally:
+        if prev_pgvector_dsn is None:
+            os.environ.pop("PGVECTOR_DSN", None)
+        else:
+            os.environ["PGVECTOR_DSN"] = prev_pgvector_dsn
+        # Restore previous RAG config
+        try:
+            if prev_rag is None:
+                # Best-effort: remove key if we added one
+                if hasattr(app_settings, "pop"):
+                    app_settings.pop("RAG", None)
+                else:
+                    app_settings["RAG"] = {}
+            else:
+                app_settings["RAG"] = prev_rag
+        except Exception:
+            pass
 
 
 @pytest.fixture(scope="function")

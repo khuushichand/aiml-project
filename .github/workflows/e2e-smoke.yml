@@ -17,6 +17,9 @@ on:
       - 'uv.lock'
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -29,8 +32,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     env:
       PYTHONPATH: ./tldw_Server_API
       TEST_MODE: "true"
@@ -40,37 +52,34 @@ jobs:
       MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          use-uv: 'true'
           cache-dependency-path: |
             pyproject.toml
             uv.lock
+            tldw_Server_API/requirements.txt
+          requirements-files: |
+            tldw_Server_API/requirements.txt
 
-      - name: Install system dependencies (Ubuntu)
+      - name: Install FFmpeg (multi-OS)
+        uses: ./.github/actions/setup-ffmpeg
+      - name: Install PortAudio (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev python3-all-dev ffmpeg
-
-      - name: Install system dependencies (macOS)
+          sudo apt-get install -y portaudio19-dev python3-all-dev
+      - name: Install PortAudio (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install portaudio ffmpeg
+          brew install portaudio || true
 
-      - name: Install system dependencies (Windows)
-        if: runner.os == 'Windows'
+      - name: Install additional test deps
         run: |
-          choco install ffmpeg -y
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r tldw_Server_API/requirements.txt
           python -m pip install websockets pytest-timeout pytest-xdist
         shell: bash
 
@@ -126,6 +135,12 @@ jobs:
               print("===== server log (single-user) =====")
               print(log_path.read_text(encoding="utf-8"))
           PY
+      - name: Upload server log (single-user)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log-single
+          path: server-single.log
 
       - name: Start server (multi-user)
         env:
@@ -172,3 +187,9 @@ jobs:
               print("===== server log (multi-user) =====")
               print(log_path.read_text(encoding="utf-8"))
           PY
+      - name: Upload server log (multi-user)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log-multi
+          path: server-multi.log

@@ -1,2 +1,0 @@
-201
-{"id":"8ef49e92-9d38-4208-abc4-d5d2f1750785","character_id":2,"title":"GreeterAPI Chat (20251026_193714)","rating":null,"created_at":"2025-10-26T19:37:14.415000Z","last_modified":"2025-10-26T19:37:14.415000Z","message_count":1,"version":1}

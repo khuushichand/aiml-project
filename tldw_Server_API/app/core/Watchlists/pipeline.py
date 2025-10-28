@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
 from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_article, fetch_site_items_with_rules
+from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evaluate_filters
 
 
 def _utcnow_iso() -> str:
@@ -125,6 +126,38 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
 
     # TEST_MODE short-circuit for offline tests: do not perform network
     test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+
+    # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
+    job_filters: List[Dict[str, Any]] = []
+    require_include: bool = False
+    try:
+        if getattr(job, "job_filters_json", None):
+            raw = json.loads(job.job_filters_json or "{}")
+            job_filters = normalize_filters(raw)
+            try:
+                require_include = bool(raw.get("require_include"))
+            except Exception:
+                require_include = False
+    except Exception:
+        job_filters = []
+        require_include = False
+
+    include_rules_exist = any((str(f.get("action")) == "include") for f in job_filters)
+    include_gating_active = bool(require_include and include_rules_exist)
+
+    # Filter evaluation statistics
+    filter_stats: Dict[str, Any] = {
+        "filters_matched": 0,
+        "filters_actions": {"include": 0, "exclude": 0, "flag": 0},
+        "filter_tallies": {},
+    }
+
+    # Bounded debug logging for filter decisions
+    try:
+        _max_debug = int(os.getenv("WATCHLISTS_FILTER_DEBUG_MAX", "100") or 100)
+    except Exception:
+        _max_debug = 100
+    _debug_count = 0
 
     try:
         for src in sources:
@@ -291,6 +324,57 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             except Exception:
                                 pass
 
+                        # Evaluate filters before fetching article
+                        decision = None
+                        flagged = False
+                        try:
+                            candidate = {
+                                "title": it.get("title"),
+                                "summary": it.get("summary"),
+                                "content": None,
+                                "author": it.get("author"),
+                                "published_at": it.get("published"),
+                            }
+                            decision, meta = evaluate_filters(job_filters, candidate)
+                            if _debug_count < _max_debug:
+                                logger.debug(
+                                    f"watchlists.filter:rss source={getattr(src,'id',None)} decision={decision} gating={include_gating_active} title={(it.get('title') or '')[:60]}"
+                                )
+                                _debug_count += 1
+                            if decision is not None:
+                                filter_stats["filters_matched"] += 1
+                                if decision in filter_stats["filters_actions"]:
+                                    filter_stats["filters_actions"][decision] += 1
+                                key = meta.get("key") if isinstance(meta, dict) else None
+                                if key:
+                                    filter_stats["filter_tallies"][key] = filter_stats["filter_tallies"].get(key, 0) + 1
+                            if decision == "exclude":
+                                _record_scraped(
+                                    status="filtered",
+                                    url=link,
+                                    title=it.get("title"),
+                                    summary=it.get("summary"),
+                                    media_id=None,
+                                    media_uuid=None,
+                                    published_at=it.get("published"),
+                                )
+                                continue
+                            # Include-only gating: if active and no include matched, filter out
+                            if include_gating_active and decision != "include":
+                                _record_scraped(
+                                    status="filtered",
+                                    url=link,
+                                    title=it.get("title"),
+                                    summary=it.get("summary"),
+                                    media_id=None,
+                                    media_uuid=None,
+                                    published_at=it.get("published"),
+                                )
+                                continue
+                            flagged = (decision == "flag")
+                        except Exception:
+                            flagged = False
+
                         article = None if test_mode else fetch_site_article(link)
                         if article is None and test_mode:
                             # In tests, fall back to summary as content
@@ -313,7 +397,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 media_type="article",
                                 content=article.get("content") or (it.get("summary") or ""),
                                 author=article.get("author"),
-                                keywords=_keywords_for_source(src),
+                                keywords=(_keywords_for_source(src) + (["flagged"] if flagged else [])),
                                 overwrite=False,
                             )
                             if media_id:
@@ -361,6 +445,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if ingestion_ok:
                             content_text = article.get("content") or summary_text or ""
                             tags_for_item = _keywords_for_source(src)
+                            if flagged and "flagged" not in tags_for_item:
+                                tags_for_item = tags_for_item + ["flagged"]
                             metadata_payload = {
                                 "source_id": int(src.id),
                                 "source_name": getattr(src, "name", None),
@@ -432,10 +518,10 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             continue
 
                     # Update last_scraped_at/status for source
-                    try:
-                        db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
-                    except Exception:
-                        pass
+                        try:
+                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
+                        except Exception:
+                            pass
 
                 elif (src.source_type or "").lower() == "site":
                     # Determine discovery preferences
@@ -566,6 +652,56 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         summary_text = article.get("content") or ""
                         if not summary_text and prefetch:
                             summary_text = prefetch.get("content") or prefetch.get("summary") or ""
+                        # Evaluate filters combining article + prefetch metadata
+                        decision = None
+                        flagged = False
+                        try:
+                            candidate = {
+                                "title": article.get("title") or (prefetch.get("title") if prefetch else None) or src.name,
+                                "summary": (prefetch.get("summary") if prefetch else None),
+                                "content": article.get("content"),
+                                "author": article.get("author") or (prefetch.get("author") if prefetch else None),
+                                "published_at": (prefetch.get("published") if prefetch else None),
+                            }
+                            decision, meta = evaluate_filters(job_filters, candidate)
+                            if _debug_count < _max_debug:
+                                logger.debug(
+                                    f"watchlists.filter:site source={getattr(src,'id',None)} decision={decision} gating={include_gating_active} url={(page_url or '')[:120]}"
+                                )
+                                _debug_count += 1
+                            if decision is not None:
+                                filter_stats["filters_matched"] += 1
+                                if decision in filter_stats["filters_actions"]:
+                                    filter_stats["filters_actions"][decision] += 1
+                                key = meta.get("key") if isinstance(meta, dict) else None
+                                if key:
+                                    filter_stats["filter_tallies"][key] = filter_stats["filter_tallies"].get(key, 0) + 1
+                            if decision == "exclude":
+                                _record_scraped(
+                                    status="filtered",
+                                    url=article.get("url") or page_url,
+                                    title=article.get("title") or src.name,
+                                    summary=(prefetch.get("summary") if prefetch else None),
+                                    media_id=None,
+                                    media_uuid=None,
+                                    published_at=(prefetch.get("published") if prefetch else None),
+                                )
+                                continue
+                            # Include-only gating
+                            if include_gating_active and decision != "include":
+                                _record_scraped(
+                                    status="filtered",
+                                    url=article.get("url") or page_url,
+                                    title=article.get("title") or src.name,
+                                    summary=(prefetch.get("summary") if prefetch else None),
+                                    media_id=None,
+                                    media_uuid=None,
+                                    published_at=(prefetch.get("published") if prefetch else None),
+                                )
+                                continue
+                            flagged = (decision == "flag")
+                        except Exception:
+                            flagged = False
                         try:
                             media_id, media_uuid, msg = mdb.add_media_with_keywords(
                                 url=article.get("url") or page_url,
@@ -573,7 +709,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 media_type="article",
                                 content=article.get("content") or summary_text or "",
                                 author=article.get("author"),
-                                keywords=_keywords_for_source(src),
+                                keywords=(_keywords_for_source(src) + (["flagged"] if flagged else [])),
                                 overwrite=False,
                             )
                             if media_id:
@@ -594,6 +730,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if ingestion_ok:
                             content_text = article.get("content") or summary_text or ""
                             tags_for_item = _keywords_for_source(src)
+                            if flagged and "flagged" not in tags_for_item:
+                                tags_for_item = tags_for_item + ["flagged"]
                             metadata_payload = {
                                 "source_id": int(src.id),
                                 "source_name": getattr(src, "name", None),
@@ -688,6 +826,13 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     pass
 
         stats = {"items_found": items_found, "items_ingested": items_ingested}
+        try:
+            if filter_stats["filters_matched"]:
+                stats["filters_matched"] = int(filter_stats["filters_matched"])  # type: ignore[assignment]
+                stats["filters_actions"] = filter_stats["filters_actions"]
+                stats["filter_tallies"] = filter_stats["filter_tallies"]
+        except Exception:
+            pass
         db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
 
         # Update job history

@@ -478,8 +478,10 @@ async def get_request_user(
             elif token:
                 api_key = token
             else:
-                # In explicit test contexts, permit missing headers by synthesizing the configured key.
-                # This makes endpoint tests less brittle when they override dependencies but omit headers.
+                # In explicit test contexts, we previously synthesized an API key when
+                # headers were missing. That behavior interferes with auth-required tests
+                # for sensitive routes (e.g., /api/v1/audio/*). Restrict synthesis to
+                # non-audio routes to preserve security semantics in tests.
                 try:
                     import os as _os, sys as _sys
                     in_test = (
@@ -490,7 +492,14 @@ async def get_request_user(
                     )
                 except Exception:
                     in_test = False
-                if in_test:
+                # Path-based guard: do NOT synthesize for audio endpoints
+                path = ""
+                try:
+                    path = getattr(getattr(request, "url", None), "path", "") or getattr(request, "scope", {}).get("path", "")
+                except Exception:
+                    path = ""
+                synth_allowed = in_test and not str(path).startswith("/api/v1/audio/")
+                if synth_allowed:
                     try:
                         api_key = (
                             get_settings().SINGLE_USER_API_KEY

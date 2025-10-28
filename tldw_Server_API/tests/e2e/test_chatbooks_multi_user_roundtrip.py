@@ -582,3 +582,181 @@ def test_chatbooks_signed_download_url_expiry_assertion(api_client):
 
     ex = api_client.client.get(expired_url)
     assert ex.status_code == 410, f"Expected 410 for expired signed URL, got {ex.status_code}"
+
+
+@pytest.mark.critical
+def test_chatbooks_export_cancel_reflected_in_job_list(api_client):
+    """Cancel an export and verify the jobs list reflects cancellation or item removal."""
+    _require_multi_user(api_client)
+
+    base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+    # Health
+    hh = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+    if hh.status_code not in (200, 207):
+        pytest.skip("Chatbooks health not OK")
+
+    c = APIClient(base)
+    ts = int(time.time())
+    ua = {"username": f"cb_list_cancel_{ts}", "email": f"cb_list_cancel_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+    try:
+        c.register(**ua)
+    except httpx.HTTPStatusError:
+        pass
+    c.login(ua["username"], ua["password"])  # bearer
+
+    # Make async export to have a job
+    note = c.create_note(title="List Cancel Note", content="content")
+    note_id = str(note.get("id") or note.get("note_id"))
+    payload = {
+        "name": f"ListCancel {uuid.uuid4().hex[:6]}",
+        "description": "list cancel test",
+        "content_selections": {"note": [note_id]},
+        "author": "pytest",
+        "include_media": False,
+        "async_mode": True,
+    }
+    r = c.client.post("/api/v1/chatbooks/export", json=payload)
+    if r.status_code in (400, 401, 403, 404, 413, 429, 500, 501):
+        pytest.skip("Async export unavailable")
+    job_id = r.json().get("job_id")
+    assert job_id
+
+    # Cancel
+    cancel = c.client.delete(f"/api/v1/chatbooks/export/jobs/{job_id}")
+    if cancel.status_code not in (200, 204):
+        # May complete too fast
+        pytest.skip("Could not cancel in time")
+
+    # Verify list reflects cancellation or removal
+    s = c.client.get("/api/v1/chatbooks/export/jobs")
+    if s.status_code != 200:
+        pytest.skip("Jobs listing unavailable")
+    items = s.json().get("jobs", []) if isinstance(s.json(), dict) else []
+    # Find job if present
+    found = next((j for j in items if (j.get("job_id") == job_id)), None)
+    if found:
+        assert (found.get("status") or "").lower() in {"cancelled", "failed", "expired"}
+    else:
+        # Not present after cancellation is also acceptable
+        assert True
+
+
+@pytest.mark.critical
+def test_chatbooks_admin_cannot_cancel_other_users_jobs(api_client):
+    """Admin bearer should not be able to cancel another user's chatbooks jobs (no admin override endpoints)."""
+    _require_multi_user(api_client)
+    admin_token = os.getenv("E2E_ADMIN_BEARER")
+    if not admin_token:
+        pytest.skip("E2E_ADMIN_BEARER not set; skipping admin cancellation attempt")
+
+    base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+    # Health
+    hh = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+    if hh.status_code not in (200, 207):
+        pytest.skip("Chatbooks health not OK")
+
+    # Create user A and job
+    ua_client = APIClient(base)
+    ts = int(time.time())
+    ua = {"username": f"cb_admin_denied_{ts}", "email": f"cb_admin_denied_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+    try:
+        ua_client.register(**ua)
+    except httpx.HTTPStatusError:
+        pass
+    ua_client.login(ua["username"], ua["password"])  # bearer for user A
+
+    # Start async export for user A
+    note = ua_client.create_note(title="Admin Denied Note", content="content")
+    note_id = str(note.get("id") or note.get("note_id"))
+    payload = {
+        "name": f"AdminDenied {uuid.uuid4().hex[:6]}",
+        "description": "admin cannot cancel",
+        "content_selections": {"note": [note_id]},
+        "author": "pytest",
+        "include_media": False,
+        "async_mode": True,
+    }
+    r = ua_client.client.post("/api/v1/chatbooks/export", json=payload)
+    if r.status_code in (400, 401, 403, 404, 413, 429, 500, 501):
+        pytest.skip("Async export unavailable")
+    job_id = r.json().get("job_id")
+    assert job_id
+
+    # Attempt to cancel using admin bearer on the same endpoint (no admin override exists)
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    cancel_as_admin = httpx.Client(base_url=base, timeout=30).delete(
+        f"/api/v1/chatbooks/export/jobs/{job_id}", headers=headers
+    )
+    # Expect denial or not found, since jobs are user-scoped
+    assert cancel_as_admin.status_code in (401, 403, 404)
+
+    # Cleanup: try cancel as user to avoid dangling jobs (best effort)
+    try:
+        ua_client.client.delete(f"/api/v1/chatbooks/export/jobs/{job_id}")
+    except Exception:
+        pass
+
+
+@pytest.mark.critical
+def test_chatbooks_import_cancel_reflected_in_job_list(api_client):
+    """Cancel an import and verify the jobs list reflects cancellation or item removal."""
+    _require_multi_user(api_client)
+
+    base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+    # Health
+    hh = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+    if hh.status_code not in (200, 207):
+        pytest.skip("Chatbooks health not OK")
+
+    # Create user and a small sync export to import
+    c = APIClient(base)
+    ts = int(time.time())
+    u = {"username": f"cb_imp_list_cancel_{ts}", "email": f"cb_imp_list_cancel_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+    try:
+        c.register(**u)
+    except httpx.HTTPStatusError:
+        pass
+    c.login(u["username"], u["password"])  # bearer
+
+    # Prepare export
+    note = c.create_note(title="Import List Cancel Note", content="content")
+    note_id = str(note.get("id") or note.get("note_id"))
+    payload = {
+        "name": f"ImpListCancel {uuid.uuid4().hex[:6]}",
+        "description": "imp list cancel test",
+        "content_selections": {"note": [note_id]},
+        "author": "pytest",
+        "include_media": False,
+        "async_mode": False,
+    }
+    er = c.client.post("/api/v1/chatbooks/export", json=payload)
+    if er.status_code in (400, 401, 403, 404, 413, 429, 500, 501):
+        pytest.skip("Sync export unavailable")
+    job_id = er.json().get("job_id")
+    dl = c.client.get(f"/api/v1/chatbooks/download/{job_id}")
+    if dl.status_code != 200:
+        pytest.skip("Download unavailable for import cancel test")
+    archive = dl.content
+
+    # Start async import
+    files = {"file": ("imp_list_cancel.chatbook", io.BytesIO(archive), "application/zip")}
+    ir = c.client.post("/api/v1/chatbooks/import?async_mode=true&conflict_resolution=skip", files=files)
+    if ir.status_code in (400, 401, 403, 404, 413, 429, 500, 501):
+        pytest.skip("Async import unavailable")
+    import_job_id = ir.json().get("job_id")
+
+    # Cancel
+    cancel = c.client.delete(f"/api/v1/chatbooks/import/jobs/{import_job_id}")
+    if cancel.status_code not in (200, 204):
+        pytest.skip("Could not cancel import in time")
+
+    # Verify list reflects cancellation or removal
+    s = c.client.get("/api/v1/chatbooks/import/jobs")
+    if s.status_code != 200:
+        pytest.skip("Import jobs listing unavailable")
+    items = s.json().get("jobs", []) if isinstance(s.json(), dict) else []
+    found = next((j for j in items if (j.get("job_id") == import_job_id)), None)
+    if found:
+        assert (found.get("status") or "").lower() in {"cancelled", "failed", "expired"}
+    else:
+        assert True

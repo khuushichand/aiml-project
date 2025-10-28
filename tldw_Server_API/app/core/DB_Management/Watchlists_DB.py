@@ -94,6 +94,7 @@ class JobRow:
     per_host_delay_ms: Optional[int]
     retry_policy_json: Optional[str]
     output_prefs_json: Optional[str]
+    job_filters_json: Optional[str]
     created_at: str
     updated_at: str
     last_run_at: Optional[str]
@@ -246,6 +247,7 @@ class WatchlistsDatabase:
             per_host_delay_ms INTEGER,
             retry_policy_json TEXT,
             output_prefs_json TEXT,
+            job_filters_json TEXT,
             schedule_timezone TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -331,6 +333,10 @@ class WatchlistsDatabase:
         # Backfill columns in case table existed
         try:
             self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", tuple())
         except Exception:
             pass
         try:
@@ -763,13 +769,14 @@ class WatchlistsDatabase:
         per_host_delay_ms: Optional[int],
         retry_policy_json: Optional[str],
         output_prefs_json: Optional[str],
+        job_filters_json: Optional[str] = None,
     ) -> JobRow:
         now = _utcnow_iso()
         res = self.backend.execute(
             """
             INSERT INTO scrape_jobs (user_id, name, description, scope_json, schedule_expr, active, max_concurrency,
-            per_host_delay_ms, retry_policy_json, output_prefs_json, schedule_timezone, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            per_host_delay_ms, retry_policy_json, output_prefs_json, job_filters_json, schedule_timezone, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 self.user_id,
@@ -782,6 +789,7 @@ class WatchlistsDatabase:
                 per_host_delay_ms,
                 retry_policy_json,
                 output_prefs_json,
+                job_filters_json,
                 schedule_timezone,
                 now,
                 now,
@@ -793,7 +801,7 @@ class WatchlistsDatabase:
         row = self.backend.execute(
             """
             SELECT id, user_id, name, description, scope_json, schedule_expr, schedule_timezone, active,
-                   max_concurrency, per_host_delay_ms, retry_policy_json, output_prefs_json,
+                   max_concurrency, per_host_delay_ms, retry_policy_json, output_prefs_json, job_filters_json,
                    created_at, updated_at, last_run_at, next_run_at, wf_schedule_id
             FROM scrape_jobs WHERE id = ? AND user_id = ?
             """,
@@ -812,10 +820,54 @@ class WatchlistsDatabase:
             params.extend([like, like])
         total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM scrape_jobs WHERE {' AND '.join(where)}", tuple(params)).scalar or 0)
         rows = self.backend.execute(
-            f"SELECT id, user_id, name, description, scope_json, schedule_expr, schedule_timezone, active, max_concurrency, per_host_delay_ms, retry_policy_json, output_prefs_json, created_at, updated_at, last_run_at, next_run_at, wf_schedule_id FROM scrape_jobs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name, description, scope_json, schedule_expr, schedule_timezone, active, max_concurrency, per_host_delay_ms, retry_policy_json, output_prefs_json, job_filters_json, created_at, updated_at, last_run_at, next_run_at, wf_schedule_id FROM scrape_jobs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             tuple(params + [limit, offset]),
         ).rows
         return [JobRow(**r) for r in rows], total
+
+    def set_job_filters(self, job_id: int, filters: Optional[Any]) -> JobRow:
+        """Replace the job's filters payload.
+
+        Accepts either a dict (e.g., {"filters": [...]}) or a raw list of filter objects.
+        Passing None clears the filters (sets NULL).
+        Returns the updated JobRow.
+        """
+        if filters is None:
+            payload_json = None
+        else:
+            try:
+                if isinstance(filters, dict):
+                    payload = filters
+                elif isinstance(filters, list):
+                    payload = {"filters": filters}
+                else:
+                    # Fallback to best-effort JSON-serializable form
+                    payload = {"filters": filters}
+                payload_json = json.dumps(payload, ensure_ascii=False)
+            except Exception:
+                payload_json = None
+        # Use update_job to ensure updated_at is maintained
+        return self.update_job(job_id, {"job_filters_json": payload_json})
+
+    def get_job_filters(self, job_id: int) -> Dict[str, Any]:
+        """Fetch and parse the job's filters payload.
+
+        Returns a dict in the normalized shape {"filters": [...]}. Invalid or missing
+        payloads yield {"filters": []}.
+        """
+        row = self.get_job(job_id)
+        raw = getattr(row, "job_filters_json", None)
+        if not raw:
+            return {"filters": []}
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and isinstance(data.get("filters"), list):
+                return {"filters": list(data.get("filters") or [])}
+            if isinstance(data, list):
+                return {"filters": data}
+        except Exception:
+            pass
+        return {"filters": []}
 
     def update_job(self, job_id: int, patch: Dict[str, Any]) -> JobRow:
         if not patch:
@@ -833,6 +885,7 @@ class WatchlistsDatabase:
             "per_host_delay_ms",
             "retry_policy_json",
             "output_prefs_json",
+            "job_filters_json",
         ):
             if key in patch and patch[key] is not None:
                 fields.append(f"{key} = ?")

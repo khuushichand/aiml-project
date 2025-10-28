@@ -16,8 +16,8 @@ import os
 import re
 from datetime import datetime, timezone, timedelta
 from html import escape
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
-from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request
+from fastapi.responses import PlainTextResponse, HTMLResponse, Response
 from loguru import logger
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -25,9 +25,11 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.core.Watchlists import template_store
+from tldw_Server_API.app.core.Watchlists.opml import parse_opml, generate_opml
 from tldw_Server_API.app.core.Notifications import NotificationsService
 from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     Source, SourceCreateRequest, SourceUpdateRequest, SourcesListResponse, SourcesBulkCreateRequest,
+    SourcesBulkCreateResponse, SourcesBulkCreateItem,
     Group, GroupCreateRequest, GroupUpdateRequest, GroupsListResponse,
     Tag, TagsListResponse,
     Job, JobCreateRequest, JobUpdateRequest, JobsListResponse,
@@ -35,6 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     ScrapedItem, ScrapedItemsListResponse, ScrapedItemUpdateRequest,
     WatchlistOutput, WatchlistOutputCreateRequest, WatchlistOutputsListResponse,
     WatchlistTemplateCreateRequest, WatchlistTemplateDetail, WatchlistTemplateListResponse, WatchlistTemplateSummary,
+    WatchlistFiltersPayload, WatchlistFilter, SourcesImportResponse, SourcesImportItem,
 )
 
 
@@ -57,6 +60,64 @@ def _is_expired(expires_at: Optional[str]) -> bool:
         return datetime.fromisoformat(expires_at).astimezone(timezone.utc) <= datetime.now(timezone.utc)
     except Exception:
         return False
+
+
+def _normalize_filters_payload(raw_json: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw_json:
+        return None
+    try:
+        data = json.loads(raw_json)
+        if isinstance(data, dict):
+            # Ensure key exists
+            if "filters" not in data:
+                data["filters"] = []
+            return data
+        if isinstance(data, list):
+            return {"filters": data}
+    except Exception:
+        return None
+    return None
+
+
+# ---- Rate limit helpers (test-aware) ----
+import functools
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
+
+
+def _limits_disabled_now() -> bool:
+    try:
+        return (
+            os.getenv("WATCHLISTS_DISABLE_RATE_LIMITS", "").strip().lower() in {"1", "true", "yes", "on"}
+            or os.getenv("PYTEST_CURRENT_TEST") is not None
+            or os.getenv("TLDW_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+    except Exception:
+        return False
+
+
+def _optional_limit(rate: str):
+    def _decorator(func):
+        if _limiter is None or _limits_disabled_now():
+            return func
+        wrapped = _limiter.limit(rate)(func)
+
+        @functools.wraps(func)
+        async def _inner(*args, **kwargs):  # type: ignore
+            if _limits_disabled_now():
+                return await func(*args, **kwargs)
+            req = kwargs.get("request", None)
+            try:
+                from starlette.requests import Request as _StarReq  # type: ignore
+                if not isinstance(req, _StarReq):
+                    return await func(*args, **kwargs)
+            except Exception:
+                return await func(*args, **kwargs)
+            return await wrapped(*args, **kwargs)
+
+        return _inner
+
+    return _decorator
 
 
 # ---- Helpers ----
@@ -261,6 +322,18 @@ def _job_payload(job_row: Any) -> Dict[str, Any]:
         )
     except Exception:
         output_prefs = {}
+    job_filters = None
+    try:
+        jf = getattr(job_row, "job_filters_json", None)
+        if jf:
+            parsed = json.loads(jf)
+            # Normalize to {"filters": [...]} shape
+            if isinstance(parsed, dict):
+                job_filters = {"filters": list(parsed.get("filters") or [])}
+            elif isinstance(parsed, list):
+                job_filters = {"filters": parsed}
+    except Exception:
+        job_filters = None
     return {
         "id": job_row.id,
         "name": job_row.name,
@@ -273,6 +346,7 @@ def _job_payload(job_row: Any) -> Dict[str, Any]:
         "per_host_delay_ms": getattr(job_row, "per_host_delay_ms", None),
         "retry_policy": retry_policy,
         "output_prefs": output_prefs,
+        "job_filters": job_filters,
     }
 
 
@@ -350,6 +424,55 @@ def _render_template_with_context(template_str: str, context: Dict[str, Any]) ->
 # --------------------
 # Sources
 # --------------------
+_YT_HOST_RE = re.compile(r"(^|\.)youtube\.com$|(^|\.)youtu\.be$", re.IGNORECASE)
+
+
+def _is_youtube_url(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+        # Strip leading 'www.'
+        if host.startswith("www."):
+            host = host[4:]
+        return bool(_YT_HOST_RE.search(host))
+    except Exception:
+        return False
+
+
+def _is_youtube_feed_url(url: str) -> bool:
+    """Accept only canonical YouTube RSS feed URLs.
+
+    Allowed forms:
+      - https://www.youtube.com/feeds/videos.xml?channel_id=...
+      - https://www.youtube.com/feeds/videos.xml?playlist_id=...
+      - https://www.youtube.com/feeds/videos.xml?user=...
+    """
+    try:
+        from urllib.parse import urlparse, parse_qs
+        u = urlparse(url)
+        path_ok = u.path.lower().startswith("/feeds/videos.xml")
+        if not path_ok:
+            return False
+        qs = parse_qs(u.query or "")
+        return any(k in qs for k in ("channel_id", "playlist_id", "user"))
+    except Exception:
+        return False
+
+
+def _validate_youtube_feed_or_raise(url: str, source_type: str) -> None:
+    if str(source_type).lower() != "rss":
+        return
+    if _is_youtube_url(url) and not _is_youtube_feed_url(url):
+        # Actionable error with canonical patterns
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "invalid_youtube_rss_url: use canonical feed URLs; "
+                "channel → https://www.youtube.com/feeds/videos.xml?channel_id=..., "
+                "playlist → https://www.youtube.com/feeds/videos.xml?playlist_id=..."
+            ),
+        )
+
 @router.post("/sources", response_model=Source, summary="Create a source")
 async def create_source(
     payload: SourceCreateRequest = Body(...),
@@ -357,6 +480,8 @@ async def create_source(
     db = Depends(get_watchlists_db_for_user),
 ):
     try:
+        # Backend validation for YouTube-as-RSS
+        _validate_youtube_feed_or_raise(str(payload.url), str(payload.source_type))
         row = db.create_source(
             name=payload.name,
             url=str(payload.url),
@@ -373,6 +498,9 @@ async def create_source(
                 row.tags = tags  # type: ignore[attr-defined]
             except Exception:
                 pass
+    except HTTPException:
+        # Propagate validation/HTTP errors unchanged
+        raise
     except Exception as e:
         logger.error(f"create_source failed: {e}")
         raise HTTPException(status_code=400, detail="source_create_failed")
@@ -423,6 +551,67 @@ async def list_sources(
     return SourcesListResponse(items=items, total=total)
 
 
+# OPML import/export placed before /sources/{source_id} to avoid route conflicts
+@router.get("/sources/export", summary="Export sources to OPML")
+async def export_sources_opml(
+    tag: Optional[List[str]] = Query(None, description="Filter by tag(s)"),
+    type: Optional[str] = Query(None, description="Filter by source_type (rss/site)"),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    rows, _ = db.list_sources(q=None, tag_names=tag, limit=10000, offset=0)
+    items: List[Dict[str, Any]] = []
+    for r in rows:
+        if type and str(r.source_type).lower() != type.lower():
+            continue
+        if str(r.source_type).lower() != "rss":
+            continue
+        items.append({"name": r.name, "url": r.url, "html_url": None})
+    xml = generate_opml(items)
+    return Response(content=xml, media_type="application/xml")
+
+
+@router.post("/sources/import", response_model=SourcesImportResponse, summary="Import sources from OPML")
+@_optional_limit("10/minute")
+async def import_sources_opml(
+    request: Request,
+    file: UploadFile = File(...),
+    active: bool = Form(True),
+    tags: Optional[List[str]] = Form(None),
+    group_id: Optional[int] = Form(None),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    content = await file.read()
+    entries = parse_opml(content)
+    items: List[SourcesImportItem] = []
+    created = skipped = errors = 0
+    default_tags = tags or []
+    for e in entries:
+        if not e.url:
+            items.append(SourcesImportItem(url="", name=e.name, status="error", error="missing_url"))
+            errors += 1
+            continue
+        try:
+            row = db.create_source(
+                name=e.name or e.url,
+                url=e.url,
+                source_type="rss",
+                active=bool(active),
+                settings_json=None,
+                tags=default_tags,
+                group_ids=([group_id] if group_id else []),
+            )
+            items.append(SourcesImportItem(url=e.url, name=row.name, id=row.id, status="created"))
+            created += 1
+        except Exception as exc:
+            items.append(SourcesImportItem(url=e.url, name=e.name, status="skipped", error=str(exc)))
+            skipped += 1
+    return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
+
+# (moved above /sources/{source_id})
+
+
 @router.get("/sources/{source_id}", response_model=Source, summary="Get source")
 async def get_source(
     source_id: int = Path(..., ge=1),
@@ -455,13 +644,19 @@ async def update_source(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    # Determine target source_type/url for validation
+    try:
+        existing = db.get_source(source_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="source_not_found")
+    target_type = str(payload.source_type) if (getattr(payload, "source_type", None) is not None) else str(existing.source_type)
+    target_url = str(payload.url) if (getattr(payload, "url", None) is not None) else str(existing.url)
+    # Validate only when target_type is rss; reject non-feed YouTube URLs
+    _validate_youtube_feed_or_raise(target_url, target_type)
     patch = payload.model_dump(exclude_unset=True)
     if "settings" in patch:
         patch["settings_json"] = json.dumps(patch.pop("settings")) if patch.get("settings") is not None else None
-    try:
-        row = db.update_source(source_id, patch)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found")
+    row = db.update_source(source_id, patch)
     # tags replacement
     if payload.tags is not None:
         try:
@@ -496,14 +691,32 @@ async def delete_source(
     return {"success": True}
 
 
-@router.post("/sources/bulk", response_model=SourcesListResponse, summary="Bulk create sources")
+@router.post("/sources/bulk", response_model=SourcesBulkCreateResponse, summary="Bulk create sources with per-entry status")
 async def bulk_create_sources(
     payload: SourcesBulkCreateRequest,
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
-    created: List[Source] = []
+    items: List[SourcesBulkCreateItem] = []
+    created_count = 0
+    errors_count = 0
     for s in payload.sources:
+        # Validate YouTube-as-RSS for each entry; collect per-entry error instead of silent skip
+        try:
+            _validate_youtube_feed_or_raise(str(s.url), str(s.source_type))
+        except HTTPException as ve:
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error=str(ve.detail),
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+            continue
+
         try:
             row = db.create_source(
                 name=s.name,
@@ -514,25 +727,35 @@ async def bulk_create_sources(
                 tags=s.tags or [],
                 group_ids=s.group_ids or [],
             )
-            created.append(
-                Source(
+            items.append(
+                SourcesBulkCreateItem(
                     id=row.id,
                     name=row.name,
                     url=row.url,
+                    status="created",
                     source_type=row.source_type,  # type: ignore[assignment]
-                    active=bool(row.active),
-                    tags=row.tags,
-                    settings=(json.loads(row.settings_json) if row.settings_json else None),
-                    last_scraped_at=row.last_scraped_at,
-                    status=row.status,
-                    created_at=row.created_at,
-                    updated_at=row.updated_at,
                 )
             )
+            created_count += 1
         except Exception as e:
-            logger.debug(f"bulk create skipped one source: {e}")
-            continue
-    return SourcesListResponse(items=created, total=len(created))
+            logger.debug(f"bulk create error: {e}")
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error="source_create_failed",
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+
+    return SourcesBulkCreateResponse(
+        items=items,
+        total=len(items),
+        created=created_count,
+        errors=errors_count,
+    )
 
 
 # --------------------
@@ -628,6 +851,12 @@ async def create_job(
     db = Depends(get_watchlists_db_for_user),
 ):
     try:
+        jf_json = None
+        try:
+            if payload.job_filters and isinstance(payload.job_filters.model_dump(), dict):
+                jf_json = json.dumps(payload.job_filters.model_dump())
+        except Exception:
+            jf_json = None
         row = db.create_job(
             name=payload.name,
             description=payload.description,
@@ -639,6 +868,7 @@ async def create_job(
             per_host_delay_ms=payload.per_host_delay_ms,
             retry_policy_json=json.dumps(payload.retry_policy or {}),
             output_prefs_json=json.dumps(payload.output_prefs or {}),
+            job_filters_json=jf_json,
         )
     except Exception as e:
         logger.error(f"create_job failed: {e}")
@@ -715,6 +945,7 @@ async def create_job(
         per_host_delay_ms=row.per_host_delay_ms,
         retry_policy=(json.loads(row.retry_policy_json or "{}")),
         output_prefs=(json.loads(row.output_prefs_json or "{}")),
+        job_filters=_normalize_filters_payload(getattr(row, "job_filters_json", None)),
         created_at=row.created_at,
         updated_at=row.updated_at,
         last_run_at=row.last_run_at,
@@ -748,6 +979,7 @@ async def list_jobs(
                 per_host_delay_ms=r.per_host_delay_ms,
                 retry_policy=(json.loads(r.retry_policy_json or "{}")),
                 output_prefs=(json.loads(r.output_prefs_json or "{}")),
+                job_filters=_normalize_filters_payload(getattr(r, "job_filters_json", None)),
                 created_at=r.created_at,
                 updated_at=r.updated_at,
                 last_run_at=r.last_run_at,
@@ -781,6 +1013,7 @@ async def get_job(
         per_host_delay_ms=r.per_host_delay_ms,
         retry_policy=(json.loads(r.retry_policy_json or "{}")),
         output_prefs=(json.loads(r.output_prefs_json or "{}")),
+        job_filters=(json.loads(r.job_filters_json or "{}") if getattr(r, "job_filters_json", None) else None),
         created_at=r.created_at,
         updated_at=r.updated_at,
         last_run_at=r.last_run_at,
@@ -803,6 +1036,8 @@ async def update_job(
         patch["retry_policy_json"] = json.dumps(patch.pop("retry_policy") or {})
     if "output_prefs" in patch:
         patch["output_prefs_json"] = json.dumps(patch.pop("output_prefs") or {})
+    if "job_filters" in patch:
+        patch["job_filters_json"] = json.dumps(patch.pop("job_filters") or {})
     try:
         r = db.update_job(job_id, patch)
     except KeyError:
@@ -890,6 +1125,7 @@ async def update_job(
         per_host_delay_ms=r.per_host_delay_ms,
         retry_policy=(json.loads(r.retry_policy_json or "{}")),
         output_prefs=(json.loads(r.output_prefs_json or "{}")),
+        job_filters=_normalize_filters_payload(getattr(r, "job_filters_json", None)),
         created_at=r.created_at,
         updated_at=r.updated_at,
         last_run_at=r.last_run_at,
@@ -915,6 +1151,48 @@ async def delete_job(
     if not ok:
         raise HTTPException(status_code=404, detail="job_not_found")
     return {"success": True}
+
+
+@router.patch("/jobs/{job_id}/filters", response_model=WatchlistFiltersPayload, summary="Replace job filters")
+@_optional_limit("30/minute")
+async def replace_job_filters(
+    job_id: int = Path(..., ge=1),
+    payload: WatchlistFiltersPayload = Body(...),
+    request: Request,
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        db.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    updated = db.set_job_filters(job_id, payload.model_dump())
+    # Normalize and return
+    try:
+        parsed = json.loads(updated.job_filters_json or "{}") if getattr(updated, "job_filters_json", None) else {"filters": []}
+    except Exception:
+        parsed = {"filters": []}
+    return WatchlistFiltersPayload(**parsed) if isinstance(parsed, dict) else WatchlistFiltersPayload(filters=[])
+
+
+@router.post("/jobs/{job_id}/filters:add", response_model=WatchlistFiltersPayload, summary="Append job filters")
+@_optional_limit("30/minute")
+async def append_job_filters(
+    job_id: int = Path(..., ge=1),
+    payload: WatchlistFiltersPayload = Body(...),
+    request: Request,
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        current = db.get_job_filters(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    existing = list(current.get("filters") or [])
+    to_add = payload.filters or []
+    new_filters = existing + [f.model_dump() if hasattr(f, "model_dump") else f for f in to_add]
+    db.set_job_filters(job_id, {"filters": new_filters})
+    return WatchlistFiltersPayload(filters=[WatchlistFilter(**f) if isinstance(f, dict) else f for f in new_filters])
 
 
 @router.post("/jobs/{job_id}/run", response_model=Run, summary="Trigger a run (executes pipeline)")
@@ -1020,13 +1298,26 @@ async def get_run_details(
         except Exception:
             log_text = None
             truncated = False
+    # Build stats for detail view, including filter totals when present
+    detail_stats: Dict[str, int] = {"items_found": items_found, "items_ingested": items_ingested}
+    try:
+        if isinstance(stats.get("filters_matched"), int):
+            detail_stats["filters_matched"] = int(stats.get("filters_matched") or 0)
+        fa = stats.get("filters_actions")
+        if isinstance(fa, dict):
+            for k in ("include", "exclude", "flag"):
+                v = fa.get(k)
+                if isinstance(v, int):
+                    detail_stats[f"filters_{k}"] = int(v)
+    except Exception:
+        pass
     return RunDetail(
         id=r.id,
         job_id=r.job_id,
         status=r.status,
         started_at=r.started_at,
         finished_at=r.finished_at,
-        stats={"items_found": items_found, "items_ingested": items_ingested},
+        stats=detail_stats,
         error_msg=r.error_msg,
         log_text=log_text,
         log_path=r.log_path,

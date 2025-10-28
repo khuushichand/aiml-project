@@ -1,0 +1,87 @@
+name: Vector Stores - PGVector
+
+on:
+  pull_request:
+    paths:
+      - 'tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py'
+      - 'tldw_Server_API/tests/VectorStores/**'
+      - '.github/workflows/vector-pgvector-tests.yml'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py'
+      - 'tldw_Server_API/tests/VectorStores/**'
+
+permissions:
+  contents: read
+
+jobs:
+  pgvector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11','3.12','3.13']
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tldw
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres" \
+          --health-interval 5s \
+          --health-timeout 3s \
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: ${{ matrix.python-version }}
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+      - name: Install psycopg client
+        run: |
+          python -m pip install --upgrade pip
+          pip install "psycopg[binary]>=3.1" pytest anyio loguru httpx fastapi starlette
+      - name: Install ffmpeg + pg client + wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
+        with:
+          host: 127.0.0.1
+          port: ${{ job.services.postgres.ports[5432] }}
+          user: postgres
+      - name: Run PGVector tests (local service)
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          DISABLE_HEAVY_STARTUP: '1'
+          TEST_MODE: 'true'
+          PG_TEST_DSN: postgresql://postgres:postgres@localhost:${{ job.services.postgres.ports[5432] }}/tldw
+          PGVECTOR_DSN: postgresql://postgres:postgres@localhost:${{ job.services.postgres.ports[5432] }}/tldw
+        run: |
+          pytest -q \
+            tldw_Server_API/tests/VectorStores/integration/test_pgvector_live.py \
+            tldw_Server_API/tests/VectorStores/integration/test_pgvector_filter_integration.py \
+            tldw_Server_API/tests/VectorStores/integration/test_vector_store_admin_ef_search_pg.py \
+            --junit-xml=vector-pgvector-${{ matrix.python-version }}.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vector-pgvector-${{ matrix.python-version }}
+          path: vector-pgvector-*.xml
+      - name: Publish results
+        if: always()
+        permissions:
+          checks: write
+          pull-requests: write
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: vector-pgvector-*.xml
+

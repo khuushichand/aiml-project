@@ -127,6 +127,13 @@ class HuggingFaceAPI:
                         continue
                     logger.error(f"Network error searching models: {e}")
                     return []
+                except httpx.HTTPError as e:
+                    # Catch-all for tests that raise base HTTPError
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"HTTP error searching models: {e}")
+                    return []
     
     async def get_model_info(self, repo_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -161,6 +168,12 @@ class HuggingFaceAPI:
                         await _async_retry_sleep(backoff, attempt)
                         continue
                     logger.error(f"Network error getting model info for {repo_id}: {e}")
+                    return None
+                except httpx.HTTPError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"HTTP error getting model info for {repo_id}: {e}")
                     return None
     
     async def list_model_files(self, repo_id: str, path: str = "") -> List[Dict[str, Any]]:
@@ -203,6 +216,12 @@ class HuggingFaceAPI:
                         await _async_retry_sleep(backoff, attempt)
                         continue
                     logger.error(f"Network error listing files for {repo_id}: {e}")
+                    return []
+                except httpx.HTTPError as e:
+                    if attempt < retries:
+                        await _async_retry_sleep(backoff, attempt)
+                        continue
+                    logger.error(f"HTTP error listing files for {repo_id}: {e}")
                     return []
     
     async def get_download_url(self, repo_id: str, filename: str, revision: str = "main") -> Optional[str]:

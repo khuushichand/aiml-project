@@ -58,6 +58,9 @@ def test_env_vars():
     
     # Set test mode
     os.environ["TEST_MODE"] = "true"
+    # Force single-user mode and deterministic API key so auth matches headers
+    os.environ["AUTH_MODE"] = "single_user"
+    os.environ["SINGLE_USER_API_KEY"] = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
     os.environ["TRANSCRIPTION_PROVIDER"] = "whisper"
     os.environ["MAX_FILE_SIZE"] = "100000000"  # 100MB for tests
     
@@ -463,12 +466,80 @@ def test_client(test_env_vars):
         yield client
 
 @pytest.fixture
-def auth_headers():
-    """Authentication headers for API requests (single-user mode)."""
-    # Use the real SINGLE_USER_API_KEY so requests authenticate correctly
+def auth_headers(test_env_vars):
+    """Authentication headers for API requests.
+
+    - If AUTH_MODE=single_user: use X-API-KEY from settings directly.
+    - If AUTH_MODE=multi_user: provision a test user and create a real API key
+      via AuthNZ services, then return it as X-API-KEY. This ensures routes that
+      depend on get_request_user (multi-user path) authenticate correctly.
+    """
+    import asyncio
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    settings = get_settings()
-    return {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+    import os
+    from pathlib import Path
+    import tempfile
+    s = get_settings()
+    # Fast path: single-user mode uses configured API key
+    if s.AUTH_MODE == "single_user":
+        return {"X-API-KEY": s.SINGLE_USER_API_KEY}
+
+    async def _provision_multi_user_headers() -> dict:
+        # Ensure Users DB is initialized and create a test admin user if needed
+        from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db, reset_users_db
+        from tldw_Server_API.app.core.AuthNZ.password_service import get_password_service
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager, reset_api_key_manager
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        # Proactively use a temporary SQLite AuthNZ DB in multi_user tests to avoid
+        # external Postgres requirements. This still exercises the multi_user auth path.
+        try:
+            from urllib.parse import urlparse
+            scheme = (urlparse(s.DATABASE_URL).scheme or "").lower()
+        except Exception:
+            scheme = ""
+        if scheme.startswith("postgres"):
+            tmp_dir = Path(tempfile.mkdtemp(prefix="tldw_authnz_"))
+            sqlite_path = tmp_dir / "users.db"
+            os.environ["DATABASE_URL"] = f"sqlite:///{sqlite_path}"
+            # Reset settings and pools to pick up the override
+            reset_settings()
+            await reset_db_pool()
+            await reset_api_key_manager()
+            await reset_users_db()
+
+        users_db = await get_users_db()
+        username = "media_ingest_test_admin"
+        email = "media_ingest_test_admin@example.com"
+        user = await users_db.get_user_by_username(username)
+        if not user:
+            # Create a strong password that meets policy; we never log or use it for login
+            pw_service = get_password_service()
+            pw_hash = pw_service.hash_password("Str0ng!MediaIngestTest1")
+            user = await users_db.create_user(
+                username=username,
+                email=email,
+                password_hash=pw_hash,
+                role="admin",
+                is_active=True,
+                is_superuser=True,
+            )
+
+        # Issue a real API key for this user (admin scope)
+        api_mgr = await get_api_key_manager()
+        key_info = await api_mgr.create_api_key(
+            user_id=int(user["id"] if isinstance(user, dict) else user.id),
+            name="media_ingest_test",
+            description="Temporary key for MediaIngestion_NEW tests",
+            scope="admin",
+            expires_in_days=7,
+        )
+        return {"X-API-KEY": key_info["key"]}
+
+    # Create key synchronously for sync tests
+    return asyncio.run(_provision_multi_user_headers())
 
 # =====================================================================
 # Cleanup Fixtures

@@ -27,8 +27,10 @@ def test_compactor_admin_endpoint(monkeypatch):
         return 3
 
     import types
-    fake_service = types.SimpleNamespace(compact_once=_fake_compact_once)
     import sys
+    # Insert a proper module object to avoid unhashable SimpleNamespace in sys.modules
+    fake_service = types.ModuleType("vector_compactor_stub")
+    setattr(fake_service, "compact_once", _fake_compact_once)
     sys.modules['tldw_Server_API.app.core.Embeddings.services.vector_compactor'] = fake_service
 
     client = TestClient(app)

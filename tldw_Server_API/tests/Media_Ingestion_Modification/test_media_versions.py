@@ -89,14 +89,15 @@ def db_session(db_instance_session):
 # Global reference for shutdown handler (consider if needed)
 test_db_instance_ref = None
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def client_module(db_instance_session):
     """
     Creates a TestClient for the module, overriding the DB dependency to use the session-scoped test DB.
     """
     def override_get_media_db_for_user():
-        # print(f"--- OVERRIDING get_media_db_for_user with: {db_instance_session.db_path_str} ---")
-        yield db_instance_session
+        # Return a stable instance instead of yielding a generator
+        # This avoids generator lifecycle/cleanup mismatches across requests
+        return db_instance_session
 
     global test_db_instance_ref
     test_db_instance_ref = db_instance_session # Store the reference for shutdown

@@ -311,3 +311,4 @@ uv.lock
 /Databases/
 /tldw_Server_API/Logs
 /tmp
+Config_Files/session_encryption.key

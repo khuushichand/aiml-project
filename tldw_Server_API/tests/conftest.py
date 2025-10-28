@@ -10,6 +10,8 @@ pytest_plugins = (
     "tldw_Server_API.tests._plugins.authnz_fixtures",
     # Expose isolated Chat fixtures (unit_test_client, isolated_db, etc.) globally
     "tldw_Server_API.tests.Chat.integration.conftest_isolated",
+    # Optional pgvector fixtures for tests that need live PG
+    "tldw_Server_API.tests.helpers.pgvector",
 )
 
 import os

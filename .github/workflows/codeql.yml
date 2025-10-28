@@ -12,6 +12,7 @@ jobs:
   analyze:
     name: Analyze (CodeQL)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       actions: read
       contents: read
@@ -22,7 +23,7 @@ jobs:
         language: [ 'python' ]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -37,4 +38,3 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:${{matrix.language}}'
-

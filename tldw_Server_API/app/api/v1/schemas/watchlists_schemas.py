@@ -7,6 +7,32 @@ from pydantic import BaseModel, Field, AnyUrl, validator
 SourceType = Literal["rss", "site"]  # forums moved to Phase 3 (feature-flagged later)
 
 
+# --------------------
+# Job Filters
+# --------------------
+FilterType = Literal["keyword", "author", "date_range", "regex", "all"]
+FilterAction = Literal["include", "exclude", "flag"]
+
+
+class WatchlistFilter(BaseModel):
+    type: FilterType
+    action: FilterAction
+    value: Dict[str, Any] = Field(default_factory=dict)
+    priority: Optional[int] = None
+    is_active: bool = True
+
+
+class WatchlistFiltersPayload(BaseModel):
+    filters: List[WatchlistFilter] = Field(default_factory=list)
+    require_include: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When true and any include rules exist, only include-matched items are ingested; "
+            "others are treated as filtered."
+        ),
+    )
+
+
 class SourceCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     url: AnyUrl
@@ -48,6 +74,25 @@ class SourcesListResponse(BaseModel):
 
 class SourcesBulkCreateRequest(BaseModel):
     sources: List[SourceCreateRequest]
+
+
+# --------------------
+# Bulk Sources Response (per-entry status)
+# --------------------
+class SourcesBulkCreateItem(BaseModel):
+    name: Optional[str] = None
+    url: str
+    id: Optional[int] = None
+    status: Literal["created", "error"]
+    error: Optional[str] = None
+    source_type: Optional[SourceType] = None
+
+
+class SourcesBulkCreateResponse(BaseModel):
+    items: List[SourcesBulkCreateItem]
+    total: int
+    created: int
+    errors: int
 
 
 class GroupCreateRequest(BaseModel):
@@ -95,6 +140,10 @@ class JobCreateRequest(BaseModel):
     per_host_delay_ms: Optional[int] = None
     retry_policy: Optional[Dict[str, Any]] = None
     output_prefs: Optional[Dict[str, Any]] = None
+    job_filters: Optional[WatchlistFiltersPayload] = Field(
+        default=None,
+        description="Optional job-level filters payload (bridge from SUBS Import Rules)",
+    )
 
 
 class JobUpdateRequest(BaseModel):
@@ -108,6 +157,10 @@ class JobUpdateRequest(BaseModel):
     per_host_delay_ms: Optional[int] = None
     retry_policy: Optional[Dict[str, Any]] = None
     output_prefs: Optional[Dict[str, Any]] = None
+    job_filters: Optional[WatchlistFiltersPayload] = Field(
+        default=None,
+        description="Optional job-level filters payload (replace)",
+    )
 
 
 class Job(BaseModel):
@@ -122,6 +175,7 @@ class Job(BaseModel):
     per_host_delay_ms: Optional[int] = None
     retry_policy: Optional[Dict[str, Any]] = None
     output_prefs: Optional[Dict[str, Any]] = None
+    job_filters: Optional[WatchlistFiltersPayload] = None
     created_at: str
     updated_at: str
     last_run_at: Optional[str] = None
@@ -272,3 +326,22 @@ class WatchlistTemplateCreateRequest(BaseModel):
     content: str = Field(..., description="Template content")
     description: Optional[str] = Field(None, description="Optional human-readable description")
     overwrite: bool = Field(False, description="If false, creation fails when template already exists")
+
+
+# --------------------
+# OPML Import/Export
+# --------------------
+class SourcesImportItem(BaseModel):
+    url: str
+    name: Optional[str] = None
+    id: Optional[int] = None
+    status: Literal["created", "skipped", "error"]
+    error: Optional[str] = None
+
+
+class SourcesImportResponse(BaseModel):
+    items: List[SourcesImportItem]
+    total: int
+    created: int
+    skipped: int
+    errors: int

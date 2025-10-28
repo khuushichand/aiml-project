@@ -41,6 +41,13 @@ from .Audio_Transcription_Nemo import (
     load_parakeet_model,
     transcribe_with_parakeet
 )
+
+# Expose get_whisper_model at module scope so tests can monkeypatch it
+# (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
+try:  # pragma: no cover - import availability varies in test contexts
+    from .Audio_Transcription_Lib import get_whisper_model as get_whisper_model  # type: ignore
+except Exception:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
+    get_whisper_model = None  # type: ignore[assignment]
 from .Audio_Streaming_Insights import LiveInsightSettings, LiveMeetingInsights
 
 try:
@@ -927,6 +934,16 @@ class UnifiedStreamingTranscriber:
         if self.transcriber:
             self.transcriber.cleanup()
         self.transcriber = None
+
+# Explicit export list to aid test imports and static analyzers
+__all__ = [
+    'UnifiedStreamingConfig',
+    'BaseStreamingTranscriber',
+    'WhisperStreamingTranscriber',
+    'CanaryStreamingTranscriber',
+    'ParakeetStreamingTranscriber',
+    'UnifiedStreamingTranscriber',
+]
 
 
 async def handle_unified_websocket(

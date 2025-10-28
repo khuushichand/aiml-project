@@ -346,6 +346,8 @@ elif not _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
     # Metrics Endpoint
     from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
+    # Sandbox Endpoint (scaffold)
+    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
     # Chunking Endpoints
     from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
     from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
@@ -468,6 +470,8 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
     # Web Scraping Management Endpoints
     from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
+    # Sandbox Endpoint (scaffold)
+    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
 
 # Metrics and Telemetry — import directly and fail fast on errors
 from tldw_Server_API.app.core.Metrics import (
@@ -2489,6 +2493,8 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    # Sandbox (scaffold)
+    app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
 else:
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
@@ -2612,6 +2618,8 @@ else:
         app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
     app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
     app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
+    # Sandbox (scaffold)
+    app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
     app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)

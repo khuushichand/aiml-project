@@ -11,6 +11,8 @@ import tempfile
 import pytest
 from pathlib import Path
 
+# Note: pgvector fixtures are registered at the top-level tests/conftest.py.
+
 
 @pytest.fixture(autouse=True, scope="session")
 def vectorstores_isolated_env():
@@ -56,3 +58,19 @@ def vectorstores_isolated_env():
             shutil.rmtree(tmp_base, ignore_errors=True)
         except Exception:
             pass
+
+
+# Local admin_user fixture (avoid importing other conftests that override pgvector_dsn)
+@pytest.fixture
+def admin_user():
+    from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+    async def _admin():
+        return User(id=42, username="admin", email="a@x", is_active=True, is_admin=True)
+
+    app.dependency_overrides[get_request_user] = _admin
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_request_user, None)

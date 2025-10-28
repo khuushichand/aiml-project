@@ -4,6 +4,9 @@ Simplified RAG Module Test Configuration
 Focused on testing only the unified pipeline that's actually in use.
 """
 
+# Note: pgvector fixtures are registered at the top-level tests/conftest.py.
+# Keep this file free of pytest_plugins to avoid pytest deprecation warnings.
+
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, Generator
@@ -24,6 +27,13 @@ def pytest_configure(config):
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
+    # Optionally register pgvector fixtures if available in this environment
+    try:
+        # Importing the helpers module registers its fixtures for this test package
+        import tldw_Server_API.tests.helpers.pgvector  # noqa: F401
+    except Exception:
+        # If unavailable, tests that require pgvector will be skipped by their own guards
+        pass
 
 # =====================================================================
 # Cross-suite fixtures (mirrors Embeddings fixtures used by RAG tests)

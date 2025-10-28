@@ -1,0 +1,41 @@
+name: "Wait for Postgres"
+description: "Ensure Postgres is reachable; optionally install client"
+inputs:
+  host:
+    description: "Postgres host"
+    required: false
+    default: "127.0.0.1"
+  port:
+    description: "Postgres port"
+    required: true
+  user:
+    description: "Postgres user"
+    required: true
+  install-client:
+    description: "Install postgresql-client on Linux"
+    required: false
+    default: 'true'
+runs:
+  using: "composite"
+  steps:
+    - name: Install client (Linux)
+      if: runner.os == 'Linux' && inputs.install-client == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+
+    - name: Wait for Postgres
+      shell: bash
+      run: |
+        host='${{ inputs.host }}'
+        port='${{ inputs.port }}'
+        user='${{ inputs.user }}'
+        echo "Waiting for Postgres at ${host}:${port} as ${user}"
+        for i in {1..60}; do
+          if pg_isready -h "$host" -p "$port" -U "$user"; then
+            echo "Postgres is ready"; exit 0; fi;
+          echo "Attempt $i: waiting for Postgres..."; sleep 2;
+        done
+        echo "Postgres did not become ready in time" >&2; exit 1
+

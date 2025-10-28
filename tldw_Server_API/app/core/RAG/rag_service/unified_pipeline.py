@@ -495,27 +495,81 @@ async def unified_rag_pipeline(
     except Exception:
         pass
 
+    # --- Internal helpers (defined early so downstream phases can use them) ---
+    async def _with_timeout(coro, timeout: Optional[float]):
+        if timeout and timeout > 0:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        return await coro
+
+    async def _resilient_call(component: str, func, *args, **kwargs):
+        """Apply circuit breaker, retries, and timeout around async operations when enabled."""
+        breaker = None
+        if enable_resilience and circuit_breaker and get_coordinator and CircuitBreakerConfig:
+            try:
+                coord = get_coordinator()
+                if component not in coord.circuit_breakers:
+                    coord.register_circuit_breaker(component, CircuitBreakerConfig())
+                breaker = coord.circuit_breakers[component]
+            except Exception:
+                breaker = None
+
+        async def _attempt():
+            if breaker is not None:
+                return await breaker.call(func, *args, **kwargs)
+            if asyncio.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            return func(*args, **kwargs)
+
+        if enable_resilience and (retry_attempts or 0) > 1 and RetryPolicy and RetryConfig:
+            policy = RetryPolicy(RetryConfig(max_attempts=int(retry_attempts or 1)))
+            call_coro = policy.execute(_attempt)
+        else:
+            call_coro = _attempt()
+
+        return await _with_timeout(call_coro, timeout_seconds)
+
     # Basic input validation
     if not isinstance(query, str) or not query.strip():
         msg = "Invalid query"
         result.generated_answer = msg
         result.errors.append(msg)
         result.timings["total"] = 0.0
-        # Always return the unified result type for consistency
-        return UnifiedSearchResult(
-            documents=[],
-            query=query if isinstance(query, str) else "",
-            expanded_queries=[],
-            metadata=result.metadata,
-            timings=result.timings,
-            citations=[],
-            feedback_id=None,
-            generated_answer=msg,
-            cache_hit=False,
-            errors=result.errors,
-            security_report=None,
-            total_time=0.0,
-        )
+        # Consistent contract: return UnifiedRAGResponse for all outcomes
+        try:
+            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
+            return UnifiedRAGResponse(
+                documents=[],
+                query=(query if isinstance(query, str) else ""),
+                expanded_queries=[],
+                metadata=result.metadata,
+                timings=result.timings,
+                citations=[],
+                academic_citations=[],
+                chunk_citations=[],
+                generated_answer=msg,
+                cache_hit=False,
+                errors=result.errors,
+                security_report=None,
+                total_time=0.0,
+                claims=None,
+                factuality=None,
+            )
+        except Exception:
+            # Fallback to dataclass if schema import fails (non-API contexts)
+            return UnifiedSearchResult(
+                documents=[],
+                query=query if isinstance(query, str) else "",
+                expanded_queries=[],
+                metadata=result.metadata,
+                timings=result.timings,
+                citations=[],
+                feedback_id=None,
+                generated_answer=msg,
+                cache_hit=False,
+                errors=result.errors,
+                security_report=None,
+                total_time=0.0,
+            )
     
     # Initialize monitoring if requested
     metrics = None
@@ -3152,40 +3206,3 @@ def compute_temporal_range_from_query(query: str) -> Optional[Dict[str, str]]:
         return {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
     except Exception:
         return None
-    # Internal helpers: timeout + resilience wrappers
-    async def _with_timeout(coro, timeout: Optional[float]):
-        if timeout and timeout > 0:
-            return await asyncio.wait_for(coro, timeout=timeout)
-        return await coro
-
-    async def _resilient_call(component: str, func, *args, **kwargs):
-        """Apply circuit breaker, retries, and timeout around async operations when enabled."""
-        # Circuit breaker setup
-        breaker = None
-        if enable_resilience and circuit_breaker and get_coordinator and CircuitBreakerConfig:
-            try:
-                coord = get_coordinator()
-                if component not in coord.circuit_breakers:
-                    coord.register_circuit_breaker(component, CircuitBreakerConfig())
-                breaker = coord.circuit_breakers[component]
-            except Exception:
-                breaker = None
-
-        # Single attempt
-        async def _attempt():
-            if breaker is not None:
-                return await breaker.call(func, *args, **kwargs)
-            # direct
-            if asyncio.iscoroutinefunction(func):
-                return await func(*args, **kwargs)
-            return func(*args, **kwargs)
-
-        # Retries
-        if enable_resilience and (retry_attempts or 0) > 1 and RetryPolicy and RetryConfig:
-            policy = RetryPolicy(RetryConfig(max_attempts=int(retry_attempts or 1)))
-            call_coro = policy.execute(_attempt)
-        else:
-            call_coro = _attempt()
-
-        # Timeout
-        return await _with_timeout(call_coro, timeout_seconds)

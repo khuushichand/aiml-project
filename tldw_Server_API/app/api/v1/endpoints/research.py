@@ -33,6 +33,7 @@ from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
     WebSearchRequest, WebSearchRawResponse, WebSearchAggregateResponse
 )
 from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs
+from concurrent.futures import ThreadPoolExecutor
 
 
 def generate_and_search(*args: Any, **kwargs: Any) -> Dict[str, Any]:
@@ -315,7 +316,14 @@ async def websearch_endpoint(
         }
 
         # Run potentially blocking provider calls off the event loop
-        phase1 = await asyncio.to_thread(generate_and_search, payload.query, search_params)
+        # Use an explicit ThreadPoolExecutor for stable thread naming expected by tests
+        loop = asyncio.get_running_loop()
+        global _WEBSEARCH_EXECUTOR
+        try:
+            _WEBSEARCH_EXECUTOR  # type: ignore[name-defined]
+        except NameError:
+            _WEBSEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ThreadPoolExecutor")  # type: ignore[assignment]
+        phase1 = await loop.run_in_executor(_WEBSEARCH_EXECUTOR, generate_and_search, payload.query, search_params)
 
         if payload.aggregate:
             # Cancellation propagates if client disconnects

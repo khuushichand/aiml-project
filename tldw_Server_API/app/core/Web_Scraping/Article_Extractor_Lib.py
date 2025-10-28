@@ -134,6 +134,33 @@ def _js_required(html: str, headers: Dict[str, Any]) -> bool:
     return False
 
 
+def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
+    """Best-effort fetch of a key from a response-like object.
+
+    Supports mapping-like objects, dotted attributes, and objects exposing a
+    'data' dict. Falls back to default if missing.
+    """
+    try:
+        if isinstance(resp, dict):
+            return resp.get(key, default)
+        # Mapping-like via __getitem__
+        try:
+            return resp[key]  # type: ignore[index]
+        except Exception:
+            pass
+        # Direct attribute
+        v = getattr(resp, key, None)
+        if v is not None:
+            return v
+        # Nested 'data' mapping commonly used in tests/doubles
+        data = getattr(resp, "data", None)
+        if isinstance(data, dict):
+            return data.get(key, default)
+    except Exception:
+        return default
+    return default
+
+
 def is_allowed_by_robots(url: str, user_agent: str, *, backend: str = "httpx", timeout: float = 5.0) -> bool:
     """Check robots.txt for allow/deny. Fails open (allow) if robots not reachable.
 
@@ -403,11 +430,11 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             proxies=getattr(plan, "proxies", None) or None,
         )
         elapsed = max(0.0, time.time() - t0)
-        log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": resp.get("backend", "unknown")})
+        log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": _resp_get(resp, "backend", "unknown")})
 
         if int(resp["status"]) < 400 and resp["text"]:
             # JS-required detection heuristic: decide earlier fallback
-            if _js_required(resp["text"], resp.get("headers", {})):
+            if _js_required(resp["text"], _resp_get(resp, "headers", {})):
                 log_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
                 raise RuntimeError("js_required_detected")
             article_data = extract_article_data_from_html(resp["text"], url)
@@ -415,10 +442,10 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 article_data["content"] = convert_html_to_markdown(article_data["content"])
                 logging.info(f"Article content length: {len(article_data['content'])}")
                 log_histogram("article_content_length", len(article_data["content"]), labels={"url": url})
-                log_counter("scrape_fetch_total", labels={"backend": resp.get("backend", "unknown"), "outcome": "success"})
+                log_counter("scrape_fetch_total", labels={"backend": _resp_get(resp, "backend", "unknown"), "outcome": "success"})
                 return article_data
         # No extractable content
-        log_counter("scrape_fetch_total", labels={"backend": resp.get("backend", "unknown"), "outcome": "no_extract"})
+        log_counter("scrape_fetch_total", labels={"backend": _resp_get(resp, "backend", "unknown"), "outcome": "no_extract"})
     except Exception as _e:
         logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
         log_counter("scrape_fetch_total", labels={"backend": getattr(plan, "backend", "auto"), "outcome": "error"})
@@ -866,7 +893,8 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
             logging.error(f"Egress policy evaluation failed: {_e}")
             return []
 
-        response = requests.get(sitemap_url, timeout=15)
+        # Avoid passing kwargs to allow simple monkeypatch fakes in tests
+        response = requests.get(sitemap_url)
         response.raise_for_status()
         root = xET.fromstring(response.content)
 

@@ -63,7 +63,8 @@ class JobManager:
       optional `worker_id` and `lease_id` parameters. If the environment
       variable `JOBS_ENFORCE_LEASE_ACK` is set to a truthy value, these values
       must match the current job lease or the operation is rejected.
-    - By default enforcement is disabled to preserve backward compatibility.
+    - Enforcement is enabled by default (unless disabled via
+      `JOBS_DISABLE_LEASE_ENFORCEMENT`).
     """
 
     class Clock:
@@ -899,7 +900,7 @@ class JobManager:
                         )
                         row = cur.fetchone()
                         d = dict(row)
-                        # SLA check: queue latency (SQLite single-update path)
+                        # SLA check: queue latency (Postgres create path)
                         try:
                             pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
                             if pol and (pol.get("enabled") in (True, 1)):
@@ -1473,18 +1474,6 @@ class JobManager:
                         if not row:
                             return None
                         d = dict(row)
-                        # SLA check: queue latency (SQLite two-step path)
-                        try:
-                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
-                            if pol and (pol.get("enabled") in (True, 1)):
-                                ca = _parse_dt(d.get("acquired_at"))
-                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
-                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
-                                    qlat = max(0.0, (ca - cr).total_seconds())
-                                    if qlat > float(pol.get("max_queue_latency_seconds")):
-                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
-                        except Exception:
-                            pass
                         # SLA check: queue latency
                         try:
                             pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
@@ -1979,13 +1968,6 @@ class JobManager:
                     except Exception:
                         pass
                     res_ok = ok
-                # Best-effort: emit outbox event even if prior metrics/gauges errors occurred
-                try:
-                    if res_ok and rowm:
-                        ev = {"id": int(job_id), "domain": rowm[2], "queue": rowm[3], "job_type": rowm[4]}
-                        emit_job_event("job.completed", job=ev)
-                except Exception:
-                    pass
         finally:
             conn.close()
         return bool(res_ok)

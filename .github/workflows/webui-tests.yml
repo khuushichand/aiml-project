@@ -6,17 +6,20 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
 jobs:
   webui-tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -33,15 +36,20 @@ jobs:
         run: |
           npm test
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
         with:
           python-version: ${{ matrix.python-version }}
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+            tldw_Server_API/requirements.txt
 
-      - name: Install Python project
+      - name: Install Python project + test deps (explicit)
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+          # Ensure local project installed in editable mode for E2E helpers
+          pip install -e '.[dev]'
 
       - name: Install Playwright browsers
         run: |

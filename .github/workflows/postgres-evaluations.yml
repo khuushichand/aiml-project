@@ -5,13 +5,19 @@ on:
   push:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
 jobs:
   pg-evaluations:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     services:
       postgres:
@@ -21,7 +27,7 @@ jobs:
           POSTGRES_PASSWORD: TestPassword123!
           POSTGRES_DB: tldw_content
         ports:
-          - 5432:5432
+          - 5432/tcp
         options: >-
           --health-cmd="pg_isready -U tldw_user -d tldw_content" 
           --health-interval=10s 
@@ -30,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,29 +48,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest psycopg[binary] loguru pydantic fastapi starlette aiosqlite
 
-      - name: Wait for Postgres readiness
-        run: |
-          python - <<'PY'
-          import time
-          import psycopg
-          dsn = "host=localhost port=5432 dbname=tldw_content user=tldw_user password=TestPassword123! connect_timeout=3"
-          for i in range(60):
-              try:
-                  with psycopg.connect(dsn) as conn:
-                      with conn.cursor() as cur:
-                          cur.execute("SELECT 1")
-                          break
-              except Exception as e:
-                  print("Waiting for Postgres...", e)
-                  time.sleep(1)
-          else:
-              raise SystemExit("Postgres did not become ready in time")
-          PY
+      - name: Install ffmpeg + pg client + wait for PG
+        uses: ./.github/actions/ffmpeg-pg-wait
+        with:
+          host: localhost
+          port: ${{ job.services.postgres.ports[5432] }}
+          user: tldw_user
 
       - name: Run Evaluations Postgres tests
         env:
           POSTGRES_TEST_HOST: localhost
-          POSTGRES_TEST_PORT: '5432'
+          POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
           POSTGRES_TEST_DATABASE: tldw_content
           POSTGRES_TEST_USER: tldw_user
           POSTGRES_TEST_PASSWORD: TestPassword123!
@@ -78,7 +72,7 @@ jobs:
         if: ${{ always() }}
         env:
           POSTGRES_TEST_HOST: localhost
-          POSTGRES_TEST_PORT: '5432'
+          POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
           POSTGRES_TEST_DATABASE: tldw_content
           POSTGRES_TEST_USER: tldw_user
           POSTGRES_TEST_PASSWORD: TestPassword123!

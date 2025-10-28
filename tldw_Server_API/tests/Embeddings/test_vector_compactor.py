@@ -17,7 +17,8 @@ class _StubSettings:
     def get(self, k, default=None):
         return default
 
-_stub_config_mod = types.SimpleNamespace(settings=_StubSettings())
+_stub_config_mod = types.ModuleType("config_stub")
+setattr(_stub_config_mod, "settings", _StubSettings())
 sys.modules.setdefault('tldw_Server_API.app.core.config', _stub_config_mod)
 
 from tldw_Server_API.app.core.Embeddings.services import vector_compactor as vc
@@ -60,7 +61,10 @@ def test_compact_once_deletes_vectors(monkeypatch):
 
     # Patch ChromaDB_Library import to avoid heavy imports
     import types as _types
-    sys.modules['tldw_Server_API.app.core.Embeddings.ChromaDB_Library'] = _types.SimpleNamespace(ChromaDBManager=_FakeMgr)
+    # Insert a proper module object into sys.modules for import compatibility
+    _stub_mod = _types.ModuleType("ChromaDB_Library_stub")
+    setattr(_stub_mod, "ChromaDBManager", _FakeMgr)
+    sys.modules['tldw_Server_API.app.core.Embeddings.ChromaDB_Library'] = _stub_mod
 
     touched = asyncio.run(vc.compact_once("u"))
     assert touched == 2

@@ -437,12 +437,13 @@ class FileValidator:
         claimed_candidates = _extension_candidates(_original_filename)
         claimed_ext_display = claimed_candidates[0] if claimed_candidates else None
         claimed_ext_display_str = claimed_ext_display or "<none>"
+        ext_allowed_lower: Set[str] = set()
         if final_allowed_extensions:
-            allowed_lower = {ext.lower() for ext in final_allowed_extensions}
+            ext_allowed_lower = {ext.lower() for ext in final_allowed_extensions}
             if not claimed_candidates:
                 issues.append(f"Claimed filename '{_original_filename}' has no extension.")
             else:
-                matched_claimed_ext = next((candidate for candidate in claimed_candidates if candidate in allowed_lower), None)
+                matched_claimed_ext = next((candidate for candidate in claimed_candidates if candidate in ext_allowed_lower), None)
                 if matched_claimed_ext is None:
                     allowed_list_display = sorted(final_allowed_extensions)
                     issues.append(
@@ -511,6 +512,42 @@ class FileValidator:
                         f"Unable to determine MIME for '{_original_filename}', and extension-based MIME "
                         f"'{fallback_mime_type or '<unknown>'}' is not allowed. Allowed: {final_allowed_mimetypes}"
                     )
+
+        # For source-code files, be permissive on MIME mismatches in favor of
+        # extension-based acceptance. Real-world code uploads often have ambiguous
+        # or missing MIME types (e.g., text/plain, application/octet-stream).
+        if media_type_key == 'code' and issues:
+            mime_only = True
+            for it in issues:
+                s = str(it).lower()
+                if ("detected mime type" in s) or ("unable to determine mime" in s):
+                    continue
+                mime_only = False
+                break
+            if mime_only:
+                # Drop MIME-only issues and proceed; rely on extension and size checks.
+                issues.clear()
+
+        # For generic documents, permit extension-based acceptance when MIME is ambiguous or misclassified.
+        # This handles cases where small text files are detected as vendor-specific types (e.g., application/x-mif).
+        if media_type_key in {'document', 'json'} and issues and ext_allowed_lower:
+            # Determine if the filename (claimed or on-disk) matches any allowed extension
+            any_claimed_ok = any(candidate in ext_allowed_lower for candidate in claimed_candidates)
+            any_disk_ok = any(candidate in ext_allowed_lower for candidate in (disk_candidates or []))
+            if any_claimed_ok or any_disk_ok:
+                mime_only = True
+                for it in issues:
+                    s = str(it).lower()
+                    if ("detected mime type" in s) or ("unable to determine mime" in s):
+                        continue
+                    # Also allow the earlier claimed-extension error to remain a blocker
+                    if "claimed extension" in s:
+                        mime_only = False
+                        break
+                    mime_only = False
+                    break
+                if mime_only:
+                    issues.clear()
 
         # 5. Malware Scan (Yara)
         is_safe_yara, yara_match_details = self._scan_file_with_yara(current_file_path)

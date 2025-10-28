@@ -15,6 +15,7 @@ interface WatchlistJob {
   timezone?: string | null;
   active: boolean;
   output_prefs?: Record<string, any> | null;
+  job_filters?: { filters: WatchlistFilter[]; require_include?: boolean } | null;
   last_run_at?: string | null;
   next_run_at?: string | null;
 }
@@ -56,6 +57,17 @@ interface WatchlistSettings {
   temporary_output_ttl_seconds?: number;
 }
 
+type FilterType = 'keyword' | 'author' | 'regex' | 'date_range' | 'all';
+type FilterAction = 'include' | 'exclude' | 'flag';
+
+interface WatchlistFilter {
+  type: FilterType;
+  action: FilterAction;
+  value: Record<string, any>;
+  priority?: number;
+  is_active?: boolean;
+}
+
 interface SourceFormState {
   name: string;
   url: string;
@@ -92,6 +104,17 @@ interface JobFormState {
   emailSubject: string;
   emailAttach: boolean;
   chatbookEnabled: boolean;
+  filters: WatchlistFilter[];
+  requireInclude: boolean;
+  showAdvancedFilters: boolean;
+  advancedFiltersJson: string;
+  // New filter draft inputs
+  newFilterType: FilterType;
+  newFilterAction: FilterAction;
+  newFilterPriority: string;
+  newFilterValueText: string; // overloaded for keywords/authors/pattern
+  newFilterRegexFlags: string;
+  newFilterMaxAgeDays: string;
 }
 
 const parseRecipients = (value: string): string[] =>
@@ -172,6 +195,7 @@ export default function WatchlistsPage() {
   const [savingSource, setSavingSource] = useState(false);
   const [newSource, setNewSource] = useState<SourceFormState>(defaultSourceState());
   const [showScrapeAdvanced, setShowScrapeAdvanced] = useState(false);
+  const [opmlFile, setOpmlFile] = useState<File | null>(null);
 
   const templateOptions = useMemo(() => templates.map((tpl) => ({ value: tpl.name, label: `${tpl.name} (${tpl.format})` })), [templates]);
 
@@ -213,6 +237,16 @@ export default function WatchlistsPage() {
         emailSubject: emailCfg.subject || '',
         emailAttach: emailCfg.attach_file !== false,
         chatbookEnabled: chatbookCfg.enabled !== false,
+        filters: (job.job_filters?.filters as WatchlistFilter[]) || [],
+        requireInclude: Boolean((job.job_filters as any)?.require_include || false),
+        showAdvancedFilters: false,
+        advancedFiltersJson: '',
+        newFilterType: 'keyword',
+        newFilterAction: 'exclude',
+        newFilterPriority: '',
+        newFilterValueText: '',
+        newFilterRegexFlags: 'i',
+        newFilterMaxAgeDays: '',
       };
     },
     []
@@ -331,6 +365,103 @@ export default function WatchlistsPage() {
     };
   };
 
+  const handleImportOPML = async () => {
+    if (!opmlFile) return;
+    try {
+      const form = new FormData();
+      form.append('file', opmlFile);
+      await apiClient.post('/watchlists/sources/import', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      show({ title: 'OPML imported', variant: 'success' });
+      setOpmlFile(null);
+      fetchSources();
+    } catch (error: any) {
+      show({ title: 'Import failed', description: error?.message, variant: 'danger' });
+    }
+  };
+
+  const handleExportOPML = async () => {
+    try {
+      const data = await apiClient.get<Blob>('/watchlists/sources/export', { responseType: 'blob' });
+      const blob = new Blob([data], { type: 'application/xml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'watchlists.opml';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      show({ title: 'Export failed', description: error?.message, variant: 'danger' });
+    }
+  };
+
+  const addFilter = (jobId: number) => {
+    const st = forms[jobId];
+    if (!st) return;
+    const f: WatchlistFilter = { type: st.newFilterType, action: st.newFilterAction, value: {}, is_active: true };
+    const pr = parseInt(st.newFilterPriority || '0', 10);
+    if (!Number.isNaN(pr)) f.priority = pr;
+    if (st.newFilterType === 'keyword') {
+      const keywords = parseTagList(st.newFilterValueText);
+      if (keywords.length === 0) return;
+      f.value = { keywords, match: 'any' };
+    } else if (st.newFilterType === 'author') {
+      const names = parseTagList(st.newFilterValueText);
+      if (names.length === 0) return;
+      f.value = { names, match: 'any' };
+    } else if (st.newFilterType === 'regex') {
+      const pattern = st.newFilterValueText.trim();
+      if (!pattern) return;
+      const flags = st.newFilterRegexFlags.trim() || 'i';
+      f.value = { pattern, flags, field: 'title' };
+    } else if (st.newFilterType === 'date_range') {
+      const days = parseInt(st.newFilterMaxAgeDays || '0', 10);
+      if (!Number.isNaN(days) && days > 0) f.value = { max_age_days: days };
+      else return;
+    } else {
+      f.value = {};
+    }
+    setForms((prev) => ({
+      ...prev,
+      [jobId]: { ...prev[jobId], filters: [...(prev[jobId].filters || []), f], newFilterValueText: '', newFilterPriority: '' },
+    }));
+  };
+
+  const removeFilter = (jobId: number, index: number) => {
+    setForms((prev) => {
+      const arr = [...(prev[jobId].filters || [])];
+      arr.splice(index, 1);
+      return { ...prev, [jobId]: { ...prev[jobId], filters: arr } };
+    });
+  };
+
+  const saveFilters = async (jobId: number) => {
+    try {
+      const state = forms[jobId];
+      if (state.showAdvancedFilters) {
+        let payload: any = null;
+        try {
+          payload = JSON.parse(state.advancedFiltersJson || '{}');
+        } catch (e: any) {
+          throw new Error('Invalid JSON in advanced filters editor');
+        }
+        if (!payload || typeof payload !== 'object') {
+          throw new Error('Advanced payload must be a JSON object');
+        }
+        await apiClient.patch(`/watchlists/jobs/${jobId}/filters`, payload);
+      } else {
+        const filters = (state.filters || []).map((f) => ({ type: f.type, action: f.action, value: f.value, priority: f.priority, is_active: f.is_active !== false }));
+        await apiClient.patch(`/watchlists/jobs/${jobId}/filters`, { require_include: state.requireInclude, filters });
+      }
+      show({ title: 'Filters saved', variant: 'success' });
+    } catch (error: any) {
+      show({ title: 'Failed to save filters', description: error?.message, variant: 'danger' });
+    }
+  };
+
   const handleCreateSource = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const name = newSource.name.trim();
@@ -346,6 +477,40 @@ export default function WatchlistsPage() {
       source_type: newSource.sourceType,
       active: newSource.active,
     };
+
+    // Optional UX: Normalize/validate YouTube URLs for RSS sources before submit
+    if (newSource.sourceType === 'rss') {
+      const isYouTube = (u: string) => /(^|\.)youtube\.com|youtu\.be/i.test(u);
+      const isFeedUrl = (u: string) => /\/feeds\/videos\.xml\?/i.test(u);
+      const toCanonicalYouTubeFeed = (u: string): string | null => {
+        try {
+          const parsed = new URL(u);
+          const list = parsed.searchParams.get('list');
+          if (list) {
+            return `https://www.youtube.com/feeds/videos.xml?playlist_id=${list}`;
+          }
+          const parts = parsed.pathname.split('/').filter(Boolean);
+          const i = parts.findIndex((p) => p.toLowerCase() === 'channel');
+          if (i >= 0 && parts[i + 1]) {
+            const cid = parts[i + 1];
+            return `https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      };
+      if (isYouTube(payload.url) && !isFeedUrl(payload.url)) {
+        const canonical = toCanonicalYouTubeFeed(payload.url);
+        if (canonical) {
+          payload.url = canonical;
+          show({ title: 'Converted to RSS feed URL', description: 'YouTube URL was normalized to a canonical feed.', variant: 'success' });
+        } else {
+          show({ title: 'Invalid YouTube URL for RSS', description: 'Use canonical feed URLs: channel → https://www.youtube.com/feeds/videos.xml?channel_id=..., playlist → https://www.youtube.com/feeds/videos.xml?playlist_id=.... Open the channel page to find /channel/<CHANNEL_ID>.', variant: 'warning' });
+          return;
+        }
+      }
+    }
 
     const tags = parseTagList(newSource.tags);
     if (tags.length > 0) {
@@ -488,9 +653,37 @@ export default function WatchlistsPage() {
                 Manage RSS feeds and site scrapers. XPath selectors can be combined with optional CSS by prefixing values
                 with <code>css:</code>. Provide one selector per line to define fallbacks.
               </p>
+              <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3 text-xs text-indigo-900">
+                <div className="font-semibold">Tip: YouTube as RSS</div>
+                <p className="mt-1">
+                  Add YouTube channels or playlists as RSS by using canonical feed URLs:
+                </p>
+                <ul className="ml-5 list-disc">
+                  <li>
+                    Channel: <code>https://www.youtube.com/feeds/videos.xml?channel_id=&lt;CHANNEL_ID&gt;</code>
+                  </li>
+                  <li>
+                    Playlist: <code>https://www.youtube.com/feeds/videos.xml?playlist_id=&lt;PLAYLIST_ID&gt;</code>
+                  </li>
+                </ul>
+                <p className="mt-1">
+                  Handle/vanity URLs (e.g., <code>youtube.com/@handle</code>) are not feeds. Open the channel page and copy the
+                  URL with <code>/channel/&lt;CHANNEL_ID&gt;</code>, or paste a canonical feed URL directly.
+                </p>
+              </div>
             </div>
             <Button type="button" variant="secondary" size="sm" onClick={fetchSources} disabled={loadingSources}>
               {loadingSources ? 'Refreshing…' : 'Refresh'}
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <input type="file" accept=".opml,.xml" onChange={(e) => setOpmlFile(e.target.files?.[0] || null)} />
+            <Button type="button" variant="primary" size="sm" onClick={handleImportOPML} disabled={!opmlFile || savingSource}>
+              Import OPML
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={handleExportOPML}>
+              Export OPML
             </Button>
           </div>
 
@@ -927,8 +1120,8 @@ export default function WatchlistsPage() {
                     />
                   </div>
 
-                  <div className="space-y-3 rounded-md border border-gray-100 p-3">
-                    <h4 className="text-sm font-semibold text-gray-800">Chatbook delivery</h4>
+                <div className="space-y-3 rounded-md border border-gray-100 p-3">
+                  <h4 className="text-sm font-semibold text-gray-800">Chatbook delivery</h4>
                     <Switch
                       checked={state.chatbookEnabled}
                       onChange={(checked) => updateForm(job.id, { chatbookEnabled: checked })}
@@ -938,6 +1131,117 @@ export default function WatchlistsPage() {
                       When enabled, outputs are stored in Chatbook for later reference alongside metadata.
                     </p>
                   </div>
+                </div>
+
+                <div className="space-y-3 rounded-md border border-gray-100 p-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-gray-800">Job Filters</h4>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 text-xs text-gray-700">
+                        <span>Require include match</span>
+                        <Switch
+                          checked={state.requireInclude}
+                          onChange={(checked) => updateForm(job.id, { requireInclude: checked })}
+                          label=""
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => {
+                          if (!state.showAdvancedFilters) {
+                            // Prefill with current state
+                            const payload = { require_include: state.requireInclude, filters: state.filters || [] } as any;
+                            const pretty = JSON.stringify(payload, null, 2);
+                            updateForm(job.id, { showAdvancedFilters: true, advancedFiltersJson: pretty });
+                          } else {
+                            // Attempt to parse and fold back into state
+                            try {
+                              const obj = JSON.parse(state.advancedFiltersJson || '{}');
+                              const filters = Array.isArray(obj?.filters) ? obj.filters : [];
+                              const req = Boolean(obj?.require_include || false);
+                              updateForm(job.id, { showAdvancedFilters: false, filters, requireInclude: req });
+                            } catch (e) {
+                              updateForm(job.id, { showAdvancedFilters: false });
+                            }
+                          }
+                        }}
+                      >
+                        {state.showAdvancedFilters ? 'Basic editor' : 'Advanced JSON'}
+                      </Button>
+                    </div>
+                  </div>
+                  {state.showAdvancedFilters && (
+                    <label className="flex flex-col text-xs text-gray-700">
+                      Advanced filters JSON
+                      <textarea
+                        value={state.advancedFiltersJson}
+                        onChange={(e) => updateForm(job.id, { advancedFiltersJson: e.target.value })}
+                        className="mt-1 min-h-[160px] w-full rounded-md border border-gray-300 p-2 font-mono text-[12px]"
+                        placeholder='{"require_include": true, "filters": [...]}'
+                      />
+                      <span className="mt-1 text-[11px] text-gray-500">Use this to set custom shapes (e.g., regex flags, date ranges).</span>
+                    </label>
+                  )}
+                  {(state.filters || []).length === 0 && (
+                    <p className="text-xs text-gray-500">No filters configured. Add one below.</p>
+                  )}
+                  {(state.filters || []).length > 0 && (
+                    <ul className="divide-y divide-gray-100 text-sm">
+                      {state.filters.map((f, idx) => (
+                        <li key={idx} className="flex items-center justify-between py-1">
+                          <div className="text-gray-700">
+                            <span className="font-medium">{f.type}</span> · {f.action}
+                            {typeof f.priority === 'number' && <span> · prio {f.priority}</span>}
+                          </div>
+                          <Button type="button" size="xs" variant="secondary" onClick={() => removeFilter(job.id, idx)}>Remove</Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex flex-col text-xs text-gray-700">
+                      Type
+                      <select value={state.newFilterType} onChange={(e) => updateForm(job.id, { newFilterType: e.target.value as FilterType })} className="mt-1 rounded-md border border-gray-300 px-2 py-1">
+                        <option value="keyword">keyword</option>
+                        <option value="author">author</option>
+                        <option value="regex">regex</option>
+                        <option value="date_range">date_range</option>
+                        <option value="all">all</option>
+                      </select>
+                    </label>
+                    <label className="flex flex-col text-xs text-gray-700">
+                      Action
+                      <select value={state.newFilterAction} onChange={(e) => updateForm(job.id, { newFilterAction: e.target.value as FilterAction })} className="mt-1 rounded-md border border-gray-300 px-2 py-1">
+                        <option value="include">include</option>
+                        <option value="exclude">exclude</option>
+                        <option value="flag">flag</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Input label="Priority" value={state.newFilterPriority} onChange={(e) => updateForm(job.id, { newFilterPriority: e.target.value })} placeholder="0" />
+                    {(state.newFilterType === 'keyword' || state.newFilterType === 'author') && (
+                      <Input label={state.newFilterType === 'keyword' ? 'Keywords (comma)' : 'Authors (comma)'} value={state.newFilterValueText} onChange={(e) => updateForm(job.id, { newFilterValueText: e.target.value })} placeholder="ai, ml" />
+                    )}
+                    {state.newFilterType === 'regex' && (
+                      <>
+                        <Input label="Pattern" value={state.newFilterValueText} onChange={(e) => updateForm(job.id, { newFilterValueText: e.target.value })} placeholder="(?i)breaking" />
+                        <Input label="Flags" value={state.newFilterRegexFlags} onChange={(e) => updateForm(job.id, { newFilterRegexFlags: e.target.value })} placeholder="i" />
+                      </>
+                    )}
+                    {state.newFilterType === 'date_range' && (
+                      <Input label="Max age (days)" value={state.newFilterMaxAgeDays} onChange={(e) => updateForm(job.id, { newFilterMaxAgeDays: e.target.value })} placeholder="7" />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button type="button" size="sm" variant="secondary" onClick={() => addFilter(job.id)}>Add filter</Button>
+                    <Button type="button" size="sm" variant="primary" onClick={() => saveFilters(job.id)}>Save filters</Button>
+                  </div>
+                  {!state.showAdvancedFilters && (
+                    <p className="text-[11px] text-gray-500">Tip: switch to Advanced to edit raw JSON payload.</p>
+                  )}
                 </div>
 
                 <div className="text-xs text-gray-500">

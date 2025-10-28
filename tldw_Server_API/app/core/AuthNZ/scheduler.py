@@ -518,8 +518,10 @@ class AuthNZScheduler:
                             except (ValueError, IndexError):
                                 purged_legacy = 0
                     else:
+                        # SQLite's datetime() doesn't reliably parse ISO8601 with timezone offsets.
+                        # Compare ISO strings directly (stored as ISO8601) for robust behavior.
                         cursor = await conn.execute(
-                            "DELETE FROM privilege_snapshots WHERE datetime(generated_at) < datetime(?)",
+                            "DELETE FROM privilege_snapshots WHERE generated_at < ?",
                             (weekly_cutoff.isoformat(),),
                         )
                         purged_legacy = _normalize_rowcount(getattr(cursor, "rowcount", None))
@@ -561,23 +563,24 @@ class AuthNZScheduler:
                             except (ValueError, IndexError):
                                 purged_duplicates = 0
                     else:
+                        # Use string-based comparisons and week bucketing compatible with ISO8601 strings.
                         dedupe_sql = """
                         WITH ranked AS (
                             SELECT
                                 snapshot_id,
                                 COALESCE(org_id, '__global__') AS org_bucket,
                                 COALESCE(team_id, '__none__') AS team_bucket,
-                                strftime('%Y-%W', datetime(generated_at)) AS iso_week,
+                                substr(generated_at, 1, 4) || '-' || printf('%02d', cast((strftime('%j', replace(replace(generated_at, 'Z',''), '+00:00','')) - 1) / 7 + 1 as integer)) AS iso_week,
                                 ROW_NUMBER() OVER (
                                     PARTITION BY
                                         COALESCE(org_id, '__global__'),
                                         COALESCE(team_id, '__none__'),
-                                        strftime('%Y-%W', datetime(generated_at))
-                                    ORDER BY datetime(generated_at) ASC
+                                        substr(generated_at, 1, 4) || '-' || printf('%02d', cast((strftime('%j', replace(replace(generated_at, 'Z',''), '+00:00','')) - 1) / 7 + 1 as integer))
+                                    ORDER BY generated_at ASC
                                 ) AS rn
                             FROM privilege_snapshots
-                            WHERE datetime(generated_at) < datetime(?)
-                              AND datetime(generated_at) >= datetime(?)
+                            WHERE generated_at < ?
+                              AND generated_at >= ?
                         )
                         DELETE FROM privilege_snapshots
                         WHERE snapshot_id IN (
