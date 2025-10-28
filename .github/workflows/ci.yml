@@ -126,7 +126,7 @@ jobs:
 
       - name: Run full test suite (Linux + PG)
         run: |
-          pytest -q --maxfail=1 --disable-warnings \
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-linux-${{ matrix.python }}.xml
 
@@ -187,7 +187,7 @@ jobs:
 
       - name: Run full test suite
         run: |
-          pytest -q --maxfail=1 --disable-warnings \
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-${{ matrix.os }}-3.12.xml
 
