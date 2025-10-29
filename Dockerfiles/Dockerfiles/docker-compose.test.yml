@@ -11,7 +11,7 @@ services:
       - OPENAI_API_KEY=test-key
       - ANTHROPIC_API_KEY=test-key
     volumes:
-      - .:/app
+      - ${HOST_REPO_DIR:-.}:/app
     command: /app/test-workflow/test-workflow.sh
 
   test-workflow-py310:
@@ -26,7 +26,7 @@ services:
       - OPENAI_API_KEY=test-key
       - ANTHROPIC_API_KEY=test-key
     volumes:
-      - .:/app
+      - ${HOST_REPO_DIR:-.}:/app
     command: bash -c "cd /app && python3.10 -m venv venv && source venv/bin/activate && pip install -e '.[dev]' && pytest -v -m unit --collect-only"
 
   test-workflow-py311:
@@ -41,7 +41,7 @@ services:
       - OPENAI_API_KEY=test-key
       - ANTHROPIC_API_KEY=test-key
     volumes:
-      - .:/app
+      - ${HOST_REPO_DIR:-.}:/app
     command: bash -c "cd /app && python3.11 -m venv venv && source venv/bin/activate && pip install -e '.[dev]' && pytest -v -m unit --collect-only"
 
   test-workflow-py312:
@@ -56,5 +56,5 @@ services:
       - OPENAI_API_KEY=test-key
       - ANTHROPIC_API_KEY=test-key
     volumes:
-      - .:/app
+      - ${HOST_REPO_DIR:-.}:/app
     command: bash -c "cd /app && python3.12 -m venv venv && source venv/bin/activate && pip install -e '.[dev]' && pytest -v -m unit --collect-only"

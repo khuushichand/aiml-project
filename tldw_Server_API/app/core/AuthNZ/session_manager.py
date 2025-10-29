@@ -101,8 +101,18 @@ class SessionManager:
                 logger.warning(f"Redis unavailable, using database only: {e}")
                 self.redis_client = None
         
-        # Schedule session cleanup
-        if self.settings.SESSION_CLEANUP_INTERVAL_HOURS > 0:
+        # Schedule session cleanup (disable in tests or when explicitly requested)
+        _truthy = {"1", "true", "yes", "on", "y"}
+        disable_sched = False
+        try:
+            if str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower() in _truthy:
+                disable_sched = True
+            # In general test mode, default to disabled unless explicitly overridden
+            if (str(os.getenv("TEST_MODE", "")).strip().lower() in _truthy or str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in _truthy) and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
+                disable_sched = True
+        except Exception:
+            pass
+        if (not disable_sched) and self.settings.SESSION_CLEANUP_INTERVAL_HOURS > 0:
             self.scheduler.add_job(
                 self.cleanup_expired_sessions,
                 trigger=IntervalTrigger(hours=self.settings.SESSION_CLEANUP_INTERVAL_HOURS),

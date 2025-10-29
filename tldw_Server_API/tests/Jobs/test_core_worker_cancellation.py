@@ -31,7 +31,7 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
             self.error_message = None
 
     class FakeChatbookService:
-        def __init__(self, user_id, db):
+        def __init__(self, user_id, db, **kwargs):
             self._jobs = {}
         def _get_export_job(self, jid: str):
             return self._jobs.get(jid)
@@ -88,14 +88,26 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
     # Wait for worker to process
     await asyncio.sleep(0.6)
     stop_event.set()
-    with pytest.raises(asyncio.CancelledError):
-        # Cancel task if still running
+    # Prefer graceful stop; if still running after timeout, cancel
+    try:
+        await asyncio.wait_for(run_task, timeout=2.0)
+    except asyncio.TimeoutError:
         run_task.cancel()
-        await run_task
+        try:
+            await run_task
+        except asyncio.CancelledError:
+            pass
 
     # Assert job was terminally cancelled
     jr = jm.get_job(int(job["id"]))
     assert jr["status"] == "cancelled"
-    # Assert Chatbooks export job reflected CANCELLED
-    ej2 = svc._get_export_job("cb-1")
+    # Assert Chatbooks export job reflected CANCELLED (allow brief propagation)
+    deadline = asyncio.get_event_loop().time() + 3.0
+    while True:
+        ej2 = svc._get_export_job("cb-1")
+        if ej2 and getattr(ej2.status, "name", str(ej2.status)) == "CANCELLED":
+            break
+        if asyncio.get_event_loop().time() > deadline:
+            break
+        await asyncio.sleep(0.05)
     assert ej2.status.name == "CANCELLED"

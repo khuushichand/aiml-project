@@ -27,7 +27,20 @@ except Exception as e:  # pragma: no cover - audit optional
 
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
-_AUDIT_ENABLED = UnifiedAuditService is not None and str(os.getenv("JOBS_AUDIT_ENABLED", "")).strip().lower() in _TRUTHY
+
+def _audit_enabled() -> bool:
+    """Return whether jobs→audit bridge is enabled.
+
+    Evaluated at call time so tests can toggle JOBS_AUDIT_ENABLED after the
+    module is imported without requiring a process restart.
+    """
+    try:
+        return (
+            UnifiedAuditService is not None
+            and str(os.getenv("JOBS_AUDIT_ENABLED", "")).strip().lower() in _TRUTHY
+        )
+    except Exception:
+        return False
 
 _EVENT_QUEUE: "Queue[Tuple[str, Dict[str, Any] | None, Dict[str, Any] | None]]" = Queue()
 _WORKER_THREAD: Optional[threading.Thread] = None
@@ -50,7 +63,7 @@ if UnifiedAuditService is not None:
 
 def submit_job_audit_event(event: str, *, job: Optional[Dict[str, Any]], attrs: Optional[Dict[str, Any]]) -> None:
     """Queue a job lifecycle event for audit logging (best-effort)."""
-    if not _AUDIT_ENABLED:
+    if not _audit_enabled():
         return
     if event not in _AUDIT_EVENT_MAP:
         return
@@ -64,7 +77,7 @@ def submit_job_audit_event(event: str, *, job: Optional[Dict[str, Any]], attrs: 
 
 def shutdown_jobs_audit_bridge() -> None:
     """Signal the audit worker to stop (used in tests/shutdown)."""
-    if not _AUDIT_ENABLED:
+    if not _audit_enabled():
         return
     with _WORKER_LOCK:
         global _WORKER_THREAD
@@ -75,7 +88,7 @@ def shutdown_jobs_audit_bridge() -> None:
 
 
 def _ensure_worker_started() -> bool:
-    if not _AUDIT_ENABLED:
+    if not _audit_enabled():
         return False
     with _WORKER_LOCK:
         global _WORKER_THREAD

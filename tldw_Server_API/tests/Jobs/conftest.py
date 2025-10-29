@@ -18,6 +18,8 @@ def _reset_settings_and_env(monkeypatch):
     """
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
+    # Disable AuthNZ scheduler in tests to prevent background APScheduler threads
+    monkeypatch.setenv("AUTHNZ_SCHEDULER_DISABLED", "1")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     # Default Jobs tests to compatibility mode unless individual cases opt in.
     monkeypatch.setenv("JOBS_DISABLE_LEASE_ENFORCEMENT", "1")

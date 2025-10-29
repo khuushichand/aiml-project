@@ -8,8 +8,15 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 
-# Resolve a DSN for Postgres tests from env.
-pg_dsn: Optional[str] = os.getenv("JOBS_DB_URL") or os.getenv("POSTGRES_TEST_DSN")
+# Resolve a DSN for Postgres tests from env, preferring the general test DSNs.
+# Order of precedence aligns with the AuthNZ/general fixtures so Jobs PG tests
+# can reuse the same cluster without extra env wiring.
+pg_dsn: Optional[str] = (
+    os.getenv("TEST_DATABASE_URL")
+    or os.getenv("DATABASE_URL")
+    or os.getenv("JOBS_DB_URL")
+    or os.getenv("POSTGRES_TEST_DSN")
+)
 
 
 def ensure_db_exists(dsn: str) -> None:
@@ -69,4 +76,3 @@ def pg_schema_and_cleanup():
         truncate_jobs_table(dsn)
     except Exception:
         pass
-

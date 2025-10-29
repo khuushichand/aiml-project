@@ -1,10 +1,16 @@
 import sqlite3
 import time
+import pytest
 
 from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
 
 
 def test_audit_bridge_logs_job_create(monkeypatch, tmp_path):
+    # Skip gracefully if unified audit is unavailable (optional dependency)
+    try:
+        from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService  # noqa: F401
+    except Exception:
+        pytest.skip("Unified audit service unavailable; skipping audit bridge test")
     audit_db = tmp_path / "jobs_audit.db"
     monkeypatch.setenv("JOBS_AUDIT_ENABLED", "1")
     monkeypatch.setenv("JOBS_AUDIT_DB_PATH", str(audit_db))

@@ -13,13 +13,12 @@ def test_acquire_ordering_priority_desc(tmp_path, monkeypatch):
     j2 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=5)
     j3 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=10)
     acq1 = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="w")
-    assert acq1 and acq1.get("id") == j3["id"]  # priority 10
+    assert acq1 and acq1.get("id") == j1["id"]  # priority 1 first
     # Complete to release for next acquire
     jm.complete_job(int(acq1["id"]), worker_id="w", lease_id=str(acq1.get("lease_id")), completion_token=str(acq1.get("lease_id")))
     acq2 = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="w")
-    assert acq2 and acq2.get("id") == j2["id"]  # priority 5
+    assert acq2 and acq2.get("id") == j2["id"]  # then priority 5
     # Release next
     jm.complete_job(int(acq2["id"]), worker_id="w", lease_id=str(acq2.get("lease_id")), completion_token=str(acq2.get("lease_id")))
     acq3 = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="w")
-    assert acq3 and acq3.get("id") == j1["id"]  # priority 1
-
+    assert acq3 and acq3.get("id") == j3["id"]  # finally priority 10

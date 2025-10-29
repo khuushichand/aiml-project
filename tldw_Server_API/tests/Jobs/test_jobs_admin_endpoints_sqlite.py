@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from datetime import datetime, timedelta
 
 import pytest
@@ -14,6 +15,20 @@ def _setup_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
+    # Disable background workers to avoid races during tests
+    monkeypatch.setenv("CHATBOOKS_CORE_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
+    monkeypatch.setenv("AUDIO_JOBS_WORKER_ENABLED", "false")
+    monkeypatch.setenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JOBS_WEBHOOKS_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_WEBHOOK_DLQ_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_GC_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false")
+    # Skip privilege catalog validation to avoid requiring config file in these tests
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    # Minimize startup
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
 
 
 def _client(monkeypatch):
@@ -30,8 +45,7 @@ def _client(monkeypatch):
 
 def test_queue_control_and_status_sqlite(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
-    db_path = tmp_path / "jobs.db"
-    ensure_jobs_tables(db_path)
+    ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
 
     with TestClient(app, headers=headers) as client:
@@ -51,7 +65,7 @@ def test_queue_control_and_status_sqlite(monkeypatch, tmp_path):
 
 def test_reschedule_and_retry_now_endpoints_sqlite(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
-    ensure_jobs_tables(tmp_path / "jobs.db")
+    ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()
     future = datetime.utcnow() + timedelta(hours=1)
@@ -71,7 +85,7 @@ def test_reschedule_and_retry_now_endpoints_sqlite(monkeypatch, tmp_path):
 
 def test_attachments_and_sla_endpoints_sqlite(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
-    ensure_jobs_tables(tmp_path / "jobs.db")
+    ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()
     j = jm.create_job(domain="ps", queue="default", job_type="exp", payload={}, owner_user_id="u")
@@ -93,7 +107,7 @@ def test_attachments_and_sla_endpoints_sqlite(monkeypatch, tmp_path):
 
 def test_crypto_rotate_endpoint_sqlite(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
-    ensure_jobs_tables(tmp_path / "jobs.db")
+    ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()
     # Set encryption for domain
@@ -111,4 +125,3 @@ def test_crypto_rotate_endpoint_sqlite(monkeypatch, tmp_path):
         # Execute requires X-Confirm; still safe as envelopes may not match provided keys
         r2 = client.post("/api/v1/jobs/crypto/rotate", headers={**headers, "X-Confirm": "true"}, json={**body, "dry_run": False})
         assert r2.status_code == 200
-

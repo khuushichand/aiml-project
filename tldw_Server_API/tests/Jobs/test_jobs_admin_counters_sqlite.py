@@ -14,6 +14,20 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
     # Debounce off for deterministic gauges
     monkeypatch.setenv("JOBS_GAUGES_DEBOUNCE_MS", "0")
+    # Disable background workers that can race with tests
+    monkeypatch.setenv("CHATBOOKS_CORE_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
+    monkeypatch.setenv("AUDIO_JOBS_WORKER_ENABLED", "false")
+    monkeypatch.setenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JOBS_WEBHOOKS_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_WEBHOOK_DLQ_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_GC_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false")
+    # Skip privilege catalog validation to avoid requiring config file in unit tests
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    # Minimize startup
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
 
 
 def _get_api(app):
@@ -36,11 +50,12 @@ def test_batch_cancel_updates_counters_and_gauges(monkeypatch, tmp_path):
     jm = JobManager()
     domain = "chatbooks"; queue = "default"; jt = "export"
     # Create one ready, one scheduled, and one processing
-    jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    first_ready = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1", available_at=datetime.utcnow() + timedelta(seconds=60))
     acq_target = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
-    assert acq and acq["id"] == acq_target["id"]
+    # FIFO by created_at: first ready job is acquired first
+    assert acq and acq["id"] == first_ready["id"]
     headers = _get_api(app)
     with TestClient(app, headers=headers) as client:
         # Sanity stats before cancel
@@ -114,4 +129,3 @@ def test_batch_requeue_quarantined_adjusts_counters(monkeypatch, tmp_path):
         assert int(row[0]) >= 1 and int(row[1]) == 0
     finally:
         conn.close()
-

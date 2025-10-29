@@ -9,13 +9,19 @@ from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
 
 
 class DummySleep:
-    """Async sleep stub that records durations and returns immediately."""
-    def __init__(self):
+    """Async sleep stub that records durations and yields via original sleep.
+
+    Important: pass the original asyncio.sleep to avoid recursive self-calls
+    when tests monkeypatch asyncio.sleep to this stub.
+    """
+    def __init__(self, orig_sleep):
         self.calls = []
+        self._orig_sleep = orig_sleep
 
     async def __call__(self, seconds: float):
         self.calls.append(seconds)
-        await asyncio.sleep(0)  # yield control
+        # Yield control using the original sleep to avoid recursion
+        await self._orig_sleep(0)
 
 
 @pytest.mark.asyncio
@@ -37,9 +43,11 @@ async def test_auto_renew_jitter_and_progress(monkeypatch, tmp_path):
         calls.append(kwargs)
         return True
 
-    sleep_stub = DummySleep()
+    # Capture original sleep; use it inside the stub and assign to sdk._sleep
+    _orig_sleep = asyncio.sleep
+    sleep_stub = DummySleep(_orig_sleep)
     monkeypatch.setattr(jm, "renew_job_lease", lambda **kwargs: fake_renew(**kwargs))
-    monkeypatch.setattr(asyncio, "sleep", sleep_stub)
+    sdk._sleep = sleep_stub
 
     # Provide a progress callback
     def progress_cb():
@@ -47,8 +55,8 @@ async def test_auto_renew_jitter_and_progress(monkeypatch, tmp_path):
 
     task = asyncio.create_task(sdk._auto_renew(acq, progress_cb=progress_cb))
     # Let it loop twice then stop
-    await asyncio.sleep(0)  # enter loop
-    await asyncio.sleep(0)
+    await _orig_sleep(0)  # enter loop
+    await _orig_sleep(0)
     sdk.stop()
     try:
         await asyncio.wait_for(task, timeout=1)
@@ -92,18 +100,20 @@ async def test_run_retryable_exception_and_backoff(monkeypatch, tmp_path):
     def fake_fail(job_id, **kwargs):
         fail_calls.append({"job_id": job_id, **kwargs})
 
-    sleep_stub = DummySleep()
+    # Capture and use original sleep inside the stub
+    _orig_sleep = asyncio.sleep
+    sleep_stub = DummySleep(_orig_sleep)
     monkeypatch.setattr(jm, "acquire_next_job", lambda **kwargs: fake_acquire(**kwargs))
     monkeypatch.setattr(jm, "fail_job", lambda job_id, **kwargs: fake_fail(job_id, **kwargs))
-    monkeypatch.setattr(asyncio, "sleep", sleep_stub)
+    sdk._sleep = sleep_stub
 
     async def handler(job):
         raise RetryErr("boom")
 
     run_task = asyncio.create_task(sdk.run(handler=handler))
     # Allow a few loop iterations then stop
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await _orig_sleep(0)
+    await _orig_sleep(0)
     sdk.stop()
     await asyncio.wait_for(run_task, timeout=1)
 
@@ -145,4 +155,3 @@ async def test_run_cancellation_check(monkeypatch, tmp_path):
     await asyncio.wait_for(run_task, timeout=1)
 
     assert cancel_called["count"] >= 1
-

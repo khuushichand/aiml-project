@@ -1,0 +1,22 @@
+services:
+  postgres-ci:
+    image: postgres:18-bookworm
+    container_name: tldw-postgres-ci
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
+      POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-TestPassword123!}
+    # No host port mapping to avoid conflicts; accessible via service name in Compose network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data_ci:/var/lib/postgresql/data
+
+volumes:
+  postgres_data_ci:
+    driver: local
+

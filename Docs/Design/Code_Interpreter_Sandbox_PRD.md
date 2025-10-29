@@ -882,3 +882,37 @@ Relationships & Notes
 - Idempotency rows are independent; `object_id` may reference `sandbox_runs.id` or a session id.
 - Cleanup jobs should combine DB row deletion with on‑disk artifact retention policy (`SANDBOX_ARTIFACT_TTL_HOURS`).
 - For HA scenarios, use a shared SQL DB and a shared filesystem/object store for artifacts.
+
+## 28) Admin API (Proposal)
+
+Purpose
+- Provide read‑only administrative endpoints to inspect sandbox runs, idempotency entries, and usage without direct DB access.
+- Scope is limited to metadata; no mutation beyond potential future GC/troubleshooting actions.
+
+Auth & RBAC
+- Require admin privileges (e.g., `is_admin=true` or specific RBAC role `sandbox_admin`).
+- All responses redact sensitive fields and respect tenant boundaries where applicable.
+
+Endpoints (read‑only)
+- `GET /api/v1/sandbox/admin/runs`
+  - Query params: `limit` (default 50, max 200), `offset` (default 0), `user_id?`, `phase?`, `runtime?`, `q?` (search base_image/message), `sort` (started_at|finished_at desc/asc).
+  - Response: `{ items: [ { id, user_id, spec_version, runtime, base_image, phase, exit_code, started_at, finished_at, image_digest, policy_hash } ], total?: number }`.
+
+- `GET /api/v1/sandbox/admin/runs/{id}`
+  - Response: Full run metadata object (no artifacts content), optionally includes `artifacts: [{ path, size }]`.
+
+- `GET /api/v1/sandbox/admin/idempotency`
+  - Query params: `endpoint` (runs|sessions|any), `limit` (default 50), `offset` (default 0), `user_id?`.
+  - Response: `{ items: [ { endpoint, user_key, key, created_at, object_id } ] }`.
+
+- `GET /api/v1/sandbox/admin/usage`
+  - Response: `{ items: [ { user_id, artifact_bytes } ] }` (top N by bytes; supports `limit`).
+
+Operational Notes
+- Backed by the default store (SQLite). For multi‑node, these endpoints should read from the shared DB.
+- Enforce rate limits and paging to avoid expensive scans.
+- Do not return inline artifact data; continue to use the artifacts endpoints with auth.
+
+Future (optional)
+- `DELETE /api/v1/sandbox/admin/idempotency` to prune by age (admin action, guarded).
+- `POST /api/v1/sandbox/admin/gc` to trigger store GC/retention sweeps.

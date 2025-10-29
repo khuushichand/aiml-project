@@ -42,6 +42,34 @@ class WorkerSDK:
         self.jm = jm
         self.cfg = cfg
         self._stop = asyncio.Event()
+        # Allow test overrides without monkeypatching global asyncio.sleep
+        # (keeps event loop behavior stable under tests)
+        self._sleep = asyncio.sleep
+        # Detect test mode for more responsive sleeps and optional iteration caps
+        try:
+            self._test_mode = any(
+                str(os.getenv(k, "")).strip().lower() in {"1", "true", "yes", "on"}
+                for k in ("TEST_MODE", "TLDW_TEST_MODE")
+            )
+        except Exception:
+            self._test_mode = False
+        try:
+            self._max_iters = int(os.getenv("JOBS_WORKER_MAX_ITERATIONS", "0") or "0")
+        except Exception:
+            self._max_iters = 0
+
+    async def _sleep_chunked(self, total_seconds: float) -> None:
+        """Sleep in small chunks to react quickly to stop() in tests.
+
+        Uses shorter steps in test mode to avoid long blocking sleeps that can
+        cause hangs when the event loop is under heavy load.
+        """
+        remaining = max(0.0, float(total_seconds))
+        # Step size: short in tests, modest otherwise
+        step = 0.05 if self._test_mode else 0.2
+        while remaining > 0 and not self._stop.is_set():
+            await self._sleep(min(step, remaining))
+            remaining -= step
 
     def stop(self) -> None:
         self._stop.set()
@@ -52,10 +80,11 @@ class WorkerSDK:
         threshold = max(1, int(self.cfg.renew_threshold_seconds))
         job_id = int(job.get('id'))
         lease_id = job.get('lease_id')
+        iters = 0
         while not self._stop.is_set():
             # Sleep for lease - threshold, plus small jitter
             sleep_for = max(1, lease - threshold) + (random.randint(0, jitter) if jitter else 0)
-            await asyncio.sleep(sleep_for)
+            await self._sleep_chunked(float(sleep_for))
             if self._stop.is_set():
                 return
             kwargs = {"job_id": job_id, "seconds": lease, "worker_id": self.cfg.worker_id, "lease_id": lease_id}
@@ -75,6 +104,10 @@ class WorkerSDK:
                     return
             except Exception as e:
                 logger.debug(f"Auto-renew error for job {job_id}: {e}")
+                return
+            iters += 1
+            if self._max_iters and iters >= self._max_iters:
+                logger.debug("Auto-renew reached max iterations; exiting loop")
                 return
 
     async def run(
@@ -105,7 +138,8 @@ class WorkerSDK:
                 logger.debug(f"Acquire error: {e}")
                 job = None
             if not job:
-                await asyncio.sleep(min(backoff, backoff_max))
+                # Sleep with backoff in chunks for responsive stop()
+                await self._sleep_chunked(float(min(backoff, backoff_max)))
                 backoff = min(backoff * 2, backoff_max)
                 continue
             backoff = max(1, int(self.cfg.backoff_base_seconds))

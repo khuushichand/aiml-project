@@ -312,3 +312,5 @@ uv.lock
 /tldw_Server_API/Logs
 /tmp
 Config_Files/session_encryption.key
+/.venv-ci
+:memory:

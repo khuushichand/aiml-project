@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.tests.helpers.pg import pg_dsn
 
 
 pytestmark = pytest.mark.pg_jobs

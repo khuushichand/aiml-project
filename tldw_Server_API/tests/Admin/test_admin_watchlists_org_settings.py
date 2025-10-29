@@ -1,5 +1,6 @@
 import os
 from importlib import import_module
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,17 @@ def test_admin_update_org_watchlists_settings(monkeypatch):
     db_path = base_dir / "authnz_admin.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("TEST_MODE", "1")
+    # Force single-user mode to avoid Postgres path picked from prior tests
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+
+    # Reset cached settings / DB pool and ensure schema for isolated DB
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
+    reset_settings()
+    asyncio.run(reset_db_pool())
+    ensure_authnz_tables(db_path)
 
     # Spin up app and override admin requirement
     mod = import_module("tldw_Server_API.app.main")
@@ -85,6 +97,16 @@ def test_admin_watchlists_org_settings_404(monkeypatch):
     db_path = base_dir / "authnz_admin_404.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+
+    # Reset cached settings / DB pool and ensure schema for isolated DB
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
+    reset_settings()
+    asyncio.run(reset_db_pool())
+    ensure_authnz_tables(db_path)
 
     # App + admin override
     mod = import_module("tldw_Server_API.app.main")
