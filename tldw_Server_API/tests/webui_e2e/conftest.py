@@ -7,14 +7,30 @@ from typing import Dict, Optional
 import pytest
 
 # Robust import of server_lifecycle regardless of PYTHONPATH layout in CI.
-# Prefer the package import; on failure, add repo root to sys.path and retry.
+# Prefer the package import; on failure, locate repository root dynamically and
+# add it (and package dir) to sys.path, then retry.
 try:
     from tldw_Server_API.scripts import server_lifecycle
 except ModuleNotFoundError:  # pragma: no cover - environment specific
     import sys
-    repo_root = Path(__file__).resolve().parents[3]
-    if str(repo_root) not in sys.path:
+    here = Path(__file__).resolve()
+    repo_root = None
+    for cand in [here.parent, *here.parents]:
+        if (cand / "tldw_Server_API" / "scripts" / "server_lifecycle.py").exists():
+            repo_root = cand
+            break
+    # Fallback: assume 3 parents up is the repo root (…/tldw_Server_API/tests/webui_e2e/../../..)
+    if repo_root is None:
+        try:
+            repo_root = here.parents[3]
+        except Exception:
+            repo_root = here.parent.parent
+    if repo_root and str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
+    # Also add the package directory directly as a secondary fallback
+    pkg_dir = repo_root / "tldw_Server_API" if repo_root else None
+    if pkg_dir and str(pkg_dir) not in sys.path:
+        sys.path.insert(0, str(pkg_dir))
     from tldw_Server_API.scripts import server_lifecycle
 
 
