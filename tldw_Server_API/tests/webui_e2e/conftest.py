@@ -6,7 +6,16 @@ from typing import Dict, Optional
 
 import pytest
 
-from tldw_Server_API.scripts import server_lifecycle
+# Robust import of server_lifecycle regardless of PYTHONPATH layout in CI.
+# Prefer the package import; on failure, add repo root to sys.path and retry.
+try:
+    from tldw_Server_API.scripts import server_lifecycle
+except ModuleNotFoundError:  # pragma: no cover - environment specific
+    import sys
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from tldw_Server_API.scripts import server_lifecycle
 
 
 def _find_free_port() -> int:
