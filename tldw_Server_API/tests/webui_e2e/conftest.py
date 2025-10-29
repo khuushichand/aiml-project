@@ -13,6 +13,7 @@ try:
     from tldw_Server_API.scripts import server_lifecycle
 except ModuleNotFoundError:  # pragma: no cover - environment specific
     import sys
+    import importlib
     here = Path(__file__).resolve()
     repo_root = None
     for cand in [here.parent, *here.parents]:
@@ -31,7 +32,14 @@ except ModuleNotFoundError:  # pragma: no cover - environment specific
     pkg_dir = repo_root / "tldw_Server_API" if repo_root else None
     if pkg_dir and str(pkg_dir) not in sys.path:
         sys.path.insert(0, str(pkg_dir))
-    from tldw_Server_API.scripts import server_lifecycle
+
+    # If a stale, preinstalled package is already loaded (e.g., older version
+    # without the 'scripts' subpackage), remove it so import uses the local path.
+    for key in list(sys.modules.keys()):
+        if key == "tldw_Server_API" or key.startswith("tldw_Server_API."):
+            sys.modules.pop(key, None)
+
+    server_lifecycle = importlib.import_module("tldw_Server_API.scripts.server_lifecycle")
 
 
 def _find_free_port() -> int:
