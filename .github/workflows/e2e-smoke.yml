@@ -32,7 +32,9 @@ jobs:
           - os: macos-latest
             python-version: "3.12"
     env:
-      PYTHONPATH: ./tldw_Server_API
+      # Ensure Python can import the top-level package `tldw_Server_API` and scripts
+      # by including the repository root on sys.path.
+      PYTHONPATH: .
       TEST_MODE: "true"
       DISABLE_HEAVY_STARTUP: "1"
       E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
