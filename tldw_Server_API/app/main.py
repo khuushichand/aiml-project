@@ -432,6 +432,13 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    # Sandbox endpoint is optional; guard import so minimal startup never fails
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        _HAS_SANDBOX = True
+    except Exception as _sb_err:  # noqa: BLE001
+        logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sb_err}")
+        _HAS_SANDBOX = False
 else:
     # Research Endpoint
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
@@ -2493,8 +2500,13 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-    # Sandbox (scaffold)
-    app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
+    # Sandbox (scaffold) — include only if import succeeded
+    try:
+        if '_HAS_SANDBOX' in globals() and _HAS_SANDBOX:
+            app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
+    except Exception:
+        # Never let optional sandbox break startup
+        pass
 else:
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router

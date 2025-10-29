@@ -13,6 +13,21 @@ pytestmark = pytest.mark.pg_jobs
 
 def _pg_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
+    # Minimize app startup and disable unrelated background workers
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("CHATBOOKS_CORE_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
+    monkeypatch.setenv("AUDIO_JOBS_WORKER_ENABLED", "false")
+    monkeypatch.setenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JOBS_WEBHOOKS_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_WEBHOOK_DLQ_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_GC_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false")
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    # Prefer shared DSN helper, but honor existing env if explicitly set
+    if pg_dsn:
+        monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
     dsn = os.getenv("JOBS_DB_URL")
     if not dsn:
         pytest.skip("JOBS_DB_URL not set for Postgres tests")

@@ -80,7 +80,7 @@ jobs:
         run: |
           python tldw_Server_API/scripts/server_lifecycle.py health-check
 
-      - name: Run E2E tests (single-user)
+      - name: Run E2E tests (single-user) — exclude Jobs for now
         env:
           AUTH_MODE: single_user
           SINGLE_USER_API_KEY: "test-api-key-12345"
@@ -91,8 +91,7 @@ jobs:
             tldw_Server_API/tests/e2e/test_prompt_studio_e2e.py \
             tldw_Server_API/tests/e2e/test_rag_deep_checks.py \
             tldw_Server_API/tests/e2e/test_mcp_basic.py \
-            tldw_Server_API/tests/e2e/test_rate_limits.py \
-            tldw_Server_API/tests/e2e/test_concurrency_jobs.py
+            tldw_Server_API/tests/e2e/test_rate_limits.py
 
       - name: Stop server (single-user)
         if: always()

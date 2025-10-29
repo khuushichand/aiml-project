@@ -245,7 +245,13 @@ class JobManager:
                     pass
         except Exception:
             # Non-fatal: continue without RLS context if GUCs unavailable
-            pass
+            # Some Postgres installations reject unknown GUCs (custom parameters).
+            # If any SET LOCAL fails, the transaction enters an aborted state.
+            # Roll back to clear the error so subsequent statements can proceed.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         return cur
 
     @classmethod
