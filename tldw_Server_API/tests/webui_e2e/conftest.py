@@ -10,7 +10,7 @@ import pytest
 # Prefer the package import; on failure, locate repository root dynamically and
 # add it (and package dir) to sys.path, then retry.
 try:
-    from tldw_Server_API.scripts import server_lifecycle
+    from tldw_Server_API.tests.scripts import server_lifecycle
 except ModuleNotFoundError:  # pragma: no cover - environment specific
     import sys
     import importlib
@@ -39,7 +39,26 @@ except ModuleNotFoundError:  # pragma: no cover - environment specific
         if key == "tldw_Server_API" or key.startswith("tldw_Server_API."):
             sys.modules.pop(key, None)
 
-    server_lifecycle = importlib.import_module("tldw_Server_API.scripts.server_lifecycle")
+    try:
+        server_lifecycle = importlib.import_module("tldw_Server_API.scripts.server_lifecycle")
+    except ModuleNotFoundError:
+        # Final fallback: import directly from file path to avoid any packaging
+        # or path precedence issues in CI.
+        import importlib.util as importlib_util
+
+        if not pkg_dir:
+            raise
+        module_path = pkg_dir / "scripts" / "server_lifecycle.py"
+        if not module_path.exists():
+            raise
+        spec = importlib_util.spec_from_file_location(
+            "tldw_Server_API.scripts.server_lifecycle", str(module_path)
+        )
+        assert spec and spec.loader
+        module = importlib_util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)  # type: ignore[assignment]
+        server_lifecycle = module
 
 
 def _find_free_port() -> int:
