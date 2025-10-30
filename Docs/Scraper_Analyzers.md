@@ -28,16 +28,16 @@ pipx install wafw00f
 ## Quick Start
 
 ```python
-from tldw_Server_API.app.scraper_analyzers import run_analysis
+from tldw_Server_API.app.core.Web_Scraping.scraper_analyzers import run_analysis
 
 result = run_analysis(
     "https://example.com",
-    find_all=False,        # pass True to use `wafw00f -a`
-    impersonate=True,      # use curl_cffi impersonation for rate-limit checks
-    scan_depth="thorough", # honeypot scan depth: default|thorough|deep
+    find_all=False,  # pass True to use `wafw00f -a`
+    impersonate=True,  # use curl_cffi impersonation for rate-limit checks
+    scan_depth="thorough",  # honeypot scan depth: default|thorough|deep
 )
 
-print(result["score"])            # {'score': 3, 'label': 'Medium'}
+print(result["score"])  # {'score': 3, 'label': 'Medium'}
 print(result["recommendations"])  # {'tools': [...], 'strategy': [...]}
 ```
 
@@ -45,7 +45,7 @@ For async environments (e.g. FastAPI handlers) import `gather_analysis` and
 await it directly:
 
 ```python
-from tldw_Server_API.app.scraper_analyzers import gather_analysis
+from tldw_Server_API.app.core.Web_Scraping.scraper_analyzers import gather_analysis
 
 analysis = await gather_analysis("https://example.com")
 ```
