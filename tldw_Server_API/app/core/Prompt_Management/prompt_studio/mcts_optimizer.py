@@ -11,7 +11,7 @@ from loguru import logger
 
 from .prompt_executor import PromptExecutor
 from .test_runner import TestRunner
-from .optimization_engine import MetricType
+from .types_common import MetricType
 from .prompt_quality import PromptQualityScorer
 from .prompt_decomposer import PromptDecomposer
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (

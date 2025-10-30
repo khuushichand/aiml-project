@@ -55,6 +55,19 @@ router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
                                     {"model_name": "gpt-4o-mini", "temperature": 0.2, "max_tokens": 256}
                                 ]
                             }
+                        },
+                        "with_program_evaluator": {
+                            "summary": "Evaluation with Program Evaluator (feature flag)",
+                            "description": "Enable PROMPT_STUDIO_ENABLE_CODE_EVAL=true and use test cases with runner=\"python\". See Prompt Studio README for safety and runner spec.",
+                            "value": {
+                                "project_id": 1,
+                                "prompt_id": 12,
+                                "name": "Code Eval",
+                                "test_case_ids": [101, 102],
+                                "model_configs": [
+                                    {"model_name": "gpt-4o-mini", "temperature": 0.2, "max_tokens": 256}
+                                ]
+                            }
                         }
                     }
                 }
