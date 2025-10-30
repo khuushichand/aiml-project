@@ -30,8 +30,12 @@ jobs:
 
       - name: Generate Node SBOM (cyclonedx-npm)
         run: |
-          if [ -f package.json ]; then \
+          if [ -f tldw-frontend/package.json ]; then \
+            (cd tldw-frontend && npx @cyclonedx/cyclonedx-npm --output-file ../sbom-frontend.cdx.json) || true; \
+          elif [ -f package.json ]; then \
             npx @cyclonedx/cyclonedx-npm --output-file sbom-frontend.cdx.json || true; \
+          else \
+            echo "No package.json found for Node SBOM generation"; \
           fi
 
       - name: Generate Source SBOM with Syft (CycloneDX JSON)
