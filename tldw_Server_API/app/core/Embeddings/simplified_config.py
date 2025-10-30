@@ -200,7 +200,21 @@ def create_default_config() -> EmbeddingsConfig:
             ProviderConfig(
                 name="huggingface",
                 priority=2,
-                models=["sentence-transformers/all-MiniLM-L6-v2"],
+                models=[
+                    "sentence-transformers/all-MiniLM-L6-v2",
+                    "sentence-transformers/all-mpnet-base-v2",
+                    "intfloat/multilingual-e5-large-instruct",
+                    "Qwen/Qwen3-Embedding-0.6B",
+                    # Newly added supported models
+                    "NovaSearch/stella_en_1.5B_v5",
+                    "NovaSearch/stella_en_400M_v5",
+                    "jinaai/jina-embeddings-v4",
+                    "intfloat/multilingual-e5-large",
+                    "mixedbread-ai/mxbai-embed-large-v1",
+                    "jinaai/jina-embeddings-v3",
+                    "BAAI/bge-large-en-v1.5",
+                    "BAAI/bge-small-en-v1.5",
+                ],
                 rate_limit="1000/min"
             ),
             ProviderConfig(

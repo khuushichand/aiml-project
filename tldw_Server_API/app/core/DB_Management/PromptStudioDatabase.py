@@ -5761,7 +5761,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         except Exception:
                             pass
                         return job
-                    return None
+                    # Lost race to another worker updating this job; retry selection
+                    should_retry = True
+                    delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < 4:
                         should_retry = True
@@ -5772,9 +5774,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     raise DatabaseError(f"Failed to acquire job: {exc}") from exc
 
             if should_retry:
-                time.sleep(delay)
+                try:
+                    time.sleep(delay)
+                except Exception:
+                    time.sleep(0.01)
 
-        raise DatabaseError("Failed to acquire job due to database locks")
+        raise DatabaseError("Failed to acquire job due to database locks or contention")
 
     def retry_job_record(self, job_id: int) -> bool:
         import random

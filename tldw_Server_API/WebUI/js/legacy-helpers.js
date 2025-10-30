@@ -465,3 +465,73 @@
     window.notesDownloadVisibleList = notesDownloadVisibleList;
     window.notesDownloadVisibleSearch = notesDownloadVisibleSearch;
 })();
+
+// Populate the Create Embeddings model dropdown from backend listing
+async function populateEmbeddingsCreateModelDropdown() {
+    try {
+        const sel = document.getElementById('embeddingsCreate_model');
+        if (!sel) return;
+        // Show loading state
+        sel.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Loading models…';
+        sel.appendChild(loading);
+
+        const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+        const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+        const res = await fetch(`${baseUrl}/api/v1/embeddings/models`, {
+            headers: {
+                ...(token ? { 'X-API-KEY': token } : {}),
+            }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const payload = await res.json();
+        const items = Array.isArray(payload?.data) ? payload.data : [];
+        const allowed = items.filter(i => i && (i.allowed !== false));
+        // Group options by provider
+        sel.innerHTML = '';
+        const providers = {};
+        allowed.forEach(i => {
+            const p = String(i.provider || '').toLowerCase() || 'unknown';
+            if (!providers[p]) providers[p] = [];
+            providers[p].push(i);
+        });
+        let selectedSet = false;
+        Object.keys(providers).sort().forEach(p => {
+            const og = document.createElement('optgroup');
+            og.label = p;
+            providers[p].sort((a,b) => String(a.model).localeCompare(String(b.model))).forEach(i => {
+                const opt = document.createElement('option');
+                opt.value = i.model;
+                const isDefault = !!i.default;
+                opt.textContent = `${p}:${i.model}${isDefault ? ' (default)' : ''}`;
+                if (isDefault && !selectedSet) {
+                    opt.selected = true;
+                    selectedSet = true;
+                }
+                og.appendChild(opt);
+            });
+            sel.appendChild(og);
+        });
+        // Fallback default if none marked
+        if (!selectedSet && sel.options.length > 0) {
+            sel.selectedIndex = 0;
+        }
+    } catch (e) {
+        // Fallback to a minimal static list if server call fails
+        try {
+            const sel = document.getElementById('embeddingsCreate_model');
+            if (!sel) return;
+            sel.innerHTML = '';
+            const opts = [
+                { value: 'text-embedding-3-small', label: 'openai:text-embedding-3-small' },
+                { value: 'sentence-transformers/all-MiniLM-L6-v2', label: 'huggingface:sentence-transformers/all-MiniLM-L6-v2' },
+            ];
+            opts.forEach(o => { const opt = document.createElement('option'); opt.value = o.value; opt.textContent = o.label; sel.appendChild(opt); });
+        } catch (_) { /* ignore */ }
+    }
+}
+
+// Expose for main.js to invoke on tab activation
+window.populateEmbeddingsCreateModelDropdown = populateEmbeddingsCreateModelDropdown;

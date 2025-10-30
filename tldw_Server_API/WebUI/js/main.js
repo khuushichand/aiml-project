@@ -265,6 +265,15 @@ class WebUI {
                 }
             }, 100);
         }
+
+        // Populate Embeddings Create model dropdown dynamically
+        if (contentId === 'tabEmbeddingsCreate') {
+            setTimeout(() => {
+                if (typeof window.populateEmbeddingsCreateModelDropdown === 'function') {
+                    window.populateEmbeddingsCreateModelDropdown();
+                }
+            }, 100);
+        }
     }
 
     async loadContentGroup(groupName, targetContentId) {

@@ -90,6 +90,7 @@ This tool is designed for:
     - `POST /api/v1/evaluations/ocr-pdf` accepts PDF uploads (`files`) and optional `ground_truths`, with OCR settings and `thresholds_json`
     - Results include averages and per-document metrics; per-page metrics appear when page-level ground truths are provided
 - **Embeddings**: Vector embedding generation
+  - Create Embeddings model selector now populates dynamically from `GET /api/v1/embeddings/models` and respects allowed/default flags.
 - **Paper Search**: arXiv, BioRxiv/MedRxiv, and Semantic Scholar
 - **Audio**: Text-to-speech functionality
 - **Admin**: User management and system administration

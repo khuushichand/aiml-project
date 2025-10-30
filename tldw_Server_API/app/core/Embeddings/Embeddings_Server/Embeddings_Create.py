@@ -1443,7 +1443,18 @@ def get_embedding_config() -> Dict[str, Any]:
     # Add common HuggingFace models that might be requested
     common_hf_models = [
         "sentence-transformers/all-MiniLM-L6-v2",
-        "sentence-transformers/all-mpnet-base-v2"
+        "sentence-transformers/all-mpnet-base-v2",
+        "intfloat/multilingual-e5-large-instruct",
+        "Qwen/Qwen3-Embedding-0.6B",
+        # Newly added supported models
+        "NovaSearch/stella_en_1.5B_v5",
+        "NovaSearch/stella_en_400M_v5",
+        "jinaai/jina-embeddings-v4",
+        "intfloat/multilingual-e5-large",
+        "mixedbread-ai/mxbai-embed-large-v1",
+        "jinaai/jina-embeddings-v3",
+        "BAAI/bge-large-en-v1.5",
+        "BAAI/bge-small-en-v1.5",
     ]
     
     for hf_model in common_hf_models:
