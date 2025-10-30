@@ -167,15 +167,25 @@ class ProgramEvaluator:
         """
         cpu_lim = int(self.CPU_TIME_SEC)
         mem_lim = int(self.MEMORY_MB) * 1024 * 1024
+        import sys as _sys
+        enable_rlimits = _sys.platform not in ("darwin", "win32")
         wrapper_lines = [
             "import sys, json, builtins",
-            "# Try to set resource limits (POSIX only)",
-            "try:",
-            "    import resource",
-            f"    resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))",
-            f"    resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))",
-            "except Exception:",
-            "    pass",
+        ]
+        if enable_rlimits:
+            wrapper_lines.extend([
+                "# Try to set resource limits (POSIX only)",
+                "try:",
+                "    import resource",
+                f"    resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))",
+                f"    resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))",
+                "except Exception:",
+                "    pass",
+            ])
+        else:
+            wrapper_lines.extend([
+                "# Resource limits disabled on this platform; relying on subprocess timeout",
+            ])
             "# Best-effort isolation: no open/read, block dangerous builtins",
             "def _blocked(*a, **k):",
             "    raise RuntimeError('file/network operations are disabled')",

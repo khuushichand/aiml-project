@@ -455,13 +455,40 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
         raise HTTPException(status_code=500, detail="Failed to create organization")
 
 
-@router.get("/orgs", response_model=OrganizationListResponse)
-async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), q: Optional[str] = Query(None)) -> OrganizationListResponse:
+@router.get("/orgs")
+async def admin_list_orgs(
+    request: Request,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    q: Optional[str] = Query(None),
+) -> Any:
+    """List organizations.
+
+    Backwards compatibility: when called without pagination/search query params,
+    return a plain list of organizations. When any of ('limit', 'offset', 'q')
+    are present in the query string, return a structured payload with
+    pagination metadata.
+    """
     try:
-        rows, total = await list_organizations(limit=limit, offset=offset, q=q, with_total=True)  # type: ignore[assignment]
-        items = [OrganizationResponse(**r) for r in rows]
-        has_more = (offset + len(items)) < int(total or 0)
-        return OrganizationListResponse(items=items, total=int(total or 0), limit=limit, offset=offset, has_more=has_more)
+        # Detect whether caller explicitly requested pagination/search
+        qp = request.query_params
+        wants_wrapper = any(k in qp for k in ("limit", "offset", "q"))
+
+        # Ask service for rows and optionally total
+        rows, total = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)  # type: ignore[assignment]
+        items = [OrganizationResponse(**r).model_dump() for r in rows]
+
+        if wants_wrapper:
+            has_more = (offset + len(items)) < int(total or 0)
+            return {
+                "items": items,
+                "total": int(total or 0),
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more,
+            }
+        # Raw list for legacy/simple callers
+        return items
     except Exception as e:
         logger.error(f"Failed to list organizations: {e}")
         raise HTTPException(status_code=500, detail="Failed to list organizations")
