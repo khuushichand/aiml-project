@@ -445,6 +445,7 @@ class MCTSOptimizer:
             return None
         best_existing: Optional[MCTSOptimizer._Node] = None
         best_existing_score = -1.0
+        new_child: Optional[MCTSOptimizer._Node] = None
         scored: List[Tuple[str, float, int]] = []
         for cand_system in candidates:
             # DB-backed scorer cache (optional)
@@ -492,9 +493,12 @@ class MCTSOptimizer:
                 except Exception:
                     pass
                 continue
-            child = self._Node(parent=node, segment_index=node.segment_index + 1, system_text=cand_system, score_bin=bin_idx)
-            node.children.append(child)
-            node.children_by_bin[bin_idx] = child
+            # Create at most one child per expansion
+            if new_child is None:
+                child = self._Node(parent=node, segment_index=node.segment_index + 1, system_text=cand_system, score_bin=bin_idx)
+                node.children.append(child)
+                node.children_by_bin[bin_idx] = child
+                new_child = child
             # Debug: record top scored candidates for this depth
             try:
                 if isinstance(self._debug_top_by_depth, dict):
@@ -506,7 +510,6 @@ class MCTSOptimizer:
                     ]
             except Exception:
                 pass
-            return child
         # If no child added, still capture debug top scored at this depth
         try:
             if isinstance(self._debug_top_by_depth, dict) and scored:
@@ -518,7 +521,7 @@ class MCTSOptimizer:
                 ]
         except Exception:
             pass
-        return best_existing
+        return new_child or best_existing
 
     async def _propose_candidates(self, system_so_far: str, segment_text: str, k: int) -> List[str]:
         proposals: List[str] = []
@@ -651,6 +654,7 @@ class MCTSOptimizer:
         conn = self.db.get_connection()
         cursor = conn.cursor()
         # Compute next version number for the same prompt name within the project to avoid collisions
+        new_name = f"{base_prompt['name']} (MCTS)"
         try:
             cursor.execute(
                 """
@@ -658,7 +662,7 @@ class MCTSOptimizer:
                 FROM prompt_studio_prompts
                 WHERE project_id = ? AND name = ?
                 """,
-                (base_prompt["project_id"], base_prompt["name"]),
+                (base_prompt["project_id"], new_name),
             )
             row = cursor.fetchone()
             next_version = int(row[0]) + 1 if row and row[0] is not None else (int(base_prompt.get("version_number") or 0) + 1)
@@ -675,7 +679,7 @@ class MCTSOptimizer:
                 f"mcts-{datetime.utcnow().timestamp()}",
                 base_prompt["project_id"],
                 base_prompt.get("signature_id"),
-                f"{base_prompt['name']} (MCTS)",
+                new_name,
                 system_text,
                 user_text,
                 next_version,
