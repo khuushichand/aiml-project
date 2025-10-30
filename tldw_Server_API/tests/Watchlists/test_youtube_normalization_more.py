@@ -248,3 +248,33 @@ def test_playlist_param_takes_precedence_over_user_path(client_with_user: TestCl
     canonical = r.headers.get("X-YouTube-Canonical-URL")
     assert canonical == "https://www.youtube.com/feeds/videos.xml?playlist_id=PLXYZ123"
     assert r.json()["url"] == canonical
+
+
+def test_user_uppercase_path_and_extra_params_normalizes(client_with_user: TestClient):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "YT User Upper",
+            "url": "https://WWW.YOUTUBE.COM/USER/SomeUser?view=all",
+            "source_type": "rss",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("X-YouTube-Normalized") == "1"
+    assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?user=SomeUser"
+
+
+def test_channel_uppercase_videos_with_query_normalizes(client_with_user: TestClient):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "YT Ch Upper Videos",
+            "url": "HTTPS://WWW.YOUTUBE.COM/CHANNEL/UCXYZZ/videos/?foo=bar",
+            "source_type": "rss",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("X-YouTube-Normalized") == "1"
+    assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?channel_id=UCXYZZ"

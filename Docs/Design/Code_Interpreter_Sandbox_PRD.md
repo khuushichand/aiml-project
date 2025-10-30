@@ -5,6 +5,7 @@ Status: v0.2
 Last updated: 2025-10-28
 
 ## Revision History
+- v0.3 (Draft): Firecracker runner GA (parity with Docker), persistent store + multi‑worker (Postgres/Redis) with shared artifacts, limited interactive runs over WS stdin (opt‑in, capped), egress allowlist policy (opt‑in, DNS pinning), Admin/observability expansions, resume logs via seq, spec_version 1.1 (backward‑compatible) exposing optional fields and runtime capabilities.
 - v0.2: Protocol/schema refinements (final WS envelope + seq on all frames; oneOf session vs one‑shot; startup vs execution timeouts; cancel TERM→grace→KILL + single end frame), runtimes discovery fields (caps: max_cpu/max_mem_mb/max_log_bytes, queue_max_length/queue_ttl_sec, workspace_cap_mb, artifact_ttl_hours, supported_spec_versions), Admin API list/details examples, policy_hash in sessions/runs, Security Defaults table, observability metrics/audit, and vNext outline.
 - v0.1: Initial draft of Sandbox PRD (endpoints, flows, and constraints).
 
@@ -175,6 +176,10 @@ Endpoints
 - POST `/runs`
   - Start a run (one-shot or for existing session). Body: `spec_version`, session_id? base_image? command[], env, `startup_timeout_sec` (image pull/VM boot), `timeout_sec` (execution), resource overrides, network_policy, files? (optional inline small files), capture_patterns. Request shape enforces `oneOf`: either `{ session_id, command }` or `{ base_image, command }`; when `session_id` is omitted, `base_image` is required. Supports `Idempotency-Key` header to dedupe client retries.
   - Returns: `run_id`, `session_id?`.
+  - v0.3 / spec 1.1 (Draft): optional fields for limited interactivity and WS resume:
+    - `interactive` (bool; default false)
+    - `stdin_max_bytes`, `stdin_max_frame_bytes`, `stdin_bps`, `stdin_idle_timeout_sec` (limits; names TBD)
+    - `resume_from_seq` (number; start WS stream from seq; for reconnect/resume)
 
 - GET `/runs/{run_id}`
   - Status: phase (queued|starting|running|completed|failed|killed|timed_out), exit_code, started_at, finished_at, runtime, base_image, image_digest (when available), policy_hash, spec_version, and `resource_usage` with keys: `cpu_time_sec`, `wall_time_sec`, `peak_rss_mb`, `log_bytes`, `artifact_bytes` (plus optional `pids`, `max_open_files`, and `limits`).
@@ -206,6 +211,10 @@ Endpoints
     - Versioning: `supported_spec_versions`
     - Queue/backpressure: `queue_max_length`, `queue_ttl_sec`
     Implemented.
+  - v0.3 / spec 1.1 (Draft) capability flags:
+    - `interactive_supported` (bool)
+    - `egress_allowlist_supported` (bool)
+    - `store_mode` (string: `memory|sqlite|postgres|redis`)
 
 ### Runtimes Defaults (quick reference)
 
@@ -297,6 +306,17 @@ See Timeouts & Defaults under Content Types & Limits for consolidated rules.
 - Discovery: GET `/runtimes` includes `supported_spec_versions` (e.g., `["1.0", "1.1"]`).
 - Validation errors include `details.supported` with accepted versions.
  - Config: Controlled via `SANDBOX_SUPPORTED_SPEC_VERSIONS` (comma- or JSON-list). The server validates `spec_version` against this list and rejects mismatches with `invalid_spec_version` including `details.supported` and `details.provided`.
+
+ v0.3 (Spec 1.1 additions — Draft)
+ - Backward‑compatible: 1.1 only adds optional fields; 1.0 clients remain supported.
+ - POST `/runs` optional fields (names TBD):
+   - `interactive` (bool; default false)
+   - `stdin_max_bytes`, `stdin_max_frame_bytes`, `stdin_bps`, `stdin_idle_timeout_sec`
+   - `resume_from_seq` (number; start WS stream from seq)
+ - GET `/runtimes` capability flags (names TBD):
+   - `interactive_supported` (bool)
+   - `egress_allowlist_supported` (bool)
+   - `store_mode` (string: `memory|sqlite|postgres|redis`)
 
 Runtime Limits Normalization
 
@@ -961,13 +981,15 @@ GET /api/v1/sandbox/runtimes
 }
 ```
 
-Network Allowlist Rules (vNext)
+Egress Allowlist (v0.3 — Draft)
+- Opt‑in policy; deny_all remains default. Applied per run/session per policy.
 - Rule format:
   - Exact host: `example.com`
   - Wildcard subdomains: `*.example.com`
   - CIDR blocks: `203.0.113.0/24`
 - DNS pinning: resolve allowed hostnames at run start; pin IPs for duration to avoid TOCTOU; re-resolution disallowed mid-run.
-- Path/port rules: out of scope for v0; only egress domain/IP controls.
+- Path/port rules: out of scope for v0.3; only egress domain/IP controls.
+- TBD: allowlist source of truth (policy vs static config), wildcard semantics, and audit event fields.
 
 
 ## 18) IDE/Web UI Experience
@@ -1433,6 +1455,13 @@ Operational Notes
 
 See also: [Store Data Model (Appendix)](#29-store-data-model-appendix)
 
+v0.3 (Draft) — Cluster View and Aggregates
+- Extend list/details to operate cluster‑wide across workers; add `node_id` and `worker_id` to run metadata. TBD: exact field names.
+- Add aggregate endpoints for operational dashboards (TBD):
+  - `GET /api/v1/sandbox/admin/metrics` — returns counters/histograms (queue_full, ttl_expired, heartbeats, disconnects, log_truncated).
+  - `GET /api/v1/sandbox/admin/usage/summary` — totals by user/runtime/time window; supports date filters.
+- Pagination and filters remain as in v0.2; add `node_id` filter.
+
 Future (optional)
 - `DELETE /api/v1/sandbox/admin/idempotency` to prune by age (admin action, guarded).
 - `POST /api/v1/sandbox/admin/gc` to trigger store GC/retention sweeps.
@@ -1472,6 +1501,39 @@ Security Test Suite (Documented cases)
 - Stdout/stderr flood: enforce server log caps and WS backpressure; emit `truncated` frames.
 - File descriptor exhaustion: enforce `ulimit nofile`; validate stability under many‑FD attempts.
 - Signals/cancel: verify TERM→grace→KILL sequence and single final WS `end` frame.
+
+## 33) v0.3 Plan (Draft)
+
+Scope
+- Firecracker GA: parity with Docker (timeouts, cancel, artifacts, logs); hardened defaults; snapshot lifecycle; kernel pinning. TBD: exact profiles/images.
+- Persistent Store: Postgres/Redis backends for runs/sessions/idempotency/queue; shared artifact bucket; process‑safe locks; queue TTL and pruning across workers. TBD: schema revisions and indexes.
+- Interactive Runs: WS stdin (utf8|base64), per‑frame/total caps, input rate limit, idle timeout; opt‑in policy flag; audited. TBD: final field names and limits.
+- Egress Allowlist: opt‑in domain/IP/CIDR rules with DNS pinning; deny_all default retained; optional signed proxy. TBD: policy format and precedence.
+- Admin/Observability: cluster‑wide list/details; aggregate metrics endpoints; additional counters (queue_full, ttl_expired, heartbeats, disconnects, log_truncated). TBD: metric names.
+- WS/Artifacts: resume logs via `resume_from_seq`; short‑lived signed WS URLs; artifact multi‑range support (or explicit 416 rejection).
+
+API and Spec
+- Bump `spec_version` to `1.1` (backward‑compatible). New optional fields only.
+- POST `/runs`: `interactive`, stdin limit keys, `resume_from_seq` (names TBD; see Spec Versioning notes).
+- GET `/runtimes`: add `interactive_supported`, `egress_allowlist_supported`, `store_mode`.
+
+Acceptance Criteria (v0.3)
+- Firecracker runner passes the same suite as Docker (timeouts, cancel, artifacts, logs, caps).
+- Persistent store supports multi‑worker idempotency, durable queue, and artifact metadata; shared bucket GC.
+- Interactive runs work behind policy with audited stdin and enforced caps; reconnection resumes from seq.
+- Admin list/details operate across workers; aggregate metrics exposed; new counters recorded.
+- `/runtimes` reflects new capabilities; 1.0 clients unaffected; 1.1 clients can use new fields.
+
+Migration & Compatibility
+- Default runner remains Docker unless Firecracker is available and enabled.
+- `spec_version` `1.0` requests continue to work; `1.1` unlocks optional fields. Server advertises supported versions via `/runtimes`.
+- Dev: memory/SQLite still supported; Prod: Postgres/Redis recommended.
+
+Open Decisions (TBD)
+- Finalize field names for interactive stdin limits and WS resume.
+- Choose default caps for interactive input (frame/total/bps/idle).
+- Set canonical policy format for egress allowlist and its precedence with config.
+- Define metric names and aggregation windows for admin endpoints.
 
 End of PRD v0.2
 Workspace sync (uploads)
