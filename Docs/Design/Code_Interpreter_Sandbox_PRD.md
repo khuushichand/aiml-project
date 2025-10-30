@@ -207,7 +207,7 @@ Endpoints
     - Queue/backpressure: `queue_max_length`, `queue_ttl_sec`
     Implemented.
 
-  Runtimes Defaults (quick reference)
+### Runtimes Defaults (quick reference)
 
   | Field | Default | Config Key |
   |---|---|---|
@@ -351,7 +351,7 @@ Timeout Outcomes (quick reference)
   Cancellation semantics
   - On user cancel: the server sends SIGTERM, waits `SANDBOX_CANCEL_GRACE_SECONDS`, then SIGKILL if still running. Final phase is `killed` with `message=canceled_by_user`. Exactly one WS `end` event is emitted per run.
 
-WebSocket Protocol Details
+### WebSocket Protocol Details
 - Auth: same bearer/JWT or API key as REST. Optionally a short-lived signed token via `?token=...` may be provided.
 - Endpoint: `WS /runs/{run_id}/stream` with `run_id` path param; no additional subprotocol required.
 - Frames: always UTF‑8 text frames carrying JSON envelopes. For `stdout`/`stderr` payloads, set `encoding` to `base64` and base64‑encode `data` when output is binary; use `encoding`=`utf8` only when `data` is valid UTF‑8. Binary WS frames are not used.
@@ -448,6 +448,8 @@ sequenceDiagram
     C->>A: GET /runs/{id} (policy_hash, resource_usage)
     A-->>C: Run status JSON
 ```
+
+Note: The above Mermaid diagram requires a Mermaid-capable renderer.
 
   Timeout outcomes
 - See consolidated table in Timeouts & Defaults above.

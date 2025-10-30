@@ -129,11 +129,34 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if self.referrer_policy:
             response.headers.setdefault("Referrer-Policy", self.referrer_policy)
 
-        # Path-scoped CSP: relax for WebUI while keeping strict defaults globally
+        # Path-scoped CSP: prefer per-request nonce for WebUI, fallback to relaxed CSP
         path = request.url.path or ""
         if path.startswith("/webui"):
-            # Force relaxed CSP for WebUI assets/pages
-            response.headers["Content-Security-Policy"] = RELAXED_CSP_WEBUI
+            try:
+                nonce = getattr(request.state, "csp_nonce", None)
+            except Exception:
+                nonce = None
+            if "Content-Security-Policy" not in response.headers:
+                if nonce:
+                    csp_value = (
+                        "default-src 'self'; "
+                        f"script-src 'self' 'nonce-{nonce}' 'strict-dynamic' 'unsafe-eval'; "
+                        f"script-src-elem 'nonce-{nonce}'; "
+                        "script-src-attr 'none'; "
+                        "style-src 'self' 'unsafe-inline'; "
+                        "img-src 'self' data: https:; "
+                        "font-src 'self' data:; "
+                        "media-src 'self' data: blob:; "
+                        "connect-src 'self' ws: wss:; "
+                        "frame-ancestors 'none'; "
+                        "base-uri 'self'; "
+                        "form-action 'self'; "
+                        "upgrade-insecure-requests"
+                    )
+                    response.headers.setdefault("Content-Security-Policy", csp_value)
+                else:
+                    # Fallback if nonce middleware not present
+                    response.headers.setdefault("Content-Security-Policy", RELAXED_CSP_WEBUI)
         else:
             csp_value = self.content_security_policy or DEFAULT_CSP
             response.headers.setdefault("Content-Security-Policy", csp_value)

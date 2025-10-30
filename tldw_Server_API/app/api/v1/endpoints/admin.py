@@ -475,7 +475,12 @@ async def admin_list_orgs(
         wants_wrapper = any(k in qp for k in ("limit", "offset", "q"))
 
         # Ask service for rows and optionally total
-        rows, total = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)  # type: ignore[assignment]
+        result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)  # type: ignore[assignment]
+        if wants_wrapper:
+            rows, total = result  # type: ignore[misc]
+        else:
+            rows = result  # type: ignore[assignment]
+            total = 0
         items = [OrganizationResponse(**r).model_dump() for r in rows]
 
         if wants_wrapper:

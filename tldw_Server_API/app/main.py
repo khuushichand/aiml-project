@@ -2218,6 +2218,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Security middleware (headers + request size limit)
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
+from tldw_Server_API.app.core.Security.webui_csp import WebUICSPMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
@@ -2232,6 +2233,11 @@ if _TEST_MODE:
     logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
     # Provide request id + trace headers even in tests for assertions
     app.add_middleware(RequestIDMiddleware)
+    # Apply WebUI CSP nonce injection even in tests to keep behavior consistent
+    try:
+        app.add_middleware(WebUICSPMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping WebUICSPMiddleware in tests: {_e}")
 
     @app.middleware("http")
     async def _trace_headers_middleware(request: Request, call_next):
@@ -2283,6 +2289,12 @@ else:
     _enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
         (_enable_sec_headers_env or "true").lower() in {"true", "1", "yes", "y", "on"}
     )
+    # Apply WebUI CSP nonce injection before security headers
+    try:
+        app.add_middleware(WebUICSPMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping WebUICSPMiddleware: {_e}")
+
     if _enable_sec_headers:
         app.add_middleware(SecurityHeadersMiddleware, enabled=True)
 
