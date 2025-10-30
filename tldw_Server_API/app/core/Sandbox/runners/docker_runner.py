@@ -13,6 +13,7 @@ import tempfile
 import subprocess
 from datetime import datetime
 import threading
+import time
 
 
 def docker_available() -> bool:
@@ -36,6 +37,62 @@ class DockerRunner:
     def _truthy(self, v: Optional[str]) -> bool:
         return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
+    # Track active containers per run for cancellation
+    _active_lock = threading.RLock()
+    _active_cid: dict[str, str] = {}
+
+    @classmethod
+    def cancel_run(cls, run_id: str) -> bool:
+        with cls._active_lock:
+            cid = cls._active_cid.get(run_id)
+        if not cid:
+            return False
+        # TERM -> grace -> KILL semantics
+        try:
+            try:
+                grace = int(getattr(app_settings, "SANDBOX_CANCEL_GRACE_SECONDS", 3))
+            except Exception:
+                grace = 3
+
+            # Send SIGTERM first
+            try:
+                subprocess.run(["docker", "kill", "--signal", "TERM", cid], check=False)
+            except Exception:
+                pass
+
+            # Wait up to grace seconds for container to stop
+            deadline = time.time() + max(0, grace)
+            while time.time() < deadline:
+                if not cls._is_container_running(cid):
+                    break
+                time.sleep(0.1)
+
+            # If still running, send SIGKILL
+            if cls._is_container_running(cid):
+                try:
+                    subprocess.run(["docker", "kill", cid], check=False)
+                except Exception:
+                    pass
+
+            # Remove container
+            try:
+                subprocess.run(["docker", "rm", "-f", cid], check=False)
+            except Exception:
+                pass
+        finally:
+            with cls._active_lock:
+                cls._active_cid.pop(run_id, None)
+        # Do not publish WS end here; service layer will publish to avoid duplicates
+        return True
+
+    @staticmethod
+    def _is_container_running(cid: str) -> bool:
+        try:
+            out = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", cid], text=True, stderr=subprocess.DEVNULL).strip().lower()
+            return out == "true"
+        except Exception:
+            return False
+
     def start_run(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
         logger.debug(f"DockerRunner.start_run called with spec: {spec}")
         # Fake mode for tests/CI without Docker
@@ -57,6 +114,14 @@ class DockerRunner:
 
         if not docker_available():
             raise RuntimeError("Docker is not available on host")
+
+        # Startup timeout budget
+        try:
+            startup_budget = int(spec.startup_timeout_sec) if spec.startup_timeout_sec else int(getattr(app_settings, "SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC", 20))
+        except Exception:
+            startup_budget = 20
+        from datetime import datetime, timedelta
+        deadline = datetime.utcnow() + timedelta(seconds=max(1, startup_budget))
 
         # Prepare tar stream from inline files (session workspace integration TBD)
         import io, tarfile, time
@@ -183,9 +248,21 @@ class DockerRunner:
             max_log = 10 * 1024 * 1024
 
         try:
-            cid = subprocess.check_output(cmd, text=True).strip()
+            remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
+            cid = subprocess.check_output(cmd, text=True, timeout=remaining).strip()
         except FileNotFoundError:
             raise RuntimeError("docker binary not found in PATH")
+        except subprocess.TimeoutExpired:
+            finished = datetime.utcnow()
+            hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            return RunStatus(
+                id="",
+                phase=RunPhase.timed_out,
+                started_at=started,
+                finished_at=finished,
+                exit_code=None,
+                message="startup_timeout",
+            )
         except subprocess.CalledProcessError as e:
             # If security opts were provided, retry without them for portability (e.g., profile not loaded)
             if security_opts:
@@ -198,11 +275,19 @@ class DockerRunner:
             else:
                 raise RuntimeError(f"docker create failed: {e}")
 
+        # Register container for cancellation
+        try:
+            with DockerRunner._active_lock:
+                DockerRunner._active_cid[run_id] = cid
+        except Exception:
+            pass
+
         # Step 2: copy session workspace and inline files using docker cp
         try:
             # Ensure /workspace exists via create flags; proceed to cp
             if session_workspace and os.path.isdir(session_workspace):
-                subprocess.check_call(["docker", "cp", f"{session_workspace}/.", f"{cid}:/workspace/"])
+                remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
+                subprocess.check_call(["docker", "cp", f"{session_workspace}/.", f"{cid}:/workspace/"], timeout=remaining)
             # Stage inline files into a temp dir and copy
             if spec.files_inline:
                 staging = tempfile.mkdtemp(prefix="tldw_inline_")
@@ -213,12 +298,29 @@ class DockerRunner:
                         os.makedirs(os.path.dirname(full), exist_ok=True)
                         with open(full, "wb") as f:
                             f.write(data)
-                    subprocess.check_call(["docker", "cp", f"{staging}/.", f"{cid}:/workspace/"])
+                    remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
+                    subprocess.check_call(["docker", "cp", f"{staging}/.", f"{cid}:/workspace/"], timeout=remaining)
                 finally:
                     try:
                         shutil.rmtree(staging, ignore_errors=True)
                     except Exception:
                         pass
+        except subprocess.TimeoutExpired:
+            # Cleanup container
+            try:
+                subprocess.check_call(["docker", "rm", "-f", cid])
+            except Exception:
+                pass
+            finished = datetime.utcnow()
+            hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            return RunStatus(
+                id="",
+                phase=RunPhase.timed_out,
+                started_at=started,
+                finished_at=finished,
+                exit_code=None,
+                message="startup_timeout",
+            )
         except subprocess.CalledProcessError as e:
             # Cleanup container
             try:
@@ -229,7 +331,23 @@ class DockerRunner:
 
         # Step 3: start container and stream logs
         try:
-            subprocess.check_call(["docker", "start", cid])
+            remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
+            subprocess.check_call(["docker", "start", cid], timeout=remaining)
+        except subprocess.TimeoutExpired:
+            try:
+                subprocess.check_call(["docker", "rm", "-f", cid])
+            except Exception:
+                pass
+            finished = datetime.utcnow()
+            hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            return RunStatus(
+                id="",
+                phase=RunPhase.timed_out,
+                started_at=started,
+                finished_at=finished,
+                exit_code=None,
+                message="startup_timeout",
+            )
         except subprocess.CalledProcessError as e:
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
@@ -279,7 +397,7 @@ class DockerRunner:
                 pass
             exit_code = None
             finished = datetime.utcnow()
-            hub.publish_event(run_id, "end", {"exit_code": exit_code})
+            hub.publish_event(run_id, "end", {"exit_code": exit_code, "reason": "execution_timeout"})
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
             except Exception:
@@ -290,7 +408,7 @@ class DockerRunner:
                 started_at=started,
                 finished_at=finished,
                 exit_code=exit_code,
-                message="Execution timed out",
+                message="execution_timeout",
             )
 
         # Join logs thread

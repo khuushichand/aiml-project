@@ -6,11 +6,23 @@ Executes a watchlist job for a given user:
 - For each source:
   - If `rss`: fetch feed items, then fetch each linked page and ingest
   - If `site`: fetch page and ingest
+- Apply job-level filters (include/exclude/flag) before ingestion, short-circuiting on the
+  highest-priority matching rule. Filter decisions and tallies are recorded into run stats
+  (filters_matched, filters_actions, filter_tallies) and filtered items are recorded into
+  `scraped_items` with status="filtered".
 - Persist per-run stats and append ingested media IDs to scrape_run_items
 
+Include-only gating semantics:
+- A job may set `require_include=true` in its filters payload. When any include rules exist and
+  this is true, only include-matched candidates are ingested; others are treated as filtered.
+- If the job does not set `require_include`, the pipeline checks the organization default
+  via organizations.metadata.watchlists.require_include_default (or flat key
+  watchlists_require_include_default). If neither is set, it falls back to the environment
+  variable `WATCHLISTS_REQUIRE_INCLUDE_DEFAULT`. Include gating only applies when include rules exist.
+
 Notes:
-- In tests (TEST_MODE=1), RSS fetch returns a fake item and site fetch may be
-  bypassed. We count items but avoid network.
+- In tests (TEST_MODE=1), RSS fetch returns a fake item and site fetch may be bypassed.
+  We count items but avoid network.
 """
 
 from __future__ import annotations

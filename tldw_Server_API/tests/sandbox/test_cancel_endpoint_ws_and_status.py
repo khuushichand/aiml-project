@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Dict
+
+import pytest
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.main import app
+
+
+def _client() -> TestClient:
+    os.environ.setdefault("TEST_MODE", "1")
+    # Disable real execution to keep run queued/non-terminal for cancel
+    os.environ["SANDBOX_ENABLE_EXECUTION"] = "false"
+    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "true"
+    os.environ["TLDW_SANDBOX_DOCKER_FAKE_EXEC"] = "1"
+    return TestClient(app)
+
+
+@pytest.mark.unit
+def test_cancel_endpoint_sends_single_end_and_sets_killed() -> None:
+    with _client() as client:
+        # Start a run (will be queued due to execution disabled)
+        body: Dict[str, Any] = {
+            "spec_version": "1.0",
+            "runtime": "docker",
+            "base_image": "python:3.11-slim",
+            "command": ["bash", "-lc", "echo running"],
+            "timeout_sec": 30,
+        }
+        r = client.post("/api/v1/sandbox/runs", json=body)
+        assert r.status_code == 200
+        run_id = r.json()["id"]
+
+        # Open WS stream and then cancel
+        with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws:
+            # Issue cancel
+            r2 = client.post(f"/api/v1/sandbox/runs/{run_id}/cancel")
+            assert r2.status_code == 200
+            assert r2.json().get("cancelled") is True
+
+            # Read frames until end; ensure exactly one end
+            end_count = 0
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                msg = ws.receive_json()
+                if msg.get("type") == "event" and msg.get("event") == "end":
+                    end_count += 1
+                    break
+            assert end_count == 1
+
+        # Run status should be killed
+        r3 = client.get(f"/api/v1/sandbox/runs/{run_id}")
+        assert r3.status_code == 200
+        assert r3.json().get("phase") == "killed"

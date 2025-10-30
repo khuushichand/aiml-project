@@ -20,11 +20,14 @@ class RunStreamHub:
         self._lock = threading.RLock()
         self._max_queue = 1000
         self._max_log_bytes_default = 10 * 1024 * 1024
+        self._seq: dict[str, int] = {}
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
-            if self._loop is None:
-                self._loop = loop
+            # Always update to the current running loop. In test environments,
+            # TestClient may create transient loops per connection; using the
+            # latest loop ensures call_soon_threadsafe targets a live loop.
+            self._loop = loop
 
     def _get_queue(self, run_id: str) -> asyncio.Queue:
         with self._lock:
@@ -37,8 +40,17 @@ class RunStreamHub:
     def subscribe(self, run_id: str) -> asyncio.Queue:
         return self._get_queue(run_id)
 
+    def _next_seq(self, run_id: str) -> int:
+        cur = self._seq.get(run_id, 0) + 1
+        self._seq[run_id] = cur
+        return cur
+
     def _publish(self, run_id: str, frame: dict) -> None:
         with self._lock:
+            if "seq" not in frame:
+                # Attach monotonically increasing sequence number per run
+                frame = dict(frame)
+                frame["seq"] = self._next_seq(run_id)
             self._buffers.setdefault(run_id, []).append(frame)
             # Trim buffer to avoid unbounded mem (keep last 100 frames)
             buf = self._buffers[run_id]
@@ -70,6 +82,10 @@ class RunStreamHub:
         frame = {"type": "event", "event": event, "data": data or {}}
         self._publish(run_id, frame)
 
+    def publish_heartbeat(self, run_id: str) -> None:
+        """Publish a heartbeat frame with seq attached by the hub."""
+        self._publish(run_id, {"type": "heartbeat"})
+
     def publish_stdout(self, run_id: str, chunk: bytes, max_log_bytes: Optional[int] = None) -> None:
         self._publish_stream(run_id, "stdout", chunk, max_log_bytes=max_log_bytes)
 
@@ -84,6 +100,12 @@ class RunStreamHub:
                 if run_id not in self._truncated:
                     self._truncated.add(run_id)
                     self._publish(run_id, {"type": "truncated", "reason": "log_cap"})
+                    # Metrics: log truncations
+                    try:
+                        from tldw_Server_API.app.core.Metrics import increment_counter
+                        increment_counter("sandbox_log_truncations_total", labels={"component": "sandbox"})
+                    except Exception:
+                        pass
                 return
             remaining = cap - used
         data = chunk[:remaining]
@@ -117,4 +139,3 @@ _HUB = RunStreamHub()
 
 def get_hub() -> RunStreamHub:
     return _HUB
-

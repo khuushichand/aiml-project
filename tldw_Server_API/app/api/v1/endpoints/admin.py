@@ -112,6 +112,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
     OrganizationResponse,
+    OrganizationListResponse,
     TeamCreateRequest,
     TeamResponse,
     TeamMemberAddRequest,
@@ -454,11 +455,13 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
         raise HTTPException(status_code=500, detail="Failed to create organization")
 
 
-@router.get("/orgs", response_model=List[OrganizationResponse])
-async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), q: Optional[str] = Query(None)) -> list[OrganizationResponse]:
+@router.get("/orgs", response_model=OrganizationListResponse)
+async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), q: Optional[str] = Query(None)) -> OrganizationListResponse:
     try:
-        rows = await list_organizations(limit=limit, offset=offset, q=q)
-        return [OrganizationResponse(**r) for r in rows]
+        rows, total = await list_organizations(limit=limit, offset=offset, q=q, with_total=True)  # type: ignore[assignment]
+        items = [OrganizationResponse(**r) for r in rows]
+        has_more = (offset + len(items)) < int(total or 0)
+        return OrganizationListResponse(items=items, total=int(total or 0), limit=limit, offset=offset, has_more=has_more)
     except Exception as e:
         logger.error(f"Failed to list organizations: {e}")
         raise HTTPException(status_code=500, detail="Failed to list organizations")
@@ -496,10 +499,16 @@ async def admin_update_org_watchlists_settings(
       - require_include_default: default include-only gating for jobs in this org
     """
     try:
-        row = await db.fetchone("SELECT metadata FROM organizations WHERE id = ?", org_id)
+        # Fetch existing metadata for this org (works for both backends)
+        if hasattr(db, "fetchrow"):
+            row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
+            meta_raw = row.get("metadata") if row else None
+        else:
+            cur = await db.execute("SELECT metadata FROM organizations WHERE id = ?", (org_id,))
+            row = await cur.fetchone()
+            meta_raw = row[0] if row else None
         if not row:
             raise HTTPException(status_code=404, detail="organization_not_found")
-        meta_raw = row.get("metadata") if isinstance(row, dict) else (row[0] if row else None)
         meta: Dict[str, Any]
         try:
             meta = json.loads(meta_raw) if meta_raw else {}
@@ -515,10 +524,16 @@ async def admin_update_org_watchlists_settings(
             changed = True
         if changed:
             meta["watchlists"] = wl
-            await db.execute(
-                "UPDATE organizations SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                json.dumps(meta), org_id,
-            )
+            if hasattr(db, "fetchrow"):
+                await db.execute(
+                    "UPDATE organizations SET metadata = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                    json.dumps(meta), org_id,
+                )
+            else:
+                await db.execute(
+                    "UPDATE organizations SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (json.dumps(meta), org_id),
+                )
         return OrganizationWatchlistsSettingsResponse(
             org_id=org_id,
             require_include_default=wl.get("require_include_default"),
@@ -534,10 +549,15 @@ async def admin_update_org_watchlists_settings(
 async def admin_get_org_watchlists_settings(org_id: int, db=Depends(get_db_transaction)) -> OrganizationWatchlistsSettingsResponse:
     """Fetch watchlists-related organization settings (from metadata)."""
     try:
-        row = await db.fetchone("SELECT metadata FROM organizations WHERE id = ?", org_id)
+        if hasattr(db, "fetchrow"):
+            row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
+            meta_raw = row.get("metadata") if row else None
+        else:
+            cur = await db.execute("SELECT metadata FROM organizations WHERE id = ?", (org_id,))
+            row = await cur.fetchone()
+            meta_raw = row[0] if row else None
         if not row:
             raise HTTPException(status_code=404, detail="organization_not_found")
-        meta_raw = row.get("metadata") if isinstance(row, dict) else (row[0] if row else None)
         require_include_default = None
         if meta_raw:
             try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import uuid
 from datetime import datetime, timedelta
+import os
 from typing import List, Optional
 import hashlib
 
@@ -33,6 +34,8 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Metrics import observe_histogram
+from .streams import get_hub
 
 
 class SandboxService:
@@ -46,6 +49,19 @@ class SandboxService:
         cfg = SandboxPolicyConfig.from_settings()
         self.policy = policy or SandboxPolicy(cfg)
         self._orch = SandboxOrchestrator(self.policy)
+        self._supported_specs = list(self.policy.cfg.supported_spec_versions or ["1.0"])
+
+    class InvalidSpecVersion(Exception):
+        def __init__(self, provided: str, supported: list[str]) -> None:
+            super().__init__(f"Unsupported spec_version '{provided}'")
+            self.provided = provided
+            self.supported = supported
+
+    def _validate_spec_version(self, spec_version: Optional[str]) -> None:
+        if not spec_version:
+            return
+        if spec_version not in self._supported_specs:
+            raise SandboxService.InvalidSpecVersion(spec_version, self._supported_specs)
 
     def feature_discovery(self) -> list[dict]:
         images = [
@@ -90,6 +106,13 @@ class SandboxService:
                             dur_ms = max(0.0, (status.finished_at - status.started_at).total_seconds() * 1000.0)
                     except Exception:
                         dur_ms = None
+                    # Include reason_code for non-success outcomes when available
+                    reason_code = None
+                    try:
+                        if outcome in ("timeout", "failed"):
+                            reason_code = (status.message or None)
+                    except Exception:
+                        reason_code = None
                     await svc.log_event(
                         event_type=AuditEventType.API_RESPONSE,
                         category=AuditEventCategory.API_CALL,
@@ -107,6 +130,7 @@ class SandboxService:
                             "policy_hash": status.policy_hash,
                             "exit_code": status.exit_code,
                             "spec_version": spec_version,
+                            "reason_code": reason_code,
                         },
                     )
                 finally:
@@ -128,6 +152,15 @@ class SandboxService:
         workspace_cap_mb = self.policy.cfg.workspace_cap_mb
         artifact_ttl_hours = self.policy.cfg.artifact_ttl_hours
         supported_spec_versions = list(self.policy.cfg.supported_spec_versions or ["1.0"])
+        # Queue/backpressure defaults from app settings
+        try:
+            queue_max_length = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+        except Exception:
+            queue_max_length = 100
+        try:
+            queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
+        except Exception:
+            queue_ttl_sec = 120
         return [
             {
                 "name": "docker",
@@ -137,6 +170,8 @@ class SandboxService:
                 "max_mem_mb": max_mem_mb,
                 "max_upload_mb": max_upload_mb,
                 "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
                 "workspace_cap_mb": workspace_cap_mb,
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
@@ -150,6 +185,8 @@ class SandboxService:
                 "max_mem_mb": max_mem_mb,
                 "max_upload_mb": max_upload_mb,
                 "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
                 "workspace_cap_mb": workspace_cap_mb,
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
@@ -158,6 +195,8 @@ class SandboxService:
         ]
 
     def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> Session:
+        # Validate requested spec version
+        self._validate_spec_version(spec_version)
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok)
         # delegate to orchestrator (with idempotency)
@@ -184,22 +223,48 @@ class SandboxService:
         return results
 
     def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> RunStatus:
+        # Validate requested spec version
+        self._validate_spec_version(spec_version)
         # Apply policy then enqueue via orchestrator (idempotency-aware)
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         # Optional: Execute via Docker runner if enabled and requested
+        # Allow per-test overrides via env even if settings were loaded earlier
         try:
-            execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
+            env_exec = os.getenv("SANDBOX_ENABLE_EXECUTION")
+            if env_exec is not None:
+                execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
+            else:
+                execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except Exception:
             execute_enabled = False
         if execute_enabled and spec.runtime == RuntimeType.docker:
             try:
-                background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
+                env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
+                if env_bg is not None:
+                    background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                else:
+                    background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
                 if background:
                     # Return early and execute in background
                     status.phase = RunPhase.starting
                     self._orch.update_run(status.id, status)
+                    # Proactively publish a 'start' event so WS subscribers connecting
+                    # immediately after POST observe at least one event.
+                    try:
+                        get_hub().publish_event(status.id, "start", {"bg": True})
+                    except Exception:
+                        pass
+                    # Metrics: queue wait histogram (if enqueued timestamp known)
+                    try:
+                        ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
+                        if ts:
+                            import time as _time
+                            qwait = max(0.0, _time.time() - float(ts))
+                            observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": "docker"})
+                    except Exception:
+                        pass
                     def _worker():
                         try:
                             dr = DockerRunner()
@@ -216,6 +281,11 @@ class SandboxService:
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
+                            # Ensure an 'end' event is published even if the runner didn't
+                            try:
+                                get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code})
+                            except Exception:
+                                pass
                             # Ensure policy hash is present (compute if missing)
                             if not status.policy_hash:
                                 policy_material = f"{self.policy.cfg.default_runtime}|{self.policy.cfg.network_default}|{self.policy.cfg.artifact_ttl_hours}|{self.policy.cfg.max_upload_mb}"
@@ -228,6 +298,15 @@ class SandboxService:
                 else:
                     dr = DockerRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+                    # Metrics: queue wait histogram before starting execution
+                    try:
+                        ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
+                        if ts:
+                            import time as _time
+                            qwait = max(0.0, _time.time() - float(ts))
+                            observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": "docker"})
+                    except Exception:
+                        pass
                     real = dr.start_run(status.id, spec, ws)
                     real.id = status.id
                     status.phase = real.phase
@@ -274,3 +353,33 @@ class SandboxService:
 
     def get_session_workspace_path(self, session_id: str) -> Optional[str]:
         return self._orch.get_session_workspace_path(session_id)
+
+    def cancel_run(self, run_id: str) -> bool:
+        st = self._orch.get_run(run_id)
+        if not st:
+            return False
+        # If already finished, no-op
+        if st.phase in (RunPhase.completed, RunPhase.failed, RunPhase.killed, RunPhase.timed_out):
+            return False
+        cancelled = False
+        try:
+            if st.runtime == RuntimeType.docker:
+                cancelled = DockerRunner.cancel_run(run_id)
+        except Exception as e:
+            logger.debug(f"cancel_run failed: {e}")
+            cancelled = False
+        # Update status
+        try:
+            st.phase = RunPhase.killed
+            st.message = "canceled_by_user"
+            st.finished_at = datetime.utcnow()
+            st.exit_code = None
+            self._orch.update_run(run_id, st)
+        except Exception:
+            pass
+        # Ensure WS end event is sent even if runner didn't publish
+        try:
+            get_hub().publish_event(run_id, "end", {"exit_code": None, "canceled": True})
+        except Exception:
+            pass
+        return bool(cancelled)

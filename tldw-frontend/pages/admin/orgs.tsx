@@ -15,6 +15,14 @@ interface Organization {
   updated_at?: string | null;
 }
 
+interface OrganizationListResponse {
+  items: Organization[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export default function AdminOrgsPage() {
   const { show } = useToast();
   const [orgs, setOrgs] = useState<Organization[]>([]);
@@ -22,6 +30,8 @@ export default function AdminOrgsPage() {
   const [page, setPage] = useState<number>(1);
   const [size, setSize] = useState<number>(20);
   const [filter, setFilter] = useState<string>("");
+  const [total, setTotal] = useState<number>(0);
+  const [hasMore, setHasMore] = useState<boolean>(false);
 
   const fetchOrgs = async () => {
     setLoading(true);
@@ -29,10 +39,14 @@ export default function AdminOrgsPage() {
       const offset = (page - 1) * size;
       const params: any = { limit: size, offset };
       if (filter.trim()) params.q = filter.trim();
-      const data = await apiClient.get<Organization[]>('/admin/orgs', { params });
-      setOrgs(Array.isArray(data) ? data : []);
+      const data = await apiClient.get<OrganizationListResponse>('/admin/orgs', { params });
+      setOrgs(Array.isArray((data as any)?.items) ? data.items : []);
+      setTotal(Number.isFinite((data as any)?.total) ? data.total : 0);
+      setHasMore(Boolean((data as any)?.has_more));
     } catch (error: any) {
       setOrgs([]);
+      setTotal(0);
+      setHasMore(false);
       show({ title: 'Failed to load organizations', description: error?.message, variant: 'danger' });
     } finally {
       setLoading(false);
@@ -85,7 +99,9 @@ export default function AdminOrgsPage() {
                 <option value={100}>100</option>
               </select>
             </label>
-            <div className="text-sm text-gray-700">Page {page}</div>
+            <div className="text-sm text-gray-700">
+              Page {page} of {Math.max(1, Math.ceil((total || 0) / (size || 1)))}
+            </div>
             <Button type="button" variant="secondary" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={loading || page <= 1}>
               Prev
             </Button>
@@ -94,7 +110,7 @@ export default function AdminOrgsPage() {
               variant="secondary"
               size="sm"
               onClick={() => setPage((p) => p + 1)}
-              disabled={loading || orgs.length < size}
+              disabled={loading || !hasMore}
             >
               Next
             </Button>

@@ -31,13 +31,15 @@ DEFAULT_CSP = (
 # - Keeps other directives aligned with DEFAULT_CSP
 RELAXED_CSP_WEBUI = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-eval'; "
-    "script-src-attr 'unsafe-inline'; "
+    # Allow same-origin external scripts and inline/eval for legacy WebUI
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    # No script-src-elem/script-src-attr overrides -> script-src applies to both
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: https:; "
     "font-src 'self' data:; "
     "media-src 'self' data: blob:; "
-    "connect-src 'self'; "
+    # Allow same-origin HTTP(S) and WebSockets for streaming features
+    "connect-src 'self' ws: wss:; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "

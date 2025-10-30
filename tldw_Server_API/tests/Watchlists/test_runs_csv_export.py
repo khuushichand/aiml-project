@@ -157,3 +157,41 @@ def test_runs_csv_headers_with_pagination_scope_job(client_with_user: TestClient
     lines2 = [ln for ln in r2.text.splitlines() if ln.strip()]
     assert lines2[0] == lines1[0]
     assert len(lines2) == 2
+
+
+def test_global_runs_csv_export_with_tallies_column(client_with_user: TestClient):
+    c = client_with_user
+    # Create source/job and seed run with tallies
+    s = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "FeedT", "url": "https://example.com/t.xml", "source_type": "rss"},
+    )
+    assert s.status_code == 200, s.text
+    j = c.post(
+        "/api/v1/watchlists/jobs",
+        json={"name": "JobT", "scope": {"sources": [s.json()["id"]]}},
+    )
+    assert j.status_code == 200, j.text
+    jid = j.json()["id"]
+
+    stats = {
+        "items_found": 7,
+        "items_ingested": 5,
+        "filters_actions": {"include": 4, "exclude": 1, "flag": 0},
+        "filter_tallies": {"kw:alpha": 3, "regex:beta": 1, "kw:gamma": 1},
+    }
+    run_id = _seed_run_with_stats(jid, stats)
+
+    r = c.get(
+        "/api/v1/watchlists/runs/export.csv",
+        params={"scope": "global", "page": 1, "size": 10, "include_tallies": True},
+    )
+    assert r.status_code == 200, r.text
+    lines = [ln for ln in r.text.splitlines() if ln.strip()]
+    header = lines[0]
+    assert header.startswith("id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag")
+    assert header.endswith(",filter_tallies_json")
+    # Find our run row and ensure tallies JSON present
+    run_line = next((ln for ln in lines[1:] if ln.split(',')[0] == str(run_id)), None)
+    assert run_line is not None
+    assert '{"kw:alpha": 3' in run_line or '\"kw:alpha\"' in run_line

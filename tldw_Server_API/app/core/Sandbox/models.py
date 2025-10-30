@@ -39,6 +39,7 @@ class RunSpec:
     base_image: Optional[str]
     command: List[str]
     env: Dict[str, str] = field(default_factory=dict)
+    startup_timeout_sec: Optional[int] = None
     timeout_sec: int = 300
     cpu: Optional[float] = None
     memory_mb: Optional[int] = None
@@ -72,3 +73,4 @@ class RunStatus:
     message: Optional[str] = None
     resource_usage: Optional[Dict[str, int]] = None
     artifacts: Optional[Dict[str, bytes]] = None
+    estimated_start_time: Optional[datetime] = None

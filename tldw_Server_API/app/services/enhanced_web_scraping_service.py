@@ -505,13 +505,23 @@ class WebScrapingService:
                     }
                     
                     # Format content with metadata
+                    # Include crawl metadata (depth, parent_url, score) if present
+                    md = article.get("metadata") or {}
+                    crawl_depth = md.get("depth")
+                    crawl_parent = md.get("parent_url")
+                    crawl_score = md.get("score")
+
                     content_with_metadata = ContentMetadataHandler.format_content_with_metadata(
                         url=article.get("url", ""),
                         content=article.get("content", ""),
                         pipeline=article.get("method", "enhanced"),
                         additional_metadata={
                             "date": article.get("date", ""),
-                            "author": article.get("author", "Unknown")
+                            "author": article.get("author", "Unknown"),
+                            # Propagate traversal metadata for context
+                            "crawl_depth": crawl_depth,
+                            "crawl_parent_url": crawl_parent,
+                            "crawl_score": crawl_score,
                         }
                     )
                     
@@ -529,6 +539,10 @@ class WebScrapingService:
                         "url": article.get("url"),
                         "date": article.get("date"),
                         "source": "web",
+                        # Persist traversal metadata in safe metadata payload
+                        "crawl_depth": crawl_depth,
+                        "crawl_parent_url": crawl_parent,
+                        "crawl_score": crawl_score,
                     }
                     safe_metadata_json = json.dumps({k: v for k, v in safe_meta.items() if v is not None}, ensure_ascii=False)
 

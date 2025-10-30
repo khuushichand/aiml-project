@@ -237,46 +237,56 @@ class PromptExecutor:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        try:
-            # Call provider (most providers have similar signatures)
-            if provider_lower in ["openai", "anthropic", "groq", "mistral", "deepseek"]:
-                response = await asyncio.to_thread(
-                    provider_func,
-                    messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    stream=False
-                )
-            elif provider_lower == "ollama":
-                response = await asyncio.to_thread(
-                    provider_func,
-                    messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-            else:
-                # Local models
-                response = await asyncio.to_thread(
-                    provider_func,
-                    messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-            
-            # Parse response
-            if isinstance(response, tuple):
-                content, tokens = response
-                return {"content": content, "tokens": tokens}
-            elif isinstance(response, str):
-                return {"content": response, "tokens": len(response.split()) * 1.3}  # Estimate
-            else:
-                return {"content": str(response), "tokens": 0}
-                
-        except Exception as e:
-            logger.error(f"LLM call failed for {provider}/{model}: {e}")
-            raise
+        # Backoff + retry for transient/provider limit errors
+        last_exc = None
+        for attempt in range(3):
+            try:
+                # Call provider (most providers have similar signatures)
+                if provider_lower in ["openai", "anthropic", "groq", "mistral", "deepseek"]:
+                    response = await asyncio.to_thread(
+                        provider_func,
+                        messages,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=False
+                    )
+                elif provider_lower == "ollama":
+                    response = await asyncio.to_thread(
+                        provider_func,
+                        messages,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                else:
+                    # Local models
+                    response = await asyncio.to_thread(
+                        provider_func,
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                # Parse response
+                if isinstance(response, tuple):
+                    content, tokens = response
+                    return {"content": content, "tokens": tokens}
+                elif isinstance(response, str):
+                    return {"content": response, "tokens": len(response.split()) * 1.3}  # Estimate
+                else:
+                    return {"content": str(response), "tokens": 0}
+            except Exception as e:
+                last_exc = e
+                # Basic 429/backoff detection
+                msg = str(e)
+                if "429" in msg or "rate limit" in msg.lower():
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                logger.error(f"LLM call failed for {provider}/{model}: {e}")
+                raise
+        # If we exhausted retries
+        logger.error(f"LLM call failed after retries for {provider}/{model}: {last_exc}")
+        raise last_exc if last_exc else RuntimeError("LLM call failed")
     
     ####################################################################################################################
     # Helper Methods

@@ -130,7 +130,7 @@ jobs:
           DISABLE_HEAVY_STARTUP: '1'
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py start
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
       - name: Smoke health check
         if: always()
@@ -139,7 +139,7 @@ jobs:
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py health-check
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
       - name: Print smoke server log on failure
         if: failure()
@@ -162,7 +162,7 @@ jobs:
           SERVER_LABEL: smoke
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
 
       - name: Run full test suite (Linux + PG) — exclude Jobs and E2E
         run: |
@@ -238,7 +238,7 @@ jobs:
           DISABLE_HEAVY_STARTUP: '1'
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py start
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
       - name: Smoke health check
         if: always()
@@ -247,7 +247,7 @@ jobs:
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py health-check
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
       - name: Print smoke server log on failure
         if: failure()
@@ -270,7 +270,7 @@ jobs:
           SERVER_LABEL: smoke
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
 
       - name: Run full test suite — exclude Jobs and E2E
         run: |

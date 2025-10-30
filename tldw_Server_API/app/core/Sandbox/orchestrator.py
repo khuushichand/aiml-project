@@ -59,11 +59,22 @@ class SandboxOrchestrator:
         self._sessions: Dict[str, Session] = {}
         # Store backend for runs/idempotency/usage
         self._store = get_store()
-        self._queue: list[str] = []  # simple in-memory run queue (run_ids)
+        # in-memory run queue of (run_id, enqueue_timestamp)
+        self._queue: list[tuple[str, float]] = []
+        self._enqueue_index: Dict[str, float] = {}
         try:
             self._idem_ttl_sec = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
         except Exception:
             self._idem_ttl_sec = 600
+        # Queue policy
+        try:
+            self._queue_max = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+        except Exception:
+            self._queue_max = 100
+        try:
+            self._queue_ttl = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
+        except Exception:
+            self._queue_ttl = 120
         self._session_roots: Dict[str, str] = {}
         self._artifacts: Dict[str, Dict[str, bytes]] = {}
 
@@ -123,21 +134,44 @@ class SandboxOrchestrator:
     # Runs
     # -----------------
     def enqueue_run(self, user_id: Any, spec: RunSpec, spec_version: str, idem_key: Optional[str], body: Dict[str, Any]) -> RunStatus:
+        # Check idempotency
         stored = self._check_idem("runs", user_id, idem_key, body)
         if stored is not None:
-            rid = stored.get("id")
-            with self._lock:
-                if rid and rid in self._runs:
-                    return self._runs[rid]
-            # Synthesize minimal status if missing
-            return RunStatus(id=rid or "", phase=RunPhase.completed, spec_version=spec_version, runtime=spec.runtime, base_image=spec.base_image)
+            rid = stored.get("id", "")
+            # Return stored status if available
+            try:
+                st = self._store.get_run(rid)
+                if st:
+                    return st
+            except Exception:
+                pass
+            # Otherwise synthesize minimal queued status
+            return RunStatus(id=rid, phase=RunPhase.queued, spec_version=spec_version, runtime=spec.runtime, base_image=spec.base_image)
 
-        # In this scaffold, we create a run and immediately complete it
-        rid = str(uuid.uuid4())
-        status = RunStatus(id=rid, phase=RunPhase.completed, spec_version=spec_version, runtime=spec.runtime, base_image=spec.base_image, exit_code=0)
+        # Enforce queue capacity: prune TTL then check max length
+        self._prune_queue_ttl()
         with self._lock:
-            self._queue.append(rid)
-        # Persist run
+            if self._queue_max > 0 and len(self._queue) >= self._queue_max:
+                raise QueueFull(retry_after=max(1, int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))))
+
+        # Create new run in queued state
+        rid = str(uuid.uuid4())
+        status = RunStatus(id=rid, phase=RunPhase.queued, spec_version=spec_version, runtime=spec.runtime, base_image=spec.base_image)
+        # Optional: estimated start time based on queue length and a per-run estimate
+        try:
+            from datetime import datetime, timedelta
+            per_run = int(getattr(app_settings, "SANDBOX_QUEUE_ESTIMATED_WAIT_PER_RUN_SEC", 5))
+            with self._lock:
+                q_len = len(self._queue)
+            status.estimated_start_time = datetime.utcnow() + timedelta(seconds=max(0, q_len) * max(0, per_run))
+        except Exception:
+            pass
+
+        # Enqueue and persist
+        with self._lock:
+            ts = time.time()
+            self._queue.append((rid, ts))
+            self._enqueue_index[rid] = ts
         try:
             self._store.put_run(user_id, status)
         except Exception as e:
@@ -151,6 +185,56 @@ class SandboxOrchestrator:
             "exit_code": status.exit_code,
         })
         return status
+
+    def _prune_queue_ttl(self) -> None:
+        """Drop queued runs older than TTL and mark them expired."""
+        try:
+            ttl = max(1, int(self._queue_ttl))
+        except Exception:
+            ttl = 120
+        now = time.time()
+        expired: list[str] = []
+        with self._lock:
+            kept: list[tuple[str, float]] = []
+            for rid, ts in self._queue:
+                if now - ts > ttl:
+                    expired.append(rid)
+                else:
+                    kept.append((rid, ts))
+            self._queue = kept
+            for rid in expired:
+                try:
+                    self._enqueue_index.pop(rid, None)
+                except Exception:
+                    pass
+        if not expired:
+            return
+        from datetime import datetime
+        for rid in expired:
+            try:
+                st = self._store.get_run(rid)
+                if st and st.phase == RunPhase.queued:
+                    st.phase = RunPhase.failed
+                    st.message = "queue_ttl_expired"
+                    st.finished_at = datetime.utcnow()
+                    self._store.update_run(st)
+                    try:
+                        from .streams import get_hub
+                        get_hub().publish_event(rid, "end", {"exit_code": None, "reason": "queue_ttl_expired"})
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+    def get_enqueue_time(self, run_id: str) -> Optional[float]:
+        with self._lock:
+            return self._enqueue_index.get(run_id)
+
+
+class QueueFull(Exception):
+    def __init__(self, retry_after: int = 30) -> None:
+        super().__init__("queue_full")
+        self.retry_after = int(retry_after)
 
     # -----------------
     # Lookups (stubs)
@@ -167,6 +251,13 @@ class SandboxOrchestrator:
             self._store.update_run(status)
         except Exception as e:
             logger.debug(f"store.update_run failed: {e}")
+        # Cleanup enqueue index when leaving queued phase
+        try:
+            if status.phase != RunPhase.queued:
+                with self._lock:
+                    self._enqueue_index.pop(run_id, None)
+        except Exception:
+            pass
 
     # -----------------
     # Artifacts
@@ -325,3 +416,54 @@ class SandboxOrchestrator:
     def get_session_workspace_path(self, session_id: str) -> Optional[str]:
         with self._lock:
             return self._session_roots.get(session_id)
+
+    # -----------------
+    # Admin listing helpers
+    # -----------------
+    def list_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        try:
+            return self._store.list_runs(
+                image_digest=image_digest,
+                user_id=user_id,
+                phase=phase,
+                started_at_from=started_at_from,
+                started_at_to=started_at_to,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+            )
+        except Exception as e:
+            logger.debug(f"store.list_runs failed: {e}")
+            return []
+
+    def count_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+    ) -> int:
+        try:
+            return int(self._store.count_runs(
+                image_digest=image_digest,
+                user_id=user_id,
+                phase=phase,
+                started_at_from=started_at_from,
+                started_at_to=started_at_to,
+            ))
+        except Exception as e:
+            logger.debug(f"store.count_runs failed: {e}")
+            return 0

@@ -1,7 +1,10 @@
 import re
 from pathlib import Path
 
-import yaml
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - runtime fallback when PyYAML is unavailable
+    yaml = None  # type: ignore
 
 
 def collect_endpoint_ids_from_code(base_dir: Path) -> set[str]:
@@ -20,9 +23,28 @@ def collect_endpoint_ids_from_code(base_dir: Path) -> set[str]:
 
 
 def load_catalog_scope_ids(catalog_path: Path) -> set[str]:
-    data = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
-    scopes = data.get("scopes", []) or []
-    return {s.get("id") for s in scopes if isinstance(s, dict) and s.get("id")}
+    text = catalog_path.read_text(encoding="utf-8")
+    if yaml is not None:
+        data = yaml.safe_load(text)
+        scopes = data.get("scopes", []) or []
+        return {s.get("id") for s in scopes if isinstance(s, dict) and s.get("id")}
+    # Fallback minimal parser: extract ids between 'scopes:' and 'feature_flags:'
+    ids: set[str] = set()
+    lines = text.splitlines()
+    in_scopes = False
+    for line in lines:
+        if line.strip().startswith("feature_flags:"):
+            if in_scopes:
+                break
+        if line.strip().startswith("scopes:"):
+            in_scopes = True
+            continue
+        if not in_scopes:
+            continue
+        m = re.match(r"\s*-\s+id:\s+(.+)$", line)
+        if m:
+            ids.add(m.group(1).strip())
+    return ids
 
 
 def test_endpoint_ids_have_catalog_entries():
@@ -37,4 +59,3 @@ def test_endpoint_ids_have_catalog_entries():
     assert not missing, (
         "Found endpoint_id values without privilege catalog entries: " + ", ".join(missing)
     )
-

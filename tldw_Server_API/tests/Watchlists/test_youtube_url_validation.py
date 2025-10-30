@@ -54,6 +54,27 @@ def test_youtube_url_helpers_import_and_behavior():
     assert is_yt("https://example.com/feed.xml") is False
     assert is_feed("https://example.com/feed.xml") is False
 
+    # m.youtube.com and no-www hosts
+    assert is_yt("https://m.youtube.com/watch?v=dQw4w9WgXcQ") is True
+    assert is_feed("https://m.youtube.com/watch?v=dQw4w9WgXcQ") is False
+    assert is_yt("https://youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw") is True
+    assert is_feed("https://youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw") is True
+
+    # Mixed case canonical feed URL should still be accepted
+    mixed = "HTTPS://WWW.YouTube.COM/FEEDS/VIDEOS.XML?CHANNEL_ID=UC_x5XG1OV2P6uZZ5FSM9Ttw"
+    assert is_yt(mixed) is True
+    assert is_feed(mixed) is True
+
+    # youtu.be link with playlist list param is NOT a feed
+    short_with_list = "https://youtu.be/dQw4w9WgXcQ?list=PL590L5WQmH8c9k2FYR3LyzAxylDWX2vHX"
+    assert is_yt(short_with_list) is True
+    assert is_feed(short_with_list) is False
+
+    # Extra query params on canonical feed remain accepted
+    feed_with_extra = "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw&foo=bar"
+    assert is_yt(feed_with_extra) is True
+    assert is_feed(feed_with_extra) is True
+
 
 def test_create_source_rejects_non_feed_youtube(client_with_user):
     c = client_with_user
@@ -119,3 +140,55 @@ def test_bulk_mixed_valid_and_invalid_reports_errors(client_with_user):
     errs = [it for it in data["items"] if it["status"] == "error"]
     assert len(errs) == 1
     assert "invalid_youtube_rss_url" in (errs[0].get("error") or "")
+
+
+def test_bulk_group_validation_errors(client_with_user):
+    c = client_with_user
+    # Use an obviously invalid group id
+    invalid_gid = 987654321
+    payload = {
+        "sources": [
+            {
+                "name": "With Invalid Group",
+                "url": "https://example.com/feed.xml",
+                "source_type": "rss",
+                "group_ids": [invalid_gid],
+            }
+        ]
+    }
+    r = c.post("/api/v1/watchlists/sources/bulk", json=payload)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] == 1
+    assert data["created"] == 0
+    assert data["errors"] == 1
+    assert data["items"][0]["status"] == "error"
+    assert "group_not_found" in (data["items"][0].get("error") or "")
+
+
+def test_bulk_tag_name_validation_errors(client_with_user):
+    c = client_with_user
+    payload = {
+        "sources": [
+            {
+                "name": "Bad Tags",
+                "url": "https://news.example.com/rss",
+                "source_type": "rss",
+                "tags": ["ok", "  ", ""],
+            },
+            {
+                "name": "Good Tags",
+                "url": "https://a.example.com/",
+                "source_type": "site",
+                "tags": ["alpha", "beta"],
+            },
+        ]
+    }
+    r = c.post("/api/v1/watchlists/sources/bulk", json=payload)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] == 2
+    assert data["created"] == 1
+    assert data["errors"] == 1
+    errs = [it for it in data["items"] if it["status"] == "error"]
+    assert errs and "invalid_tag_names" in (errs[0].get("error") or "")

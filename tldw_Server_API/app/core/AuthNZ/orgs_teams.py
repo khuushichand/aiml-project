@@ -146,9 +146,20 @@ async def create_organization(
             }
 
 
-async def list_organizations(limit: int = 100, offset: int = 0, q: Optional[str] = None) -> List[Dict[str, Any]]:
+async def list_organizations(
+    limit: int = 100,
+    offset: int = 0,
+    q: Optional[str] = None,
+    *,
+    with_total: bool = False,
+) -> List[Dict[str, Any]] | tuple[List[Dict[str, Any]], int]:
+    """List organizations with optional server-side filtering and total count.
+
+    When with_total=True, returns a tuple of (rows, total). Otherwise returns rows only.
+    """
     pool = await get_db_pool()
     if pool.pool:
+        # Postgres path
         if q:
             like = f"%{str(q).lower()}%"
             rows = await pool.fetchall(
@@ -161,16 +172,27 @@ async def list_organizations(limit: int = 100, offset: int = 0, q: Optional[str]
                 """,
                 like, limit, offset,
             )
+            total = await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM organizations
+                WHERE LOWER(name) LIKE $1 OR LOWER(COALESCE(slug, '')) LIKE $1 OR CAST(id AS TEXT) LIKE $1
+                """,
+                like,
+            ) if with_total else 0
         else:
             rows = await pool.fetchall(
                 "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC LIMIT $1 OFFSET $2",
                 limit, offset,
             )
-        return rows
+            total = await pool.fetchval("SELECT COUNT(*) FROM organizations") if with_total else 0
+        return (rows, int(total)) if with_total else rows
     else:
+        # SQLite / aiosqlite path
         async with pool.acquire() as conn:
+            params: list[Any] = []
             if q:
                 like = f"%{str(q).lower()}%"
+                params = [like, like, like, limit, offset]
                 cursor = await conn.execute(
                     """
                     SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
@@ -179,20 +201,46 @@ async def list_organizations(limit: int = 100, offset: int = 0, q: Optional[str]
                     ORDER BY created_at DESC
                     LIMIT ? OFFSET ?
                     """,
-                    (like, like, like, limit, offset),
+                    params,
                 )
+                rows_raw = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0], "name": r[1], "slug": r[2], "owner_user_id": r[3],
+                        "is_active": bool(r[4]), "created_at": r[5], "updated_at": r[6]
+                    } for r in rows_raw
+                ]
+                if with_total:
+                    cur2 = await conn.execute(
+                        """
+                        SELECT COUNT(*) FROM organizations
+                        WHERE LOWER(name) LIKE ? OR LOWER(COALESCE(slug, '')) LIKE ? OR CAST(id AS TEXT) LIKE ?
+                        """,
+                        (like, like, like),
+                    )
+                    total_row = await cur2.fetchone()
+                    total = int(total_row[0]) if total_row else 0
+                else:
+                    total = 0
             else:
                 cursor = await conn.execute(
                     "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     (limit, offset),
                 )
-            rows = await cursor.fetchall()
-            return [
-                {
-                    "id": r[0], "name": r[1], "slug": r[2], "owner_user_id": r[3],
-                    "is_active": bool(r[4]), "created_at": r[5], "updated_at": r[6]
-                } for r in rows
-            ]
+                rows_raw = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0], "name": r[1], "slug": r[2], "owner_user_id": r[3],
+                        "is_active": bool(r[4]), "created_at": r[5], "updated_at": r[6]
+                    } for r in rows_raw
+                ]
+                if with_total:
+                    cur2 = await conn.execute("SELECT COUNT(*) FROM organizations")
+                    total_row = await cur2.fetchone()
+                    total = int(total_row[0]) if total_row else 0
+                else:
+                    total = 0
+            return (rows, total) if with_total else rows
 
 
 async def create_team(

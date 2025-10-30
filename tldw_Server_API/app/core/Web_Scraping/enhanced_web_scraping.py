@@ -35,6 +35,7 @@ from bs4 import BeautifulSoup
 import trafilatura
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import atexit
+from heapq import heappush, heappop
 #
 # Import existing components
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
@@ -54,12 +55,14 @@ from tldw_Server_API.app.core.Web_Scraping.filters import (
     DomainFilter,
     ContentTypeFilter,
     URLPatternFilter,
+    RobotsFilter,
 )
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+BEST_FIRST_BATCH_SIZE = 10
 
 
 class JobStatus(Enum):
@@ -1015,7 +1018,6 @@ class EnhancedWebScraper:
             return []
         visited: Set[str] = set()
         base_norm = normalize_for_crawl(base_url, base_url)
-        to_visit: List[Tuple[str, int]] = [(base_norm, 0)]
         # Build filter chain based on config (include_external, allow/deny, patterns, content types)
         cfg = load_and_log_configs() or {}
         wc = cfg.get('web_scraper', {}) if isinstance(cfg, dict) else {}
@@ -1043,6 +1045,15 @@ class EnhancedWebScraper:
             ContentTypeFilter(),
             URLPatternFilter(include_patterns=None, exclude_patterns=default_excludes),
         ])
+
+        # Optional robots filter controlled by config (default: respect robots)
+        respect_robots_default = wc.get('web_scraper_respect_robots', True)
+        if isinstance(respect_robots_default, str):
+            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on", "y"}
+        robots_filter: Optional[RobotsFilter] = None
+        if bool(respect_robots_default):
+            robots_ua = user_agent or DEFAULT_USER_AGENT
+            robots_filter = RobotsFilter(robots_ua, ttl_seconds=1800, backend="httpx", timeout=5.0)
 
         # Build composite scorer
         scorers = [
@@ -1091,50 +1102,102 @@ class EnhancedWebScraper:
 
         results = []
         
-        while to_visit and len(results) < max_pages:
-            url, depth = to_visit.pop(0)
-            current = normalize_for_crawl(url, base_norm)
-            
-            if current in visited or depth > max_depth:
+        # Build best-first priority queue
+        pq: List[Tuple[float, int, str, Optional[str]]] = []  # (-score, depth, url, parent)
+        seen: Set[str] = set()
+        try:
+            start_score = composite.score(base_norm)
+        except Exception:
+            start_score = 0.0
+        heappush(pq, (-float(start_score), 0, base_norm, None))
+        seen.add(base_norm)
+
+        while pq and len(results) < max_pages:
+            # Pop up to batch size items
+            remaining = max_pages - len(results)
+            batch_n = min(BEST_FIRST_BATCH_SIZE, remaining)
+            batch: List[Tuple[float, int, str, Optional[str]]] = []
+            while pq and len(batch) < batch_n:
+                neg_s, depth, url, parent = heappop(pq)
+                cur = normalize_for_crawl(url, base_norm)
+                if cur in visited or depth > max_depth:
+                    continue
+                batch.append((neg_s, depth, cur, parent))
+                visited.add(cur)
+
+            if not batch:
                 continue
-            
-            visited.add(current)
-            
-            # Update progress
-            self._progress['recursive_scrape'] = {
-                'visited': len(visited),
-                'to_visit': len(to_visit),
-                'scraped': len(results),
-                'current_url': current,
-                'current_depth': depth
-            }
-            
-            # Scrape page
-            result = await self.scrape_article(
-                current,
+
+            batch_urls = [u for (_, _, u, _) in batch]
+            batch_results = await self.scrape_multiple(
+                batch_urls,
+                method="trafilatura",
                 custom_cookies=custom_cookies,
                 user_agent=user_agent,
                 custom_headers=custom_headers,
             )
-            
-            if result.get('extraction_successful'):
-                results.append(result)
-                
-                # Extract links if not at max depth
-                if depth < max_depth:
-                    links = await self._extract_links(current, result.get('content', ''))
-                    for link in links:
-                        absolute_url = normalize_for_crawl(link, current)
-                        if absolute_url not in visited and filter_chain.apply(absolute_url):
-                            # Score gating
+
+            # Map url -> (neg_score, depth, parent)
+            meta_map = {u: (neg_s, d, p) for (neg_s, d, u, p) in batch}
+
+            for res in batch_results:
+                r_url = res.get('url') or ''
+                neg_score, depth, parent = meta_map.get(r_url, (0.0, 0, None))
+                # Attach traversal metadata
+                res.setdefault('metadata', {})
+                # Score is derived from queue priority (negated)
+                try:
+                    computed_score = float(-neg_score)
+                except Exception:
+                    # Fallback compute on demand
+                    try:
+                        computed_score = float(composite.score(r_url))
+                    except Exception:
+                        computed_score = 0.0
+                res['metadata'].update({'depth': depth, 'parent_url': parent, 'score': computed_score})
+
+                if res.get('extraction_successful'):
+                    results.append(res)
+                    # Discovery
+                    if depth < max_depth:
+                        # remaining capacity for enqueueing new links
+                        remaining = max_pages - len(results)
+                        if remaining <= 0:
+                            break
+                        links = await self._extract_links(r_url, res.get('content', ''))
+                        for link in links:
+                            if remaining <= 0:
+                                break
+                            cand = normalize_for_crawl(link, r_url)
+                            if cand in visited or cand in seen:
+                                continue
+                            if not filter_chain.apply(cand):
+                                continue
+                            # Optional robots gating (execute only for egress-allowed hosts)
+                            if robots_filter is not None:
+                                try:
+                                    allowed = await robots_filter.allowed(cand)
+                                except Exception:
+                                    allowed = True  # fail open
+                                if not allowed:
+                                    try:
+                                        from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
+                                        parsed = urlparse(cand)
+                                        log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                                    except Exception:
+                                        pass
+                                    continue
                             try:
-                                s_val = composite.score(absolute_url)
+                                s_val = composite.score(cand)
                             except Exception:
                                 s_val = 0.0
                             if s_val < score_threshold:
                                 continue
-                            if not url_filter or url_filter(absolute_url):
-                                to_visit.append((absolute_url, depth + 1))
+                            if url_filter and not url_filter(cand):
+                                continue
+                            heappush(pq, (-float(s_val), depth + 1, cand, r_url))
+                            seen.add(cand)
+                            remaining -= 1
         
         return results
     

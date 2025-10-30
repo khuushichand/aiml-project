@@ -2,7 +2,7 @@
 Utilities for starting, monitoring, and stopping the FastAPI server used in CI workflows.
 
 This script consolidates all lifecycle management so that GitHub Actions workflows can call
-`python tldw_Server_API/scripts/server_lifecycle.py <command>` instead of embedding large
+`python tldw_Server_API/tests/scripts/server_lifecycle.py <command>` instead of embedding large
 inline Python blocks.
 
 Commands:

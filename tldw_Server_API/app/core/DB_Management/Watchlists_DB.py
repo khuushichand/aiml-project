@@ -173,14 +173,28 @@ class OutputRow:
 
 
 class WatchlistsDatabase:
+    # Keep track of schema initialization per DB path to avoid redundant ALTER checks/noise
+    _schema_init_keys: set[str] = set()
+
     def __init__(self, user_id: int | str, backend: Optional[DatabaseBackend] = None):
         self.user_id = str(user_id)
+        db_key: Optional[str] = None
         if backend is None:
             db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
             cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
             backend = DatabaseBackendFactory.create_backend(cfg)
+            db_key = f"sqlite:{db_path}"
+        else:
+            # Fallback key when external backend is supplied (best-effort de-dupe)
+            db_key = f"backend:{id(backend)}"
         self.backend = backend
-        self.ensure_schema()
+        # De-duplicate schema ensures across startup/requests
+        if db_key and db_key not in WatchlistsDatabase._schema_init_keys:
+            self.ensure_schema()
+            WatchlistsDatabase._schema_init_keys.add(db_key)
+        elif not db_key:
+            # If we couldn't derive a key, fall back to ensuring schema once here
+            self.ensure_schema()
 
     @classmethod
     def for_user(cls, user_id: int | str) -> "WatchlistsDatabase":
@@ -330,35 +344,50 @@ class WatchlistsDatabase:
         CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_job ON watchlist_outputs(job_id);
         """
         self.backend.create_tables(ddl)
-        # Backfill columns in case table existed
-        try:
-            self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
-        except Exception:
-            pass
-        try:
-            self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", tuple())
-        except Exception:
-            pass
-        try:
-            self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", tuple())
-        except Exception:
-            pass
-        try:
-            self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
-        except Exception:
-            pass
-        try:
-            self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", tuple())
-        except Exception:
-            pass
-        try:
-            self.backend.execute("ALTER TABLE watchlist_outputs ADD COLUMN version INTEGER NOT NULL DEFAULT 1", tuple())
-        except Exception:
-            pass
-        try:
-            self.backend.execute("ALTER TABLE watchlist_outputs ADD COLUMN expires_at TEXT", tuple())
-        except Exception:
-            pass
+        # Backfill columns in case tables existed (guarded to avoid noisy duplicate-column errors)
+        def _col_exists(table: str, col: str) -> bool:
+            try:
+                info = self.backend.get_table_info(table)
+                names = {str(c.get("name")) for c in info if c.get("name") is not None}
+                return col in names
+            except Exception:
+                return False
+
+        if not _col_exists("scrape_jobs", "wf_schedule_id"):
+            try:
+                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
+            except Exception:
+                pass
+        if not _col_exists("scrape_jobs", "job_filters_json"):
+            try:
+                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", tuple())
+            except Exception:
+                pass
+        if not _col_exists("sources", "defer_until"):
+            try:
+                self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", tuple())
+            except Exception:
+                pass
+        if not _col_exists("sources", "consec_not_modified"):
+            try:
+                self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
+            except Exception:
+                pass
+        if not _col_exists("scrape_run_items", "source_id"):
+            try:
+                self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", tuple())
+            except Exception:
+                pass
+        if not _col_exists("watchlist_outputs", "version"):
+            try:
+                self.backend.execute("ALTER TABLE watchlist_outputs ADD COLUMN version INTEGER NOT NULL DEFAULT 1", tuple())
+            except Exception:
+                pass
+        if not _col_exists("watchlist_outputs", "expires_at"):
+            try:
+                self.backend.execute("ALTER TABLE watchlist_outputs ADD COLUMN expires_at TEXT", tuple())
+            except Exception:
+                pass
 
     # ------------------------
     # Tags helpers
@@ -952,6 +981,37 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             "SELECT id, job_id, status, started_at, finished_at, stats_json, error_msg, log_path FROM scrape_runs WHERE job_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
             (job_id, limit, offset),
+        ).rows
+        return [RunRow(**r) for r in rows], total
+
+    def list_runs(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[RunRow], int]:
+        """List runs across all jobs for this user.
+
+        Optional q filters by job name/description, run status, or run id (text match).
+        """
+        where = ["j.user_id = ?"]
+        params: List[Any] = [self.user_id]
+        if q:
+            like = f"%{q}%"
+            # Match job name/description or run status/id (text)
+            where.append("(j.name LIKE ? OR j.description LIKE ? OR sr.status LIKE ? OR CAST(sr.id AS TEXT) LIKE ?)")
+            params.extend([like, like, like, like])
+        where_sql = " AND ".join(where)
+        total = int(
+            self.backend.execute(
+                f"SELECT COUNT(*) AS cnt FROM scrape_runs sr JOIN scrape_jobs j ON j.id = sr.job_id WHERE {where_sql}",
+                tuple(params),
+            ).scalar or 0
+        )
+        rows = self.backend.execute(
+            f"""
+            SELECT sr.id, sr.job_id, sr.status, sr.started_at, sr.finished_at, sr.stats_json, sr.error_msg, sr.log_path
+            FROM scrape_runs sr JOIN scrape_jobs j ON j.id = sr.job_id
+            WHERE {where_sql}
+            ORDER BY sr.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params + [limit, offset]),
         ).rows
         return [RunRow(**r) for r in rows], total
 

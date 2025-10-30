@@ -31,6 +31,17 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
     assert acq
     jm.complete_job(int(acq["id"]))
 
+    # Assert exactly one job.completed outbox row for this job
+    import sqlite3
+    db_path = tmp_path / "Databases" / "jobs.db"
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM job_events WHERE job_id = ? AND event_type = 'job.completed'",
+            (int(j["id"]),),
+        )
+        cnt = int(cur.fetchone()[0])
+        assert cnt == 1, f"expected 1 job.completed event, found {cnt}"
+
     # Capture outgoing webhook requests
     sent = {"count": 0, "headers": None, "body": None}
 

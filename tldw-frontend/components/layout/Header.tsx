@@ -11,12 +11,17 @@ export function Header() {
     logout();
   };
   
+  const showRunsEnv = (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== '0' && (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== 'false';
+  const runsRequireAdmin = (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === '1' || (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === 'true';
+  const userIsAdmin = !!((user as any)?.is_admin || (user as any)?.role === 'admin' || (user as any)?.roles?.includes?.('admin'));
+  const showRuns = showRunsEnv && (!runsRequireAdmin || userIsAdmin);
   const navLinks = [
     { href: '/', label: 'Home' },
     { href: '/media', label: 'Media' },
     { href: '/items', label: 'Items' },
     { href: '/reading', label: 'Reading' },
     { href: '/watchlists', label: 'Watchlists' },
+    ...(showRuns ? [{ href: '/admin/watchlists-runs', label: 'Runs' } as const] : []),
     { href: '/chat', label: 'Chat' },
     { href: '/search', label: 'Search' },
     { href: '/audio', label: 'Audio' },

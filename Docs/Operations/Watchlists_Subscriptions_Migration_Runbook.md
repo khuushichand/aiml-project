@@ -101,6 +101,7 @@ Notes:
 - Invalid entries return `status:"error"` with `error` message; valid entries are created.
 - YouTube-as-RSS: When `source_type="rss"`, non-feed YouTube URLs (e.g., `watch`, `shorts`, `@handle`) are rejected with
   `invalid_youtube_rss_url`. Accepted forms are canonical feeds, e.g. `https://www.youtube.com/feeds/videos.xml?channel_id=...`.
+ - Tags: Each tag must be a non-empty, non-whitespace string. Invalid tags cause per-entry errors with `invalid_tag_names`.
 
 Example:
 ```
@@ -217,6 +218,18 @@ Templates: list/create under `/api/v1/watchlists/templates` (`watchlists.py:1403
 - Job created with expected scope; `next_run_at` computed; schedule registered.
 - First run completes without errors; items present and dedupe is effective.
 - Outputs generate and TTL semantics reflect `/watchlists/settings` values.
+
+### UI Verification (Admin)
+
+- Runs view: navigate to `/admin/watchlists-runs`.
+  - Browse runs (Global or By Job), confirm counters (found/ingested and filters include/exclude/flag) and pagination.
+  - Optionally enable “Include tallies” and set a filtered sample size to view per-run tallies and a small sample of filtered items.
+  - For large result sets, prefer the “Server CSV” export links over client-side CSV.
+
+- Items view: from the Runs table, click “View items” or open `/admin/watchlists-items?run_id=<id>`.
+  - Verify items list for the run, status filter (ingested/filtered/flagged), and pagination work as expected.
+
+Tip: These views are intended for admin triage only and reflect the same data returned by the API endpoints under `/api/v1/watchlists/*`.
 - Delivery (email/Chatbook) succeeds in integration/staging.
 
 ## 7) Rollback Plan

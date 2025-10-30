@@ -147,11 +147,20 @@ class TestRunner:
                 or (test_case.get("inputs") or {}).get("_runner")
             )
 
-        if str(runner_hint or "").lower() == "python" and ProgramEvaluator.is_enabled():
-            # Heuristic program evaluation (no code execution in MVP):
+        if str(runner_hint or "").lower() == "python":
+            # Sandboxed program evaluator (feature-gated per project)
             pe = ProgramEvaluator()
-            reward = pe.evaluate_text_output(result.get("actual", {}).get("response", ""))
-            # Map reward (−1..10) to [0..1]
+            try:
+                project_id = (self.db.get_prompt(prompt_id) or {}).get("project_id")
+            except Exception:
+                project_id = None
+            eval_res = pe.evaluate(
+                project_id=project_id,
+                db=self.db,
+                llm_output=result.get("actual", {}).get("response", ""),
+                spec=(self.db.get_test_case(test_case_id) or {}).get("expected_outputs") or {},
+            )
+            reward = eval_res.reward
             score = max(0.0, min(1.0, reward / 10.0))
         else:
             # Provide a basic aggregate score based on expected vs actual overlap

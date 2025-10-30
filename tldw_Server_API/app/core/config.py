@@ -8,7 +8,7 @@ import os
 import yaml
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
@@ -654,6 +654,12 @@ def load_settings():
     SANDBOX_MAX_CPU = _sbx_float("SANDBOX_MAX_CPU", "max_cpu", 4.0)
     SANDBOX_MAX_MEM_MB = _sbx_int("SANDBOX_MAX_MEM_MB", "max_mem_mb", 8192)
     SANDBOX_WORKSPACE_CAP_MB = _sbx_int("SANDBOX_WORKSPACE_CAP_MB", "workspace_cap_mb", 256)
+    # Queue/backpressure defaults for sandbox orchestrator
+    SANDBOX_QUEUE_MAX_LENGTH = _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
+    SANDBOX_QUEUE_TTL_SEC = _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
+    # WebSocket server poll timeout (seconds) for sandbox log streams
+    # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
+    SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
     SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0"])
     SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
         os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"
@@ -662,6 +668,10 @@ def load_settings():
         os.getenv("SANDBOX_BACKGROUND_EXECUTION") or _sbx_get("background_execution", "false") or "false"
     )
     SANDBOX_IDEMPOTENCY_TTL_SEC = _sbx_int("SANDBOX_IDEMPOTENCY_TTL_SEC", "idempotency_ttl_sec", 600)
+    # Default timeouts and cancel grace
+    SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC = _sbx_int("SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC", "default_startup_timeout_sec", 20)
+    SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC = _sbx_int("SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", "default_exec_timeout_sec", 60)
+    SANDBOX_CANCEL_GRACE_SECONDS = _sbx_int("SANDBOX_CANCEL_GRACE_SECONDS", "cancel_grace_seconds", 5)
     # Artifact caps (MB)
     SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB = _sbx_int("SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB", "max_artifact_bytes_per_run_mb", 32)
     SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB = _sbx_int("SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB", "max_artifact_bytes_per_user_mb", 128)
@@ -672,7 +682,8 @@ def load_settings():
     SANDBOX_DOCKER_SECCOMP = os.getenv("SANDBOX_DOCKER_SECCOMP") or _sbx_get("docker_seccomp", None)
     SANDBOX_DOCKER_APPARMOR_PROFILE = os.getenv("SANDBOX_DOCKER_APPARMOR_PROFILE") or _sbx_get("docker_apparmor_profile", None)
     # Store backend (sqlite|memory) and path
-    SANDBOX_STORE_BACKEND = _sbx_env_or_cfg("SANDBOX_STORE_BACKEND", "store_backend", "sqlite").lower()
+    # Default to in-memory store for MVP to align with PRD (can be overridden to 'sqlite')
+    SANDBOX_STORE_BACKEND = _sbx_env_or_cfg("SANDBOX_STORE_BACKEND", "store_backend", "memory").lower()
     SANDBOX_STORE_DB_PATH = _sbx_get("store_db_path", None)
 
     config_dict = {
@@ -767,6 +778,9 @@ def load_settings():
         "SANDBOX_WORKSPACE_CAP_MB": SANDBOX_WORKSPACE_CAP_MB,
         "SANDBOX_SUPPORTED_SPEC_VERSIONS": SANDBOX_SUPPORTED_SPEC_VERSIONS,
         "SANDBOX_IDEMPOTENCY_TTL_SEC": SANDBOX_IDEMPOTENCY_TTL_SEC,
+        "SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC": SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC,
+        "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC": SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC,
+        "SANDBOX_CANCEL_GRACE_SECONDS": SANDBOX_CANCEL_GRACE_SECONDS,
         "SANDBOX_ENABLE_EXECUTION": SANDBOX_ENABLE_EXECUTION,
         "SANDBOX_BACKGROUND_EXECUTION": SANDBOX_BACKGROUND_EXECUTION,
         "SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB": SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB,
@@ -1458,6 +1472,116 @@ def load_comprehensive_config_with_tts():
     
     return CombinedConfig(config_parser, tts_config)
 
+
+# ----------------------------
+# API Route Toggle Helpers
+# ----------------------------
+
+@lru_cache(maxsize=1)
+def _route_toggle_policy() -> dict:
+    """Compute route toggle policy from env and config.txt.
+
+    Priority: ENV overrides > config.txt > defaults.
+
+    ENV variables supported:
+      - ROUTES_STABLE_ONLY: true|false (default false)
+      - ROUTES_DISABLE: comma-separated list of route keys
+      - ROUTES_ENABLE: comma-separated list of route keys
+      - ROUTES_EXPERIMENTAL: comma-separated list of additional experimental route keys
+
+    config.txt section [API-Routes] supports:
+      stable_only = true|false
+      disable = a,b,c
+      enable = x,y,z
+      experimental_routes = k1,k2  (optional, to extend defaults)
+    """
+
+    def _parse_list(val: Optional[str]) -> Set[str]:
+        if not val:
+            return set()
+        try:
+            # Allow JSON array
+            if val.strip().startswith("["):
+                arr = json.loads(val)
+                return {str(x).strip().lower() for x in arr if str(x).strip()}
+        except Exception:
+            pass
+        # Comma/space separated
+        parts = [p.strip() for p in val.replace("\n", ",").split(",")]
+        return {p.lower() for p in parts if p}
+
+    # Defaults: include all routes; a curated set flagged as experimental
+    default_experimental: Set[str] = {
+        # Clearly in-development or optional scaffolds
+        "sandbox",
+        "connectors",
+        "workflows",
+        "scheduler",
+        "flashcards",
+        "personalization",
+        "persona",
+        "jobs",  # jobs admin
+        "benchmarks",
+    }
+
+    # Load from config.txt (if available)
+    cfg_stable_only = True
+    cfg_disable: Set[str] = set()
+    cfg_enable: Set[str] = set()
+    cfg_experimental_extra: Set[str] = set()
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section('API-Routes'):
+            cfg_stable_only = cp.getboolean('API-Routes', 'stable_only', fallback=False)
+            cfg_disable = _parse_list(cp.get('API-Routes', 'disable', fallback=''))
+            cfg_enable = _parse_list(cp.get('API-Routes', 'enable', fallback=''))
+            cfg_experimental_extra = _parse_list(cp.get('API-Routes', 'experimental_routes', fallback=''))
+    except Exception as _e:
+        _log_debug(f"Route policy: unable to read config.txt [API-Routes]: {_e}")
+
+    # ENV overrides
+    env_stable_only = os.getenv('ROUTES_STABLE_ONLY')
+    if env_stable_only is not None:
+        cfg_stable_only = str(env_stable_only).strip().lower() in {"true", "1", "yes", "on"}
+
+    cfg_disable |= _parse_list(os.getenv('ROUTES_DISABLE'))
+    cfg_enable |= _parse_list(os.getenv('ROUTES_ENABLE'))
+    default_experimental |= _parse_list(os.getenv('ROUTES_EXPERIMENTAL'))
+    default_experimental |= cfg_experimental_extra
+
+    return {
+        'stable_only': cfg_stable_only,
+        'disable': cfg_disable,
+        'enable': cfg_enable,
+        'experimental': default_experimental,
+    }
+
+
+def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
+    """Return True if a route identified by `route_key` should be included.
+
+    - `route_key` should be a short, kebab/underscore case string used in main.py
+    - If stable_only is True, routes marked experimental are disabled unless explicitly enabled
+    - `disable` list always wins over implicit defaults; `enable` wins over stable_only gate
+    - Unknown routes are treated as stable by default
+    """
+    key = (route_key or "").strip().lower()
+    policy = _route_toggle_policy()
+
+    # Explicit allow/deny take precedence
+    if key in policy['enable']:
+        return True
+    if key in policy['disable']:
+        return False
+
+    # Stable-only gate: exclude experimental by default when enabled
+    if policy['stable_only']:
+        if key in policy['experimental']:
+            return False
+
+    # Fallback default behavior: stable routes are enabled unless explicitly disabled
+    return bool(default_stable)
+
 def load_and_log_configs():
     _log_debug("load_and_log_configs(): Loading and logging configurations...")
     try:
@@ -2126,6 +2250,53 @@ def load_and_log_configs():
         web_scraper_retry_timeout = config_parser_object.get('Web-Scraper', 'web_scraper_retry_timeout', fallback='5')
         web_scraper_stealth_playwright = config_parser_object.get('Web-Scraper', 'web_scraper_stealth_playwright', fallback='False')
 
+        # Web Scraper crawl flags (env overrides config.txt)
+        def _env_or_cfg(env_key: str, section: str, cfg_key: str, default: str) -> str:
+            return os.getenv(env_key) or config_parser_object.get(section, cfg_key, fallback=default)
+
+        def _as_bool(v: object, d: bool) -> bool:
+            try:
+                s = str(v).strip().lower()
+                if s in {"1", "true", "yes", "on", "y"}:
+                    return True
+                if s in {"0", "false", "no", "off", "n"}:
+                    return False
+            except Exception:
+                pass
+            return d
+
+        def _as_int(v: object, d: int) -> int:
+            try:
+                return int(str(v))
+            except Exception:
+                return d
+
+        def _as_float(v: object, d: float) -> float:
+            try:
+                return float(str(v))
+            except Exception:
+                return d
+
+        web_crawl_strategy = _env_or_cfg('WEB_CRAWL_STRATEGY', 'Web-Scraper', 'web_crawl_strategy', 'default')
+        web_crawl_include_external = _as_bool(
+            _env_or_cfg('WEB_CRAWL_INCLUDE_EXTERNAL', 'Web-Scraper', 'web_crawl_include_external', 'false'), False
+        )
+        web_crawl_score_threshold = _as_float(
+            _env_or_cfg('WEB_CRAWL_SCORE_THRESHOLD', 'Web-Scraper', 'web_crawl_score_threshold', '0.0'), 0.0
+        )
+        web_crawl_max_pages = _as_int(
+            _env_or_cfg('WEB_CRAWL_MAX_PAGES', 'Web-Scraper', 'web_crawl_max_pages', '100'), 100
+        )
+        # Optional scorers configuration
+        web_crawl_enable_keyword = _as_bool(
+            _env_or_cfg('WEB_CRAWL_ENABLE_KEYWORD_SCORER', 'Web-Scraper', 'web_crawl_enable_keyword_scorer', 'false'), False
+        )
+        web_crawl_keywords = _env_or_cfg('WEB_CRAWL_KEYWORDS', 'Web-Scraper', 'web_crawl_keywords', '')
+        web_crawl_enable_domain_map = _as_bool(
+            _env_or_cfg('WEB_CRAWL_ENABLE_DOMAIN_MAP', 'Web-Scraper', 'web_crawl_enable_domain_map', 'false'), False
+        )
+        web_crawl_domain_map = _env_or_cfg('WEB_CRAWL_DOMAIN_MAP', 'Web-Scraper', 'web_crawl_domain_map', '')
+
         return_dict = {
             'anthropic_api': {
                 'api_key': anthropic_api_key,
@@ -2665,6 +2836,16 @@ def load_and_log_configs():
                 'web_scraper_retry_count': web_scraper_retry_count,
                 'web_scraper_retry_timeout': web_scraper_retry_timeout,
                 'web_scraper_stealth_playwright': web_scraper_stealth_playwright,
+                # Crawl feature flags
+                'web_crawl_strategy': web_crawl_strategy,
+                'web_crawl_include_external': web_crawl_include_external,
+                'web_crawl_score_threshold': web_crawl_score_threshold,
+                'web_crawl_max_pages': web_crawl_max_pages,
+                # Scorers
+                'web_crawl_enable_keyword_scorer': web_crawl_enable_keyword,
+                'web_crawl_keywords': web_crawl_keywords,
+                'web_crawl_enable_domain_map': web_crawl_enable_domain_map,
+                'web_crawl_domain_map': web_crawl_domain_map,
             },
             'Redis': config_parser_object['Redis'] if 'Redis' in config_parser_object else {},
             'Web-Scraping': config_parser_object['Web-Scraping'] if 'Web-Scraping' in config_parser_object else {}

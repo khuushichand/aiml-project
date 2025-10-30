@@ -27,8 +27,11 @@ class WatchlistFiltersPayload(BaseModel):
     require_include: Optional[bool] = Field(
         default=None,
         description=(
-            "When true and any include rules exist, only include-matched items are ingested; "
-            "others are treated as filtered."
+            "Include-only gating toggle. When true and any include rules exist, only include-"
+            "matched items are ingested; others are treated as filtered. If unset, the job"
+            " inherits the organization default when available (organizations.metadata.watchlists."
+            "require_include_default or flat key watchlists_require_include_default) and finally"
+            " the WATCHLISTS_REQUIRE_INCLUDE_DEFAULT env var."
         ),
     )
 
@@ -201,6 +204,27 @@ class Run(BaseModel):
 class RunsListResponse(BaseModel):
     items: List[Run]
     total: int
+    has_more: Optional[bool] = None
+
+
+class PreviewItem(BaseModel):
+    source_id: int
+    source_type: SourceType
+    url: Optional[str] = None
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    published_at: Optional[str] = None
+    decision: Literal["ingest", "filtered"]
+    matched_action: Optional[FilterAction] = None
+    matched_filter_key: Optional[str] = None
+    flagged: bool = False
+
+
+class PreviewResponse(BaseModel):
+    items: List[PreviewItem]
+    total: int
+    ingestable: int
+    filtered: int
 
 
 class RunDetail(BaseModel):
@@ -210,10 +234,12 @@ class RunDetail(BaseModel):
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     stats: Dict[str, int] = Field(default_factory=lambda: {"items_found": 0, "items_ingested": 0})
+    filter_tallies: Optional[Dict[str, int]] = None
     error_msg: Optional[str] = None
     log_text: Optional[str] = None
     log_path: Optional[str] = None
     truncated: bool = False
+    filtered_sample: Optional[List[Dict[str, Any]]] = None
 
 
 class ScrapedItem(BaseModel):

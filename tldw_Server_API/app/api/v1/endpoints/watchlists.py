@@ -26,7 +26,45 @@ from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlist
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.core.Watchlists import template_store
 from tldw_Server_API.app.core.Watchlists.opml import parse_opml, generate_opml
-from tldw_Server_API.app.core.Notifications import NotificationsService
+from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_items_with_rules
+from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters, evaluate_filters as _evaluate_filters
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
+# Lazy/optional notifications import: avoid blocking router load if optional deps fail
+try:
+    from tldw_Server_API.app.core.Notifications import NotificationsService  # type: ignore
+except Exception:
+    class NotificationsService:  # type: ignore
+        def __init__(self, *, user_id: int, user_email: Optional[str] = None) -> None:
+            self.user_id = user_id
+            self.user_email = user_email
+
+        async def deliver_email(
+            self,
+            *,
+            subject: str,
+            html_body: str,
+            text_body: Optional[str],
+            recipients: Optional[List[str]],
+            attachments: Optional[List[Dict[str, Any]]] = None,
+            fallback_to_user_email: bool = True,
+        ) -> Any:
+            # Minimal shim for tests; report skipped
+            return type("_Result", (), {"channel": "email", "status": "skipped", "details": {"reason": "notifications_unavailable"}})()
+
+        def deliver_chatbook(
+            self,
+            *,
+            title: str,
+            content: str,
+            description: Optional[str] = None,
+            metadata: Optional[Dict[str, Any]] = None,
+            document_type: Any = None,
+            provider: str = "watchlists",
+            model: str = "watchlists",
+            conversation_id: Optional[int] = None,
+        ) -> Any:
+            return type("_Result", (), {"channel": "chatbook", "status": "skipped", "details": {"reason": "notifications_unavailable"}})()
 from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     Source, SourceCreateRequest, SourceUpdateRequest, SourcesListResponse, SourcesBulkCreateRequest,
     SourcesBulkCreateResponse, SourcesBulkCreateItem,
@@ -34,6 +72,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     Tag, TagsListResponse,
     Job, JobCreateRequest, JobUpdateRequest, JobsListResponse,
     Run, RunsListResponse, RunDetail,
+    PreviewItem, PreviewResponse,
     ScrapedItem, ScrapedItemsListResponse, ScrapedItemUpdateRequest,
     WatchlistOutput, WatchlistOutputCreateRequest, WatchlistOutputsListResponse,
     WatchlistTemplateCreateRequest, WatchlistTemplateDetail, WatchlistTemplateListResponse, WatchlistTemplateSummary,
@@ -459,6 +498,32 @@ def _is_youtube_feed_url(url: str) -> bool:
         return False
 
 
+def _normalize_youtube_feed_url(url: str) -> Optional[str]:
+    """Attempt to normalize some YouTube URLs to canonical feed URLs.
+
+    Supports channel, playlist, and user URL forms. Other forms are not normalized.
+    """
+    try:
+        from urllib.parse import urlparse, parse_qs
+        u = urlparse(url)
+        raw_qs = parse_qs(u.query or "")
+        # Normalize query keys to lowercase for case-insensitive lookup
+        qs = {str(k).lower(): v for k, v in raw_qs.items()}
+        parts = [p for p in (u.path or "").split("/") if p]
+        # playlist
+        if "list" in qs and qs["list"]:
+            return f"https://www.youtube.com/feeds/videos.xml?playlist_id={qs['list'][0]}"
+        # channel
+        if len(parts) >= 2 and parts[0].lower() == "channel":
+            return f"https://www.youtube.com/feeds/videos.xml?channel_id={parts[1]}"
+        # user
+        if len(parts) >= 2 and parts[0].lower() == "user":
+            return f"https://www.youtube.com/feeds/videos.xml?user={parts[1]}"
+    except Exception:
+        return None
+    return None
+
+
 def _validate_youtube_feed_or_raise(url: str, source_type: str) -> None:
     if str(source_type).lower() != "rss":
         return
@@ -478,13 +543,31 @@ async def create_source(
     payload: SourceCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    response: Response = None,  # type: ignore[assignment]
 ):
     try:
-        # Backend validation for YouTube-as-RSS
-        _validate_youtube_feed_or_raise(str(payload.url), str(payload.source_type))
+        # Backend normalization/validation for YouTube-as-RSS
+        url_str = str(payload.url)
+        orig_url_for_log = url_str
+        if str(payload.source_type).lower() == "rss" and _is_youtube_url(url_str) and not _is_youtube_feed_url(url_str):
+            normalized = _normalize_youtube_feed_url(url_str)
+            if normalized:
+                url_str = normalized
+                try:
+                    if response is not None:
+                        response.headers["X-YouTube-Normalized"] = "1"
+                        response.headers["X-YouTube-Canonical-URL"] = url_str
+                except Exception:
+                    pass
+                try:
+                    logger.debug(f"watchlists.create_source: normalized YouTube URL {orig_url_for_log} -> {url_str}")
+                except Exception:
+                    pass
+            else:
+                _validate_youtube_feed_or_raise(url_str, str(payload.source_type))
         row = db.create_source(
             name=payload.name,
-            url=str(payload.url),
+            url=url_str,
             source_type=str(payload.source_type),
             active=payload.active,
             settings_json=(json.dumps(payload.settings) if payload.settings else None),
@@ -555,11 +638,27 @@ async def list_sources(
 @router.get("/sources/export", summary="Export sources to OPML")
 async def export_sources_opml(
     tag: Optional[List[str]] = Query(None, description="Filter by tag(s)"),
+    group: Optional[List[int]] = Query(None, description="Filter by group id(s) (OR semantics)"),
     type: Optional[str] = Query(None, description="Filter by source_type (rss/site)"),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
-    rows, _ = db.list_sources(q=None, tag_names=tag, limit=10000, offset=0)
+    # Base selection
+    if group:
+        try:
+            rows = db.list_sources_by_group_ids([int(g) for g in group])
+        except Exception:
+            rows = []
+        # Apply tag filter manually (AND semantics)
+        if tag:
+            needed = [t.strip().lower() for t in tag if t and str(t).strip()]
+            def _has_all_tags(src) -> bool:
+                src_tags = [str(t).strip().lower() for t in (getattr(src, "tags", []) or [])]
+                return all(n in src_tags for n in needed)
+            rows = [r for r in rows if _has_all_tags(r)]
+    else:
+        rows, _ = db.list_sources(q=None, tag_names=tag, limit=10000, offset=0)
+    # Build OPML items (rss sources only)
     items: List[Dict[str, Any]] = []
     for r in rows:
         if type and str(r.source_type).lower() != type.lower():
@@ -581,6 +680,7 @@ async def import_sources_opml(
     group_id: Optional[int] = Form(None),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    response: Response = None,  # type: ignore[assignment]
 ):
     content = await file.read()
     entries = parse_opml(content)
@@ -607,6 +707,26 @@ async def import_sources_opml(
         except Exception as exc:
             items.append(SourcesImportItem(url=e.url, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
+    # Best-effort rate-limit header
+    if not _limits_disabled_now():
+        try:
+            if response is not None:
+                response.headers.setdefault("X-RateLimit-Limit", "10/minute")
+                return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
+        except Exception:
+            pass
+        try:
+            from fastapi.responses import JSONResponse
+            payload = {
+                "items": [i.model_dump() if hasattr(i, "model_dump") else dict(i) for i in items],
+                "total": (created + skipped + errors),
+                "created": created,
+                "skipped": skipped,
+                "errors": errors,
+            }
+            return JSONResponse(content=payload, headers={"X-RateLimit-Limit": "10/minute"})
+        except Exception:
+            pass
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
 
 # (moved above /sources/{source_id})
@@ -643,6 +763,7 @@ async def update_source(
     payload: SourceUpdateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    response: Response = None,  # type: ignore[assignment]
 ):
     # Determine target source_type/url for validation
     try:
@@ -651,11 +772,38 @@ async def update_source(
         raise HTTPException(status_code=404, detail="source_not_found")
     target_type = str(payload.source_type) if (getattr(payload, "source_type", None) is not None) else str(existing.source_type)
     target_url = str(payload.url) if (getattr(payload, "url", None) is not None) else str(existing.url)
-    # Validate only when target_type is rss; reject non-feed YouTube URLs
-    _validate_youtube_feed_or_raise(target_url, target_type)
+    # Normalize/validate when target_type is rss and URL is YouTube
+    if target_type.lower() == "rss" and _is_youtube_url(target_url) and not _is_youtube_feed_url(target_url):
+        orig_url_for_log = target_url
+        normalized = _normalize_youtube_feed_url(target_url)
+        if normalized:
+            target_url = normalized
+            if payload.url is not None:
+                try:
+                    payload.url = type(payload.url)(target_url)  # type: ignore[call-arg]
+                except Exception:
+                    pass
+            try:
+                if response is not None:
+                    response.headers["X-YouTube-Normalized"] = "1"
+                    response.headers["X-YouTube-Canonical-URL"] = target_url
+            except Exception:
+                pass
+            try:
+                logger.debug(f"watchlists.update_source: normalized YouTube URL {orig_url_for_log} -> {target_url}")
+            except Exception:
+                pass
+        else:
+            _validate_youtube_feed_or_raise(target_url, target_type)
     patch = payload.model_dump(exclude_unset=True)
     if "settings" in patch:
         patch["settings_json"] = json.dumps(patch.pop("settings")) if patch.get("settings") is not None else None
+    # Coerce pydantic types to primitives for DB layer
+    if "url" in patch and patch["url"] is not None:
+        try:
+            patch["url"] = str(patch["url"])
+        except Exception:
+            pass
     row = db.update_source(source_id, patch)
     # tags replacement
     if payload.tags is not None:
@@ -720,7 +868,8 @@ async def delete_source(
         "Each item is either created or returns an error with reason.\n\n"
         "Validation: When `source_type=\"rss\"` and the URL is a YouTube link, only canonical RSS feeds "
         "are accepted (e.g., https://www.youtube.com/feeds/videos.xml?channel_id=..., playlist_id=..., user=...). "
-        "Non-feed YouTube URLs are rejected per-entry with error `invalid_youtube_rss_url`."
+        "Non-feed YouTube URLs are rejected per-entry with error `invalid_youtube_rss_url`. "
+        "Tags must be non-empty strings; invalid tags are rejected per-entry with `invalid_tag_names`."
     ),
 )
 async def bulk_create_sources(
@@ -732,9 +881,19 @@ async def bulk_create_sources(
     created_count = 0
     errors_count = 0
     for s in payload.sources:
-        # Validate YouTube-as-RSS for each entry; collect per-entry error instead of silent skip
+        # Normalize/Validate YouTube-as-RSS for each entry; collect per-entry error instead of silent skip
         try:
-            _validate_youtube_feed_or_raise(str(s.url), str(s.source_type))
+            url_str = str(s.url)
+            if str(s.source_type).lower() == "rss" and _is_youtube_url(url_str) and not _is_youtube_feed_url(url_str):
+                normalized = _normalize_youtube_feed_url(url_str)
+                if normalized:
+                    url_str = normalized
+                    try:
+                        logger.debug(f"watchlists.bulk_create_sources: normalized YouTube URL {s.url} -> {url_str}")
+                    except Exception:
+                        pass
+                else:
+                    _validate_youtube_feed_or_raise(url_str, str(s.source_type))
         except HTTPException as ve:
             items.append(
                 SourcesBulkCreateItem(
@@ -748,20 +907,84 @@ async def bulk_create_sources(
             errors_count += 1
             continue
 
+        # Validate tag name shape (no empty/whitespace-only names)
+        try:
+            if s.tags is not None:
+                invalid_tags = [t for t in s.tags if (not isinstance(t, str) or not t.strip())]
+                if invalid_tags:
+                    items.append(
+                        SourcesBulkCreateItem(
+                            name=s.name,
+                            url=str(s.url),
+                            status="error",
+                            error=f"invalid_tag_names: {invalid_tags}",
+                            source_type=str(s.source_type),
+                        )
+                    )
+                    errors_count += 1
+                    continue
+        except Exception:
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error="tag_validation_failed",
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+            continue
+
+        # Validate group_ids existence per-entry
+        try:
+            if s.group_ids:
+                missing: List[int] = []
+                for gid in s.group_ids:
+                    try:
+                        db.get_group(int(gid))
+                    except KeyError:
+                        missing.append(int(gid))
+                if missing:
+                    items.append(
+                        SourcesBulkCreateItem(
+                            name=s.name,
+                            url=str(s.url),
+                            status="error",
+                            error=f"group_not_found: {missing}",
+                            source_type=str(s.source_type),
+                        )
+                    )
+                    errors_count += 1
+                    continue
+        except Exception as e:
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error="group_validation_failed",
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+            continue
+
         try:
             row = db.create_source(
                 name=s.name,
-                url=str(s.url),
+                url=url_str if ('url_str' in locals()) else str(s.url),
                 source_type=str(s.source_type),
                 active=s.active,
                 settings_json=(json.dumps(s.settings) if s.settings else None),
                 tags=s.tags or [],
                 group_ids=s.group_ids or [],
             )
+            # Echo request name for stable per-entry mapping, even on idempotent creates
             items.append(
                 SourcesBulkCreateItem(
                     id=row.id,
-                    name=row.name,
+                    name=s.name,
                     url=row.url,
                     status="created",
                     source_type=row.source_type,  # type: ignore[assignment]
@@ -984,6 +1207,186 @@ async def create_job(
     )
 
 
+@router.post("/jobs/{job_id}/preview", response_model=PreviewResponse, summary="Preview candidates and filter decisions without ingestion")
+async def preview_job(
+    job_id: int = Path(..., ge=1),
+    limit: int = Query(20, ge=1, le=200, description="Max candidates to return across all sources"),
+    per_source: int = Query(10, ge=1, le=100, description="Max candidates per source"),
+    include_content: bool = Query(False, description="Reserved; previews return summary only for now"),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        job = db.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    # Resolve sources for job scope (IDs, tags, groups)
+    scope = {}
+    try:
+        scope = json.loads(job.scope_json or "{}") if job.scope_json else {}
+    except Exception:
+        scope = {}
+
+    selected: Dict[int, Any] = {}
+    for sid in map(int, scope.get("sources", []) or []):
+        try:
+            r = db.get_source(sid)
+            if int(r.active or 0) == 1:
+                selected[int(r.id)] = r
+        except Exception:
+            continue
+    tag_names = scope.get("tags") or []
+    if tag_names:
+        rows, _ = db.list_sources(q=None, tag_names=tag_names, limit=10000, offset=0)
+        for r in rows:
+            if int(r.active or 0) == 1:
+                selected[int(r.id)] = r
+    group_ids = scope.get("groups") or []
+    if group_ids:
+        try:
+            rows = db.list_sources_by_group_ids(group_ids)
+            for r in rows:
+                if int(r.active or 0) == 1:
+                    selected[int(r.id)] = r
+        except Exception:
+            pass
+    sources = list(selected.values())
+
+    # Load job filters and include-only gating default
+    raw_filters = {}
+    try:
+        raw_filters = json.loads(job.job_filters_json or "{}") if getattr(job, "job_filters_json", None) else {}
+    except Exception:
+        raw_filters = {}
+    job_filters = _normalize_job_filters(raw_filters)
+
+    async def _org_require_include_default() -> bool:
+        try:
+            scope_ctx = _get_scope()
+            org_id = getattr(scope_ctx, "effective_org_id", None) if scope_ctx else None
+            if org_id is not None:
+                pool = await _get_db_pool()
+                row = await pool.fetchone("SELECT metadata FROM organizations WHERE id = ?", int(org_id))
+                if row is not None:
+                    meta = row.get("metadata")
+                    if isinstance(meta, str):
+                        meta = json.loads(meta)
+                    if isinstance(meta, dict):
+                        watch = meta.get("watchlists") if isinstance(meta.get("watchlists"), dict) else {}
+                        if isinstance(watch, dict) and isinstance(watch.get("require_include_default"), bool):
+                            return bool(watch.get("require_include_default"))
+                        flat = meta.get("watchlists_require_include_default")
+                        if isinstance(flat, bool):
+                            return flat
+        except Exception:
+            pass
+        try:
+            return str(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "")).strip().lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            return False
+
+    include_rules_exist = any((str(f.get("action")) == "include") for f in job_filters)
+    job_require_include = None
+    if isinstance(raw_filters, dict) and "require_include" in raw_filters:
+        try:
+            job_require_include = bool(raw_filters.get("require_include"))
+        except Exception:
+            job_require_include = None
+    org_default = await _org_require_include_default()
+    effective_require_include = job_require_include if (job_require_include is not None) else org_default
+    include_gating_active = bool(effective_require_include and include_rules_exist)
+
+    # Collect candidates
+    items: List[PreviewItem] = []
+    total_ingestable = 0
+    total_filtered = 0
+    test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+
+    for src in sources:
+        if len(items) >= limit:
+            break
+        per_items: List[Dict[str, Any]] = []
+        try:
+            if str(src.source_type).lower() == "rss":
+                if test_mode:
+                    per_items = [{
+                        "title": "Test Item",
+                        "url": "https://example.com/test",
+                        "summary": "Preview sample",
+                        "published": datetime.now(timezone.utc).isoformat(),
+                        "author": None,
+                    }]
+                else:
+                    feed = await fetch_rss_feed(str(src.url), etag=None, last_modified=None, tenant_id=str(current_user.id))
+                    per_items = feed.get("items") or []
+            else:
+                if test_mode:
+                    per_items = [{
+                        "title": "Site Item",
+                        "url": getattr(src, "url", None) or "https://example.com/",
+                        "summary": "Preview sample",
+                        "content": "",
+                        "author": None,
+                    }]
+                else:
+                    cfg = {}
+                    try:
+                        cfg = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
+                    except Exception:
+                        cfg = {}
+                    per_items = await fetch_site_items_with_rules(str(src.url), rules=cfg.get("scrape_rules") or {}, limit=per_source)
+        except Exception:
+            per_items = []
+
+        taken = 0
+        for it in per_items:
+            if len(items) >= limit or taken >= per_source:
+                break
+            title = it.get("title")
+            link = it.get("url") or it.get("link")
+            summary = it.get("summary") or it.get("content")
+            published = it.get("published") or it.get("published_at")
+
+            candidate = {
+                "title": title,
+                "summary": summary,
+                "content": None,
+                "author": it.get("author"),
+                "published_at": published,
+            }
+            action, meta = _evaluate_filters(job_filters, candidate)
+            # Determine final decision with include-only gating
+            if action == "exclude":
+                decision = "filtered"
+            elif include_gating_active and action != "include":
+                decision = "filtered"
+            else:
+                decision = "ingest"
+            flagged = (action == "flag")
+            if decision == "ingest":
+                total_ingestable += 1
+            else:
+                total_filtered += 1
+            items.append(
+                PreviewItem(
+                    source_id=int(src.id),
+                    source_type=str(src.source_type),  # type: ignore[arg-type]
+                    url=link,
+                    title=title,
+                    summary=summary if not include_content else summary,
+                    published_at=published,
+                    decision=decision,  # type: ignore[arg-type]
+                    matched_action=action,  # type: ignore[arg-type]
+                    matched_filter_key=(meta.get("key") if isinstance(meta, dict) else None),
+                    flagged=flagged,
+                )
+            )
+            taken += 1
+
+    return PreviewResponse(items=items, total=len(items), ingestable=total_ingestable, filtered=total_filtered)
+
+
 @router.get("/jobs", response_model=JobsListResponse, summary="List jobs")
 async def list_jobs(
     q: Optional[str] = Query(None),
@@ -1187,11 +1590,12 @@ async def delete_job(
 @router.patch("/jobs/{job_id}/filters", response_model=WatchlistFiltersPayload, summary="Replace job filters")
 @_optional_limit("30/minute")
 async def replace_job_filters(
+    request: Request,
     job_id: int = Path(..., ge=1),
     payload: WatchlistFiltersPayload = Body(...),
-    request: Request,
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    response: Response = None,  # type: ignore[assignment]
 ):
     try:
         db.get_job(job_id)
@@ -1203,17 +1607,24 @@ async def replace_job_filters(
         parsed = json.loads(updated.job_filters_json or "{}") if getattr(updated, "job_filters_json", None) else {"filters": []}
     except Exception:
         parsed = {"filters": []}
+    # Best-effort rate-limit header for visibility
+    try:
+        if response is not None and not _limits_disabled_now():
+            response.headers.setdefault("X-RateLimit-Limit", "30/minute")
+    except Exception:
+        pass
     return WatchlistFiltersPayload(**parsed) if isinstance(parsed, dict) else WatchlistFiltersPayload(filters=[])
 
 
 @router.post("/jobs/{job_id}/filters:add", response_model=WatchlistFiltersPayload, summary="Append job filters")
 @_optional_limit("30/minute")
 async def append_job_filters(
+    request: Request,
     job_id: int = Path(..., ge=1),
     payload: WatchlistFiltersPayload = Body(...),
-    request: Request,
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    response: Response = None,  # type: ignore[assignment]
 ):
     try:
         current = db.get_job_filters(job_id)
@@ -1223,6 +1634,11 @@ async def append_job_filters(
     to_add = payload.filters or []
     new_filters = existing + [f.model_dump() if hasattr(f, "model_dump") else f for f in to_add]
     db.set_job_filters(job_id, {"filters": new_filters})
+    try:
+        if response is not None and not _limits_disabled_now():
+            response.headers.setdefault("X-RateLimit-Limit", "30/minute")
+    except Exception:
+        pass
     return WatchlistFiltersPayload(filters=[WatchlistFilter(**f) if isinstance(f, dict) else f for f in new_filters])
 
 
@@ -1275,7 +1691,35 @@ async def list_runs_for_job(
     offset = (page - 1) * limit
     rows, total = db.list_runs_for_job(job_id, limit=limit, offset=offset)
     items = [Run(id=r.id, job_id=r.job_id, status=r.status, started_at=r.started_at, finished_at=r.finished_at, stats=(json.loads(r.stats_json or "{}") if r.stats_json else None), error_msg=r.error_msg) for r in rows]
-    return RunsListResponse(items=items, total=total)
+    has_more = (offset + len(items)) < int(total or 0)
+    return RunsListResponse(items=items, total=total, has_more=has_more)
+
+
+@router.get("/runs", response_model=RunsListResponse, summary="List runs across all jobs")
+async def list_runs_global(
+    q: Optional[str] = Query(None, description="Filter by job name/description, run status, or run id (text)"),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    limit = size
+    offset = (page - 1) * limit
+    rows, total = db.list_runs(q=q, limit=limit, offset=offset)
+    items = [
+        Run(
+            id=r.id,
+            job_id=r.job_id,
+            status=r.status,
+            started_at=r.started_at,
+            finished_at=r.finished_at,
+            stats=(json.loads(r.stats_json or "{}") if r.stats_json else None),
+            error_msg=r.error_msg,
+        )
+        for r in rows
+    ]
+    has_more = (offset + len(items)) < int(total or 0)
+    return RunsListResponse(items=items, total=total, has_more=has_more)
 
 
 @router.get("/runs/{run_id}", response_model=Run, summary="Get a run")
@@ -1294,9 +1738,18 @@ async def get_run(
 @router.get("/runs/{run_id}/details", response_model=RunDetail, summary="Get run details with stats and logs")
 async def get_run_details(
     run_id: int = Path(..., ge=1),
+    include_tallies: bool = Query(False, description="When true, include filter_tallies in the response"),
+    filtered_sample_max: int = Query(5, ge=0, le=50, description="Optional number of filtered items to include as a sample"),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    response: Response = None,  # type: ignore[assignment]
 ):
+    """Return a summarized view of run stats and logs.
+
+    Note: Per-filter tallies are retained in the raw run stats (GET /watchlists/runs/{run_id})
+    under the key `filter_tallies` for detailed analysis. This detail view returns
+    flattened totals (filters_include/exclude/flag) for quick inspection.
+    """
     try:
         r = db.get_run(run_id)
     except KeyError:
@@ -1342,6 +1795,42 @@ async def get_run_details(
                     detail_stats[f"filters_{k}"] = int(v)
     except Exception:
         pass
+    # Optional tallies
+    tallies_out = None
+    if include_tallies:
+        try:
+            tallies = stats.get("filter_tallies")
+            if isinstance(tallies, dict):
+                # Coerce values to int
+                tallies_out = {str(k): int(v) for k, v in tallies.items() if isinstance(k, (str, int)) and isinstance(v, (int, float))}
+        except Exception:
+            tallies_out = None
+
+    # Optional filtered items sample for triage
+    filtered_sample = None
+    if filtered_sample_max and filtered_sample_max > 0:
+        try:
+            rows, _ = db.list_items(run_id=run_id, status="filtered", limit=int(filtered_sample_max), offset=0)
+            filtered_sample = [
+                {
+                    "id": it.id,
+                    "title": it.title,
+                    "url": it.url,
+                    "status": it.status,
+                }
+                for it in rows
+            ]
+        except Exception:
+            filtered_sample = None
+
+    # Expose filter debug max knob via header for visibility
+    try:
+        debug_max_env = int(os.getenv("WATCHLISTS_FILTER_DEBUG_MAX", "100") or 100)
+        if response is not None:
+            response.headers["X-Watchlists-Filter-Debug-Max"] = str(debug_max_env)
+    except Exception:
+        pass
+
     return RunDetail(
         id=r.id,
         job_id=r.job_id,
@@ -1349,11 +1838,109 @@ async def get_run_details(
         started_at=r.started_at,
         finished_at=r.finished_at,
         stats=detail_stats,
+        filter_tallies=tallies_out,
         error_msg=r.error_msg,
         log_text=log_text,
         log_path=r.log_path,
         truncated=truncated,
+        filtered_sample=filtered_sample,
     )
+
+
+# --------------------
+# CSV Exports (Admin convenience)
+# --------------------
+@router.get("/runs/export.csv", response_class=PlainTextResponse, summary="Export runs as CSV (global or by job)")
+async def export_runs_csv(
+    scope: str = Query("global", pattern="^(global|job)$"),
+    job_id: Optional[int] = Query(None, ge=1),
+    q: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(200, ge=1, le=1000),
+    include_tallies: bool = Query(False, description="When true, include a filter_tallies_json column per row"),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    """Return a CSV export of runs with basic counters.
+
+    Columns: id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag
+    """
+    limit = size
+    offset = (page - 1) * limit
+    if scope == "job":
+        if not job_id:
+            raise HTTPException(status_code=400, detail="job_id_required")
+        rows, _ = db.list_runs_for_job(job_id, limit=limit, offset=offset)
+    else:
+        rows, _ = db.list_runs(q=q, limit=limit, offset=offset)
+    headers = [
+        "id",
+        "job_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "items_found",
+        "items_ingested",
+        "filters_include",
+        "filters_exclude",
+        "filters_flag",
+    ]
+    if include_tallies:
+        headers.append("filter_tallies_json")
+    out_lines = [",".join(headers)]
+    for r in rows:
+        try:
+            stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
+        except Exception:
+            stats = {}
+        vals = [
+            str(r.id),
+            str(r.job_id),
+            json.dumps(r.status or ""),
+            json.dumps(r.started_at or ""),
+            json.dumps(r.finished_at or ""),
+            str(int((stats or {}).get("items_found", 0) or 0)),
+            str(int((stats or {}).get("items_ingested", 0) or 0)),
+            str(int(((stats.get("filters_actions") or {}).get("include", 0)) if isinstance(stats, dict) else 0)),
+            str(int(((stats.get("filters_actions") or {}).get("exclude", 0)) if isinstance(stats, dict) else 0)),
+            str(int(((stats.get("filters_actions") or {}).get("flag", 0)) if isinstance(stats, dict) else 0)),
+        ]
+        if include_tallies:
+            try:
+                tallies = stats.get("filter_tallies") if isinstance(stats, dict) else None
+                vals.append(json.dumps(tallies or {}))
+            except Exception:
+                vals.append("{}")
+        out_lines.append(",".join(vals))
+    filename = f"watchlists_runs_{scope}_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
+    return PlainTextResponse("\n".join(out_lines), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@router.get("/runs/{run_id}/tallies.csv", response_class=PlainTextResponse, summary="Export filter tallies for a run as CSV")
+async def export_run_tallies_csv(
+    run_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        r = db.get_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    try:
+        stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
+    except Exception:
+        stats = {}
+    tallies = stats.get("filter_tallies") if isinstance(stats, dict) else None
+    headers = ["run_id", "filter_key", "count"]
+    out_lines = [",".join(headers)]
+    if isinstance(tallies, dict):
+        for k, v in tallies.items():
+            try:
+                out_lines.append(",".join([str(run_id), json.dumps(str(k)), str(int(v))]))
+            except Exception:
+                continue
+    filename = f"watchlists_run_{run_id}_tallies_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
+    return PlainTextResponse("\n".join(out_lines), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 # --------------------

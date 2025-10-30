@@ -20,6 +20,14 @@ class OrganizationResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class OrganizationListResponse(BaseModel):
+    items: List[OrganizationResponse]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class TeamCreateRequest(BaseModel):
     name: str = Field(..., min_length=2)
     slug: Optional[str] = None

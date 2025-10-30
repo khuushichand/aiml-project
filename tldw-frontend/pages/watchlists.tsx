@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
+import { isYouTube, isYouTubeFeedUrl, toCanonicalYouTubeFeed } from '@/lib/urlNormalize';
 
 interface WatchlistJob {
   id: number;
@@ -199,6 +200,8 @@ export default function WatchlistsPage() {
   const [orgsPage, setOrgsPage] = useState<number>(1);
   const [orgsSize, setOrgsSize] = useState<number>(10);
   const [orgsFilter, setOrgsFilter] = useState<string>("");
+  const [orgsTotal, setOrgsTotal] = useState<number>(0);
+  const [orgsHasMore, setOrgsHasMore] = useState<boolean>(false);
   const [forms, setForms] = useState<Record<number, JobFormState>>({});
   const [sources, setSources] = useState<WatchlistSource[]>([]);
   const [loadingSources, setLoadingSources] = useState(false);
@@ -206,6 +209,11 @@ export default function WatchlistsPage() {
   const [newSource, setNewSource] = useState<SourceFormState>(defaultSourceState());
   const [showScrapeAdvanced, setShowScrapeAdvanced] = useState(false);
   const [opmlFile, setOpmlFile] = useState<File | null>(null);
+  const [opmlResult, setOpmlResult] = useState<any | null>(null);
+  const [showOpmlModal, setShowOpmlModal] = useState(false);
+  const [bulkJsonText, setBulkJsonText] = useState<string>('');
+  const [bulkResult, setBulkResult] = useState<any | null>(null);
+  const [showBulkModal, setShowBulkModal] = useState(false);
 
   const templateOptions = useMemo(() => templates.map((tpl) => ({ value: tpl.name, label: `${tpl.name} (${tpl.format})` })), [templates]);
 
@@ -380,10 +388,12 @@ export default function WatchlistsPage() {
     try {
       const form = new FormData();
       form.append('file', opmlFile);
-      await apiClient.post('/watchlists/sources/import', form, {
+      const data = await apiClient.post('/watchlists/sources/import', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      show({ title: 'OPML imported', variant: 'success' });
+      setOpmlResult(data);
+      setShowOpmlModal(true);
+      show({ title: 'OPML import completed', description: `Created ${data.created}, errors ${data.errors}`, variant: data.errors ? 'warning' : 'success' });
       setOpmlFile(null);
       fetchSources();
     } catch (error: any) {
@@ -405,6 +415,23 @@ export default function WatchlistsPage() {
       URL.revokeObjectURL(url);
     } catch (error: any) {
       show({ title: 'Export failed', description: error?.message, variant: 'danger' });
+    }
+  };
+
+  const handleBulkJsonSubmit = async () => {
+    try {
+      const payload = JSON.parse(bulkJsonText || '{}');
+      if (!payload || typeof payload !== 'object' || !Array.isArray(payload.sources)) {
+        show({ title: 'Invalid payload', description: 'JSON must be an object with a sources[] array', variant: 'warning' });
+        return;
+      }
+      const data = await apiClient.post('/watchlists/sources/bulk', payload);
+      setBulkResult(data);
+      setShowBulkModal(true);
+      show({ title: 'Bulk create completed', description: `Created ${data.created}, errors ${data.errors}`, variant: data.errors ? 'warning' : 'success' });
+      fetchSources();
+    } catch (error: any) {
+      show({ title: 'Bulk create failed', description: error?.message, variant: 'danger' });
     }
   };
 
@@ -456,13 +483,17 @@ export default function WatchlistsPage() {
       const offset = (orgsPage - 1) * orgsSize;
       const params: any = { limit: orgsSize, offset };
       if (orgsFilter.trim()) params.q = orgsFilter.trim();
-      const data = await apiClient.get<{ id: number; name: string; slug?: string | null }[]>(
+      const data = await apiClient.get<{ items: { id: number; name: string; slug?: string | null }[]; total: number; has_more: boolean }>(
         '/admin/orgs',
         { params }
       );
-      setOrgsList(Array.isArray(data) ? data : []);
+      setOrgsList(Array.isArray((data as any)?.items) ? data.items : []);
+      setOrgsTotal(Number.isFinite((data as any)?.total) ? data.total : 0);
+      setOrgsHasMore(Boolean((data as any)?.has_more));
     } catch (error: any) {
       setOrgsList([]);
+      setOrgsTotal(0);
+      setOrgsHasMore(false);
       show({ title: 'Failed to load organizations', description: error?.message, variant: 'danger' });
     } finally {
       setLoadingOrgsList(false);
@@ -551,27 +582,7 @@ export default function WatchlistsPage() {
 
     // Optional UX: Normalize/validate YouTube URLs for RSS sources before submit
     if (newSource.sourceType === 'rss') {
-      const isYouTube = (u: string) => /(^|\.)youtube\.com|youtu\.be/i.test(u);
-      const isFeedUrl = (u: string) => /\/feeds\/videos\.xml\?/i.test(u);
-      const toCanonicalYouTubeFeed = (u: string): string | null => {
-        try {
-          const parsed = new URL(u);
-          const list = parsed.searchParams.get('list');
-          if (list) {
-            return `https://www.youtube.com/feeds/videos.xml?playlist_id=${list}`;
-          }
-          const parts = parsed.pathname.split('/').filter(Boolean);
-          const i = parts.findIndex((p) => p.toLowerCase() === 'channel');
-          if (i >= 0 && parts[i + 1]) {
-            const cid = parts[i + 1];
-            return `https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`;
-          }
-          return null;
-        } catch {
-          return null;
-        }
-      };
-      if (isYouTube(payload.url) && !isFeedUrl(payload.url)) {
+      if (isYouTube(payload.url) && !isYouTubeFeedUrl(payload.url)) {
         const canonical = toCanonicalYouTubeFeed(payload.url);
         if (canonical) {
           payload.url = canonical;
@@ -716,6 +727,108 @@ export default function WatchlistsPage() {
           </p>
         </div>
 
+        {/* Import/Export and Bulk Upload */}
+        <div className="grid gap-6 rounded-md border border-gray-200 bg-white p-6 shadow-sm md:grid-cols-2">
+          <div className="space-y-3">
+            <h2 className="text-lg font-semibold text-gray-800">OPML Import/Export</h2>
+            <input type="file" accept=".opml,.xml" onChange={(e) => setOpmlFile(e.target.files?.[0] || null)} />
+            <div className="flex gap-3">
+              <Button onClick={handleImportOPML} disabled={!opmlFile}>Import OPML</Button>
+              <Button variant="secondary" onClick={handleExportOPML}>Export OPML</Button>
+              {opmlResult && (
+                <Button variant="ghost" onClick={() => setShowOpmlModal(true)}>View Results</Button>
+              )}
+            </div>
+          </div>
+          <div className="space-y-3">
+            <h2 className="text-lg font-semibold text-gray-800">Bulk JSON Upload</h2>
+            <p className="text-sm text-gray-600">Paste JSON like {'{ "sources": [ ... ] }'} and submit.</p>
+            <textarea className="w-full rounded border border-gray-300 p-2 text-sm" rows={6} value={bulkJsonText} onChange={(e) => setBulkJsonText(e.target.value)} placeholder='{"sources":[{"name":"Site A","url":"https://a.example.com/","source_type":"site"}]}' />
+            <div className="flex gap-3">
+              <Button onClick={handleBulkJsonSubmit}>Upload Bulk JSON</Button>
+              {bulkResult && (
+                <Button variant="ghost" onClick={() => setShowBulkModal(true)}>View Results</Button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Results Modals */}
+        {showOpmlModal && opmlResult && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowOpmlModal(false)}>
+            <div className="max-h-[80vh] w-[90vw] max-w-4xl overflow-auto rounded bg-white p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-semibold">OPML Import Results</h3><Button variant="ghost" onClick={() => setShowOpmlModal(false)}>Close</Button></div>
+              <p className="mb-2 text-sm text-gray-600">Total: {opmlResult.total} • Created: {opmlResult.created} • Skipped: {opmlResult.skipped} • Errors: {opmlResult.errors}</p>
+              <div className="overflow-auto">
+                <table className="w-full text-left text-sm">
+                  <thead><tr><th className="px-2 py-1">Name</th><th className="px-2 py-1">URL</th><th className="px-2 py-1">Status</th><th className="px-2 py-1">Error</th><th className="px-2 py-1">ID</th></tr></thead>
+                  <tbody>
+                    {(opmlResult.items || []).map((it: any, idx: number) => (
+                      <tr key={idx} className="border-t">
+                        <td className="px-2 py-1">{it.name || ''}</td>
+                        <td className="px-2 py-1 break-all">{it.url}</td>
+                        <td className="px-2 py-1">{it.status}</td>
+                        <td className="px-2 py-1">{it.error || ''}</td>
+                        <td className="px-2 py-1">{it.id || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {opmlResult.errors > 0 && (
+                <div className="mt-3">
+                  <Button variant="secondary" onClick={() => {
+                    const rows = (opmlResult.items || []).filter((it: any) => it.status !== 'created');
+                    const csv = ['name,url,status,error'].concat(rows.map((r: any) => [r.name || '', r.url || '', r.status || '', r.error || ''].map((s: string) => '"' + String(s).replaceAll('"','""') + '"').join(','))).join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'opml_import_errors.csv'; a.click(); URL.revokeObjectURL(url);
+                  }}>Download Errors CSV</Button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {showBulkModal && bulkResult && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowBulkModal(false)}>
+            <div className="max-h-[80vh] w-[90vw] max-w-4xl overflow-auto rounded bg-white p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-semibold">Bulk JSON Results</h3><Button variant="ghost" onClick={() => setShowBulkModal(false)}>Close</Button></div>
+              <p className="mb-2 text-sm text-gray-600">Total: {bulkResult.total} • Created: {bulkResult.created} • Errors: {bulkResult.errors}</p>
+              <div className="overflow-auto">
+                <table className="w-full text-left text-sm">
+                  <thead><tr><th className="px-2 py-1">Name</th><th className="px-2 py-1">URL</th><th className="px-2 py-1">Type</th><th className="px-2 py-1">Status</th><th className="px-2 py-1">Error</th><th className="px-2 py-1">ID</th></tr></thead>
+                  <tbody>
+                    {(bulkResult.items || []).map((it: any, idx: number) => (
+                      <tr key={idx} className="border-t">
+                        <td className="px-2 py-1">{it.name || ''}</td>
+                        <td className="px-2 py-1 break-all">{it.url}</td>
+                        <td className="px-2 py-1">{it.source_type || ''}</td>
+                        <td className="px-2 py-1">{it.status}</td>
+                        <td className="px-2 py-1">{it.error || ''}</td>
+                        <td className="px-2 py-1">{it.id || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {bulkResult.errors > 0 && (
+                <div className="mt-3">
+                  <Button variant="secondary" onClick={() => {
+                    const rows = (bulkResult.items || []).filter((it: any) => it.status !== 'created');
+                    const csv = ['name,url,source_type,status,error'].concat(rows.map((r: any) => [r.name || '', r.url || '', r.source_type || '', r.status || '', r.error || ''].map((s: string) => '"' + String(s).replaceAll('"','""') + '"').join(','))).join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'bulk_create_errors.csv'; a.click(); URL.revokeObjectURL(url);
+                  }}>Download Errors CSV</Button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-6 rounded-md border border-gray-200 bg-white p-6 shadow-sm md:grid-cols-2">
           <div>
             <h2 className="text-lg font-semibold text-gray-800">Org Defaults (Admin)</h2>
@@ -791,13 +904,13 @@ export default function WatchlistsPage() {
                         <option value={50}>50</option>
                       </select>
                     </label>
-                    <span>Page {orgsPage}</span>
+                    <span>Page {orgsPage} of {Math.max(1, Math.ceil((orgsTotal || 0) / (orgsSize || 1)))}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Button type="button" size="xs" variant="secondary" onClick={async () => { setOrgsPage((p) => Math.max(1, p - 1)); await fetchOrgListInline(); }} disabled={loadingOrgsList || orgsPage <= 1}>
                       Prev
                     </Button>
-                    <Button type="button" size="xs" variant="secondary" onClick={async () => { setOrgsPage((p) => p + 1); await fetchOrgListInline(); }} disabled={loadingOrgsList || orgsList.length < orgsSize}>
+                    <Button type="button" size="xs" variant="secondary" onClick={async () => { setOrgsPage((p) => p + 1); await fetchOrgListInline(); }} disabled={loadingOrgsList || !orgsHasMore}>
                       Next
                     </Button>
                     <Button type="button" size="xs" variant="secondary" onClick={fetchOrgListInline} disabled={loadingOrgsList}>
@@ -1285,6 +1398,21 @@ export default function WatchlistsPage() {
                     </Button>
                     <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const data = await apiClient.post<{ items: any[]; total: number; ingestable: number; filtered: number }>(`/watchlists/jobs/${job.id}/preview`, { }, { params: { limit: 10, per_source: 5 } });
+                          updateForm(job.id, { previewItems: data.items, showPreview: true });
+                        } catch (e: any) {
+                          show({ title: 'Preview failed', description: e?.message, variant: 'danger' });
+                        }
+                      }}
+                    >
+                      Preview
+                    </Button>
+                    <Button
+                      type="button"
                       variant="primary"
                       size="sm"
                       onClick={() => handleSave(job)}
@@ -1484,6 +1612,42 @@ export default function WatchlistsPage() {
                   {job.last_run_at && <span className="mr-4">Last run: {new Date(job.last_run_at).toLocaleString()}</span>}
                   {job.next_run_at && <span>Next run: {new Date(job.next_run_at).toLocaleString()}</span>}
                 </div>
+
+                {state.showPreview && (
+                  <div className="mt-4 rounded-md border border-indigo-200 bg-indigo-50/50 p-3">
+                    <div className="mb-2 text-sm font-semibold text-indigo-900">Preview (dry‑run)</div>
+                    {Array.isArray(state.previewItems) && state.previewItems.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200 text-xs">
+                          <thead className="bg-indigo-100/60">
+                            <tr>
+                              <th className="px-2 py-1 text-left font-medium text-indigo-900">Decision</th>
+                              <th className="px-2 py-1 text-left font-medium text-indigo-900">Matched</th>
+                              <th className="px-2 py-1 text-left font-medium text-indigo-900">Title</th>
+                              <th className="px-2 py-1 text-left font-medium text-indigo-900">Source</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-indigo-100">
+                            {state.previewItems.map((it: any, idx: number) => (
+                              <tr key={idx} className="bg-white">
+                                <td className="px-2 py-1">{it.decision}</td>
+                                <td className="px-2 py-1">{it.matched_action || '-'} {it.matched_filter_key ? `(${it.matched_filter_key})` : ''}</td>
+                                <td className="px-2 py-1">
+                                  <a href={it.url || '#'} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
+                                    {it.title || '(no title)'}
+                                  </a>
+                                </td>
+                                <td className="px-2 py-1">{it.source_type} #{it.source_id}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-indigo-800">No candidates in preview.</div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

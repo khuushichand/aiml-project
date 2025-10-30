@@ -310,7 +310,7 @@ config = {
 ```
 
 #### MCTS (Sequence Optimization)
-Use Monte Carlo Tree Search inspired exploration to refine prompt sequences. This MVP performs iterative variant sampling with early stopping and optional pruning via a cheap heuristic quality scorer.
+Use Monte Carlo Tree Search inspired exploration to refine prompt sequences. The MCTS core performs full tree search with UCT selection, sibling deduplication via score bins, and contextual generation over decomposed segments. This MVP includes early stopping and optional pruning via a cheap heuristic quality scorer.
 
 ```python
 config = {
@@ -375,7 +375,7 @@ To mark a test case as a code/program evaluation (non-executing MVP), include a 
 }
 ```
 
-When the environment flag `PROMPT_STUDIO_ENABLE_CODE_EVAL=true` is set, the TestRunner will use a heuristic Program Evaluator to score code-like outputs (no code execution in MVP). The full sandboxed executor will be added in a subsequent release.
+When the environment flag `PROMPT_STUDIO_ENABLE_CODE_EVAL=true` is set, the TestRunner will enable the Program Evaluator for code-like outputs. Additionally, you can enable per project by setting `{"enable_code_eval": true}` in the project `metadata` field. The evaluator extracts Python code blocks from LLM output, runs them in a sandboxed subprocess (no network/files; import whitelist), and maps objective/constraints to a reward in [-1..10]. If disabled, a heuristic text-based reward is used instead.
 
 #### Evaluations
 - `POST /evaluations/create` - Create evaluation
@@ -502,7 +502,7 @@ ws.onmessage = (event) => {
             console.log(`Progress: ${data.data.progress}%`);
             break;
         case 'optimization_iteration':
-            console.log(`Iteration ${data.data.iteration}: Score ${data.data.score}`);
+            console.log(`Iteration ${data.data.iteration}: current=${data.data.current_metric}, best=${data.data.best_metric}`);
             break;
         case 'job_completed':
             console.log('Job completed!', data.data);

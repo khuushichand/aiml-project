@@ -78,6 +78,24 @@ def test_outbox_list_and_sse_sqlite(monkeypatch, tmp_path):
                 time.sleep(0.05)
         assert saw, "jobs.test_event_2 not observed in outbox list"
 
+        # Create and complete a job; assert exactly one job.completed event exists for it
+        j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u2")
+        acq2 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w2")
+        assert acq2 is not None
+        jm.complete_job(int(acq2["id"]))
+
+        # Poll until we see the completed event, then count
+        deadline2 = time.time() + 2.0
+        completed_events = []
+        while time.time() < deadline2 and not completed_events:
+            r3 = client.get("/api/v1/jobs/events", params={"after_id": 0, "domain": "chatbooks"})
+            assert r3.status_code == 200
+            evs = r3.json()
+            completed_events = [ev for ev in evs if ev.get("event_type") == "job.completed" and int(ev.get("job_id") or 0) == int(j2["id"])]
+            if not completed_events:
+                time.sleep(0.05)
+        assert len(completed_events) == 1, f"expected 1 job.completed event for job {j2['id']}, found {len(completed_events)}"
+
 
 @pytest.mark.integration
 def test_outbox_after_id_and_filters_sqlite(monkeypatch, tmp_path):

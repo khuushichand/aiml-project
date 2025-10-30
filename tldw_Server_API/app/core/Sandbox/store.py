@@ -53,6 +53,37 @@ class SandboxStore:
     def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
         pass
 
+    # Admin listing APIs
+    def list_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        """Return a list of run summary rows as dicts suitable for admin list endpoints.
+
+        Each dict contains: id, user_id, spec_version, runtime, base_image, phase,
+        exit_code, started_at, finished_at, message, image_digest, policy_hash
+        """
+        raise NotImplementedError
+
+    def count_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+    ) -> int:
+        raise NotImplementedError
+
 
 class InMemoryStore(SandboxStore):
     def __init__(self, idem_ttl_sec: int = 600) -> None:
@@ -130,6 +161,82 @@ class InMemoryStore(SandboxStore):
     def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
         with self._lock:
             self._user_bytes[user_id] = int(self._user_bytes.get(user_id, 0)) + int(delta)
+
+    def list_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        from datetime import datetime
+        with self._lock:
+            rows = []
+            for st in self._runs.values():
+                if image_digest and (st.image_digest or None) != image_digest:
+                    continue
+                if user_id and self._owners.get(st.id) != user_id:
+                    continue
+                if phase and st.phase.value != phase:
+                    continue
+                sa = st.started_at
+                if started_at_from:
+                    try:
+                        dt_from = datetime.fromisoformat(started_at_from)
+                        if not (sa and sa >= dt_from):
+                            continue
+                    except Exception:
+                        pass
+                if started_at_to:
+                    try:
+                        dt_to = datetime.fromisoformat(started_at_to)
+                        if not (sa and sa <= dt_to):
+                            continue
+                    except Exception:
+                        pass
+                rows.append({
+                    "id": st.id,
+                    "user_id": self._owners.get(st.id),
+                    "spec_version": st.spec_version,
+                    "runtime": (st.runtime.value if st.runtime else None),
+                    "base_image": st.base_image,
+                    "phase": st.phase.value,
+                    "exit_code": st.exit_code,
+                    "started_at": (st.started_at.isoformat() if st.started_at else None),
+                    "finished_at": (st.finished_at.isoformat() if st.finished_at else None),
+                    "message": st.message,
+                    "image_digest": st.image_digest,
+                    "policy_hash": st.policy_hash,
+                })
+        def _key(r: dict):
+            return r.get("started_at") or ""
+        rows.sort(key=_key, reverse=bool(sort_desc))
+        return rows[offset: offset + limit]
+
+    def count_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+    ) -> int:
+        return len(self.list_runs(
+            image_digest=image_digest,
+            user_id=user_id,
+            phase=phase,
+            started_at_from=started_at_from,
+            started_at_to=started_at_to,
+            limit=10**9,
+            offset=0,
+            sort_desc=True,
+        ))
 
 
 class SQLiteStore(SandboxStore):
@@ -321,6 +428,93 @@ class SQLiteStore(SandboxStore):
                 (user_id, new_val),
             )
 
+    def list_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        order = "DESC" if sort_desc else "ASC"
+        where = ["1=1"]
+        params: list[Any] = []
+        if image_digest:
+            where.append("image_digest = ?")
+            params.append(image_digest)
+        if user_id:
+            where.append("user_id = ?")
+            params.append(user_id)
+        if phase:
+            where.append("phase = ?")
+            params.append(phase)
+        if started_at_from:
+            where.append("started_at >= ?")
+            params.append(started_at_from)
+        if started_at_to:
+            where.append("started_at <= ?")
+            params.append(started_at_to)
+        sql = (
+            "SELECT id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "
+            f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT ? OFFSET ?"
+        )
+        params.extend([int(limit), int(offset)])
+        with self._lock, self._conn() as con:
+            cur = con.execute(sql, tuple(params))
+            items: list[dict] = []
+            for row in cur.fetchall():
+                items.append({
+                    "id": row["id"],
+                    "user_id": row["user_id"],
+                    "spec_version": row["spec_version"],
+                    "runtime": row["runtime"],
+                    "base_image": row["base_image"],
+                    "phase": row["phase"],
+                    "exit_code": row["exit_code"],
+                    "started_at": row["started_at"],
+                    "finished_at": row["finished_at"],
+                    "message": row["message"],
+                    "image_digest": row["image_digest"],
+                    "policy_hash": row["policy_hash"],
+                })
+            return items
+
+    def count_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+    ) -> int:
+        where = ["1=1"]
+        params: list[Any] = []
+        if image_digest:
+            where.append("image_digest = ?")
+            params.append(image_digest)
+        if user_id:
+            where.append("user_id = ?")
+            params.append(user_id)
+        if phase:
+            where.append("phase = ?")
+            params.append(phase)
+        if started_at_from:
+            where.append("started_at >= ?")
+            params.append(started_at_from)
+        if started_at_to:
+            where.append("started_at <= ?")
+            params.append(started_at_to)
+        sql = f"SELECT COUNT(*) AS c FROM sandbox_runs WHERE {' AND '.join(where)}"
+        with self._lock, self._conn() as con:
+            cur = con.execute(sql, tuple(params))
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
 
 def get_store() -> SandboxStore:
     backend = None
@@ -338,4 +532,3 @@ def get_store() -> SandboxStore:
     except Exception:
         db_path = None
     return SQLiteStore(db_path=db_path, idem_ttl_sec=ttl)
-

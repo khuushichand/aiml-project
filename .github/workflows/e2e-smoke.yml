@@ -82,14 +82,14 @@ jobs:
           SINGLE_USER_API_KEY: "test-api-key-12345"
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py start
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
       - name: Wait for API health (single-user)
         env:
           SERVER_LABEL: single
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py health-check
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
       - name: Run E2E tests (single-user) — exclude Jobs for now
         env:
@@ -110,8 +110,8 @@ jobs:
           SERVER_LABEL: single
         shell: bash
         run: |
-          if [ -f "tldw_Server_API/scripts/server_lifecycle.py" ]; then
-            python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          if [ -f "tldw_Server_API/tests/scripts/server_lifecycle.py" ]; then
+            python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
           else
             echo "server_lifecycle.py not found; skipping stop for '${SERVER_LABEL}'";
           fi
@@ -143,14 +143,14 @@ jobs:
           AUTH_MODE: multi_user
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py start
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
       - name: Wait for API health (multi-user)
         env:
           SERVER_LABEL: multi
         shell: bash
         run: |
-          python tldw_Server_API/scripts/server_lifecycle.py health-check
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
       - name: Run E2E tests (multi-user)
         env:
@@ -166,8 +166,8 @@ jobs:
           SERVER_LABEL: multi
         shell: bash
         run: |
-          if [ -f "tldw_Server_API/scripts/server_lifecycle.py" ]; then
-            python tldw_Server_API/scripts/server_lifecycle.py stop || true
+          if [ -f "tldw_Server_API/tests/scripts/server_lifecycle.py" ]; then
+            python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
           else
             echo "server_lifecycle.py not found; skipping stop for '${SERVER_LABEL}'";
           fi

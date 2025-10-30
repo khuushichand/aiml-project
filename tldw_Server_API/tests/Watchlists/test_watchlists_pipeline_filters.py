@@ -109,3 +109,49 @@ async def test_flag_filter_ingests_and_tags_flagged():
     assert total >= 1
     assert any("flagged" in (itm.tags or []) for itm in items)
 
+
+@pytest.mark.asyncio
+async def test_include_only_gating_blocks_site_items_without_match():
+    user_id = 814
+    db = WatchlistsDatabase.for_user(user_id)
+
+    # Create a site source with simple scrape rules; TEST_MODE yields deterministic items
+    rules = {"list_url": "https://example.com/articles", "limit": 2}
+    site = db.create_source(
+        name="Site",
+        url="https://example.com/",
+        source_type="site",
+        active=True,
+        settings_json=json.dumps({"scrape_rules": rules}),
+        tags=["news"],
+        group_ids=[],
+    )
+
+    # Job with include-only gating enabled and an include rule that does NOT match test items
+    job = db.create_job(
+        name="SiteIncludeOnly",
+        description=None,
+        scope_json=json.dumps({"sources": [site.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+        job_filters_json=json.dumps({
+            "require_include": True,
+            "filters": [
+                {"type": "keyword", "action": "include", "value": {"keywords": ["NoMatch"], "match": "any"}},
+            ]
+        }),
+    )
+
+    res = await run_watchlist_job(user_id, job.id)
+    # Items found but none ingested due to include-only gating without a match
+    assert res.get("items_found", 0) >= 1
+    assert res.get("items_ingested", 0) == 0
+
+    items, total = db.list_items(run_id=None, job_id=job.id, status=None, limit=100, offset=0)
+    assert total >= 1
+    assert all(i.status == "filtered" for i in items)

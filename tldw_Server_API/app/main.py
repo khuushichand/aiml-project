@@ -29,10 +29,28 @@ class InterceptHandler(logging.Handler):
             level = logger.level(record.levelname).name
         except ValueError:
             level = record.levelno
+        # Walk back through frames to skip logging/loguru internals
         frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
+        try:
+            import os as _os
+            _logging_file = _os.path.abspath(getattr(logging, "__file__", ""))
+        except Exception:
+            _logging_file = ""
+        # Move at least one frame back (currentframe() points to this emit())
+        if frame is not None:
             frame = frame.f_back
-            depth += 1
+        while frame is not None:
+            fname = getattr(frame.f_code, "co_filename", "")
+            if _logging_file and _logging_file == fname:
+                depth += 1
+                frame = frame.f_back
+                continue
+            # Skip frames inside loguru internals as well
+            if "loguru" in (fname or ""):
+                depth += 1
+                frame = frame.f_back
+                continue
+            break
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 class _SafeExtra(dict):
@@ -157,7 +175,18 @@ class _SafeStreamWrapper:
         self._stream = stream
     def write(self, message: str):
         try:
+            # Normalize line endings and ensure a newline terminator
+            if message and not message.endswith("\n"):
+                if message.endswith("\r"):
+                    message = message[:-1] + "\n"
+                else:
+                    message = message + "\n"
             self._stream.write(message)
+            # Flush to avoid line coalescing in buffered environments
+            try:
+                self._stream.flush()
+            except Exception:
+                pass
         except Exception:
             # Swallow closed-file or teardown-time errors
             pass
@@ -2155,7 +2184,7 @@ async def _display_startup_info_and_warm():
 
 # --- FIX: Add CORS Middleware ---
 # Import from config
-from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX, should_disable_cors
+from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX, should_disable_cors, route_enabled
 
 # FIXME - CORS
 if should_disable_cors():
@@ -2322,8 +2351,7 @@ except Exception as _e:
 # WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
 WEBUI_DIR = BASE_DIR.parent / "WebUI"
 if WEBUI_DIR.exists():
-    # First, add a dynamic config endpoint for single user mode
-    @app.get("/webui/config.json", include_in_schema=False)
+    # First, define a dynamic config endpoint for single user mode (registered conditionally below)
     async def get_webui_config():
         """Dynamically generate WebUI configuration with API key in single user mode."""
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -2406,17 +2434,27 @@ if WEBUI_DIR.exists():
             logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
         
         return JSONResponse(content=config)
-    
-    # Mount the WebUI static files (except config.json which is handled dynamically)
-    app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
-    logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
+
+    # Gate WebUI static mount and config endpoint
+    try:
+        if route_enabled("webui"):
+            app.add_api_route("/webui/config.json", get_webui_config, include_in_schema=False)
+            # Mount the WebUI static files (except config.json which is handled above)
+            app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
+            logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
+        else:
+            logger.info("Route disabled by policy: webui (static + /webui/config.json)")
+    except Exception as _webui_rt_err:
+        logger.warning(f"Route gating error for webui; mounting by default. Error: {_webui_rt_err}")
+        app.add_api_route("/webui/config.json", get_webui_config, include_in_schema=False)
+        app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
+        logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
 else:
     logger.warning(f"WebUI directory not found at {WEBUI_DIR}")
 
 SETUP_PAGE_PATH = WEBUI_DIR / "setup.html"
 
 
-@app.get("/setup", include_in_schema=False, openapi_extra={"security": []})
 async def serve_setup_page():
     """Serve the first-time setup UI when required."""
     try:
@@ -2431,6 +2469,16 @@ async def serve_setup_page():
         raise HTTPException(status_code=404, detail="Setup UI assets missing. Reinstall the WebUI bundle.")
 
     return FileResponse(SETUP_PAGE_PATH)
+
+# Register setup UI route conditionally
+try:
+    if route_enabled("setup"):
+        app.add_api_route("/setup", serve_setup_page, methods=["GET"], include_in_schema=False, openapi_extra={"security": []})
+    else:
+        logger.info("Route disabled by policy: setup (UI)")
+except Exception as _setup_rt_err:
+    logger.warning(f"Route gating error for setup UI; including by default. Error: {_setup_rt_err}")
+    app.add_api_route("/setup", serve_setup_page, methods=["GET"], include_in_schema=False, openapi_extra={"security": []})
 
 # Mount project Docs (read-only) for WebUI links, if present
 DOCS_DIR = BASE_DIR.parent.parent / "Docs"
@@ -2449,7 +2497,11 @@ async def favicon():
 async def root():
     try:
         if needs_setup():
-            return RedirectResponse(url="/setup", status_code=307)
+            try:
+                if route_enabled("setup"):
+                    return RedirectResponse(url="/setup", status_code=307)
+            except Exception:
+                pass
     except FileNotFoundError:
         logger.warning("config.txt missing while handling root request; serving default message.")
 
@@ -2457,8 +2509,7 @@ async def root():
         "message": "Welcome to the tldw API; If you're seeing this, the server is running!" "Check out /webui , /docs or /metrics to get started!"
     }
 
-# Metrics endpoint for Prometheus scraping
-@app.get("/metrics", include_in_schema=False)
+# Metrics endpoint for Prometheus scraping (registered conditionally below)
 async def metrics():
     """Prometheus metrics endpoint.
 
@@ -2482,8 +2533,7 @@ async def metrics():
         pass
     return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
 
-# OpenTelemetry metrics endpoint (if using OTLP)
-@app.get("/api/v1/metrics", tags=["monitoring"])
+# OpenTelemetry metrics endpoint (if using OTLP) — registered conditionally below
 @track_metrics(labels={"endpoint": "metrics"})
 async def api_metrics():
     """Get current metrics in JSON format."""
@@ -2508,6 +2558,16 @@ if _MINIMAL_TEST_APP:
         # Never let optional sandbox break startup
         pass
 else:
+    # Small helper to guard route inclusion via config.txt and ENV
+    def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:
+        try:
+            if route_enabled(route_key, default_stable=default_stable):
+                app.include_router(router, prefix=prefix, tags=tags)
+            else:
+                logger.info(f"Route disabled by policy: {route_key}")
+        except Exception as _rt_err:  # noqa: BLE001
+            logger.warning(f"Route gating error for {route_key}; including by default. Error: {_rt_err}")
+            app.include_router(router, prefix=prefix, tags=tags)
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
         _HAS_HEALTH = True
@@ -2517,87 +2577,93 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
     from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring_router
     if _HAS_HEALTH:
-        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
-        app.include_router(health_router, prefix="", tags=["health"])  # /healthz, /readyz
-    app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
-    app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
+        _include_if_enabled("health", health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
+        _include_if_enabled("health", health_router, prefix="", tags=["health"])  # /healthz, /readyz
+    _include_if_enabled("moderation", moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
+    _include_if_enabled("monitoring", monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
     from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
-    app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
-    app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
+    _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
     if _HAS_AUTH_ENHANCED:
-        app.include_router(auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
-    app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
-    app.include_router(privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
+        _include_if_enabled("auth-enhanced", auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
+    _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    _include_if_enabled("privileges", privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
     from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
     from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
-    app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
-    app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
+    _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
     if _HAS_MEDIA:
-        app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+        _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     if _HAS_AUDIO:
-        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+        _include_if_enabled("audio", audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
     if _HAS_AUDIO_JOBS:
-        app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
+        _include_if_enabled("audio-jobs", audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
     if _HAS_AUDIO:
-        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
-    app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
-    app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
-    app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
-    app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-    app.include_router(metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
-    app.include_router(chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
-    app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
+        _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
+    _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
+    _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
+    _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
+    _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
     if _HAS_OUTPUT_TEMPLATES:
-        app.include_router(outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
+        _include_if_enabled("outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
     try:
         # Optional outputs artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router
-        app.include_router(_outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
+        _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
-    app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
-    app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+    _include_if_enabled("vector-stores", vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
     # External connectors (Drive/Notion) scaffold
     try:
         from tldw_Server_API.app.api.v1.endpoints.connectors import router as connectors_router
-        app.include_router(connectors_router, prefix=f"{API_V1_PREFIX}", tags=["connectors"])
+        _include_if_enabled("connectors", connectors_router, prefix=f"{API_V1_PREFIX}", tags=["connectors"], default_stable=False)
     except Exception as _conn_e:
         logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
-    app.include_router(claims_router, prefix=f"{API_V1_PREFIX}")
-    app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
+    _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
+    _include_if_enabled("media-embeddings", media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
     try:
         # Unified items endpoint
         from tldw_Server_API.app.api.v1.endpoints.items import router as _items_router
-        app.include_router(_items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
+        _include_if_enabled("items", _items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
     except Exception as _e:
         logger.warning(f"Items endpoint not available: {_e}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.reading import router as _reading_router
-        app.include_router(_reading_router, prefix=f"{API_V1_PREFIX}", tags=["reading"])
+        _include_if_enabled("reading", _reading_router, prefix=f"{API_V1_PREFIX}", tags=["reading"])
     except Exception as _e:
         logger.warning(f"Reading endpoint not available: {_e}")
     # Watchlists endpoints (sources/groups/tags/jobs/runs)
     try:
         from tldw_Server_API.app.api.v1.endpoints.watchlists import router as _watchlists_router
-        app.include_router(_watchlists_router, prefix=f"{API_V1_PREFIX}", tags=["watchlists"])
+        _include_if_enabled("watchlists", _watchlists_router, prefix=f"{API_V1_PREFIX}", tags=["watchlists"])
     except Exception as _e:
         logger.warning(f"Watchlists endpoint not available: {_e}")
-    app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
-    app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
+    # Legacy subscriptions API deprecation shim (returns 410 with replacement link)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.subscriptions_legacy import router as _subs_legacy_router
+        _include_if_enabled("subscriptions-deprecated", _subs_legacy_router, prefix=f"{API_V1_PREFIX}", tags=["subscriptions-deprecated"])
+    except Exception as _e:
+        logger.warning(f"Legacy subscriptions shim not available: {_e}")
+    _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     if _HAS_READING_HIGHLIGHTS:
-        app.include_router(reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
+        _include_if_enabled("reading-highlights", reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
     if _HAS_PROMPT_STUDIO:
-        app.include_router(prompt_studio_projects_router, tags=["prompt-studio"])
-        app.include_router(prompt_studio_prompts_router, tags=["prompt-studio"])
-        app.include_router(prompt_studio_test_cases_router, tags=["prompt-studio"])
-        app.include_router(prompt_studio_optimization_router, tags=["prompt-studio"])
-        app.include_router(prompt_studio_status_router, tags=["prompt-studio"])
-        app.include_router(prompt_studio_evaluations_router, tags=["prompt-studio"])
-        app.include_router(prompt_studio_websocket_router, tags=["prompt-studio"])
-    app.include_router(rag_health_router, tags=["rag-health"])
-    app.include_router(rag_unified_router, tags=["rag-unified"])
+        _include_if_enabled("prompt-studio", prompt_studio_projects_router, tags=["prompt-studio"])
+        _include_if_enabled("prompt-studio", prompt_studio_prompts_router, tags=["prompt-studio"])
+        _include_if_enabled("prompt-studio", prompt_studio_test_cases_router, tags=["prompt-studio"])
+        _include_if_enabled("prompt-studio", prompt_studio_optimization_router, tags=["prompt-studio"])
+        _include_if_enabled("prompt-studio", prompt_studio_status_router, tags=["prompt-studio"])
+        _include_if_enabled("prompt-studio", prompt_studio_evaluations_router, tags=["prompt-studio"])
+        _include_if_enabled("prompt-studio", prompt_studio_websocket_router, tags=["prompt-studio"])
+    _include_if_enabled("rag-health", rag_health_router, tags=["rag-health"])
+    _include_if_enabled("rag-unified", rag_unified_router, tags=["rag-unified"])
     if _HAS_WORKFLOWS:
-        app.include_router(workflows_router, tags=["workflows"])
+        _include_if_enabled("workflows", workflows_router, tags=["workflows"], default_stable=False)
     try:
         from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
         _HAS_SCHEDULER_WF = True
@@ -2605,14 +2671,14 @@ else:
         logger.warning(f"Scheduler Workflows endpoints unavailable; skipping import: {_sch_import_err}")
         _HAS_SCHEDULER_WF = False
     if _HAS_SCHEDULER_WF:
-        app.include_router(scheduler_workflows_router, tags=["scheduler"])
-    app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
-    app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
+        _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
+    _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    _include_if_enabled("paper-search", paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     if _HAS_UNIFIED_EVALUATIONS:
-        app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-    app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
-    app.include_router(vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
-    app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"])
+        _include_if_enabled("evaluations", unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+    _include_if_enabled("ocr", ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
+    _include_if_enabled("vlm", vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+    _include_if_enabled("benchmarks", benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"], default_stable=False)
     from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
     try:
         from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
@@ -2624,26 +2690,38 @@ else:
             _logger.warning(f"Skipping jobs_admin router due to import error: {_e}")
         except Exception:
             pass
-    app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
-    app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
+    _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
     if _HAS_JOBS_ADMIN:
-        app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
-    app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
-    app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
+        _include_if_enabled("jobs", jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"], default_stable=False)
+    _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
+    _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
     # Sandbox (scaffold)
-    app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
-    app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
+    _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
+    _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=False)
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)
-    app.include_router(personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"])
-    app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
-    app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
-    app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
-    app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
-    app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
-    app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
-    app.include_router(web_scraping_router, tags=["web-scraping"])
-    app.include_router(web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
+    _include_if_enabled("personalization", personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"], default_stable=False)
+    _include_if_enabled("persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=False)
+    _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
+    _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
+    _include_if_enabled("llamacpp", llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
+    _include_if_enabled("llamacpp", llamacpp_public_router, prefix="", tags=["llamacpp"])
+    _include_if_enabled("web-scraping", web_scraping_router, tags=["web-scraping"])
+    _include_if_enabled("web-scraping", web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
+
+# Register control-plane metrics endpoints (works in both minimal and full modes)
+try:
+    if route_enabled("metrics"):
+        app.add_api_route("/metrics", metrics, include_in_schema=False)
+        app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"]) 
+    else:
+        logger.info("Route disabled by policy: metrics")
+except Exception as _metrics_rt_err:
+    logger.warning(f"Route gating error for metrics; including by default. Error: {_metrics_rt_err}")
+    app.add_api_route("/metrics", metrics, include_in_schema=False)
+    app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"]) 
 
 # Router for trash endpoints - deletion of media items / trash file handling (FIXME: Secure delete vs lag on delete?)
 #app.include_router(trash_router, prefix=f"{API_V1_PREFIX}/trash", tags=["trash"])
@@ -2652,13 +2730,11 @@ else:
 #app.include_router(auth_router, prefix=f"{API_V1_PREFIX}/auth", tags=["auth"])
 # The docs at http://localhost:8000/docs will show an “Authorize” button. You can log in by calling POST /api/v1/auth/login with a form that includes username and password. The docs interface is automatically aware because we used OAuth2PasswordBearer.
 
-# Health check
-@app.get("/health", openapi_extra={"security": []})
+# Health check (registered conditionally below)
 async def health_check():
     return {"status": "healthy"}
 
-# Readiness check (verifies critical dependencies)
-@app.get("/ready", openapi_extra={"security": []})
+# Readiness check (verifies critical dependencies) — registered conditionally below
 async def readiness_check():
     """Readiness probe for orchestrators and load balancers."""
     try:
@@ -2732,10 +2808,23 @@ async def readiness_check():
     except Exception as e:
         return {"status": "not_ready", "error": str(e)}
 
-# /health/ready alias for some orchestrators
-@app.get("/health/ready", openapi_extra={"security": []})
+# /health/ready alias for some orchestrators (registered conditionally below)
 async def readiness_alias():
     return await readiness_check()
+
+# Register control-plane health endpoints (works in both minimal and full modes)
+try:
+    if route_enabled("health"):
+        app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
+        app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
+        app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
+    else:
+        logger.info("Route disabled by policy: health (/health, /ready, /health/ready)")
+except Exception as _health_rt_err:
+    logger.warning(f"Route gating error for health; including by default. Error: {_health_rt_err}")
+    app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
+    app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
+    app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
 
 #
 ## Entry point for running the server

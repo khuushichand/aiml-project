@@ -52,6 +52,7 @@ Run details include:
   - Validation:
     - When `source_type="rss"` and the URL is a YouTube link, only canonical RSS feeds are accepted, e.g. `https://www.youtube.com/feeds/videos.xml?channel_id=...`.
     - Non-feed YouTube URLs are rejected with `invalid_youtube_rss_url`.
+    - Tags must be non-empty, non-whitespace strings. Invalid tags are rejected per-entry with `invalid_tag_names: [..]`.
 
 Example response with mixed valid/invalid entries:
 ```

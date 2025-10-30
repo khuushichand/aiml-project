@@ -1,12 +1,13 @@
 # Watchlists – Subscriptions Bridge PRD (v0.2)
 
-Status: Proposed → In Progress
+Status: Near Complete (v1 wrap-up)
 Owner: Core Maintainers (Server/API + WebUI)
-Updated: 2025-10-28
+Updated: 2025-10-29
 
 Related:
 - Docs/Product/Watchlist_PRD.md (primary PRD)
 - Docs/Product/Content_Collections_PRD.md
+- Docs/Operations/Watchlists_Migration_Notes.md (migration notes)
 - SUBS/01_OVERVIEW.md, SUBS/02_ARCHITECTURE.md, SUBS/03_DATABASE_SCHEMA.md, SUBS/04_API_DESIGN.md, SUBS/05_IMPLEMENTATION_PHASES.md, SUBS/06_RSS_YOUTUBE_INTEGRATION.md, SUBS/07_BACKGROUND_TASKS.md, SUBS/08_UI_MOCKUPS.md
 
 ---
@@ -26,6 +27,34 @@ Watchlists remains the primary concept, with sources, groups/tags, jobs (with sc
 - Mapping SUBS Import Rules to job-level filters attached to `scrape_jobs`.
 - Adding OPML import/export for Watchlists sources to ease migration and bulk setup.
 - Modeling YouTube channels/playlists as RSS under `source_type=rss`, using canonical feed URLs.
+
+Implementation status
+
+- Done
+  - Data model: `scrape_jobs.job_filters_json` added with idempotent backfill; CRUD helpers for job filters; JobRow extended.
+  - Filters pipeline: include/exclude/flag rules evaluated pre‑ingestion for RSS and site; filtered items recorded; per‑run counters + per‑filter tallies tracked.
+  - API: filters in job payloads; `PATCH /watchlists/jobs/{id}/filters` and `POST /watchlists/jobs/{id}/filters:add`; OPML `POST /sources/import` and `GET /sources/export` (with `tag`, `type`, `group`).
+  - Global runs: `GET /watchlists/runs` with pagination/search.
+  - YouTube normalization: server accepts channel/user/playlist URLs and normalizes to canonical feeds; sets `X-YouTube-Normalized` and `X-YouTube-Canonical-URL` headers. Unsupported `@handle`, `/c/…`, `youtu.be`, `/watch` return 400.
+  - Deprecation shim: `/api/v1/subscriptions/*` returns 410 Gone with Link to Watchlists.
+  - Admin/org: include‑only gating org‑level default (and env fallback); admin endpoints to read/update; WebUI toggle + orgs list with pagination (API returns `total`/`has_more`).
+- Admin runs UI: global and by‑job modes; filter counters; tallies on demand; CSV/JSON export.
+- Admin runs UI polish: added pagination in By Job mode and a “Download Tallies CSV” button when tallies are loaded.
+- Admin items UI: `/admin/watchlists-items` lists items for a selected run with pagination and status filtering; linked from the Runs table (“View items”).
+  - Rate limits: SlowAPI limits on OPML import and job filters endpoints (test-aware bypass).
+  - Preview/dry‑run: `POST /watchlists/jobs/{job_id}/preview` ships; respects include‑only gating; returns decision per item; test-mode stubs for deterministic previews.
+  - CSV exports (server-side): `GET /watchlists/runs/export.csv` (global or by job) and `GET /watchlists/runs/{run_id}/tallies.csv`.
+  - Docs: API page updated (global runs endpoint, run‑detail tallies toggle, OPML group filter, preview endpoint, CSV exports). Release notes added.
+  - Migration notes: new page added (Docs/Operations/Watchlists_Migration_Notes.md) clarifying that no dedicated CLI is required; use OPML + filters. Linked from API/PRD.
+  - DB hardening: schema migration guards added to avoid duplicate‑column ALTER noise.
+
+- In Progress
+  - Docs polish (light): continue expanding OPML examples and include‑only semantics quick table where helpful.
+  - Optional preview endpoint tests: additional RSS+site preview scenarios and edge cases (regex errors, empty filters).
+
+- Remaining (Phase B / nice‑to‑have)
+  - Admin runs view polish: optional richer metrics columns; optionally integrate server CSV endpoints directly into the UI.
+  - Optional: server‑side YouTube resolver for `@handle`/vanity (policy remains 400; resolver out of scope for v1).
 
 ## 3) Goals and Non‑Goals
 
@@ -69,7 +98,7 @@ Notes:
 
 Base prefix remains: `/api/v1/watchlists`
 
-### Sources (existing + OPML)
+### Sources (existing + OPML) — Implemented
 - `POST /watchlists/sources` (create)
 - `GET /watchlists/sources` (list; filters: `q`, `type`, `tag`, `group`, `active`)
 - `GET /watchlists/sources/{id}` (get)
@@ -79,7 +108,7 @@ Base prefix remains: `/api/v1/watchlists`
 - `POST /watchlists/sources/import` (OPML multipart; fields: `file`, optional defaults: `active`, `tags`, `group_id`)
 - `GET /watchlists/sources/export` (OPML; optional filters to scope export)
 
-### Jobs (add filters)
+### Jobs (add filters) — Implemented
 - `POST /watchlists/jobs` | `GET /watchlists/jobs` | `GET/PATCH/DELETE /watchlists/jobs/{id}`
 - `PATCH /watchlists/jobs/{id}/filters` (replace full filter set)
 - `POST /watchlists/jobs/{id}/filters:add` (append one or more filters)
@@ -97,7 +126,7 @@ Filter JSON example:
 }
 ```
 
-### Items, Runs, Outputs (unchanged)
+### Items, Runs, Outputs — Implemented/extended
 - `GET /watchlists/items` (filters: `run_id`, `job_id`, `source_id`, `status`, `reviewed`, `q`, `since`, `until`)
 - `PATCH /watchlists/items/{id}` (mark reviewed / update status)
 - Outputs and Templates remain as in Watchlists PRD (TTL, versioning, delivery via NotificationsService).
@@ -136,9 +165,22 @@ Import (`POST /watchlists/sources/import`):
 - Optional defaults in multipart: `active` (bool), `tags` (list of names), `group_id` (int).
 - Returns summary counts and per-entry errors for invalid or unsupported outlines.
 
+Details and edge cases:
+- Nested outlines are supported; importer walks all children and handles duplicates idempotently.
+- `htmlUrl` is retained on export and ignored if missing on import.
+- Invalid OPML or outlines missing `xmlUrl` produce an error entry but do not abort the entire import.
+  The response reports `created`, `skipped`, and `errors` totals for observability.
+
 Export (`GET /watchlists/sources/export`):
-- Returns OPML with nested groups where possible; includes `xmlUrl` and `htmlUrl` when available.
-- Optional filters (`tag`, `group`, `type`) to scope the export.
+- Returns OPML with `xmlUrl` and `htmlUrl` where available.
+- Optional filters (`tag`, `group`, `type`) to scope the export. Group filter supports multiple ids (OR semantics) and can be combined with tag (AND semantics).
+ - Unknown group ids result in an empty RSS list (HTTP 200 with an empty body list), avoiding partial matches by design.
+
+Link: see Docs/Published/API-related/Watchlists_API.md for request/response examples and guidance.
+
+Include-only gating reference
+
+See the quick behavior table in Docs/Published/API-related/Watchlists_API.md (Job Filters and Include‑Only Gating). The UI and preview endpoint follow the same semantics; org defaults can be changed via the admin setting.
 
 ## 9) Scheduling & Timezone Semantics
 
@@ -154,10 +196,13 @@ Mapping:
 - `SubscriptionChecks` → `scrape_runs` (optional historical import; not required for MVP).
 - `ImportRules` → `scrape_jobs.job_filters_json` (consolidate into job filters; create 1 job per prior subscription if no jobs exist).
 
-Process:
+Process (Status: not required for prod)
 1) Export all SUBS as OPML; import via `/watchlists/sources/import`.
 2) For SUBS with Import Rules, create jobs targeting those sources and translate each rule into a job filter entry.
 3) Disable/mark deprecated any `/api/v1/subscriptions/*` clients; point to `/api/v1/watchlists/*`.
+
+Notes
+- Subscriptions was never pushed to production; a dedicated migration CLI is not required. For bulk seeding, OPML import is sufficient.
 
 Compatibility (optional):
 - For a limited window, expose read-only redirects for `/api/v1/subscriptions/*` returning 410/Link headers to the new resources.
@@ -166,25 +211,36 @@ Compatibility (optional):
 
 - Use Watchlists error shape and limits. OPML import/export returns actionable per-entry errors.
 - Filters endpoints validate filter schema and reject unknown `type`/`action`.
+- Rate limits applied to OPML import and filters endpoints; test mode bypass documented.
 
 ## 12) Testing Strategy
 
-- Unit: OPML parser; filter evaluation (keyword/date/regex); RSS-to-YouTube URL canonicalization.
-- Integration: import OPML → list sources; create job with filters → run → items filtered; generate outputs with TTL and optional delivery.
+- Unit: OPML parser; filter evaluation (keyword/date/regex); RSS-to-YouTube URL canonicalization; include-only org default logic.
+- Integration: import OPML → list sources; create job with filters → run → items filtered; generate outputs with TTL and optional delivery; runs detail tallies.
 - Property-based: filter ordering by priority; equivalent filter sets yield identical inclusion/exclusion decisions.
 - Markers: `unit`, `integration` with network mocked; skip external RSS by default.
+
+Implemented tests (selection)
+- Filters matching and API CRUD: `tldw_Server_API/tests/Watchlists/test_filters_matching.py`, `test_filters_api.py`
+- Pipeline filters e2e (exclude/flag, include-only): `test_watchlists_pipeline_filters.py`, `test_include_org_default.py`
+- Runs detail counters + tallies toggle: `test_run_detail_filters_totals.py`
+- OPML import/export (nested, edge cases, group filter): `test_opml_api.py`, `test_opml_nested.py`, `test_opml_edge_cases.py`, `test_opml_export_group.py`, `test_opml_export_group_more.py`
+- YouTube normalization and policy tests: `test_youtube_url_validation.py`, `test_youtube_normalization_more.py`
+- Admin org settings + search: `tests/Admin/test_admin_watchlists_org_settings.py`, `tests/Admin/test_admin_orgs_search.py`, `tests/Admin/test_admin_orgs_search_edge.py`
+- Include-only gating (site) e2e: `test_site_include_only_gating.py`
+- Rate‑limit headers (deterministic, non-test mode): `test_rate_limit_headers_strict.py`
 
 ## 13) Rollout Plan
 
 Phase A (this cycle):
-- Add OPML import/export endpoints.
-- Add job filters fields and endpoints; wire into pipeline evaluation before ingestion.
-- Document YouTube-as-RSS guidance in WebUI and API docs.
+- OPML import/export endpoints — Done.
+- Job filters fields and endpoints; pipeline evaluation — Done.
+- YouTube-as-RSS guidance in WebUI and API docs — Done (server normalization and docs updated).
 
 Phase B (next):
-- Optional redirects/deprecations for `/api/v1/subscriptions/*`.
-- Additional helpers to normalize YouTube inputs to feed URLs.
-- Metrics and admin visibility for filter matches (per filter stats).
+- Redirects/deprecations for `/api/v1/subscriptions/*` — Done (410 shim) + docs.
+- Optional: additional normalization helpers (policy kept as 400 for `@handle` and vanity URLs).
+- Metrics/admin visibility — Partial (run counters + tallies and admin page shipped; deeper metrics/export polish remain).
 
 ## 14) Risks & Mitigations
 
