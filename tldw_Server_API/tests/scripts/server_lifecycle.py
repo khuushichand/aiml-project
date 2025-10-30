@@ -34,7 +34,18 @@ from typing import Optional
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_PORT = "8000"
-HEALTH_PATH = "/api/v1/health"
+
+# Candidate health endpoints to probe in order. The check succeeds when any returns HTTP 200.
+HEALTH_PATHS = [
+    "/api/v1/health",
+    "/health",
+    "/api/v1/healthz",
+    "/healthz",
+    "/api/v1/health/ready",
+    "/ready",
+]
+
+# Default timeout; may be overridden via env (see _get_timeout_seconds).
 STARTUP_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_SECONDS = 2
 
@@ -88,20 +99,47 @@ def start_server() -> None:
     print(f"[server-lifecycle] Started server '{label}' (PID {process.pid}) on port {port}")
 
 
+def _get_timeout_seconds() -> float:
+    """Get the startup timeout in seconds from environment with a sensible default.
+
+    Priority order:
+      - SMOKE_STARTUP_TIMEOUT_SECONDS (used in CI smoke steps)
+      - STARTUP_TIMEOUT_SECONDS
+      - built-in default (120)
+    """
+    def _parse_int(name: str) -> int | None:
+        try:
+            raw = os.environ.get(name)
+            if raw is None or raw.strip() == "":
+                return None
+            return int(raw.strip())
+        except Exception:
+            return None
+
+    return float(
+        _parse_int("SMOKE_STARTUP_TIMEOUT_SECONDS")
+        or _parse_int("STARTUP_TIMEOUT_SECONDS")
+        or STARTUP_TIMEOUT_SECONDS
+    )
+
+
 def health_check() -> None:
     label = _env("SERVER_LABEL", "server")
     base_url = _env("E2E_TEST_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-    url = f"{base_url}{HEALTH_PATH}"
-    deadline = time.time() + STARTUP_TIMEOUT_SECONDS
+    deadline = time.time() + _get_timeout_seconds()
 
     while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=5) as response:
-                if response.status == 200:
-                    print(f"[server-lifecycle] Health check OK for '{label}'")
-                    return
-        except Exception:
-            time.sleep(POLL_INTERVAL_SECONDS)
+        for path in HEALTH_PATHS:
+            url = f"{base_url}{path}"
+            try:
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    if response.status == 200:
+                        print(f"[server-lifecycle] Health check OK for '{label}' via {path}")
+                        return
+            except Exception:
+                # Try next candidate
+                continue
+        time.sleep(POLL_INTERVAL_SECONDS)
 
     _print_recent_logs(label)
     raise SystemExit(f"[server-lifecycle] Server '{label}' failed health check within timeout")
