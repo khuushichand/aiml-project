@@ -650,6 +650,20 @@ class MCTSOptimizer:
     def _create_ephemeral_prompt_version(self, *, base_prompt: Dict[str, Any], system_text: str, user_text: str) -> int:
         conn = self.db.get_connection()
         cursor = conn.cursor()
+        # Compute next version number for the same prompt name within the project to avoid collisions
+        try:
+            cursor.execute(
+                """
+                SELECT COALESCE(MAX(version_number), 0)
+                FROM prompt_studio_prompts
+                WHERE project_id = ? AND name = ?
+                """,
+                (base_prompt["project_id"], base_prompt["name"]),
+            )
+            row = cursor.fetchone()
+            next_version = int(row[0]) + 1 if row and row[0] is not None else (int(base_prompt.get("version_number") or 0) + 1)
+        except Exception:
+            next_version = (base_prompt.get("version_number") or 0) + 1
         cursor.execute(
             """
             INSERT INTO prompt_studio_prompts (
@@ -664,7 +678,7 @@ class MCTSOptimizer:
                 f"{base_prompt['name']} (MCTS)",
                 system_text,
                 user_text,
-                (base_prompt.get("version_number") or 0) + 1,
+                next_version,
                 base_prompt.get("id"),
                 self.db.client_id,
             ),

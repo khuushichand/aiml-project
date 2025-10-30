@@ -165,6 +165,8 @@ class ProgramEvaluator:
 
         Returns (success, stdout, stderr, globals_dump)
         """
+        cpu_lim = int(self.CPU_TIME_SEC)
+        mem_lim = int(self.MEMORY_MB) * 1024 * 1024
         wrapper = textwrap.dedent(
             f"""
             import sys, json, builtins
@@ -172,9 +174,9 @@ class ProgramEvaluator:
             try:
                 import resource
                 # CPU time (seconds)
-                resource.setrlimit(resource.RLIMIT_CPU, ({cpu}, {cpu}))
+                resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))
                 # Address space / virtual memory (bytes)
-                resource.setrlimit(resource.RLIMIT_AS, ({mem}, {mem}))
+                resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))
             except Exception:
                 pass
             # Best-effort isolation: no open/read, block dangerous builtins
@@ -230,7 +232,7 @@ class ProgramEvaluator:
         with tempfile.TemporaryDirectory() as td:
             script_path = os.path.join(td, "sandbox_runner.py")
             with open(script_path, "w", encoding="utf-8") as f:
-                f.write(wrapper.format(cpu=int(self.CPU_TIME_SEC), mem=int(self.MEMORY_MB) * 1024 * 1024))
+                f.write(wrapper)
             # Run isolated Python: -I ignores env vars/user site; -B no pyc; no cwd files
             env = {"PYTHONHASHSEED": "0"}
             try:
