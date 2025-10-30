@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 from loguru import logger
 
 from ....core.Chat.chat_orchestrator import chat_api_call
+from .program_evaluator import ProgramEvaluator
 
 class TestRunner:
     """Runs test cases against prompts using LLM."""
@@ -131,22 +132,44 @@ class TestRunner:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        # Provide a basic aggregate score based on expected vs actual overlap
-        expected = result.get("expected", {}) or {}
-        actual = result.get("actual", {}) or {}
-        exp = str(expected.get("response", "")).lower()
-        act = str(actual.get("response", "")).lower()
-        if not exp and not act:
-            score = 0.0
-        elif exp == act:
-            score = 1.0
-        elif exp and act and (exp in act or act in exp):
-            score = 0.5
+        # Determine if this is a program test case and if evaluator is enabled
+        try:
+            test_case = self.db.get_test_case(test_case_id)
+        except Exception:
+            test_case = None
+
+        runner_hint = None
+        if isinstance(test_case, dict):
+            runner_hint = (
+                (test_case.get("expected_outputs") or {}).get("runner")
+                or (test_case.get("expected_outputs") or {}).get("_runner")
+                or (test_case.get("inputs") or {}).get("runner")
+                or (test_case.get("inputs") or {}).get("_runner")
+            )
+
+        if str(runner_hint or "").lower() == "python" and ProgramEvaluator.is_enabled():
+            # Heuristic program evaluation (no code execution in MVP):
+            pe = ProgramEvaluator()
+            reward = pe.evaluate_text_output(result.get("actual", {}).get("response", ""))
+            # Map reward (−1..10) to [0..1]
+            score = max(0.0, min(1.0, reward / 10.0))
         else:
-            # very rough token overlap
-            ew = set(exp.split())
-            aw = set(act.split())
-            score = (len(ew & aw) / max(1, len(ew))) if ew else 0.0
+            # Provide a basic aggregate score based on expected vs actual overlap
+            expected = result.get("expected", {}) or {}
+            actual = result.get("actual", {}) or {}
+            exp = str(expected.get("response", "")).lower()
+            act = str(actual.get("response", "")).lower()
+            if not exp and not act:
+                score = 0.0
+            elif exp == act:
+                score = 1.0
+            elif exp and act and (exp in act or act in exp):
+                score = 0.5
+            else:
+                # very rough token overlap
+                ew = set(exp.split())
+                aw = set(act.split())
+                score = (len(ew & aw) / max(1, len(ew))) if ew else 0.0
 
         result = dict(result)
         result["success"] = True

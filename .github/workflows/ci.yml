@@ -118,11 +118,55 @@ jobs:
       - name: Install additional deps for PG tests
         run: |
           python -m pip install --upgrade pip
-          pip install "psycopg[binary]>=3.1" pytest-asyncio
+          pip install "psycopg[binary]>=3.1" pytest pytest-asyncio
 
-      - name: Run full test suite (Linux + PG) — exclude Jobs for now
+      - name: Smoke start server (single-user)
+        env:
+          SERVER_LABEL: smoke
+          AUTH_MODE: single_user
+          SINGLE_USER_API_KEY: "smoke-ci-key-12345"
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          TEST_MODE: 'true'
+          DISABLE_HEAVY_STARTUP: '1'
+        shell: bash
         run: |
-          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -m "not jobs" \
+          python tldw_Server_API/scripts/server_lifecycle.py start
+
+      - name: Smoke health check
+        if: always()
+        env:
+          SERVER_LABEL: smoke
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+        shell: bash
+        run: |
+          python tldw_Server_API/scripts/server_lifecycle.py health-check
+
+      - name: Print smoke server log on failure
+        if: failure()
+        env:
+          SERVER_LABEL: smoke
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          label = os.environ.get('SERVER_LABEL','smoke')
+          p = pathlib.Path(f'server-{label}.log')
+          if p.exists():
+              print('===== smoke server log =====')
+              print(p.read_text(encoding='utf-8'))
+          PY
+
+      - name: Smoke stop server
+        if: always()
+        env:
+          SERVER_LABEL: smoke
+        shell: bash
+        run: |
+          python tldw_Server_API/scripts/server_lifecycle.py stop || true
+
+      - name: Run full test suite (Linux + PG) — exclude Jobs and E2E
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -m "not jobs and not e2e" \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-linux-${{ matrix.python }}.xml
         shell: bash
@@ -184,9 +228,53 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Run full test suite — exclude Jobs for now
+      - name: Smoke start server (single-user)
+        env:
+          SERVER_LABEL: smoke
+          AUTH_MODE: single_user
+          SINGLE_USER_API_KEY: "smoke-ci-key-12345"
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          TEST_MODE: 'true'
+          DISABLE_HEAVY_STARTUP: '1'
+        shell: bash
         run: |
-          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -m "not jobs" \
+          python tldw_Server_API/scripts/server_lifecycle.py start
+
+      - name: Smoke health check
+        if: always()
+        env:
+          SERVER_LABEL: smoke
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+        shell: bash
+        run: |
+          python tldw_Server_API/scripts/server_lifecycle.py health-check
+
+      - name: Print smoke server log on failure
+        if: failure()
+        env:
+          SERVER_LABEL: smoke
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          label = os.environ.get('SERVER_LABEL','smoke')
+          p = pathlib.Path(f'server-{label}.log')
+          if p.exists():
+              print('===== smoke server log =====')
+              print(p.read_text(encoding='utf-8'))
+          PY
+
+      - name: Smoke stop server
+        if: always()
+        env:
+          SERVER_LABEL: smoke
+        shell: bash
+        run: |
+          python tldw_Server_API/scripts/server_lifecycle.py stop || true
+
+      - name: Run full test suite — exclude Jobs and E2E
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -m "not jobs and not e2e" \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-${{ matrix.os }}-3.12.xml
         shell: bash

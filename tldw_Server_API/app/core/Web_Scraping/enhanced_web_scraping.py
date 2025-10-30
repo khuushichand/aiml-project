@@ -40,6 +40,21 @@ import atexit
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import get_database_dir
+from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
+from tldw_Server_API.app.core.Web_Scraping.scoring import (
+    CompositeScorer,
+    PathDepthScorer,
+    KeywordRelevanceScorer,
+    ContentTypeScorer as CTScorer,
+    FreshnessScorer,
+    DomainAuthorityScorer,
+)
+from tldw_Server_API.app.core.Web_Scraping.filters import (
+    FilterChain,
+    DomainFilter,
+    ContentTypeFilter,
+    URLPatternFilter,
+)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -998,30 +1013,105 @@ class EnhancedWebScraper:
         except Exception as _e:
             logger.error(f"Egress policy evaluation failed: {_e}")
             return []
-        visited = set()
-        to_visit = [(base_url, 0)]
+        visited: Set[str] = set()
+        base_norm = normalize_for_crawl(base_url, base_url)
+        to_visit: List[Tuple[str, int]] = [(base_norm, 0)]
+        # Build filter chain based on config (include_external, allow/deny, patterns, content types)
+        cfg = load_and_log_configs() or {}
+        wc = cfg.get('web_scraper', {}) if isinstance(cfg, dict) else {}
+        include_external_flag = bool(wc.get('web_crawl_include_external', False))
+        allowed_raw = wc.get('web_crawl_allowed_domains') or ""
+        blocked_raw = wc.get('web_crawl_blocked_domains') or ""
+        def _split(s: str) -> Set[str]:
+            return {t.strip().lower() for t in str(s).split(',') if t.strip()}
+        allowed_set = _split(allowed_raw)
+        blocked_set = _split(blocked_raw)
+        base_host = urlparse(base_norm).netloc.lower()
+        domain_allowed = None if include_external_flag else {base_host}
+        if allowed_set:
+            domain_allowed = allowed_set if include_external_flag else (allowed_set | {base_host})
+
+        default_excludes = [
+            '/tag/', '/category/', '/author/', '/search/', '/page/',
+            'wp-content', 'wp-includes', 'wp-json', 'wp-admin',
+            'login', 'register', 'cart', 'checkout', 'account',
+            '.jpg', '.png', '.gif', '.pdf', '.zip'
+        ]
+
+        filter_chain = FilterChain([
+            DomainFilter(allowed=domain_allowed, blocked=blocked_set or None),
+            ContentTypeFilter(),
+            URLPatternFilter(include_patterns=None, exclude_patterns=default_excludes),
+        ])
+
+        # Build composite scorer
+        scorers = [
+            PathDepthScorer(optimal_depth=3, weight=1.0),
+            CTScorer(weight=1.0),
+            FreshnessScorer(weight=1.0),
+        ]
+        # Optional keyword scorer
+        if bool(wc.get('web_crawl_enable_keyword_scorer', False)):
+            kw_raw = wc.get('web_crawl_keywords') or ''
+            keywords = [t.strip() for t in str(kw_raw).split(',') if t.strip()]
+            if keywords:
+                scorers.append(KeywordRelevanceScorer(keywords=keywords, weight=1.0))
+        # Optional domain authority map
+        if bool(wc.get('web_crawl_enable_domain_map', False)):
+            dom_raw = wc.get('web_crawl_domain_map') or ''
+            dom_map: Dict[str, float] = {}
+            if isinstance(dom_raw, dict):
+                dom_map = {str(k).lower(): float(v) for k, v in dom_raw.items()}
+            else:
+                s = str(dom_raw).strip()
+                if s.startswith('{'):
+                    try:
+                        import json as _json
+                        obj = _json.loads(s)
+                        if isinstance(obj, dict):
+                            dom_map = {str(k).lower(): float(v) for k, v in obj.items()}
+                    except Exception:
+                        dom_map = {}
+                else:
+                    for part in s.split(','):
+                        if ':' in part:
+                            d, val = part.split(':', 1)
+                            try:
+                                dom_map[str(d).strip().lower()] = float(val)
+                            except Exception:
+                                pass
+            if dom_map:
+                scorers.append(DomainAuthorityScorer(domain_weights=dom_map, default_weight=0.5, weight=1.0))
+
+        composite = CompositeScorer(scorers, normalize=True)
+        try:
+            score_threshold = float(wc.get('web_crawl_score_threshold', 0.0))
+        except Exception:
+            score_threshold = 0.0
+
         results = []
         
         while to_visit and len(results) < max_pages:
             url, depth = to_visit.pop(0)
+            current = normalize_for_crawl(url, base_norm)
             
-            if url in visited or depth > max_depth:
+            if current in visited or depth > max_depth:
                 continue
             
-            visited.add(url)
+            visited.add(current)
             
             # Update progress
             self._progress['recursive_scrape'] = {
                 'visited': len(visited),
                 'to_visit': len(to_visit),
                 'scraped': len(results),
-                'current_url': url,
+                'current_url': current,
                 'current_depth': depth
             }
             
             # Scrape page
             result = await self.scrape_article(
-                url,
+                current,
                 custom_cookies=custom_cookies,
                 user_agent=user_agent,
                 custom_headers=custom_headers,
@@ -1032,10 +1122,17 @@ class EnhancedWebScraper:
                 
                 # Extract links if not at max depth
                 if depth < max_depth:
-                    links = await self._extract_links(url, result.get('content', ''))
+                    links = await self._extract_links(current, result.get('content', ''))
                     for link in links:
-                        absolute_url = urljoin(base_url, link)
-                        if absolute_url.startswith(base_url) and absolute_url not in visited:
+                        absolute_url = normalize_for_crawl(link, current)
+                        if absolute_url not in visited and filter_chain.apply(absolute_url):
+                            # Score gating
+                            try:
+                                s_val = composite.score(absolute_url)
+                            except Exception:
+                                s_val = 0.0
+                            if s_val < score_threshold:
+                                continue
                             if not url_filter or url_filter(absolute_url):
                                 to_visit.append((absolute_url, depth + 1))
         

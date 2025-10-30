@@ -63,8 +63,17 @@ jobs:
 
       - name: Install additional test deps
         run: |
-          python -m pip install websockets pytest-timeout pytest-xdist
+          python -m pip install pytest pytest-asyncio websockets pytest-timeout pytest-xdist
         shell: bash
+
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python -m playwright install --with-deps chromium
+          else
+            python -m playwright install chromium
+          fi
 
       - name: Start server (single-user)
         env:

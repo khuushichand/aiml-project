@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from loguru import logger
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.config import load_and_log_configs
 
 # Import the enhanced scraper
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
@@ -103,6 +104,36 @@ class WebScrapingService:
             await self.initialize()
         
         try:
+            # Read crawl feature flags (env > config.txt); keep behavior unchanged if params provided
+            cfg = load_and_log_configs() or {}
+            wc = cfg.get('web_scraper', {}) if isinstance(cfg, dict) else {}
+            def _as_bool(v: Any, d: bool) -> bool:
+                try:
+                    s = str(v).strip().lower()
+                    if s in {"1", "true", "yes", "on", "y"}: return True
+                    if s in {"0", "false", "no", "off", "n"}: return False
+                except Exception:
+                    pass
+                return d
+            def _as_int(v: Any, d: int) -> int:
+                try:
+                    return int(v)
+                except Exception:
+                    return d
+            def _as_float(v: Any, d: float) -> float:
+                try:
+                    return float(v)
+                except Exception:
+                    return d
+
+            crawl_strategy: str = str(wc.get('web_crawl_strategy', 'default'))
+            include_external: bool = _as_bool(wc.get('web_crawl_include_external', False), False)
+            score_threshold: float = _as_float(wc.get('web_crawl_score_threshold', 0.0), 0.0)
+            default_max_pages: int = _as_int(wc.get('web_crawl_max_pages', 100), 100)
+
+            # Respect explicit API param; otherwise allow config default to apply
+            effective_max_pages: int = max_pages if max_pages is not None and max_pages != 100 else default_max_pages
+
             # Map priority string to enum
             priority_map = {
                 "low": JobPriority.LOW,
@@ -126,7 +157,7 @@ class WebScrapingService:
 
             elif scrape_method == "Sitemap":
                 result = await self._scrape_sitemap(
-                    url_input, max_pages, summarize_checkbox,
+                    url_input, effective_max_pages, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, job_priority,
                     custom_cookies, user_agent, custom_headers
@@ -136,7 +167,7 @@ class WebScrapingService:
                 if url_level is None:
                     raise ValueError("url_level must be provided for URL Level scraping")
                 result = await self._scrape_by_url_level(
-                    url_input, url_level, max_pages, summarize_checkbox,
+                    url_input, url_level, effective_max_pages, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, job_priority,
                     custom_cookies, user_agent, custom_headers
@@ -144,7 +175,7 @@ class WebScrapingService:
 
             elif scrape_method == "Recursive Scraping":
                 result = await self._scrape_recursive(
-                    url_input, max_pages, max_depth, summarize_checkbox,
+                    url_input, effective_max_pages, max_depth, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, custom_cookies,
                     job_priority, user_agent, custom_headers
@@ -153,6 +184,19 @@ class WebScrapingService:
             else:
                 raise ValueError(f"Unknown scrape method: {scrape_method}")
             
+            # Attach crawl configuration used (observable but non-breaking)
+            if isinstance(result, dict):
+                result.setdefault('crawl_config', {})
+                result['crawl_config'].update({
+                    'strategy': crawl_strategy,
+                    'include_external': include_external,
+                    'score_threshold': score_threshold,
+                    'default_max_pages': default_max_pages,
+                    'effective_max_pages': effective_max_pages,
+                    'enable_keyword_scorer': bool(wc.get('web_crawl_enable_keyword_scorer', False)),
+                    'enable_domain_map': bool(wc.get('web_crawl_enable_domain_map', False)),
+                })
+
             # Process results based on mode
             if mode == "ephemeral":
                 return await self._store_ephemeral(result, task_id, user_id)

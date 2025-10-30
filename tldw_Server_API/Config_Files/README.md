@@ -262,6 +262,17 @@ VibeVoice:
 - `web_scraper_api_timeout|web_scraper_api_retry|web_scraper_api_retry_delay` (int)
 - `web_scraper_retry_count` (int)
 - `web_scraper_stealth_playwright` (bool)
+  - Crawl flags (env overrides file):
+    - `web_crawl_strategy` (str) → `WEB_CRAWL_STRATEGY` (default `default`)
+    - `web_crawl_include_external` (bool) → `WEB_CRAWL_INCLUDE_EXTERNAL` (default `false`)
+    - `web_crawl_score_threshold` (float) → `WEB_CRAWL_SCORE_THRESHOLD` (default `0.0`)
+    - `web_crawl_max_pages` (int) → `WEB_CRAWL_MAX_PAGES` (default `100`)
+  - Scoring (env overrides file):
+    - `web_crawl_enable_keyword_scorer` (bool) → `WEB_CRAWL_ENABLE_KEYWORD_SCORER` (default `false`)
+    - `web_crawl_keywords` (csv) → `WEB_CRAWL_KEYWORDS` (e.g., `ai,ml,python`)
+    - `web_crawl_enable_domain_map` (bool) → `WEB_CRAWL_ENABLE_DOMAIN_MAP` (default `false`)
+    - `web_crawl_domain_map` (json or `domain:score` csv) → `WEB_CRAWL_DOMAIN_MAP`
+      - Examples: `{"docs.python.org": 1.0, "github.com": 0.8}` or `docs.python.org:1.0,github.com:0.8`
 
 ## [Logging]
 - `log_level` (str): `DEBUG|INFO|WARN|ERROR`.
@@ -308,3 +319,47 @@ Notes
 - Some keys are placeholders (`FIXME`); leave empty or set via `.env` when a provider requires credentials.
 - When both provider‑specific and global keys exist, provider‑specific keys take precedence for that provider’s operations.
 - For advanced tuning of chunking behavior, see `tldw_Server_API/app/core/Chunking/README.md`.
+
+---
+
+## API Route Toggles
+
+Purpose: allow end users to run only stable API modules and let developers/operators selectively enable in‑development endpoints. Route inclusion is evaluated at startup before routers are mounted.
+
+Default behavior
+- Stable‑only mode is ON by default. A curated set of experimental routes is disabled unless explicitly enabled.
+- You can override behavior per route or globally via `config.txt` or environment variables.
+
+Configure in `config.txt`
+- Section: `[API-Routes]`
+- Keys:
+  - `stable_only` (bool, default: true): When true, disables the experimental set unless explicitly enabled.
+  - `disable` (csv): Route keys to always disable.
+  - `enable` (csv): Route keys to force‑enable (useful when `stable_only=true`).
+  - `experimental_routes` (csv): Extend the curated experimental set with more route keys.
+
+Environment overrides
+- `ROUTES_STABLE_ONLY=true|false`
+- `ROUTES_DISABLE="sandbox,connectors"`
+- `ROUTES_ENABLE="workflows"`
+- `ROUTES_EXPERIMENTAL="workflows,scheduler"`
+
+Known route keys (not exhaustive)
+`health, metrics, monitoring, moderation, audit, auth, auth-enhanced, users, privileges, admin, mcp-catalogs, media, audio, audio-jobs, audio-websocket, chat, characters, character-chat-sessions, character-messages, chunking, chunking-templates, outputs-templates, outputs, embeddings, vector-stores, connectors, claims, media-embeddings, items, reading, watchlists, subscriptions-deprecated, notes, prompts, reading-highlights, prompt-studio, rag-health, rag-unified, workflows, scheduler, research, paper-search, evaluations, ocr, vlm, benchmarks, setup, config, jobs, sync, tools, sandbox, flashcards, personalization, persona, mcp-unified, chatbooks, llm, llamacpp, web-scraping, webui`
+
+Curated experimental set (gated by `stable_only=true` unless explicitly enabled)
+`sandbox, connectors, workflows, scheduler, flashcards, personalization, persona, jobs, benchmarks`
+
+Examples
+- Run stable‑only with workflows enabled:
+  - `stable_only = true`
+  - `enable = workflows`
+- Disable web‑scraping and connectors regardless of `stable_only`:
+  - `disable = web-scraping, connectors`
+
+Notes
+- Control‑plane endpoints are also gated:
+  - `metrics` key: gates both `/metrics` (Prometheus text) and `/api/v1/metrics` (JSON).
+  - `health` key: gates `/health`, `/ready`, and `/health/ready`, as well as health routers (`/healthz`, `/readyz`).
+  - `webui` key: gates the WebUI static mount (`/webui`) and `/webui/config.json`.
+  - `setup` key: gates the Setup UI (`/setup`) and the setup API routes; root (`/`) only redirects to `/setup` when this key is enabled and setup is required.

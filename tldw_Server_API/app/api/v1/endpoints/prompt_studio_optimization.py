@@ -330,6 +330,74 @@ def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
             if not (1 <= mn < mx <= 100000):
                 raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
 
+    # mcts: validate tree-search configuration knobs if provided
+    if ot == "mcts":
+        def _as_int(name: str, value: Any, *, ge: int = None, le: int = None) -> int:
+            try:
+                iv = int(value)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+            if ge is not None and iv < ge:
+                raise HTTPException(status_code=400, detail=f"{name} must be >= {ge}")
+            if le is not None and iv > le:
+                raise HTTPException(status_code=400, detail=f"{name} must be <= {le}")
+            return iv
+
+        def _as_float(name: str, value: Any, *, gt: float = None, ge_f: float = None, le_f: float = None) -> float:
+            try:
+                fv = float(value)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"{name} must be a number")
+            if gt is not None and not (fv > gt):
+                raise HTTPException(status_code=400, detail=f"{name} must be > {gt}")
+            if ge_f is not None and fv < ge_f:
+                raise HTTPException(status_code=400, detail=f"{name} must be >= {ge_f}")
+            if le_f is not None and fv > le_f:
+                raise HTTPException(status_code=400, detail=f"{name} must be <= {le_f}")
+            return fv
+
+        sims = _get("mcts_simulations")
+        if sims is not None:
+            _as_int("mcts_simulations", sims, ge=1, le=200)
+
+        depth = _get("mcts_max_depth")
+        if depth is not None:
+            _as_int("mcts_max_depth", depth, ge=1, le=10)
+
+        c_ucb = _get("mcts_exploration_c")
+        if c_ucb is not None:
+            _as_float("mcts_exploration_c", c_ucb, ge_f=0.05, le_f=5.0)
+
+        k = _get("prompt_candidates_per_node")
+        if k is not None:
+            _as_int("prompt_candidates_per_node", k, ge=1, le=10)
+
+        sbin = _get("score_dedup_bin")
+        if sbin is not None:
+            _as_float("score_dedup_bin", sbin, ge_f=0.01, le_f=0.5)
+
+        thr = _get("feedback_threshold")
+        if thr is not None:
+            _as_float("feedback_threshold", thr, ge_f=0.0, le_f=10.0)
+
+        retries = _get("feedback_max_retries")
+        if retries is not None:
+            _as_int("feedback_max_retries", retries, ge=0, le=10)
+
+        budget = _get("token_budget")
+        if budget is not None:
+            _as_int("token_budget", budget, ge=1, le=1_000_000)
+
+        noimp = _get("early_stop_no_improve")
+        if noimp is not None:
+            _as_int("early_stop_no_improve", noimp, ge=1, le=50)
+
+        # Optional strings: scorer_model / rollout_model if provided must be non-empty strings
+        for name in ("scorer_model", "rollout_model"):
+            val = _get(name)
+            if val is not None and (not isinstance(val, str) or not val.strip()):
+                raise HTTPException(status_code=400, detail=f"{name} must be a non-empty string if provided")
+
 # Compatibility: base POST returns job info directly
 @router.post("")
 async def create_optimization_simple(
@@ -376,6 +444,29 @@ async def _rl_optimizations(
                                 },
                                 "test_case_ids": [1, 2, 3],
                                 "name": "Refine Summarizer"
+                            }
+                        },
+                        "mcts": {
+                            "summary": "Create MCTS sequence optimization job",
+                            "value": {
+                                "project_id": 1,
+                                "initial_prompt_id": 12,
+                                "optimization_config": {
+                                    "optimizer_type": "mcts",
+                                    "max_iterations": 20,
+                                    "target_metric": "accuracy",
+                                    "strategy_params": {
+                                        "mcts_simulations": 20,
+                                        "mcts_max_depth": 4,
+                                        "mcts_exploration_c": 1.4,
+                                        "prompt_candidates_per_node": 3,
+                                        "score_dedup_bin": 0.1,
+                                        "early_stop_no_improve": 5,
+                                        "token_budget": 50000
+                                    }
+                                },
+                                "test_case_ids": [1, 2, 3],
+                                "name": "MCTS Sequence Optimization"
                             }
                         }
                     }

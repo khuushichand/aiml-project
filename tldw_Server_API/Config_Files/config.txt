@@ -538,6 +538,39 @@ default_alltalk_tts_output_format = mp3
 alltalk_api_ip = http://127.0.0.1:7851/v1/audio/speech
 kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
+
+# ---------------------------------------------
+# API Route Toggles (optional)
+# ---------------------------------------------
+# Control which API route groups are included at startup.
+# You can also override via env vars:
+#   ROUTES_STABLE_ONLY=true|false
+#   ROUTES_DISABLE="sandbox,connectors"
+#   ROUTES_ENABLE="workflows"
+#
+# Known route keys include (not exhaustive):
+#   health, moderation, monitoring, audit, auth, auth-enhanced, users, privileges,
+#   admin, mcp-catalogs, media, audio, audio-jobs, audio-websocket, chat, characters,
+#   character-chat-sessions, character-messages, metrics, chunking, chunking-templates,
+#   outputs-templates, outputs, embeddings, vector-stores, connectors, claims,
+#   media-embeddings, items, reading, watchlists, subscriptions-deprecated, notes, prompts,
+#   reading-highlights, prompt-studio, rag-health, rag-unified, workflows, scheduler,
+#   research, paper-search, evaluations, ocr, vlm, benchmarks, setup, config, jobs,
+#   sync, tools, sandbox, flashcards, personalization, persona, mcp-unified, chatbooks,
+#   llm, llamacpp, web-scraping
+
+[API-Routes]
+# When true, disables a curated set of in-development (experimental) routes unless explicitly enabled.
+stable_only = true
+
+# Comma-separated list of route keys to disable regardless of stability
+disable = 
+
+# Comma-separated list of route keys to force-enable (useful when stable_only = true)
+enable = 
+
+# Optionally extend the curated experimental set (comma-separated)
+experimental_routes = 
 default_kokoro_tts_voice = sky
 default_kokoro_tts_model = pht
 default_kokoro_tts_output_format = wav

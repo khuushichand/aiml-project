@@ -62,6 +62,11 @@ from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
 from tldw_Server_API.app.core.http_client import fetch as http_fetch
 from urllib.robotparser import RobotFileParser
 from pathlib import Path
+from tldw_Server_API.app.core.Web_Scraping.filters import (
+    FilterChain,
+    URLPatternFilter,
+    ContentTypeFilter,
+)
 
 #
 #######################################################################################################################
@@ -773,7 +778,6 @@ def is_content_page(url: str) -> bool:
     :param url: The URL to check
     :return: True if the URL is likely a content page, False otherwise
     """
-    # Add more specific checks here based on the website's structure
     # Exclude common non-content pages
     exclude_patterns = [
         '/tag/', '/category/', '/author/', '/search/', '/page/',
@@ -781,7 +785,11 @@ def is_content_page(url: str) -> bool:
         'login', 'register', 'cart', 'checkout', 'account',
         '.jpg', '.png', '.gif', '.pdf', '.zip'
     ]
-    return not any(pattern in url.lower() for pattern in exclude_patterns)
+    chain = FilterChain([
+        ContentTypeFilter(),
+        URLPatternFilter(include_patterns=None, exclude_patterns=exclude_patterns)
+    ])
+    return chain.apply(url)
 
 def scrape_and_convert_with_filter(source: str, output_file: str, filter_function=is_content_page, level: int = None):
     """
@@ -1643,29 +1651,23 @@ def scrape_article_sync(url: str) -> Dict[str, Any]:
             browser.close()
 
 def should_scrape_url(url: str) -> bool:
-    parsed_url = urlparse(url)
-    path = parsed_url.path.lower()
+    """Deprecated: use FilterChain externally where possible.
 
-    # List of patterns to exclude
+    Kept for backward compatibility and implemented via FilterChain
+    using include/exclude substring patterns and content type check.
+    """
     exclude_patterns = [
         '/tag/', '/category/', '/author/', '/search/', '/page/',
         'wp-content', 'wp-includes', 'wp-json', 'wp-admin',
         'login', 'register', 'cart', 'checkout', 'account',
         '.jpg', '.png', '.gif', '.pdf', '.zip'
     ]
-
-    # Check if the URL contains any exclude patterns
-    if any(pattern in path for pattern in exclude_patterns):
-        return False
-
-    # Add more sophisticated checks here
-    # For example, you might want to only include URLs with certain patterns
     include_patterns = ['/article/', '/post/', '/blog/']
-    if any(pattern in path for pattern in include_patterns):
-        return True
-
-    # By default, return True if no exclusion or inclusion rules matched
-    return True
+    chain = FilterChain([
+        ContentTypeFilter(),
+        URLPatternFilter(include_patterns=include_patterns, exclude_patterns=exclude_patterns)
+    ])
+    return chain.apply(url)
 
 async def scrape_with_retry(url: str, max_retries: int = 3, retry_delay: float = 5.0):
     for attempt in range(max_retries):

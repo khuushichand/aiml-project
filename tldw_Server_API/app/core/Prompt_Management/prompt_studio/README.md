@@ -309,6 +309,32 @@ config = {
 }
 ```
 
+#### MCTS (Sequence Optimization)
+Use Monte Carlo Tree Search inspired exploration to refine prompt sequences. This MVP performs iterative variant sampling with early stopping and optional pruning via a cheap heuristic quality scorer.
+
+```python
+config = {
+    "optimizer_type": "mcts",  # or "strategy": "mcts" (legacy key)
+    "max_iterations": 20,
+    "target_metric": "accuracy",
+    "strategy_params": {
+        "mcts_simulations": 20,
+        "mcts_max_depth": 4,
+        "mcts_exploration_c": 1.4,
+        "prompt_candidates_per_node": 3,
+        "score_dedup_bin": 0.1,
+        "early_stop_no_improve": 5,
+        "token_budget": 50000,
+        "min_quality": 0.0  # 0..10 (heuristic pruning)
+    }
+}
+```
+
+Notes:
+- Progress is streamed via Prompt Studio WebSocket (iteration, current/best scores).
+- Heuristic pruning is controlled by `min_quality` (0–10). Lower = fewer prunes.
+- OpenAPI example for MCTS is available under `/api/v1/prompt-studio/optimizations/create`.
+
 ## API Reference
 
 ### Base URL
@@ -337,6 +363,19 @@ http://localhost:8000/api/v1/prompt_studio
 - `POST /test_cases/import` - Import from CSV/JSON
 - `POST /test_cases/export/{project_id}` - Export test cases
 - `POST /test_cases/generate` - Auto-generate tests
+
+##### Program Evaluator Runner Flag (MVP)
+To mark a test case as a code/program evaluation (non-executing MVP), include a `runner` hint in either `expected_outputs` or `inputs`:
+
+```json
+{
+  "name": "Generate Python function",
+  "inputs": { "prompt": "Write a function add(a,b).", "runner": "python" },
+  "expected_outputs": { "runner": "python" }
+}
+```
+
+When the environment flag `PROMPT_STUDIO_ENABLE_CODE_EVAL=true` is set, the TestRunner will use a heuristic Program Evaluator to score code-like outputs (no code execution in MVP). The full sandboxed executor will be added in a subsequent release.
 
 #### Evaluations
 - `POST /evaluations/create` - Create evaluation

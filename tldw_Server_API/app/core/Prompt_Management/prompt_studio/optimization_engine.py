@@ -13,6 +13,7 @@ from loguru import logger
 from .prompt_executor import PromptExecutor
 from .test_runner import TestRunner
 from .evaluation_metrics import EvaluationMetrics
+from .mcts_optimizer import MCTSOptimizer
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
@@ -593,6 +594,7 @@ class OptimizationEngine:
         # Initialize optimizers
         self.mipro = MIPROOptimizer(db, self.test_runner)
         self.bootstrap = BootstrapOptimizer(db, self.test_runner)
+        self.mcts = MCTSOptimizer(db, self.test_runner)
     
     async def optimize(self, optimization_id: int) -> Dict[str, Any]:
         """
@@ -611,7 +613,11 @@ class OptimizationEngine:
         
         # Parse configuration
         config = json.loads(optimization.get("optimizer_config", "{}"))
-        strategy = config.get("strategy", "mipro")
+        # Support both legacy "strategy" and new "optimizer_type" fields
+        strategy = (
+            (config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro")
+        )
+        strategy = str(strategy).lower()
         
         # Update status
         self._update_optimization_status(optimization_id, "running")
@@ -634,6 +640,18 @@ class OptimizationEngine:
                     model_config=json.loads(optimization["model_config"]),
                     num_examples=config.get("num_examples", 3),
                     selection_strategy=config.get("selection_strategy", "diverse")
+                )
+            
+            elif strategy == "mcts":
+                results = await self.mcts.optimize(
+                    initial_prompt_id=optimization["initial_prompt_id"],
+                    optimization_id=optimization_id,
+                    test_case_ids=json.loads(optimization["test_case_ids"]),
+                    model_config=json.loads(optimization["model_config"]),
+                    # Treat max_iterations as fallback simulations; allow override via strategy_params
+                    max_iterations=optimization.get("max_iterations", 20),
+                    target_metric=MetricType(config.get("target_metric", "accuracy")),
+                    strategy_params=config.get("strategy_params", {}),
                 )
             
             else:
