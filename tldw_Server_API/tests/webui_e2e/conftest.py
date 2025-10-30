@@ -40,7 +40,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment specific
             sys.modules.pop(key, None)
 
     try:
-        server_lifecycle = importlib.import_module("tldw_Server_API.scripts.server_lifecycle")
+        server_lifecycle = importlib.import_module("tldw_Server_API.tests.scripts.server_lifecycle")
     except ModuleNotFoundError:
         # Final fallback: import directly from file path to avoid any packaging
         # or path precedence issues in CI.
@@ -52,7 +52,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment specific
         if not module_path.exists():
             raise
         spec = importlib_util.spec_from_file_location(
-            "tldw_Server_API.scripts.server_lifecycle", str(module_path)
+            "tldw_Server_API.tests.scripts.server_lifecycle", str(module_path)
         )
         assert spec and spec.loader
         module = importlib_util.module_from_spec(spec)
