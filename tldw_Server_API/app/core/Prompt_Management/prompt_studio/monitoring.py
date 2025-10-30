@@ -320,6 +320,70 @@ class PromptStudioMetrics:
                 buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000]
             )
         )
+
+        # MCTS metrics
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.sims_total",
+                type=MetricType.COUNTER,
+                description="Total MCTS simulations run",
+                labels=["strategy"]
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.tree_nodes",
+                type=MetricType.HISTOGRAM,
+                description="Total nodes created during MCTS",
+                labels=["strategy"],
+                buckets=[1, 2, 5, 10, 20, 50, 100, 200, 500]
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.avg_branching",
+                type=MetricType.HISTOGRAM,
+                description="Average branching factor per expanded node",
+                labels=["strategy"],
+                buckets=[0.5, 1, 1.5, 2, 3, 4, 5]
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.best_reward",
+                type=MetricType.HISTOGRAM,
+                description="Best reward/score achieved in an MCTS run",
+                labels=["strategy"],
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.tokens_spent",
+                type=MetricType.COUNTER,
+                description="Total tokens spent during MCTS runs",
+                labels=["strategy"]
+            )
+        )
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.duration_ms",
+                type=MetricType.HISTOGRAM,
+                description="MCTS run duration in milliseconds",
+                unit="ms",
+                labels=["strategy"],
+                buckets=[100, 250, 500, 1000, 2000, 5000, 10000, 30000]
+            )
+        )
+        # Error counters (prunes, scorer failures, evaluator timeouts)
+        self.metrics_manager.register_metric(
+            MetricDefinition(
+                name="prompt_studio.mcts.errors_total",
+                type=MetricType.COUNTER,
+                description="MCTS error/prune counters",
+                labels=["strategy", "error"]
+            )
+        )
     
     ####################################################################################################################
     # Context Managers for Tracking
@@ -538,6 +602,46 @@ class PromptStudioMetrics:
             latency_ms,
             labels={"operation": operation}
         )
+
+    def record_mcts_summary(
+        self,
+        *,
+        sims_total: int,
+        tree_nodes: int,
+        avg_branching: float,
+        best_reward: float,
+        tokens_spent: int,
+        duration_ms: float,
+        strategy: str = "mcts",
+    ) -> None:
+        """Record a summary of an MCTS optimization run."""
+        s = {"strategy": strategy}
+        try:
+            self.metrics_manager.increment("prompt_studio.mcts.sims_total", value=int(sims_total), labels=s)
+            self.metrics_manager.observe("prompt_studio.mcts.tree_nodes", int(tree_nodes), labels=s)
+            self.metrics_manager.observe("prompt_studio.mcts.avg_branching", float(avg_branching), labels=s)
+            self.metrics_manager.observe("prompt_studio.mcts.best_reward", float(best_reward), labels=s)
+            self.metrics_manager.increment("prompt_studio.mcts.tokens_spent", value=int(tokens_spent), labels=s)
+            self.metrics_manager.observe("prompt_studio.mcts.duration_ms", float(duration_ms), labels=s)
+        except Exception as e:
+            logger.debug(f"Failed to record MCTS metrics: {e}")
+
+    def record_mcts_error(self, *, error: str, count: int = 1, strategy: str = "mcts") -> None:
+        """Record an MCTS error/prune occurrence.
+
+        Args:
+            error: One of prune_low_quality, prune_dedup, scorer_failure, evaluator_timeout
+            count: Increment amount
+            strategy: Strategy label (default 'mcts')
+        """
+        try:
+            self.metrics_manager.increment(
+                "prompt_studio.mcts.errors_total",
+                value=int(count),
+                labels={"strategy": strategy, "error": str(error)},
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record MCTS error metric: {e}")
 
 ########################################################################################################################
 # Monitoring Decorators

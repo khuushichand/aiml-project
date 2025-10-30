@@ -8392,6 +8392,10 @@ class WebScrapingRequest(BaseModel):
     mode: str = "persist"  # or "ephemeral"
     user_agent: Optional[str] = None
     custom_headers: Optional[Dict[str, str]] = None
+    # Optional crawl overrides (UI toggles)
+    crawl_strategy: Optional[str] = None  # e.g., "default" or "best_first"
+    include_external: Optional[bool] = None
+    score_threshold: Optional[float] = None
 
 @router.post("/process-web-scraping",
              dependencies=[Depends(PermissionChecker(MEDIA_CREATE)), Depends(rbac_rate_limit("media.create"))])
@@ -8436,7 +8440,10 @@ async def process_web_scraping_endpoint(
             custom_cookies=payload.custom_cookies,
             mode=payload.mode,
             user_agent=payload.user_agent,
-            custom_headers=payload.custom_headers
+            custom_headers=payload.custom_headers,
+            crawl_strategy=payload.crawl_strategy,
+            include_external=payload.include_external,
+            score_threshold=payload.score_threshold,
         )
         return result
     except Exception as e:

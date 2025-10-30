@@ -168,6 +168,15 @@ class ProgramEvaluator:
         wrapper = textwrap.dedent(
             f"""
             import sys, json, builtins
+            # Try to set resource limits (POSIX only)
+            try:
+                import resource
+                # CPU time (seconds)
+                resource.setrlimit(resource.RLIMIT_CPU, ({cpu}, {cpu}))
+                # Address space / virtual memory (bytes)
+                resource.setrlimit(resource.RLIMIT_AS, ({mem}, {mem}))
+            except Exception:
+                pass
             # Best-effort isolation: no open/read, block dangerous builtins
             safe_open = None
             def _blocked(*a, **k):
@@ -190,7 +199,8 @@ class ProgramEvaluator:
             # User code
             __code_globals = {{}}
             __code_locals = None
-            __user_code = r"""{code}\n"""
+            # Use triple-single quotes to avoid conflicting with the outer f-string's triple-double quotes
+            __user_code = r'''{code}\n'''
             try:
                 exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)
             except Exception as e:
@@ -220,7 +230,7 @@ class ProgramEvaluator:
         with tempfile.TemporaryDirectory() as td:
             script_path = os.path.join(td, "sandbox_runner.py")
             with open(script_path, "w", encoding="utf-8") as f:
-                f.write(wrapper)
+                f.write(wrapper.format(cpu=int(self.CPU_TIME_SEC), mem=int(self.MEMORY_MB) * 1024 * 1024))
             # Run isolated Python: -I ignores env vars/user site; -B no pyc; no cwd files
             env = {"PYTHONHASHSEED": "0"}
             try:
@@ -279,13 +289,7 @@ class ProgramEvaluator:
         constraints_ok = True
         if constraints and isinstance(globals_dump, dict):
             for expr in constraints:
-                try:
-                    # Very restricted eval: only names in globals_dump and simple operators
-                    allowed_names = {k: globals_dump.get(k) for k in globals_dump.keys()}
-                    if not bool(eval(expr, {"__builtins__": {}}, allowed_names)):
-                        constraints_ok = False
-                        break
-                except Exception:
+                if not self._safe_eval_constraint(expr, globals_dump):
                     constraints_ok = False
                     break
         metrics["constraints_ok"] = constraints_ok
@@ -307,3 +311,30 @@ class ProgramEvaluator:
         if not constraints_ok:
             reward *= 0.5
         return float(max(-1.0, min(10.0, reward))), metrics
+
+    # --------------------------------------------------------------------------------------------
+    # Safe constraint evaluation via AST
+    def _safe_eval_constraint(self, expr: str, names: Dict[str, Any]) -> bool:
+        import ast
+        try:
+            tree = ast.parse(str(expr), mode="eval")
+        except Exception:
+            return False
+
+        allowed_nodes = (
+            ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
+            ast.Name, ast.Load, ast.Constant, ast.Num,
+            ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+            ast.And, ast.Or, ast.Not,
+            ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+            ast.USub, ast.UAdd,
+        )
+
+        for node in ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                return False
+        try:
+            env = {k: names.get(k) for k in names.keys()}
+            return bool(eval(compile(tree, "<constraint>", "eval"), {"__builtins__": {}}, env))
+        except Exception:
+            return False

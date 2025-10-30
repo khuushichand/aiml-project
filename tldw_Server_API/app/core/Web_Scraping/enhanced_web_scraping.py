@@ -57,6 +57,11 @@ from tldw_Server_API.app.core.Web_Scraping.filters import (
     URLPatternFilter,
     RobotsFilter,
 )
+from tldw_Server_API.app.core.Metrics.metrics_logger import (
+    log_counter,
+    log_histogram,
+    log_gauge,
+)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1004,6 +1009,10 @@ class EnhancedWebScraper:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        *,
+        include_external_override: Optional[bool] = None,
+        score_threshold_override: Optional[float] = None,
+        crawl_strategy: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively scrape a website"""
         # Egress guard for base URL
@@ -1022,6 +1031,8 @@ class EnhancedWebScraper:
         cfg = load_and_log_configs() or {}
         wc = cfg.get('web_scraper', {}) if isinstance(cfg, dict) else {}
         include_external_flag = bool(wc.get('web_crawl_include_external', False))
+        if include_external_override is not None:
+            include_external_flag = bool(include_external_override)
         allowed_raw = wc.get('web_crawl_allowed_domains') or ""
         blocked_raw = wc.get('web_crawl_blocked_domains') or ""
         def _split(s: str) -> Set[str]:
@@ -1099,6 +1110,11 @@ class EnhancedWebScraper:
             score_threshold = float(wc.get('web_crawl_score_threshold', 0.0))
         except Exception:
             score_threshold = 0.0
+        if score_threshold_override is not None:
+            try:
+                score_threshold = float(score_threshold_override)
+            except Exception:
+                pass
 
         results = []
         
@@ -1111,8 +1127,22 @@ class EnhancedWebScraper:
             start_score = 0.0
         heappush(pq, (-float(start_score), 0, base_norm, None))
         seen.add(base_norm)
+        # Initial metrics
+        try:
+            log_histogram("webscraping.crawl.score", float(start_score), labels={"stage": "start"})
+        except Exception:
+            pass
+        try:
+            log_gauge("webscraping.crawl.queue_size", float(len(pq)))
+        except Exception:
+            pass
 
         while pq and len(results) < max_pages:
+            # Gauge: current queue size at loop start
+            try:
+                log_gauge("webscraping.crawl.queue_size", float(len(pq)))
+            except Exception:
+                pass
             # Pop up to batch size items
             remaining = max_pages - len(results)
             batch_n = min(BEST_FIRST_BATCH_SIZE, remaining)
@@ -1121,12 +1151,27 @@ class EnhancedWebScraper:
                 neg_s, depth, url, parent = heappop(pq)
                 cur = normalize_for_crawl(url, base_norm)
                 if cur in visited or depth > max_depth:
+                    # Count URL skipped due to visited or exceeding depth
+                    try:
+                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "visited_or_depth"})
+                    except Exception:
+                        pass
+                    if cur in visited:
+                        logger.debug(f"Skip URL (visited): {cur}")
+                    elif depth > max_depth:
+                        logger.debug(f"Skip URL (depth>{max_depth}): {cur}")
                     continue
                 batch.append((neg_s, depth, cur, parent))
                 visited.add(cur)
 
             if not batch:
                 continue
+
+            # Gauge: current processing depth (first item in batch)
+            try:
+                log_gauge("webscraping.crawl.depth", float(batch[0][1]))
+            except Exception:
+                pass
 
             batch_urls = [u for (_, _, u, _) in batch]
             batch_results = await self.scrape_multiple(
@@ -1157,6 +1202,11 @@ class EnhancedWebScraper:
                 res['metadata'].update({'depth': depth, 'parent_url': parent, 'score': computed_score})
 
                 if res.get('extraction_successful'):
+                    logger.debug(f"Crawled page success: {r_url} depth={depth} score={computed_score:.3f}")
+                    try:
+                        log_counter("webscraping.crawl.pages_crawled")
+                    except Exception:
+                        pass
                     results.append(res)
                     # Discovery
                     if depth < max_depth:
@@ -1165,13 +1215,27 @@ class EnhancedWebScraper:
                         if remaining <= 0:
                             break
                         links = await self._extract_links(r_url, res.get('content', ''))
+                        try:
+                            log_counter("webscraping.crawl.links_discovered", value=len(links))
+                        except Exception:
+                            pass
                         for link in links:
                             if remaining <= 0:
                                 break
                             cand = normalize_for_crawl(link, r_url)
                             if cand in visited or cand in seen:
+                                try:
+                                    log_counter("webscraping.crawl.urls_skipped", labels={"reason": "dup_seen"})
+                                except Exception:
+                                    pass
+                                logger.debug(f"Skip URL (duplicate): {cand}")
                                 continue
                             if not filter_chain.apply(cand):
+                                try:
+                                    log_counter("webscraping.crawl.urls_skipped", labels={"reason": "filter_chain"})
+                                except Exception:
+                                    pass
+                                logger.debug(f"Skip URL (filters reject): {cand}")
                                 continue
                             # Optional robots gating (execute only for egress-allowed hosts)
                             if robots_filter is not None:
@@ -1181,23 +1245,48 @@ class EnhancedWebScraper:
                                     allowed = True  # fail open
                                 if not allowed:
                                     try:
-                                        from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
                                         parsed = urlparse(cand)
                                         log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                     except Exception:
                                         pass
+                                    try:
+                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "robots"})
+                                    except Exception:
+                                        pass
+                                    logger.debug(f"Skip URL (robots disallow): {cand}")
                                     continue
                             try:
                                 s_val = composite.score(cand)
                             except Exception:
                                 s_val = 0.0
+                            # Histogram: candidate score distribution
+                            try:
+                                log_histogram("webscraping.crawl.score", float(s_val))
+                            except Exception:
+                                pass
                             if s_val < score_threshold:
+                                try:
+                                    log_counter("webscraping.crawl.urls_skipped", labels={"reason": "below_threshold"})
+                                except Exception:
+                                    pass
+                                logger.debug(f"Skip URL (score {s_val:.3f} < threshold {score_threshold:.3f}): {cand}")
                                 continue
                             if url_filter and not url_filter(cand):
+                                try:
+                                    log_counter("webscraping.crawl.urls_skipped", labels={"reason": "custom_filter"})
+                                except Exception:
+                                    pass
+                                logger.debug(f"Skip URL (custom filter): {cand}")
                                 continue
                             heappush(pq, (-float(s_val), depth + 1, cand, r_url))
                             seen.add(cand)
                             remaining -= 1
+                            logger.debug(f"Enqueue URL (score={s_val:.3f}, depth={depth+1}): {cand}")
+                            # Gauge: queue size after enqueue
+                            try:
+                                log_gauge("webscraping.crawl.queue_size", float(len(pq)))
+                            except Exception:
+                                pass
         
         return results
     

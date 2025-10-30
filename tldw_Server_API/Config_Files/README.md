@@ -267,12 +267,20 @@ VibeVoice:
     - `web_crawl_include_external` (bool) → `WEB_CRAWL_INCLUDE_EXTERNAL` (default `false`)
     - `web_crawl_score_threshold` (float) → `WEB_CRAWL_SCORE_THRESHOLD` (default `0.0`)
     - `web_crawl_max_pages` (int) → `WEB_CRAWL_MAX_PAGES` (default `100`)
+    - `web_crawl_allowed_domains` (csv) → restrict crawl to specific domains (always includes base host when `include_external` is false)
+    - `web_crawl_blocked_domains` (csv) → domains to exclude (subdomains included)
   - Scoring (env overrides file):
     - `web_crawl_enable_keyword_scorer` (bool) → `WEB_CRAWL_ENABLE_KEYWORD_SCORER` (default `false`)
     - `web_crawl_keywords` (csv) → `WEB_CRAWL_KEYWORDS` (e.g., `ai,ml,python`)
     - `web_crawl_enable_domain_map` (bool) → `WEB_CRAWL_ENABLE_DOMAIN_MAP` (default `false`)
     - `web_crawl_domain_map` (json or `domain:score` csv) → `WEB_CRAWL_DOMAIN_MAP`
       - Examples: `{"docs.python.org": 1.0, "github.com": 0.8}` or `docs.python.org:1.0,github.com:0.8`
+  - Robots policy:
+    - `web_scraper_respect_robots` (bool, default `true`): enforce robots.txt for egress-allowed hosts
+      - Resolved per-domain with caching; missing robots.txt fails open.
+  - Patterns:
+    - Default excludes include common non-content paths (e.g., `/tag/`, `/category/`, `wp-content`, images/docs). These are applied internally.
+    - Advanced pattern controls can be added via code (see `URLPatternFilter` in `app/core/Web_Scraping/filters.py`).
 
 ## [Logging]
 - `log_level` (str): `DEBUG|INFO|WARN|ERROR`.

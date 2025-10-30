@@ -13,6 +13,9 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase,
     DatabaseError,
 )
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+    prompt_studio_metrics,
+)
 
 ########################################################################################################################
 # Event Types
@@ -114,8 +117,13 @@ class EventBroadcaster:
                 await self.connection_manager.broadcast_to_client(client_id, message)
         else:
             await self.connection_manager.broadcast_to_all(message)
-        
+
         logger.debug(f"Broadcast {event_type.value} to {client_ids or 'all'}")
+        # Optional metrics per WS message
+        try:
+            prompt_studio_metrics.record_websocket_message(event_type.value)
+        except Exception:
+            pass
 
     # Backward-compat: some tests patch EventBroadcaster.broadcast; provide a thin wrapper
     async def broadcast(self, *args, **kwargs):  # noqa: D401 - compatibility wrapper

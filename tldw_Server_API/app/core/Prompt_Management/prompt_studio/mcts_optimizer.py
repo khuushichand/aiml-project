@@ -16,6 +16,10 @@ from .prompt_quality import PromptQualityScorer
 from .prompt_decomposer import PromptDecomposer
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster,
+    EventType,
+)
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+    prompt_studio_metrics,
 )
 try:
     # Optional: shared WS connection manager if WS endpoints loaded
@@ -97,6 +101,11 @@ class MCTSOptimizer:
         feedback_enabled = bool(params.get("feedback_enabled", True))
         feedback_threshold = float(params.get("feedback_threshold", 6.0))
         feedback_max_retries = int(params.get("feedback_max_retries", 2))
+        ws_throttle_every = int(params.get("ws_throttle_every") or max(1, int(n_sims // 50) or 1))
+        trace_top_k = int(params.get("trace_top_k") or 3)
+        # Debugging/observability of decisions
+        import os as _os
+        debug_decisions = str(_os.getenv("PROMPT_STUDIO_MCTS_DEBUG_DECISIONS", "false")).lower() in {"1", "true", "yes", "on"}
 
         # Configure scorer
         if scorer_model:
@@ -136,11 +145,38 @@ class MCTSOptimizer:
 
         iteration_history: List[Dict[str, Any]] = []
         no_improve_streak = 0
+        nodes_created = 0
+        edges_created = 0
+        parent_ids: set = set()
+        t_start = datetime.utcnow()
+
+        # Error/observability counters
+        self._counters = {
+            "prune_low_quality": 0,
+            "prune_dedup": 0,
+            "scorer_failures": 0,
+            "evaluator_timeouts": 0,
+        }
+        # Collect top scored candidates per depth when debugging
+        self._debug_top_by_depth: Dict[int, List[Dict[str, Any]]] = {} if debug_decisions else None
 
         broadcaster = None
         if ws_connection_manager is not None and optimization_id is not None:
             broadcaster = EventBroadcaster(ws_connection_manager, self.db)
+            try:
+                await broadcaster.broadcast_event(
+                    event_type=EventType.OPTIMIZATION_STARTED,
+                    data={
+                        "optimization_id": optimization_id,
+                        "strategy": "mcts",
+                        "max_iterations": n_sims,
+                    },
+                    project_id=base_prompt.get("project_id"),
+                )
+            except Exception:
+                pass
 
+        best_eval_system: Optional[str] = None
         for sim in range(1, n_sims + 1):
             if token_budget and self._tokens_spent >= token_budget:
                 logger.info("MCTS token budget exhausted: %s >= %s", self._tokens_spent, token_budget)
@@ -164,9 +200,32 @@ class MCTSOptimizer:
                     if child is not None:
                         node = child
                         path.append(node)
+                        nodes_created += 1
+                        edges_created += 1
+                        try:
+                            parent_ids.add(id(node.parent))
+                        except Exception:
+                            pass
                         continue
                 if node.children:
-                    node = max(node.children, key=lambda ch: ch.uct(exploration_c=exploration_c))
+                    # Log selection decision (UCT) for observability
+                    try:
+                        if debug_decisions:
+                            scored_children = [
+                                (ch, ch.uct(exploration_c=exploration_c)) for ch in node.children
+                            ]
+                            chosen, chosen_uct = max(scored_children, key=lambda p: p[1])
+                            logger.debug(
+                                "mcts.select depth=%s chose_child_bin=%s uct=%.4f",
+                                node.segment_index,
+                                getattr(chosen, "score_bin", None),
+                                float(chosen_uct),
+                            )
+                            node = chosen
+                        else:
+                            node = max(node.children, key=lambda ch: ch.uct(exploration_c=exploration_c))
+                    except Exception:
+                        node = max(node.children, key=lambda ch: ch.uct(exploration_c=exploration_c))
                     path.append(node)
                     continue
                 break
@@ -191,23 +250,39 @@ class MCTSOptimizer:
                 p.q_sum += float(score)
 
             # Update best and record
-            iteration_history.append({
+            # Compact system trace info
+            import hashlib
+            sys_hash = hashlib.sha256((eval_system or "").encode("utf-8", errors="ignore")).hexdigest()
+            sys_preview = (eval_system or "")[:160]
+            iter_entry = {
                 "simulation": sim,
                 "prompt_id": prompt_id,
                 "score": score,
                 "improvement": score - best_score,
-            })
-            if score > best_score:
+                "system_hash": sys_hash,
+                "system_preview": sys_preview,
+            }
+            iteration_history.append(iter_entry)
+            improved = score > best_score
+            if improved:
                 best_score = score
                 best_prompt_id = prompt_id
                 no_improve_streak = 0
+                best_eval_system = eval_system
             else:
                 no_improve_streak += 1
                 if no_improve_streak >= early_no_improve:
                     logger.info("MCTS early stop: no improvement for %s sims", early_no_improve)
                     break
 
-            if broadcaster:
+            # Throttled WS + per-iteration persistence
+            do_broadcast = (
+                (sim == 1)
+                or (sim == n_sims)
+                or improved
+                or (sim % ws_throttle_every == 0)
+            )
+            if broadcaster and do_broadcast:
                 try:
                     await broadcaster.broadcast_optimization_iteration(
                         optimization_id=optimization_id,
@@ -219,7 +294,110 @@ class MCTSOptimizer:
                 except Exception:
                     pass
 
-        return {
+            # Persist iteration record (throttled similarly to WS)
+            if optimization_id is not None and do_broadcast:
+                try:
+                    self.db.record_optimization_iteration(
+                        optimization_id,
+                        iteration_number=sim,
+                        prompt_variant={
+                            "prompt_id": prompt_id,
+                            "system_hash": sys_hash,
+                            "system_preview": sys_preview,
+                        },
+                        metrics={
+                            "score": float(score),
+                            "best_metric": float(best_score),
+                        },
+                        tokens_used=int(self._tokens_spent),
+                        note="mcts-iteration",
+                    )
+                except Exception:
+                    pass
+
+            # Cancellation check (if status changed to cancelled)
+            if optimization_id is not None:
+                try:
+                    current = self.db.get_optimization(optimization_id)
+                    if current and str(current.get("status")).lower() == "cancelled":
+                        logger.info("MCTS detected cancellation; exiting loop")
+                        break
+                except Exception:
+                    pass
+
+        duration_ms = (datetime.utcnow() - t_start).total_seconds() * 1000.0
+        parents_used = len(parent_ids) or 1
+        avg_branching = float(edges_created) / float(parents_used)
+
+        # Record metrics and error counters
+        try:
+            prompt_studio_metrics.record_mcts_summary(
+                sims_total=len(iteration_history),
+                tree_nodes=nodes_created,
+                avg_branching=avg_branching,
+                best_reward=float(best_score),
+                tokens_spent=self._tokens_spent,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            pass
+        # Emit error counters
+        try:
+            for key, val in (self._counters or {}).items():
+                if not val:
+                    continue
+                # Map internal keys to error labels
+                label = {
+                    "prune_low_quality": "prune_low_quality",
+                    "prune_dedup": "prune_dedup",
+                    "scorer_failures": "scorer_failure",
+                    "evaluator_timeouts": "evaluator_timeout",
+                }.get(key, key)
+                prompt_studio_metrics.record_mcts_error(error=label, count=int(val))
+        except Exception:
+            pass
+
+        if broadcaster:
+            try:
+                await broadcaster.broadcast_event(
+                    event_type=EventType.OPTIMIZATION_COMPLETED,
+                    data={
+                        "optimization_id": optimization_id,
+                        "strategy": "mcts",
+                        "iterations": len(iteration_history),
+                        "final_score": float(best_score),
+                        "tokens_spent": int(self._tokens_spent),
+                    },
+                    project_id=base_prompt.get("project_id"),
+                )
+            except Exception:
+                pass
+
+        # Build compact final trace: best path + top-K candidates
+        top_candidates = sorted(iteration_history, key=lambda e: e.get("score", 0.0), reverse=True)[: max(1, trace_top_k)]
+        final_trace = {
+            "best_path": {
+                "prompt_id": best_prompt_id,
+                "system_hash": (top_candidates[0]["system_hash"] if top_candidates else None),
+                "system_preview": (top_candidates[0]["system_preview"] if top_candidates else None),
+                "depth": None,  # unknown without tracking full path; kept for schema stability
+            },
+            "top_candidates": [
+                {
+                    "simulation": tc.get("simulation"),
+                    "prompt_id": tc.get("prompt_id"),
+                    "score": tc.get("score"),
+                    "system_hash": tc.get("system_hash"),
+                    "system_preview": tc.get("system_preview"),
+                }
+                for tc in top_candidates
+            ],
+            "sims_total": len(iteration_history),
+        }
+        if debug_decisions and isinstance(self._debug_top_by_depth, dict):
+            final_trace["debug_top_scores_by_depth"] = self._debug_top_by_depth
+
+        result = {
             "initial_prompt_id": initial_prompt_id,
             "optimized_prompt_id": best_prompt_id,
             "initial_score": initial_score,
@@ -228,7 +406,29 @@ class MCTSOptimizer:
             "iterations": len(iteration_history),
             "iteration_history": iteration_history,
             "strategy": "MCTS",
+            "total_tokens": self._tokens_spent,
+            "duration_ms": duration_ms,
+            # Extra metrics/traces for engine to persist
+            "final_metrics": {
+                "score": float(best_score),
+                "best_reward": float(best_score),
+                "tree_nodes": nodes_created,
+                "avg_branching": avg_branching,
+                "tokens_spent": int(self._tokens_spent),
+                "duration_ms": duration_ms,
+                "trace": final_trace,
+                "errors": dict(self._counters or {}),
+                "applied_params": {
+                    "mcts_max_depth": max_depth,
+                    "prompt_candidates_per_node": k_candidates,
+                    "mcts_exploration_c": exploration_c,
+                },
+            },
         }
+
+        # Reset counters holder
+        self._counters = None
+        return result
 
     async def _expand_node(
         self,
@@ -245,21 +445,79 @@ class MCTSOptimizer:
             return None
         best_existing: Optional[MCTSOptimizer._Node] = None
         best_existing_score = -1.0
+        scored: List[Tuple[str, float, int]] = []
         for cand_system in candidates:
-            q = await self.scorer.score_prompt_async(system_text=cand_system, user_text=base_user)
+            # DB-backed scorer cache (optional)
+            try:
+                key = "scorer:" + self.scorer._cache_key(cand_system, base_user)
+                cached = self._db_cache_get(key)
+            except Exception:
+                cached = None
+            if cached is not None:
+                q = float(cached)
+            else:
+                try:
+                    q = await self.scorer.score_prompt_async(system_text=cand_system, user_text=base_user)
+                except Exception:
+                    q = 0.0
+                    try:
+                        if hasattr(self, "_counters") and isinstance(self._counters, dict):
+                            self._counters["scorer_failures"] = self._counters.get("scorer_failures", 0) + 1
+                    except Exception:
+                        pass
+                try:
+                    self._db_cache_set(key, q, ttl_sec=1800)
+                except Exception:
+                    pass
+            try:
+                bin_idx = PromptQualityScorer.score_to_bin(q, score_bin_size)
+                scored.append((cand_system, q, bin_idx))
+            except Exception:
+                bin_idx = PromptQualityScorer.score_to_bin(q, score_bin_size)
             if q < min_quality:
+                try:
+                    if hasattr(self, "_counters") and isinstance(self._counters, dict):
+                        self._counters["prune_low_quality"] = self._counters.get("prune_low_quality", 0) + 1
+                except Exception:
+                    pass
                 continue
-            bin_idx = PromptQualityScorer.score_to_bin(q, score_bin_size)
             if bin_idx in node.children_by_bin:
                 ch = node.children_by_bin[bin_idx]
                 if q > best_existing_score:
                     best_existing = ch
                     best_existing_score = q
+                try:
+                    if hasattr(self, "_counters") and isinstance(self._counters, dict):
+                        self._counters["prune_dedup"] = self._counters.get("prune_dedup", 0) + 1
+                except Exception:
+                    pass
                 continue
             child = self._Node(parent=node, segment_index=node.segment_index + 1, system_text=cand_system, score_bin=bin_idx)
             node.children.append(child)
             node.children_by_bin[bin_idx] = child
+            # Debug: record top scored candidates for this depth
+            try:
+                if isinstance(self._debug_top_by_depth, dict):
+                    depth = node.segment_index
+                    top = sorted(scored, key=lambda t: t[1], reverse=True)[:3]
+                    self._debug_top_by_depth[depth] = [
+                        {"score": float(s[1]), "bin": int(s[2]), "system_preview": (s[0] or "")[:160]}
+                        for s in top
+                    ]
+            except Exception:
+                pass
             return child
+        # If no child added, still capture debug top scored at this depth
+        try:
+            if isinstance(self._debug_top_by_depth, dict) and scored:
+                depth = node.segment_index
+                top = sorted(scored, key=lambda t: t[1], reverse=True)[:3]
+                self._debug_top_by_depth[depth] = [
+                    {"score": float(s[1]), "bin": int(s[2]), "system_preview": (s[0] or "")[:160]}
+                    for s in top
+                ]
+        except Exception:
+            pass
         return best_existing
 
     async def _propose_candidates(self, system_so_far: str, segment_text: str, k: int) -> List[str]:
@@ -287,6 +545,15 @@ class MCTSOptimizer:
         cache_key = (system_text, segment_text)
         if cache_key in self._rephrase_cache:
             return self._rephrase_cache[cache_key]
+        # DB cache
+        try:
+            db_key = "rephrase:" + self._hash_pair(system_text, segment_text)
+            cached = self._db_cache_get(db_key)
+            if isinstance(cached, str) and cached:
+                self._rephrase_cache[cache_key] = cached
+                return cached
+        except Exception:
+            pass
         prompt = (
             "You are improving a system prompt for an assistant.\n"
             "Focus on the following segment, enhancing clarity, specificity, and constraint adherence,"
@@ -308,6 +575,10 @@ class MCTSOptimizer:
                 pass
             if content:
                 self._rephrase_cache[cache_key] = content
+                try:
+                    self._db_cache_set(db_key, content, ttl_sec=3600)
+                except Exception:
+                    pass
             return content or None
         except Exception:
             return None
@@ -336,8 +607,21 @@ class MCTSOptimizer:
         if cached is not None:
             score = cached
         else:
-            score = await self._evaluate_prompt(prompt_id, test_case_ids, model_config, target_metric)
-            self._eval_cache[eval_cache_key] = score
+            # DB cache (rollout)
+            db_key = "eval:" + eval_cache_key
+            try:
+                cached_db = self._db_cache_get(db_key)
+            except Exception:
+                cached_db = None
+            if cached_db is not None:
+                score = float(cached_db)
+            else:
+                score = await self._evaluate_prompt(prompt_id, test_case_ids, model_config, target_metric)
+                self._eval_cache[eval_cache_key] = score
+                try:
+                    self._db_cache_set(db_key, score, ttl_sec=3600)
+                except Exception:
+                    pass
         scaled = score * 10.0
         if not feedback_enabled or scaled >= feedback_threshold or not self._refiner_cls:
             return score, prompt_id
@@ -399,12 +683,23 @@ class MCTSOptimizer:
         scores: List[float] = []
         metric_key = getattr(target_metric, "value", str(target_metric))
         for tc_id in test_case_ids:
-            result = await self.test_runner.run_single_test(
-                prompt_id=prompt_id,
-                test_case_id=tc_id,
-                model_config=model_config,
-                metrics=[target_metric] if hasattr(target_metric, "value") else None,
-            )
+            try:
+                result = await self.test_runner.run_single_test(
+                    prompt_id=prompt_id,
+                    test_case_id=tc_id,
+                    model_config=model_config,
+                    metrics=[target_metric] if hasattr(target_metric, "value") else None,
+                )
+            except Exception as e:
+                # Count timeouts; keep conservative by substring match
+                msg = str(e).lower()
+                if "timeout" in msg or "timed out" in msg:
+                    try:
+                        if hasattr(self, "_counters") and isinstance(self._counters, dict):
+                            self._counters["evaluator_timeouts"] = self._counters.get("evaluator_timeouts", 0) + 1
+                    except Exception:
+                        pass
+                continue
             if result.get("success") and "scores" in result:
                 score = result["scores"].get(metric_key)
                 if score is None:
@@ -454,4 +749,54 @@ class MCTSOptimizer:
         h.update(
             (",".join(str(int(x)) for x in sorted(test_case_ids or []))).encode("utf-8")
         )
+        return h.hexdigest()
+
+    # --- Simple DB-backed cache via sync_log ---
+    def _db_cache_get(self, key: str) -> Optional[Any]:
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT payload, timestamp FROM sync_log WHERE entity = ? AND entity_uuid = ? ORDER BY timestamp DESC LIMIT 1",
+                ("prompt_studio_cache", key),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            payload_raw = row[0]
+            import json, datetime
+            payload = json.loads(payload_raw) if isinstance(payload_raw, str) else self.db._row_to_dict(cursor, row)
+            data = payload if isinstance(payload, dict) else {}
+            expires = data.get("expires_at")
+            if expires:
+                try:
+                    if datetime.datetime.fromisoformat(expires) < datetime.datetime.utcnow():
+                        return None
+                except Exception:
+                    pass
+            return data.get("value")
+        except Exception:
+            return None
+
+    def _db_cache_set(self, key: str, value: Any, *, ttl_sec: int = 3600) -> None:
+        try:
+            import json, datetime, uuid
+            expires_at = (datetime.datetime.utcnow() + datetime.timedelta(seconds=int(ttl_sec))).isoformat()
+            payload = {"value": value, "expires_at": expires_at}
+            self.db._log_sync_event(
+                entity="prompt_studio_cache",
+                entity_uuid=key,
+                operation="set",
+                payload=payload,
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _hash_pair(a: str, b: str) -> str:
+        import hashlib
+        h = hashlib.sha256()
+        h.update(a.encode("utf-8", errors="ignore"))
+        h.update(b"\0")
+        h.update(b.encode("utf-8", errors="ignore"))
         return h.hexdigest()

@@ -87,7 +87,11 @@ class WebScrapingService:
         priority: str = "normal",
         user_id: Optional[int] = None,
         user_agent: Optional[str] = None,
-        custom_headers: Optional[Dict[str, str]] = None
+        custom_headers: Optional[Dict[str, str]] = None,
+        # Crawl overrides from UI/clients
+        crawl_strategy: Optional[str] = None,
+        include_external: Optional[bool] = None,
+        score_threshold: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Process web scraping task with enhanced features.
@@ -126,13 +130,18 @@ class WebScrapingService:
                 except Exception:
                     return d
 
-            crawl_strategy: str = str(wc.get('web_crawl_strategy', 'default'))
-            include_external: bool = _as_bool(wc.get('web_crawl_include_external', False), False)
-            score_threshold: float = _as_float(wc.get('web_crawl_score_threshold', 0.0), 0.0)
+            crawl_strategy_cfg: str = str(wc.get('web_crawl_strategy', 'default'))
+            include_external_cfg: bool = _as_bool(wc.get('web_crawl_include_external', False), False)
+            score_threshold_cfg: float = _as_float(wc.get('web_crawl_score_threshold', 0.0), 0.0)
             default_max_pages: int = _as_int(wc.get('web_crawl_max_pages', 100), 100)
 
             # Respect explicit API param; otherwise allow config default to apply
             effective_max_pages: int = max_pages if max_pages is not None and max_pages != 100 else default_max_pages
+
+            # Effective overrides (prefer explicit inputs over config)
+            eff_strategy = (crawl_strategy or '').strip() or crawl_strategy_cfg
+            eff_include_external = include_external if include_external is not None else include_external_cfg
+            eff_score_threshold = score_threshold if score_threshold is not None else score_threshold_cfg
 
             # Map priority string to enum
             priority_map = {
@@ -170,7 +179,10 @@ class WebScrapingService:
                     url_input, url_level, effective_max_pages, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, job_priority,
-                    custom_cookies, user_agent, custom_headers
+                    custom_cookies, user_agent, custom_headers,
+                    include_external=eff_include_external,
+                    score_threshold=eff_score_threshold,
+                    crawl_strategy=eff_strategy,
                 )
 
             elif scrape_method == "Recursive Scraping":
@@ -178,7 +190,10 @@ class WebScrapingService:
                     url_input, effective_max_pages, max_depth, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, custom_cookies,
-                    job_priority, user_agent, custom_headers
+                    job_priority, user_agent, custom_headers,
+                    include_external=eff_include_external,
+                    score_threshold=eff_score_threshold,
+                    crawl_strategy=eff_strategy,
                 )
                 
             else:
@@ -188,9 +203,9 @@ class WebScrapingService:
             if isinstance(result, dict):
                 result.setdefault('crawl_config', {})
                 result['crawl_config'].update({
-                    'strategy': crawl_strategy,
-                    'include_external': include_external,
-                    'score_threshold': score_threshold,
+                    'strategy': eff_strategy,
+                    'include_external': eff_include_external,
+                    'score_threshold': eff_score_threshold,
                     'default_max_pages': default_max_pages,
                     'effective_max_pages': effective_max_pages,
                     'enable_keyword_scorer': bool(wc.get('web_crawl_enable_keyword_scorer', False)),
@@ -318,7 +333,11 @@ class WebScrapingService:
         temperature: float, priority: JobPriority,
         custom_cookies: Optional[List[Dict[str, Any]]],
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]]
+        custom_headers: Optional[Dict[str, str]],
+        *,
+        include_external: Optional[bool] = None,
+        score_threshold: Optional[float] = None,
+        crawl_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scrape by URL level"""
         # Define URL level filter
@@ -335,7 +354,10 @@ class WebScrapingService:
             url_filter=url_level_filter,
             custom_cookies=custom_cookies,
             user_agent=user_agent,
-            custom_headers=custom_headers
+            custom_headers=custom_headers,
+            include_external_override=include_external,
+            score_threshold_override=score_threshold,
+            crawl_strategy=crawl_strategy,
         )
         
         # Add summarization if requested
@@ -365,7 +387,11 @@ class WebScrapingService:
         temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
         priority: JobPriority,
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]]
+        custom_headers: Optional[Dict[str, str]],
+        *,
+        include_external: Optional[bool] = None,
+        score_threshold: Optional[float] = None,
+        crawl_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Recursive scraping with progress tracking"""
         # Create progress file for resumability
@@ -380,7 +406,10 @@ class WebScrapingService:
                 url_filter=is_content_page,
                 custom_cookies=custom_cookies,
                 user_agent=user_agent,
-                custom_headers=custom_headers
+                custom_headers=custom_headers,
+                include_external_override=include_external,
+                score_threshold_override=score_threshold,
+                crawl_strategy=crawl_strategy,
             )
             
             # Add summarization if requested

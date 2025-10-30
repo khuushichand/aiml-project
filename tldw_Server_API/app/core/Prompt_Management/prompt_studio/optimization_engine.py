@@ -686,12 +686,24 @@ class OptimizationEngine:
 
     def _update_optimization_results(self, optimization_id: int, results: Dict[str, Any]):
         """Update optimization with results."""
+        # Merge additional final metrics if provided by strategy (e.g., trace, tokens, branching)
+        final_metrics: Dict[str, Any] = {"score": results.get("final_score", 0)}
+        if isinstance(results.get("final_metrics"), dict):
+            try:
+                # Do not overwrite score if present in extra metrics without intent
+                extra = dict(results.get("final_metrics") or {})
+                if "score" in extra and extra["score"] is None:
+                    extra.pop("score")
+                final_metrics.update(extra)
+            except Exception:
+                pass
+
         self.db.complete_optimization(
             optimization_id,
             optimized_prompt_id=results.get("optimized_prompt_id"),
             iterations_completed=results.get("iterations", 1),
             initial_metrics={"score": results.get("initial_score", 0)},
-            final_metrics={"score": results.get("final_score", 0)},
+            final_metrics=final_metrics,
             improvement_percentage=results.get("improvement", 0) * 100,
             total_tokens=results.get("total_tokens"),
             total_cost=results.get("total_cost"),

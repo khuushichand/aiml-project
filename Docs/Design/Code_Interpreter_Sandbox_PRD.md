@@ -207,6 +207,19 @@ Endpoints
     - Queue/backpressure: `queue_max_length`, `queue_ttl_sec`
     Implemented.
 
+  Runtimes Defaults (quick reference)
+
+  | Field | Default | Config Key |
+  |---|---|---|
+  | `max_cpu` | 4.0 | `SANDBOX_MAX_CPU` |
+  | `max_mem_mb` | 8192 | `SANDBOX_MAX_MEM_MB` |
+  | `max_log_bytes` | 10 MB | `SANDBOX_MAX_LOG_BYTES` |
+  | `queue_max_length` | 100 | `SANDBOX_QUEUE_MAX_LENGTH` |
+  | `queue_ttl_sec` | 120 | `SANDBOX_QUEUE_TTL_SEC` |
+  | `workspace_cap_mb` | 256 | `SANDBOX_WORKSPACE_CAP_MB` |
+  | `artifact_ttl_hours` | 24 | `SANDBOX_ARTIFACT_TTL_HOURS` |
+  | `supported_spec_versions` | ["1.0"] | `SANDBOX_SUPPORTED_SPEC_VERSIONS` |
+
 Error Model
 - All error responses use a standard envelope:
   - `{ "error": { "code": "string", "message": "human readable", "details": {"...": "..."} } }`
@@ -395,9 +408,48 @@ Rule: when `session_id` is not provided, `base_image` is required. When `session
   - `running` → `failed`: exit_code != 0 or unrecoverable runtime error.
   - `starting|running` → `timed_out`: startup or execution timeout exceeded (reason_code=`startup_timeout`|`execution_timeout`).
   - `starting|running` → `killed`: user cancel or policy kill; message=`canceled_by_user` or reason code.
- - Failure `reason_code` examples: `image_pull_failed`, `provision_failed`, `policy_denied`, `exec_failed`, `oom_killed`, `log_cap_exceeded`.
+  - Failure `reason_code` examples: `image_pull_failed`, `provision_failed`, `policy_denied`, `exec_failed`, `oom_killed`, `log_cap_exceeded`.
 
-Timeout outcomes
+### Sequence Diagram (Run + WS Stream)
+
+```mermaid
+sequenceDiagram
+    participant C as Client (IDE/Web)
+    participant A as API Server
+    participant O as Orchestrator/Store
+    participant R as Runner (Docker)
+    participant H as WS Stream Hub
+
+    C->>A: POST /api/v1/sandbox/runs
+    A->>O: enqueue(run)
+    O-->>C: 202 Accepted (phase=queued) or 200 (starting)
+    A->>R: start(run)
+    R-->>O: phase=starting → running
+    R-->>H: {type:"event", event:"start", seq}
+    H-->>C: WS frame (event:start)
+    loop streaming
+        R-->>H: {type:"stdout"|"stderr", encoding, data, seq}
+        H-->>C: WS frame (stdout/stderr)
+    end
+    alt log cap exceeded
+        R-->>H: {type:"truncated", reason:"log_cap", seq}
+        H-->>C: WS frame (truncated)
+    end
+    par heartbeats
+        H-->>C: {type:"heartbeat", ts, seq} (periodic)
+    and cancellation/timeout
+        C->>A: POST /runs/{id}/cancel
+        A->>R: TERM → grace → KILL
+        R-->>O: phase=killed (message=canceled_by_user)
+    end
+    R-->>O: phase=completed|failed|timed_out (exit_code/reason)
+    R-->>H: {type:"event", event:"end", data:{exit_code?}, seq}
+    H-->>C: WS frame (event:end)
+    C->>A: GET /runs/{id} (policy_hash, resource_usage)
+    A-->>C: Run status JSON
+```
+
+  Timeout outcomes
 - See consolidated table in Timeouts & Defaults above.
 
 Resource Usage Reporting

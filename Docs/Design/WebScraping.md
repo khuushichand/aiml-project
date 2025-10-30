@@ -19,6 +19,20 @@ This document explains the production pipeline, fallbacks, configuration, and op
   - `playwright` (JavaScript-rendered sites; guarded fallback to `trafilatura` if Playwright isn’t initialized)
   - `beautifulsoup` (lightweight HTML parsing when appropriate)
 
+### Crawling Strategy (Best‑First)
+
+Recursive crawling uses a best‑first priority queue with a normalized composite score. The pipeline:
+
+- Normalizes URLs and removes tracking params for robust deduplication.
+- Applies a FilterChain (domain allow/deny, content type, and default URL patterns).
+- Optionally enforces robots.txt with a per‑domain cache (honors centralized egress guard).
+- Scores each candidate using PathDepth, ContentType, Freshness, and optional Keyword/Domain scorers.
+- Enqueues candidates above a configurable threshold until `max_pages` or `max_depth` is reached.
+
+Result metadata provides `depth`, `parent_url`, and `score`; the service persists `crawl_depth`, `crawl_parent_url`, and `crawl_score` into Media DB safe metadata.
+
+For configuration and request overrides, see `Docs/Design/WebCrawl_Priority_BFS.md`.
+
 Start/stop lifecycle initializes Playwright if available; absence of Playwright no longer breaks scraping—`playwright` calls transparently fall back to `trafilatura`.
 
 ## Legacy Helpers and Fallbacks
@@ -53,6 +67,8 @@ The WebSearch pipeline supports subquery generation, filtering, and aggregation.
 - Rate limits and concurrency are tunable in config; adjust for resource-constrained environments.
 - Cookies can be provided as Playwright-style dicts ({name, value, ...}) or as plain mappings.
 - Use the article extraction benchmark (Docs/Evals/WebScraping_Article_Benchmark.md) to quantify changes to extraction logic.
+- Keep `include_external=false` unless you need cross-domain exploration. External crawling increases latency and the likelihood of anti‑bot challenges.
+- Consider a modest `web_crawl_score_threshold` (0.2–0.4) to emphasize likely content pages; enable the keyword scorer when targeting topic-specific sections.
 
 ## Testing
 Key regression tests cover:

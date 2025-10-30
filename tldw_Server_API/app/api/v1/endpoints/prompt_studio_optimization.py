@@ -332,6 +332,20 @@ def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
 
     # mcts: validate tree-search configuration knobs if provided
     if ot == "mcts":
+        # Feature gate: default off; canary enable in dev via env
+        import os as _os
+        def _is_dev_env() -> bool:
+            env = (_os.getenv("ENVIRONMENT") or _os.getenv("APP_ENV") or _os.getenv("ENV") or "dev").lower()
+            return env in {"dev", "development", "local", "debug"}
+
+        def _flag(name: str, default: str = "false") -> bool:
+            return str(_os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+        _mcts_enabled = _flag("PROMPT_STUDIO_ENABLE_MCTS", "false") or (
+            _flag("PROMPT_STUDIO_ENABLE_MCTS_CANARY", "true") and _is_dev_env()
+        )
+        if not _mcts_enabled:
+            raise HTTPException(status_code=400, detail="MCTS strategy is disabled. Enable via PROMPT_STUDIO_ENABLE_MCTS or canary in dev.")
         def _as_int(name: str, value: Any, *, ge: int = None, le: int = None) -> int:
             try:
                 iv = int(value)
@@ -467,6 +481,29 @@ async def _rl_optimizations(
                                 },
                                 "test_case_ids": [1, 2, 3],
                                 "name": "MCTS Sequence Optimization"
+                            }
+                        },
+                        "mcts_with_program_evaluator": {
+                            "summary": "MCTS with Program Evaluator (feature flag)",
+                            "description": "Enable code execution evaluator via PROMPT_STUDIO_ENABLE_CODE_EVAL=true and use test cases with runner=\"python\". See Prompt Studio README for safety and runner spec.",
+                            "value": {
+                                "project_id": 1,
+                                "initial_prompt_id": 12,
+                                "optimization_config": {
+                                    "optimizer_type": "mcts",
+                                    "max_iterations": 10,
+                                    "target_metric": "accuracy",
+                                    "strategy_params": {
+                                        "mcts_simulations": 10,
+                                        "mcts_max_depth": 3,
+                                        "mcts_exploration_c": 1.4,
+                                        "prompt_candidates_per_node": 2,
+                                        "token_budget": 20000,
+                                        "ws_throttle_every": 2
+                                    }
+                                },
+                                "test_case_ids": [101, 102],
+                                "name": "MCTS + Program Evaluator"
                             }
                         }
                     }

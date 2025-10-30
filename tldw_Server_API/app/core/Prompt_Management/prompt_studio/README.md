@@ -178,6 +178,30 @@ optimization_result = await engine.optimize(
 print(f"Improvement: {optimization_result['improvement']*100:.1f}%")
 ```
 
+## MCTS Strategy (Canary)
+
+The MCTS-based optimizer (optimizer_type="mcts") explores multi-step prompt sequences with UCT-guided tree search.
+It is disabled by default. Enable in development or explicitly with flags:
+
+- Set `PROMPT_STUDIO_ENABLE_MCTS=true` to enable everywhere, or
+- Set `APP_ENV=dev` (or `ENVIRONMENT=dev`) and keep canary default `PROMPT_STUDIO_ENABLE_MCTS_CANARY=true`.
+
+Knobs (strategy_params):
+- `mcts_simulations`: number of simulations
+- `mcts_max_depth`: maximum depth of the search tree
+- `mcts_exploration_c`: UCT exploration constant
+- `prompt_candidates_per_node`: candidate expansions per node
+- `score_dedup_bin`: dedup bin size for scorer
+- `ws_throttle_every`: throttle iteration WS events and persisted iterations (default ≈ n_sims/50)
+- `trace_top_k`: how many top candidates to store in final trace
+
+Observability:
+- Iteration WS events are throttled; see `/api/v1/prompt-studio/ws`.
+- Metrics: `prompt_studio.mcts.*` including best_reward and errors_total (see monitoring.py).
+- Debug decisions: set `PROMPT_STUDIO_MCTS_DEBUG_DECISIONS=true` to include per-depth top scored candidates in the final trace and log UCT choices.
+
+Final metrics include `tree_nodes`, `avg_branching`, `tokens_spent`, `duration_ms`, `best_reward`, error counters, `applied_params`, and a compact `trace`.
+
 ## Core Components
 
 ### Projects and Signatures
@@ -655,3 +679,37 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 ## License
 
 Part of tldw_server project - see main LICENSE file.
+## Program Evaluator (Feature Flag)
+
+The Program Evaluator executes code (runner="python") for test cases and maps objective/constraint success to a reward.
+It is disabled by default and guarded by a feature flag and per-project controls.
+
+Enable:
+- `PROMPT_STUDIO_ENABLE_CODE_EVAL=true` to enable globally, and/or
+- Set project metadata `{ "enable_code_eval": true }`.
+
+Runner convention:
+- Test cases that should be executed must declare `runner="python"` and provide inputs/expected_outputs compatible with the evaluator.
+- The evaluator extracts fenced code blocks or heuristically detects Python in the output.
+- Execution is sandboxed with resource limits (best-effort, POSIX RLIMIT); no network/files; import whitelist only.
+- On non-POSIX (e.g., Windows), the sandbox is best-effort only; use extra caution.
+
+Status and safety:
+- If disabled, a heuristic text-based reward is used instead.
+- Do not enable in untrusted multi-tenant contexts.
+- Long-running loops are mitigated with CPU/memory/time limits; still use with care.
+
+See also:
+- Docs/Guides/Prompt_Studio_Program_Evaluator.md
+- OpenAPI example `mcts_with_program_evaluator` under `/api/v1/prompt-studio/optimizations/create`.
+
+## Strategy Overview (Pros/Cons & Cost)
+
+| Strategy | Pros | Cons | Cost Expectation |
+| --- | --- | --- | --- |
+| iterative | Simple, predictable | May get stuck in local optima | Low–Medium |
+| bootstrap | Improves few-shot grounding | Needs quality traces | Medium |
+| genetic | Explores diverse space | Parameter-sensitive | Medium–High |
+| mcts (canary) | Strong on hard tasks; sequence-aware | Higher token usage; latency | High |
+
+For MCTS, token usage scales with simulations × depth × candidates. Use `token_budget`, `ws_throttle_every`, and caching to control costs.
