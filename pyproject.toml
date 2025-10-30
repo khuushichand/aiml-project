@@ -553,7 +553,7 @@ addopts = [
     "--verbose",
     "--tb=short",
     "--disable-warnings",
-    "-p pytest_asyncio"
+    "-p pytest_asyncio.plugin"
 ]
 timeout = 300
 timeout_method = "thread"

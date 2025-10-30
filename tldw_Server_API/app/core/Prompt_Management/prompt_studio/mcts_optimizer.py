@@ -440,7 +440,16 @@ class MCTSOptimizer:
         score_bin_size: float,
         min_quality: float,
     ) -> Optional["MCTSOptimizer._Node"]:
-        candidates = await self._propose_candidates(node.system_text, segment, k_candidates)
+        # Support both async and sync monkeypatching for _propose_candidates in tests
+        try:
+            maybe = self._propose_candidates(node.system_text, segment, k_candidates)
+            if hasattr(maybe, "__await__") or hasattr(maybe, "__aiter__"):
+                candidates = await maybe  # type: ignore[assignment]
+            else:
+                candidates = maybe  # type: ignore[assignment]
+        except TypeError:
+            # Fallback to direct await if attribute detection failed
+            candidates = await self._propose_candidates(node.system_text, segment, k_candidates)
         if not candidates:
             return None
         best_existing: Optional[MCTSOptimizer._Node] = None

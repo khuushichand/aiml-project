@@ -78,6 +78,7 @@ nav:
       - Overview: API-related/index.md
       - API Design: API-related/API_Design.md
       - API Notes: API-related/API_Notes.md
+      - Endpoints Feature Map: API-related/Endpoints_Feature_Map.md
       - API README: API-related/API_README.md
       - API Tag Index: API-related/API_Tags_Index.md
       - Admin RBAC API: Admin_RBAC_API.md

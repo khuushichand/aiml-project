@@ -167,67 +167,59 @@ class ProgramEvaluator:
         """
         cpu_lim = int(self.CPU_TIME_SEC)
         mem_lim = int(self.MEMORY_MB) * 1024 * 1024
-        wrapper = textwrap.dedent(
-            f"""
-            import sys, json, builtins
-            # Try to set resource limits (POSIX only)
-            try:
-                import resource
-                # CPU time (seconds)
-                resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))
-                # Address space / virtual memory (bytes)
-                resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))
-            except Exception:
-                pass
-            # Best-effort isolation: no open/read, block dangerous builtins
-            safe_open = None
-            def _blocked(*a, **k):
-                raise RuntimeError("file/network operations are disabled")
-            for name in ("open",):
-                setattr(builtins, name, _blocked)
-
-            # Preload modules and block certain imports
-            import types
-            import importlib
-            _forbidden = {json.dumps(sorted(list(_FORBIDDEN_IMPORTS)))}
-            _orig_import = builtins.__import__
-            def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-                base = name.split('.')[0]
-                if base in _forbidden:
-                    raise ImportError(f"Forbidden import: {{name}}")
-                return _orig_import(name, globals, locals, fromlist, level)
-            builtins.__import__ = _guarded_import
-
-            # User code
-            __code_globals = {{}}
-            __code_locals = None
-            # Use triple-single quotes to avoid conflicting with the outer f-string's triple-double quotes
-            __user_code = r'''{code}\n'''
-            try:
-                exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)
-            except Exception as e:
-                print(f"__EXEC_ERROR__: {{e}}", file=sys.stderr)
-                sys.exit(7)
-
-            # Best-effort globals dump (numbers and small containers only)
-            def _jsonable(v):
-                import math
-                if isinstance(v, (int, float, str, bool)) or v is None:
-                    return True
-                if isinstance(v, (list, tuple)):
-                    return all(_jsonable(x) for x in v[:50])
-                if isinstance(v, dict):
-                    return all(isinstance(k, str) and _jsonable(v[k]) for k in list(v.keys())[:50])
-                return False
-            _dump = {{}}
-            for k, v in list(__code_globals.items()):
-                if k.startswith('__'):
-                    continue
-                if _jsonable(v):
-                    _dump[k] = v
-            print("\n__GLOBALS_JSON__\n" + json.dumps(_dump, separators=(',',':')))
-            """
-        )
+        wrapper_lines = [
+            "import sys, json, builtins",
+            "# Try to set resource limits (POSIX only)",
+            "try:",
+            "    import resource",
+            f"    resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))",
+            f"    resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))",
+            "except Exception:",
+            "    pass",
+            "# Best-effort isolation: no open/read, block dangerous builtins",
+            "def _blocked(*a, **k):",
+            "    raise RuntimeError('file/network operations are disabled')",
+            "for name in ('open',):",
+            "    setattr(builtins, name, _blocked)",
+            "# Preload modules and block certain imports",
+            "import types",
+            "import importlib",
+            f"_forbidden = {json.dumps(sorted(list(_FORBIDDEN_IMPORTS)))}",
+            "_orig_import = builtins.__import__",
+            "def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):",
+            "    base = name.split('.')[0]",
+            "    if base in _forbidden:",
+            "        raise ImportError(f'Forbidden import: {name}')",
+            "    return _orig_import(name, globals, locals, fromlist, level)",
+            "builtins.__import__ = _guarded_import",
+            "# User code",
+            "__code_globals = {}",
+            "__code_locals = None",
+            f"__user_code = r'''{code}\n'''",
+            "try:",
+            "    exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)",
+            "except Exception as e:",
+            "    print(f'__EXEC_ERROR__: {e}', file=sys.stderr)",
+            "    sys.exit(7)",
+            "# Best-effort globals dump (numbers and small containers only)",
+            "def _jsonable(v):",
+            "    import math",
+            "    if isinstance(v, (int, float, str, bool)) or v is None:",
+            "        return True",
+            "    if isinstance(v, (list, tuple)):",
+            "        return all(_jsonable(x) for x in v[:50])",
+            "    if isinstance(v, dict):",
+            "        return all(isinstance(k, str) and _jsonable(v[k]) for k in list(v.keys())[:50])",
+            "    return False",
+            "_dump = {}",
+            "for k, v in list(__code_globals.items()):",
+            "    if k.startswith('__'):",
+            "        continue",
+            "    if _jsonable(v):",
+            "        _dump[k] = v",
+            "print('\n__GLOBALS_JSON__\n' + json.dumps(_dump, separators=(',',':')))",
+        ]
+        wrapper = "\n".join(wrapper_lines)
         # Create temp dir and files
         with tempfile.TemporaryDirectory() as td:
             script_path = os.path.join(td, "sandbox_runner.py")

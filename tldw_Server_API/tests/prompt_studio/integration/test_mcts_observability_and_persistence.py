@@ -57,6 +57,14 @@ def test_mcts_ws_throttling_behavior(prompt_studio_dual_backend_db, monkeypatch)
         status="pending",
     )
 
+    # Ensure engine can resolve test_case_ids/model_config like endpoint would
+    import json as _json
+    db.update_optimization(opt["id"], {
+        "test_case_ids": [case["id"] for case in db.get_test_cases_by_ids([case["id"] for case in db.get_test_cases_by_ids([1])]) if False]  # placeholder no-op
+    })
+    # Minimal test set: empty list acceptable for engine code paths
+    db.update_optimization(opt["id"], {"test_case_ids": []})
+
     # Patch EventBroadcaster to count iteration events
     events = {"iteration": 0, "started": 0, "completed": 0}
 
@@ -114,6 +122,8 @@ async def test_mcts_cancellation_mid_run(prompt_studio_dual_backend_db, monkeypa
         status="pending",
     )
 
+    # Ensure engine has test cases field present
+    db.update_optimization(opt["id"], {"test_case_ids": []})
     engine = OptimizationEngine(db)
 
     async def _cancel_soon():
@@ -158,6 +168,8 @@ def test_mcts_final_trace_persisted(prompt_studio_dual_backend_db, monkeypatch):
         status="pending",
     )
 
+    # Ensure engine has test cases field present
+    db.update_optimization(opt["id"], {"test_case_ids": []})
     engine = OptimizationEngine(db)
     asyncio.get_event_loop().run_until_complete(engine.optimize(opt["id"]))
 
@@ -169,4 +181,3 @@ def test_mcts_final_trace_persisted(prompt_studio_dual_backend_db, monkeypatch):
     assert "best_path" in tr and "top_candidates" in tr
     # When debug flag is on, include debug_top_scores_by_depth
     assert "debug_top_scores_by_depth" in tr
-
