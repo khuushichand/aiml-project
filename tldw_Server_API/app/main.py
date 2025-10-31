@@ -1932,11 +1932,6 @@ OPENAPI_TAGS = [
 import os as _env_os
 
 _prod_flag = _env_os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
-_enable_openapi_env = _env_os.getenv("ENABLE_OPENAPI")
-_enable_openapi = True if _enable_openapi_env is None else (_enable_openapi_env.lower() in {"true", "1", "yes", "y", "on"})
-if _prod_flag and _enable_openapi_env is None:
-    # Default to hidden docs in production unless explicitly enabled
-    _enable_openapi = False
 
 APP_DESCRIPTION = (
     """
@@ -1961,9 +1956,11 @@ APP_DESCRIPTION = (
     .strip()
 )
 
-_docs_url = "/docs" if _enable_openapi else None
-_redoc_url = "/redoc" if _enable_openapi else None
-_openapi_url = "/openapi.json" if _enable_openapi else None
+# Always expose docs and redoc; remove ENABLE_OPENAPI toggle
+_docs_url = "/docs"
+_redoc_url = "/redoc"
+# Always serve OpenAPI JSON regardless of docs gating
+_openapi_url = "/openapi.json"
 
 _startup_trace("Creating FastAPI app instance")
 
