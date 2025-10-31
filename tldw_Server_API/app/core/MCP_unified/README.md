@@ -159,21 +159,34 @@ When using API keys, RequestContext.metadata includes `org_id` and `team_id` (if
 ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&token=<jwt>
 # or
 ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
+# Recommended (headers/subprotocol):
+#   Authorization: Bearer <token>
+#   Sec-WebSocket-Protocol: bearer,<token>
 ```
 
 ### HTTP Endpoints
 - `POST /api/v1/mcp/request` - Process MCP request
 - `GET /api/v1/mcp/status` - Server status
 - `GET /api/v1/mcp/metrics` - Server metrics (admin only)
-- `GET /api/v1/mcp/tools` - List available tools
+- `GET /api/v1/mcp/tools` - List available tools (auth required; RBAC‑filtered)
 - `POST /api/v1/mcp/tools/execute` - Execute tool (auth required)
 - `GET /api/v1/mcp/health` - Health check
+
+#### Tool Discovery & Catalogs
+- Reduce discovery size by grouping tools into catalogs (global, org, team).
+- Filtering:
+  - HTTP: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>`
+  - JSON‑RPC: `tools/list` with `{ catalog?: string, catalog_id?: number }`
+- Name resolution respects caller context with precedence `team > org > global`; `catalog_id` takes precedence.
+- Responses include `canExecute` per tool; catalog membership does not grant execution rights.
+- See `Docs/MCP/mcp_tool_catalogs.md` for admin/manager APIs to create/manage catalogs.
 
 ## 🛡️ Production Checklist
 
 - Set secure secrets: `MCP_JWT_SECRET`, `MCP_API_KEY_SALT`
 - Enforce WS auth: `MCP_WS_AUTH_REQUIRED=true`
 - Configure `MCP_WS_ALLOWED_ORIGINS`
+- Keep WS query‑parameter auth disabled (default): `MCP_WS_ALLOW_QUERY_AUTH=0`; use headers/subprotocol instead
 - If using mTLS via proxy: set `MCP_CLIENT_CERT_REQUIRED=true`, `MCP_CLIENT_CERT_HEADER_VALUE`, and `MCP_TRUSTED_PROXY_IPS`
 - Keep rate limiting enabled; configure Redis for multi-instance
 - Do not use wildcard CORS in production

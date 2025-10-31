@@ -120,10 +120,13 @@ if _ENV_ALLOWED:
     ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
 else:
     ALLOWED_ORIGINS = [
+        # Common local origins
         "http://localhost",
+        "http://localhost:8000",
         "http://localhost:8080",
         "http://localhost:8081",
         "http://127.0.0.1",
+        "http://127.0.0.1:8000",
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8081",
         "https://localhost",

@@ -7,10 +7,11 @@
 2. [Getting Started](#getting-started)
 3. [Using the WebSocket Interface](#using-the-websocket-interface)
 4. [Using the HTTP API](#using-the-http-api)
-5. [Available Tools](#available-tools)
-6. [Authentication](#authentication)
-7. [Examples](#examples)
-8. [Troubleshooting](#troubleshooting)
+5. [Tool Discovery & Catalogs](#tool-discovery--catalogs)
+6. [Available Tools](#available-tools)
+7. [Authentication](#authentication)
+8. [Examples](#examples)
+9. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -38,10 +39,19 @@ The Model Context Protocol (MCP) Unified module provides a standardized interfac
    ```
    Response: `{"status": "healthy"}`
 
-2. **List Available Tools**
-   ```bash
-   curl http://localhost:8000/api/v1/mcp/tools
-   ```
+2. **Authenticate and List Tools**
+   Tools listing requires authentication. Use either a bearer token (AuthNZ or MCP demo token) or an API key.
+
+   - Bearer token:
+     ```bash
+     curl -H "Authorization: Bearer <token>" \
+       http://localhost:8000/api/v1/mcp/tools
+     ```
+   - Single-user API key:
+     ```bash
+     curl -H "X-API-KEY: <your_single_user_api_key>" \
+       http://localhost:8000/api/v1/mcp/tools
+     ```
 
 ## Using the WebSocket Interface
 
@@ -51,13 +61,17 @@ Connect to the WebSocket endpoint:
 ws://localhost:8000/api/v1/mcp/ws
 ```
 
-Optional query parameters:
-- `client_id`: Your client identifier
-- `token`: JWT authentication token
+Auth for WebSocket:
+- Preferred: send `Authorization: Bearer <token>` (header) or use the subprotocol `bearer,<token>`.
+- Query tokens (`?token=...` or `?api_key=...`) are disabled by default; enable only for legacy clients (`MCP_WS_ALLOW_QUERY_AUTH=1`).
+
+Pass an optional `client_id` as a query parameter for observability.
 
 ### Example WebSocket Client (JavaScript)
 ```javascript
-const ws = new WebSocket('ws://localhost:8000/api/v1/mcp/ws?client_id=my-app');
+// Subprotocol-based auth: results in header "Sec-WebSocket-Protocol: bearer,<token>"
+const token = "<jwt or access token>";
+const ws = new WebSocket('ws://localhost:8000/api/v1/mcp/ws?client_id=my-app', ['bearer', token]);
 
 ws.onopen = () => {
     // Initialize connection
@@ -116,9 +130,13 @@ def on_open(ws):
         "id": 1
     }))
 
-ws = websocket.WebSocketApp("ws://localhost:8000/api/v1/mcp/ws",
-                            on_open=on_open,
-                            on_message=on_message)
+headers = ["Authorization: Bearer <token>"]
+ws = websocket.WebSocketApp(
+    "ws://localhost:8000/api/v1/mcp/ws",
+    on_open=on_open,
+    on_message=on_message,
+    header=headers,
+)
 ws.run_forever()
 ```
 
@@ -145,6 +163,10 @@ curl -X POST http://localhost:8000/api/v1/mcp/request \
 GET /api/v1/mcp/tools
 ```
 
+Tips
+- 403 without auth indicates RBAC is enforced; pass `Authorization` or `X-API-KEY`.
+- Add `catalog` or `catalog_id` to filter discovery (see next section).
+
 #### Execute Tool
 ```bash
 POST /api/v1/mcp/tools/execute
@@ -164,74 +186,17 @@ GET /api/v1/mcp/status
 
 ## Available Tools
 
-### Media Tools
+The exact tool set depends on enabled modules. Common examples include:
 
-#### media.search
-Search for media content in the database.
+### Media
+- `media.search` — full‑text search over media content
+- `media.get` — retrieve media content or snippet by id
+
+Example
 ```json
 {
-    "tool_name": "media.search",
-    "arguments": {
-        "query": "your search query",
-        "limit": 10,
-        "media_type": "video"  // optional: video, audio, document
-    }
-}
-```
-
-#### media.get_transcript
-Retrieve transcript for a specific media item.
-```json
-{
-    "tool_name": "media.get_transcript",
-    "arguments": {
-        "media_id": 123,
-        "format": "text"  // or "srt", "vtt"
-    }
-}
-```
-
-### RAG Tools
-
-#### rag.search
-Perform semantic search using RAG.
-```json
-{
-    "tool_name": "rag.search",
-    "arguments": {
-        "query": "explain quantum computing",
-        "collection": "media_content",
-        "top_k": 5
-    }
-}
-```
-
-#### rag.hybrid_search
-Combine keyword and semantic search.
-```json
-{
-    "tool_name": "rag.hybrid_search",
-    "arguments": {
-        "query": "climate change effects",
-        "keywords": ["temperature", "CO2"],
-        "limit": 10
-    }
-}
-```
-
-### Chat Tools
-
-#### chat.complete
-Get AI-powered completions.
-```json
-{
-    "tool_name": "chat.complete",
-    "arguments": {
-        "messages": [
-            {"role": "user", "content": "Summarize this transcript"}
-        ],
-        "context": "transcript_text_here"
-    }
+  "tool_name": "media.search",
+  "arguments": { "query": "your search query", "limit": 10 }
 }
 ```
 
@@ -273,31 +238,24 @@ Notes:
 ## Authentication
 
 ### Getting a Token
-```bash
-POST /api/v1/mcp/auth/token
-{
-    "username": "your_username",
-    "password": "your_password"
-}
-```
 
-Response:
-```json
-{
-    "access_token": "eyJ...",
-    "token_type": "bearer",
-    "expires_in": 1800,
-    "refresh_token": "..."
-}
+Production: obtain an AuthNZ JWT via the primary AuthNZ flow (outside MCP), or use an API key.
+
+Development/demo only: enable the MCP demo token endpoint, then request a token using the configured secret.
+```bash
+export MCP_ENABLE_DEMO_AUTH=1
+export MCP_DEMO_AUTH_SECRET='<strong-secret>'
+
+POST /api/v1/mcp/auth/token
+{ "username": "admin", "password": "<strong-secret>" }
 ```
 
 ### Using the Token
 
 #### WebSocket
-Include as query parameter:
-```
-ws://localhost:8000/api/v1/mcp/ws?token=eyJ...
-```
+Prefer header or subprotocol:
+- Header: `Authorization: Bearer <token>`
+- Subprotocol: `Sec-WebSocket-Protocol: bearer,<token>`
 
 #### HTTP
 Include in Authorization header:
@@ -308,77 +266,52 @@ curl -H "Authorization: Bearer eyJ..." \
 
 ## Examples
 
-### Example 1: Search and Summarize Media
+### Example 1: Search and Retrieve
 
 ```python
 import requests
 import json
 
-# Search for content
-response = requests.post('http://localhost:8000/api/v1/mcp/tools/execute',
-    json={
-        "tool_name": "media.search",
-        "arguments": {
-            "query": "artificial intelligence",
-            "limit": 5
-        }
-    }
-)
-results = response.json()
+# Search across knowledge sources
+token = "<bearer token>"
+base = "http://localhost:8000/api/v1/mcp/tools/execute"
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-# Get transcript of first result
-media_id = results['result'][0]['id']
-transcript_response = requests.post('http://localhost:8000/api/v1/mcp/tools/execute',
+resp = requests.post(
+    base,
+    headers=headers,
     json={
-        "tool_name": "media.get_transcript",
-        "arguments": {
-            "media_id": media_id,
-            "format": "text"
-        }
-    }
+        "tool_name": "knowledge.search",
+        "arguments": {"query": "artificial intelligence", "limit": 5}
+    },
 )
+results = resp.json()["result"]["results"]
+first = results[0]
 
-# Summarize the transcript
-summary_response = requests.post('http://localhost:8000/api/v1/mcp/tools/execute',
+# Retrieve full content for the first hit (source + id)
+resp2 = requests.post(
+    base,
+    headers=headers,
     json={
-        "tool_name": "chat.complete",
-        "arguments": {
-            "messages": [
-                {"role": "user", "content": "Summarize this content in 3 bullet points"}
-            ],
-            "context": transcript_response.json()['result']['transcript']
-        }
-    }
+        "tool_name": "knowledge.get",
+        "arguments": {"source": first["source"], "id": first["id"], "retrieval": {"mode": "full"}}
+    },
 )
-
-print(summary_response.json()['result'])
+print(resp2.json()["result"])  # { meta, content, attachments }
 ```
 
-### Example 2: Real-time Monitoring
+### Example 2: Session Defaults via Safe Config
 
-```javascript
-const ws = new WebSocket('ws://localhost:8000/api/v1/mcp/ws');
+You can provide per-session defaults (e.g., snippet lengths) via a base64‑encoded JSON config.
 
-// Subscribe to updates
-ws.onopen = () => {
-    ws.send(JSON.stringify({
-        jsonrpc: "2.0",
-        method: "subscribe",
-        params: {
-            events: ["media.added", "transcript.completed"]
-        },
-        id: 1
-    }));
-};
-
-// Handle notifications
-ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.method === "notification") {
-        console.log(`Event: ${msg.params.event}`, msg.params.data);
-    }
-};
+HTTP initialize with `mcp-session-id` negotiation and safe config:
+```bash
+cfg=$(printf '{"snippet_length": 200, "chars_per_token": 4}' | base64)
+curl -i -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/api/v1/mcp/request?config=$cfg" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"clientInfo":{"name":"demo"}},"id":1}'
 ```
+The response includes an `mcp-session-id` header. Reuse it on subsequent requests to apply the same safe config automatically.
 
 ## Troubleshooting
 
@@ -391,7 +324,7 @@ ws.onmessage = (event) => {
 
 #### Authentication Failed
 - **Check**: Are environment variables set?
-- **Solution**: Set `MCP_JWT_SECRET` and `MCP_API_KEY_SALT`
+- **Solution**: Set `MCP_JWT_SECRET` and `MCP_API_KEY_SALT`; ensure you pass `Authorization` or `X-API-KEY`.
 - **Verify**: Check server logs for authentication errors
 
 #### Tool Not Found
@@ -414,3 +347,30 @@ export MCP_LOG_LEVEL=DEBUG
 - Check server logs for detailed error messages
 - Review API documentation at `http://localhost:8000/docs`
 - Consult the Developer Guide for advanced usage
+## Tool Discovery & Catalogs
+
+Large deployments can organize tools into named catalogs to avoid dumping thousands of tools at once. Discovery accepts a catalog filter; RBAC still gates execution.
+
+- HTTP
+  - By name (resolved with precedence team > org > global):
+    ```bash
+    curl -H "Authorization: Bearer <token>" \
+      "http://localhost:8000/api/v1/mcp/tools?catalog=research"
+    ```
+  - By id (takes precedence over name):
+    ```bash
+    curl -H "Authorization: Bearer <token>" \
+      "http://localhost:8000/api/v1/mcp/tools?catalog_id=42"
+    ```
+
+- JSON-RPC
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "method": "tools/list",
+    "params": { "catalog": "research" },
+    "id": 1
+  }
+  ```
+
+Results include `canExecute` per tool to reflect your effective permissions. See `Docs/MCP/mcp_tool_catalogs.md` for creating and managing catalogs (global, org, team).

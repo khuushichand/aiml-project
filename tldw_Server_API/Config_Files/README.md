@@ -16,13 +16,34 @@ How to apply changes
 
 ---
 
+## Diagnostics
+- Admin network diagnostics endpoint: `GET /api/v1/admin/network-info`
+  - Returns resolved client IP, proxy headers used, and access decisions for WebUI/Setup based on toggles and IP lists.
+  - Requires admin role. Useful when configuring `trusted_proxies`, allow/deny lists, or remote toggles.
+
 ## [Setup]
 - `enable_first_time_setup` (bool): Allow interactive/setup workflows on first run.
 - `setup_completed` (bool): Marks setup completed to suppress guided flows.
 - `allow_remote_setup_access` (bool): If true, allows setup API from non‑localhost.
+ - `setup_ip_allowlist` (csv): Optional IPs/CIDRs allowed to access `/setup` remotely.
+   - Env override: `TLDW_SETUP_ALLOWLIST="203.0.113.0/24"`
+ - `setup_ip_denylist` (csv): Optional IPs/CIDRs to explicitly block from `/setup`.
+   - Env override: `TLDW_SETUP_DENYLIST="0.0.0.0/0"`
 
 ## [Server]
 - `disable_cors` (bool): Disable CORS protections for development.
+- `allow_remote_webui_access` (bool): Allow remote clients (non‑localhost) to load `/webui`.
+  - Security: Only enable on trusted networks and with proper auth. When enabled, run the server
+    listening on a public interface (e.g., `uvicorn ... --host 0.0.0.0`).
+  - Env override: set `TLDW_WEBUI_ALLOW_REMOTE=1` (or `WEBUI_ALLOW_REMOTE=1`).
+ - `webui_ip_allowlist` (csv): Optional IPs/CIDRs allowed to access `/webui` remotely.
+   - Examples: `192.168.1.0/24, 10.0.0.5, 2001:db8::/32`
+   - Env override: `TLDW_WEBUI_ALLOWLIST="192.168.1.0/24,10.0.0.5"`
+ - `webui_ip_denylist` (csv): Optional IPs/CIDRs to explicitly block from `/webui`.
+   - Env override: `TLDW_WEBUI_DENYLIST="203.0.113.4,198.51.100.0/24"`
+ - `trusted_proxies` (csv): Proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP processing.
+   - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
+   - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
 
 ## [Processing]
 - `processing_choice` (str): Hardware backend, e.g., `cuda|cpu` for ML pipelines.

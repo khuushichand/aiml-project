@@ -35,11 +35,29 @@ RELAXED_CSP_WEBUI = (
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
     # No script-src-elem/script-src-attr overrides -> script-src applies to both
     "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data: https:; "
+    # Permit blob: for dynamic image object URLs used in UI
+    "img-src 'self' data: blob: https:; "
     "font-src 'self' data:; "
     "media-src 'self' data: blob:; "
-    # Allow same-origin HTTP(S) and WebSockets for streaming features
-    "connect-src 'self' ws: wss:; "
+    # Allow HTTP(S) and WebSockets (legacy pages may use localhost vs 127.0.0.1)
+    "connect-src 'self' http: https: ws: wss:; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "upgrade-insecure-requests"
+)
+
+# Relaxed CSP for API Docs (/docs, /redoc). Allows inline scripts and HTTPS CDN fallback if
+# local assets are unavailable, while keeping other directives reasonably strict.
+RELAXED_CSP_DOCS = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+    "style-src 'self' 'unsafe-inline' https:; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data: https:; "
+    "media-src 'self' data: blob:; "
+    # Allow fetching the OpenAPI schema using absolute URLs during dev
+    "connect-src 'self' http: https:; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -131,7 +149,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # Path-scoped CSP: prefer per-request nonce for WebUI, fallback to relaxed CSP
         path = request.url.path or ""
-        if path.startswith("/webui"):
+        if path.startswith("/webui") or path.startswith("/setup"):
             try:
                 nonce = getattr(request.state, "csp_nonce", None)
             except Exception:
@@ -140,14 +158,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 if nonce:
                     csp_value = (
                         "default-src 'self'; "
-                        f"script-src 'self' 'nonce-{nonce}' 'strict-dynamic' 'unsafe-eval'; "
-                        f"script-src-elem 'nonce-{nonce}'; "
-                        "script-src-attr 'none'; "
+                        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
                         "style-src 'self' 'unsafe-inline'; "
-                        "img-src 'self' data: https:; "
+                        "img-src 'self' data: blob: https:; "
                         "font-src 'self' data:; "
                         "media-src 'self' data: blob:; "
-                        "connect-src 'self' ws: wss:; "
+                        "connect-src 'self' http: https: ws: wss:; "
                         "frame-ancestors 'none'; "
                         "base-uri 'self'; "
                         "form-action 'self'; "
@@ -157,6 +173,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 else:
                     # Fallback if nonce middleware not present
                     response.headers.setdefault("Content-Security-Policy", RELAXED_CSP_WEBUI)
+        elif path.startswith("/docs") or path.startswith("/redoc"):
+            # Docs UI often uses inline scripts; allow inline/eval and optional HTTPS CDNs
+            if "Content-Security-Policy" not in response.headers:
+                response.headers.setdefault("Content-Security-Policy", RELAXED_CSP_DOCS)
         else:
             csp_value = self.content_security_policy or DEFAULT_CSP
             response.headers.setdefault("Content-Security-Policy", csp_value)

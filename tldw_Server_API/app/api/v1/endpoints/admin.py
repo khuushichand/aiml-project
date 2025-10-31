@@ -147,6 +147,12 @@ from tldw_Server_API.app.services.admin_usage_service import (
     fetch_llm_usage_summary as svc_fetch_llm_usage_summary,
 )
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
+from tldw_Server_API.app.core.Security.webui_access_guard import (
+    webui_remote_access_enabled,
+    setup_remote_access_enabled,
+)
+from tldw_Server_API.app.core.config import load_comprehensive_config
+import ipaddress
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
@@ -3627,3 +3633,138 @@ async def delete_tool_catalog_entry(catalog_id: int, tool_name: str, db=Depends(
     except Exception as e:
         logger.error(f"Failed to delete tool catalog entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")
+# -------------------------------------------------------------------------------------------------
+# Network diagnostics: resolved client IP, proxy headers, and WebUI/Setup access decisions
+
+def _parse_nets(raw: str | None) -> list[ipaddress._BaseNetwork]:
+    nets: list[ipaddress._BaseNetwork] = []
+    if not raw:
+        return nets
+    for token in [t.strip() for t in raw.replace("\n", ",").split(",") if t.strip()]:
+        try:
+            if "/" in token:
+                nets.append(ipaddress.ip_network(token, strict=False))
+            else:
+                ip = ipaddress.ip_address(token)
+                nets.append(ipaddress.ip_network(ip.exploded + ("/32" if ip.version == 4 else "/128"), strict=False))
+        except Exception:
+            # Skip invalid entries
+            pass
+    return nets
+
+
+def _load_list(section: str, field: str, env_name: str) -> list[ipaddress._BaseNetwork]:
+    import os
+    raw_env = os.getenv(env_name)
+    if raw_env:
+        return _parse_nets(raw_env)
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section(section):
+            raw_cfg = cp.get(section, field, fallback="").strip()
+            if raw_cfg:
+                return _parse_nets(raw_cfg)
+    except Exception:
+        pass
+    return []
+
+
+def _resolve_client_ip(request: Request, trusted_proxies: list[ipaddress._BaseNetwork]) -> tuple[str | None, bool]:
+    def _is_trusted(ip: ipaddress._BaseAddress | None) -> bool:
+        return bool(ip and any(ip in net for net in trusted_proxies))
+
+    peer = request.client.host if request.client else None
+    try:
+        peer_ip_obj = ipaddress.ip_address(peer) if peer else None
+    except Exception:
+        peer_ip_obj = None
+
+    if _is_trusted(peer_ip_obj):
+        xr = request.headers.get("x-real-ip") or request.headers.get("X-Real-IP")
+        if xr:
+            try:
+                ipaddress.ip_address(xr.strip())
+                return xr.strip(), True
+            except Exception:
+                pass
+        fwd = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+        if fwd:
+            try:
+                leftmost = fwd.split(",")[0].strip()
+                ipaddress.ip_address(leftmost)
+                return leftmost, True
+            except Exception:
+                pass
+    return peer, False
+
+
+def _is_loopback(ip_str: str | None) -> bool:
+    if not ip_str:
+        return False
+    if ip_str in {"testclient", "localhost"}:
+        return True
+    try:
+        return ipaddress.ip_address(ip_str).is_loopback
+    except Exception:
+        return False
+
+
+@router.get("/network-info")
+async def network_info(request: Request):
+    """Show resolved client IP, proxy headers, and access decision inputs for WebUI/Setup.
+
+    Returns a JSON payload useful for debugging remote-access policy and proxy header handling.
+    """
+    import os
+    # Load lists and settings
+    trusted_proxies = _load_list("Server", "trusted_proxies", "TLDW_TRUSTED_PROXIES")
+    webui_allow = _load_list("Server", "webui_ip_allowlist", "TLDW_WEBUI_ALLOWLIST")
+    webui_deny = _load_list("Server", "webui_ip_denylist", "TLDW_WEBUI_DENYLIST")
+    setup_allow = _load_list("Setup", "setup_ip_allowlist", "TLDW_SETUP_ALLOWLIST")
+    setup_deny = _load_list("Setup", "setup_ip_denylist", "TLDW_SETUP_DENYLIST")
+
+    resolved_ip, via_proxy = _resolve_client_ip(request, trusted_proxies)
+    loopback = _is_loopback(resolved_ip)
+    ip_obj = None
+    try:
+        ip_obj = ipaddress.ip_address(resolved_ip) if resolved_ip else None
+    except Exception:
+        ip_obj = None
+
+    def _decide(kind: str):
+        if loopback:
+            return {"decision": "allow", "reason": "loopback"}
+        allowlist = webui_allow if kind == "webui" else setup_allow
+        denylist = webui_deny if kind == "webui" else setup_deny
+        toggle = webui_remote_access_enabled() if kind == "webui" else setup_remote_access_enabled()
+        # denylist precedes
+        if denylist and ip_obj and any(ip_obj in net for net in denylist):
+            return {"decision": "deny", "reason": "denylist"}
+        if allowlist:
+            if ip_obj and any(ip_obj in net for net in allowlist):
+                return {"decision": "allow", "reason": "allowlist"}
+            return {"decision": "allow" if toggle else "deny", "reason": "toggle" if toggle else "no-allowlist-match"}
+        return {"decision": "allow" if toggle else "deny", "reason": "toggle" if toggle else "toggle-off"}
+
+    return {
+        "peer_ip": request.client.host if request.client else None,
+        "resolved_client_ip": resolved_ip,
+        "via_trusted_proxy": via_proxy,
+        "headers": {
+            "x_forwarded_for": request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For"),
+            "x_real_ip": request.headers.get("x-real-ip") or request.headers.get("X-Real-IP"),
+        },
+        "is_loopback": loopback,
+        "webui": {
+            "remote_toggle": webui_remote_access_enabled(),
+            "allowlist": [str(n) for n in webui_allow],
+            "denylist": [str(n) for n in webui_deny],
+            **_decide("webui"),
+        },
+        "setup": {
+            "remote_toggle": setup_remote_access_enabled(),
+            "allowlist": [str(n) for n in setup_allow],
+            "denylist": [str(n) for n in setup_deny],
+            **_decide("setup"),
+        },
+    }

@@ -42,18 +42,16 @@ def _inject_nonce_into_html(html: bytes, nonce: str) -> bytes:
 
 
 def _build_webui_csp(nonce: str) -> str:
-    # Provide a restrictive CSP with script nonces for /webui.
-    # Keep 'unsafe-eval' for legacy helpers; consider removing once JS is refactored.
+    # Relaxed CSP tailored for legacy WebUI/Setup: allow inline/eval scripts and blob/object URLs
+    # Using a nonce header here is harmless but not required for allowances below.
     return (
         "default-src 'self'; "
-        f"script-src 'self' 'nonce-{nonce}' 'strict-dynamic' 'unsafe-eval'; "
-        f"script-src-elem 'nonce-{nonce}'; "
-        "script-src-attr 'none'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: https:; "
+        "img-src 'self' data: blob: https:; "
         "font-src 'self' data:; "
         "media-src 'self' data: blob:; "
-        "connect-src 'self' ws: wss:; "
+        "connect-src 'self' http: https: ws: wss:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'; "
@@ -70,8 +68,8 @@ class WebUICSPMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path or ""
-        # Only apply to WebUI paths
-        if not path.startswith("/webui"):
+        # Only apply to WebUI and setup paths
+        if not (path.startswith("/webui") or path.startswith("/setup")):
             return await call_next(request)
 
         # Generate and attach nonce to request state for downstream use

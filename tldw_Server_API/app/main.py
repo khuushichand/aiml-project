@@ -1966,6 +1966,31 @@ _redoc_url = "/redoc" if _enable_openapi else None
 _openapi_url = "/openapi.json" if _enable_openapi else None
 
 _startup_trace("Creating FastAPI app instance")
+
+# Prefer locally-served Swagger UI assets when available to avoid CSP/CDN issues
+_swagger_static_dir = BASE_DIR / "static" / "swagger"
+_swagger_bundle = _swagger_static_dir / "swagger-ui-bundle.js"
+_swagger_css = _swagger_static_dir / "swagger-ui.css"
+_swagger_use_local = _swagger_bundle.exists() and _swagger_css.exists()
+_swagger_ui_js_url = "/static/swagger/swagger-ui-bundle.js" if _swagger_use_local else None
+_swagger_ui_css_url = "/static/swagger/swagger-ui.css" if _swagger_use_local else None
+
+# Merge Swagger UI parameters and include our overrides via customCssUrl
+_swagger_ui_params = {
+    "displayRequestDuration": True,
+    "deepLinking": True,
+    "docExpansion": "none",
+    "defaultModelsExpandDepth": -1,
+    "defaultModelExpandDepth": 2,
+    "persistAuthorization": True,
+    "tryItOutEnabled": True,
+    "tagsSorter": "alpha",
+    "operationsSorter": "alpha",
+    "filter": True,
+    # Inject our optional overrides stylesheet without replacing the base CSS
+    "customCssUrl": "/static/swagger-overrides.css",
+}
+
 app = FastAPI(
     title="tldw API",
     version="0.1.0",
@@ -1980,20 +2005,9 @@ app = FastAPI(
         "url": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html",
     },
     openapi_tags=OPENAPI_TAGS,
-    swagger_ui_parameters={
-        "displayRequestDuration": True,
-        "deepLinking": True,
-        "docExpansion": "none",
-        "defaultModelsExpandDepth": -1,
-        "defaultModelExpandDepth": 2,
-        "persistAuthorization": True,
-        "tryItOutEnabled": True,
-        "tagsSorter": "alpha",
-        "operationsSorter": "alpha",
-        # "syntaxHighlight.theme": "monokai",  # optional, supported by Swagger UI
-        "filter": True,
-    },
-    swagger_ui_css_url="/static/swagger-overrides.css",
+    swagger_ui_parameters=_swagger_ui_params,
+    swagger_ui_js_url=_swagger_ui_js_url,
+    swagger_ui_css_url=_swagger_ui_css_url,
     docs_url=_docs_url,
     redoc_url=_redoc_url,
     openapi_url=_openapi_url,
@@ -2200,6 +2214,26 @@ else:
         allow_headers=["*"],
     )
 
+    # Ensure OpenAPI schema is consumable across common local origins (helpful when docs are
+    # viewed via alternate hostnames like 127.0.0.1 vs localhost). We only set headers if the
+    # CORS middleware didn't already do so.
+    @app.middleware("http")
+    async def _openapi_cors_helper(request, call_next):
+        response = await call_next(request)
+        try:
+            if request.url.path == _openapi_url:
+                origin = request.headers.get("origin")
+                if origin:
+                    response.headers.setdefault("Access-Control-Allow-Origin", origin)
+                    response.headers.setdefault("Vary", "Origin")
+                else:
+                    response.headers.setdefault("Access-Control-Allow-Origin", "*")
+                response.headers.setdefault("Access-Control-Allow-Methods", "GET, OPTIONS")
+                response.headers.setdefault("Access-Control-Allow-Headers", "*")
+        except Exception:
+            pass
+        return response
+
 # Add CSRF Protection Middleware (NEW) with friendly error logging for misconfiguration
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import add_csrf_protection
 try:
@@ -2219,6 +2253,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 # Security middleware (headers + request size limit)
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
 from tldw_Server_API.app.core.Security.webui_csp import WebUICSPMiddleware
+from tldw_Server_API.app.core.Security.webui_access_guard import WebUIAccessGuardMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
@@ -2238,6 +2273,11 @@ if _TEST_MODE:
         app.add_middleware(WebUICSPMiddleware)
     except Exception as _e:
         logger.debug(f"Skipping WebUICSPMiddleware in tests: {_e}")
+    # Guard WebUI remote access in tests too (should evaluate loopback as allowed)
+    try:
+        app.add_middleware(WebUIAccessGuardMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping WebUIAccessGuardMiddleware in tests: {_e}")
 
     @app.middleware("http")
     async def _trace_headers_middleware(request: Request, call_next):
@@ -2294,6 +2334,11 @@ else:
         app.add_middleware(WebUICSPMiddleware)
     except Exception as _e:
         logger.debug(f"Skipping WebUICSPMiddleware: {_e}")
+    # Enforce WebUI remote access policy
+    try:
+        app.add_middleware(WebUIAccessGuardMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping WebUIAccessGuardMiddleware: {_e}")
 
     if _enable_sec_headers:
         app.add_middleware(SecurityHeadersMiddleware, enabled=True)

@@ -59,146 +59,77 @@ MCP_unified/
 #### 1. Define Module Interface
 ```python
 # modules/implementations/my_module.py
-from typing import Dict, Any, List, Optional
-from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleHealth
-from tldw_Server_API.app.core.MCP_unified.schemas import (
-    MCPTool, MCPResource, MCPPrompt, ToolParameter
-)
+from typing import Dict, Any, List
+from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, create_tool_definition
 
 class MyModule(BaseModule):
-    """Custom module implementation"""
-    
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__("my_module", "1.0.0", config)
-        self.initialize_resources()
-    
-    async def initialize(self) -> None:
-        """Initialize module resources"""
-        # Set up database connections, load models, etc.
-        self.db_pool = await create_pool(self.config.get("database_url"))
-        self.logger.info(f"{self.name} initialized successfully")
-    
-    async def shutdown(self) -> None:
-        """Clean up resources"""
-        if self.db_pool:
-            await self.db_pool.close()
-        self.logger.info(f"{self.name} shutdown complete")
-```
+    async def on_initialize(self) -> None:
+        # Initialize connections/resources here
+        # e.g., self.pool = await create_pool(self.config.settings.get("database_url"))
+        pass
 
-#### 2. Implement Tools
-```python
-    def get_tools(self) -> List[MCPTool]:
-        """Define module tools"""
+    async def on_shutdown(self) -> None:
+        # Close connections/resources here
+        pass
+
+    async def check_health(self) -> Dict[str, bool]:
+        # Return a dict of checks; any True marks DEGRADED, all True marks HEALTHY
+        return {"service": True}
+
+    async def get_tools(self) -> List[Dict[str, Any]]:
         return [
-            MCPTool(
-                name=f"{self.name}.process_data",
+            create_tool_definition(
+                name="my_module.process_data",
                 description="Process data with custom logic",
-                parameters=[
-                    ToolParameter(
-                        name="input_data",
-                        type="string",
-                        description="Data to process",
-                        required=True
-                    ),
-                    ToolParameter(
-                        name="options",
-                        type="object",
-                        description="Processing options",
-                        required=False,
-                        properties={
-                            "format": {"type": "string", "enum": ["json", "xml", "csv"]},
-                            "validate": {"type": "boolean", "default": True}
-                        }
-                    )
-                ]
+                parameters={
+                    "properties": {
+                        "input_data": {"type": "string"},
+                        "format": {"type": "string", "enum": ["json", "xml", "csv"], "default": "json"},
+                        "validate": {"type": "boolean", "default": True}
+                    },
+                    "required": ["input_data"]
+                },
+                metadata={"category": "read"}
             )
         ]
-    
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
-        """Execute a tool"""
-        if tool_name == f"{self.name}.process_data":
-            return await self.process_data(
-                arguments["input_data"],
-                arguments.get("options", {})
-            )
+
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]) -> None:
+        # Strongly recommended for write/management tools (ingestion/update/delete)
+        # Use explicit allowlists and type checks here when metadata.category is a write-capable kind.
+        pass
+
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context=None) -> Any:
+        # Dispatch
+        if tool_name == "my_module.process_data":
+            input_data = self.sanitize_input(arguments.get("input_data", ""))
+            fmt = arguments.get("format", "json")
+            # ... do work ...
+            return {"status": "ok", "format": fmt, "length": len(input_data)}
         raise ValueError(f"Unknown tool: {tool_name}")
-    
-    async def process_data(self, input_data: str, options: Dict[str, Any]) -> Dict[str, Any]:
-        """Actual implementation"""
-        # Validate input
-        if options.get("validate", True):
-            self.validate_input(input_data)
-        
-        # Process data
-        format_type = options.get("format", "json")
-        result = await self.transform_data(input_data, format_type)
-        
-        # Return result
-        return {
-            "status": "success",
-            "data": result,
-            "metadata": {
-                "processed_at": datetime.utcnow().isoformat(),
-                "format": format_type
-            }
-        }
 ```
 
-#### 3. Add Health Checks
-```python
-    async def health_check(self) -> ModuleHealth:
-        """Perform health check"""
-        checks = {}
-        
-        # Check database connection
-        try:
-            async with self.db_pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
-            checks["database"] = True
-        except Exception as e:
-            checks["database"] = False
-            self.logger.error(f"Database health check failed: {e}")
-        
-        # Check external service
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.config["service_url"], timeout=5) as resp:
-                    checks["external_service"] = resp.status == 200
-        except:
-            checks["external_service"] = False
-        
-        # Overall status
-        all_healthy = all(checks.values())
-        
-        return ModuleHealth(
-            module_id=self.name,
-            status="healthy" if all_healthy else "unhealthy",
-            checks=checks,
-            message="All systems operational" if all_healthy else "Some checks failed"
-        )
+Notes
+- Use `create_tool_definition()` to produce MCP-compliant tool definitions with `inputSchema`.
+- For write-capable tools (ingestion/management), set `metadata.category` to `ingestion` or `management` and override `validate_tool_arguments`.
+- `sanitize_input()` deeply sanitizes nested arguments; call it before processing untrusted inputs.
+
+#### 2. Register the Module
+Prefer configuration-driven registration instead of hardcoding:
+
+- YAML: `tldw_Server_API/Config_Files/mcp_modules.yaml`
+```yaml
+modules:
+  - id: my_module
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.my_module:MyModule
+    enabled: true
+    name: My Module
+    settings:
+      database_url: postgresql+asyncpg://user:pass@host/db
 ```
 
-#### 4. Register Module
-```python
-# In server initialization
-from tldw_Server_API.app.core.MCP_unified.modules.registry import ModuleRegistry
-from .modules.implementations.my_module import MyModule
-
-async def register_modules(registry: ModuleRegistry):
-    """Register all modules"""
-    
-    # Create module instance
-    my_module = MyModule({
-        "database_url": os.getenv("MY_MODULE_DATABASE_URL"),
-        "service_url": os.getenv("MY_MODULE_SERVICE_URL"),
-        "cache_ttl": 300
-    })
-    
-    # Initialize module
-    await my_module.initialize()
-    
-    # Register with registry
-    await registry.register(my_module)
+- Environment variable (comma-separated list):
+```bash
+export MCP_MODULES="my_module=tldw_Server_API.app.core.MCP_unified.modules.implementations.my_module:MyModule"
 ```
 
 ### Module Best Practices
@@ -247,7 +178,7 @@ Notes for module authors
 
 ### Tools Listing and Discovery
 
-`GET /api/v1/mcp/tools` lists available tools filtered by RBAC for the caller. Catalog filters shape discovery but do not grant permissions.
+`GET /api/v1/mcp/tools` lists available tools filtered by RBAC for the caller. Authentication is required. Catalog filters shape discovery but do not grant permissions.
 
 - Catalog filtering:
   - `catalog` (name) and `catalog_id` (numeric) narrow discovery to tools included in a named catalog.
@@ -260,7 +191,7 @@ HTTP examples:
 
 ```bash
 # List tools (all, RBAC-filtered)
-curl -H "X-API-KEY: ..." "http://127.0.0.1:8000/api/v1/mcp/tools"
+curl -H "Authorization: Bearer <token>" "http://127.0.0.1:8000/api/v1/mcp/tools"
 
 # List tools in catalog by name
 curl -H "X-API-KEY: ..." "http://127.0.0.1:8000/api/v1/mcp/tools?catalog=research-kit"

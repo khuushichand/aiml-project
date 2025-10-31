@@ -36,9 +36,9 @@ Notes
 
 API Changes
 1) MCP tools list filter
-   - HTTP: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>`
+   - HTTP: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>` (requires auth; RBAC still applies)
    - JSON-RPC: `tools/list` accepts params `{ catalog?: string, catalog_id?: number }`
-   - Server filters returned tools to those present in the catalog after RBAC.
+   - Catalog filters shape discovery only; RBAC still gates visibility/`canExecute` and execution.
 
 2) Admin endpoints (all require admin)
    - `GET  /api/v1/admin/mcp/tool_catalogs` — list catalogs (optional `org_id`, `team_id` filters)
@@ -73,6 +73,16 @@ HTTP Usage Notes
   - `catalog`: catalog name; resolved by precedence `team > org > global` using authenticated context
   - `catalog_id`: numeric id; takes precedence over `catalog` when both provided
 - If the catalog name/id can’t be resolved, the server fails open (no catalog filter). RBAC is still enforced, and `canExecute` reflects effective permissions.
+
+JSON-RPC Usage
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "params": { "catalog": "research-kit" },
+  "id": 1
+}
+```
 
 Migration
 - Add migration 022 to AuthNZ migrations (SQLite) to create the two tables (with indexes/constraints above).
