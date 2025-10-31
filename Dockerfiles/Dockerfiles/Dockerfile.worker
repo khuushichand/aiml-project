@@ -15,14 +15,15 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY tldw_Server_API/requirements.txt /app/requirements.txt
+# Copy pyproject and minimal files for install
+COPY pyproject.toml /app/pyproject.toml
+COPY README.md /app/README.md
+COPY tldw_Server_API /app/tldw_Server_API
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install package with extras (multiplayer for PG support)
+RUN pip install --no-cache-dir -e ".[multiplayer]"
 
 # Copy application code
-COPY tldw_Server_API /app/tldw_Server_API
 COPY Config_Files /app/Config_Files
 
 # Create necessary directories

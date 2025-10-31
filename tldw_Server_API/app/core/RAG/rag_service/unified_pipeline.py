@@ -321,7 +321,7 @@ async def unified_rag_pipeline(
     
     # ========== RERANKING ==========
     enable_reranking: bool = True,
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"] = "flashrank",
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = "flashrank",
     rerank_top_k: Optional[int] = None,  # Defaults to top_k if not specified
     reranking_model: Optional[str] = None,  # Optional model id/path for rerankers (GGUF path or HF model id)
     # Two-tier specific: request-level gating overrides (optional)

@@ -29,7 +29,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
-│   └── requirements.txt          # Python dependencies
+│   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
 ├── Dockerfiles/                  # Docker images and compose files
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
@@ -215,7 +215,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 - Database location configurable via `DATABASE_URL` (AuthNZ) and config helpers
 
 ### Required Setup
-1. **Dependencies**: `pip install -r tldw_Server_API/requirements.txt`
+1. **Dependencies**: `pip install -e .` (add extras as needed, e.g., `.[dev]`, `.[multiplayer]`)
 2. **FFmpeg**: Required for audio/video processing
 3. **Auth Setup**: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
 4. **Provider Keys**: Add to `.env` or `Config_Files/config.txt`

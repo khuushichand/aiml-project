@@ -17,14 +17,15 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements
-COPY requirements.txt /tmp/
-COPY requirements-mcp.txt /tmp/
+# Copy project for editable install
+WORKDIR /src
+COPY pyproject.toml /src/pyproject.toml
+COPY README.md /src/README.md
+COPY tldw_Server_API /src/tldw_Server_API
 
-# Install Python dependencies
+# Install package (base deps from pyproject; add extras as needed)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /tmp/requirements.txt && \
-    pip install --no-cache-dir -r /tmp/requirements-mcp.txt
+    pip install --no-cache-dir -e .
 
 # Stage 2: Runtime
 FROM python:3.11-slim

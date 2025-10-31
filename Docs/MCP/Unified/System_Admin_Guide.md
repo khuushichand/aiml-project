@@ -34,7 +34,7 @@ The MCP Unified module is a critical component of the TLDW server that provides:
 ### 1. Install Dependencies
 ```bash
 # Core dependencies
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .
 
 # Production dependencies
 pip install gunicorn uvloop httptools redis aioredis prometheus-client
@@ -616,7 +616,7 @@ git pull origin main
 
 # Update dependencies
 source venv/bin/activate
-pip install -r requirements.txt --upgrade
+pip install -e . --upgrade
 
 # Run migrations
 python -m tldw_Server_API.app.core.MCP_unified.migrations

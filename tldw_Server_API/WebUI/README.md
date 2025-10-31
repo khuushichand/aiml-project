@@ -382,7 +382,7 @@ For issues or questions:
 
 ## License
 
-This module is part of the TLDW Server project and follows the same licensing terms (GPLv2).
+This module is part of the TLDW Server project and follows the same licensing terms (GPLv3).
 
 ---
 

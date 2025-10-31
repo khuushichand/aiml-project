@@ -38,7 +38,7 @@ Recommended (Compose deployments)
 5. If issues: `docker compose logs app`, and roll back by checking out the previous commit/tag and rebuilding.
 
 Bare‑metal
-- Update code then reinstall: `pip install --upgrade .` or `pip install -r tldw_Server_API/requirements.txt` if pinned.
+- Update code then reinstall: `pip install --upgrade .`.
 - Restart the service.
 
 Database migrations

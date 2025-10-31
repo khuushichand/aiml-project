@@ -32,7 +32,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
-            tldw_Server_API/requirements.txt
+            uv.lock
 
       - name: Install mypy
         run: |
@@ -101,6 +101,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
+          extras: dev,multiplayer
 
       - name: Install pg client and wait for PG
         uses: ./.github/actions/wait-for-postgres
@@ -241,6 +242,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
+          extras: dev
 
       - name: Ensure pytest-asyncio installed (OS matrix)
         shell: bash

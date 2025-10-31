@@ -144,10 +144,7 @@ cd tldw_server
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
-pip install -r tldw_Server_API/requirements.txt
-
-# Install development dependencies
+# Install dependencies (with dev extras)
 pip install -e ".[dev]"
 
 # Set up pre-commit hooks

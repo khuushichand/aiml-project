@@ -18,7 +18,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r tldw_Server_API/requirements.txt
+          pip install -e ".[dev]"
 
       - name: Start server (background)
         env:
@@ -52,4 +52,3 @@ jobs:
         if: always()
         run: |
           kill $(cat server.pid) || true
-

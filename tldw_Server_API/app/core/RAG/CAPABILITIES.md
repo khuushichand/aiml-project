@@ -52,6 +52,11 @@ curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
       ]
     },
     "table_processing": {"supported": true, "methods": ["markdown", "html", "hybrid"]},
+    "vlm_late_chunking": {
+      "supported": true,
+      "backends": ["docling", "hf_table_transformer"],
+      "backends_endpoint": "/api/v1/rag/vlm/backends"
+    },
     "enhanced_chunking": {
       "supported": true,
       "parent_context": true,

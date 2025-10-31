@@ -444,6 +444,7 @@ async def get_capabilities(request: Request):
                 "VLM_TABLE_THRESHOLD"
             ],
             "defaults": vlm_defaults,
+            "backends_endpoint": "/api/v1/rag/vlm/backends",
             "note": "Env defaults reflect current process environment; Table Transformer threshold is 0.9 by default."
         },
         "enhanced_chunking": {
@@ -637,6 +638,26 @@ async def get_capabilities(request: Request):
         "auth": auth,
         "quick_start": quick_start,
     }
+
+
+@router.get(
+    "/vlm/backends",
+    summary="VLM Backends",
+    description="List VLM (Vision-Language) backends and their availability",
+    response_description="Backend availability map"
+)
+async def list_vlm_backends():
+    """
+    Report available VLM backends from the ingestion registry.
+
+    Returns a mapping like { "hf_table_transformer": {"available": true}, "docling": {"available": false} }.
+    """
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import list_backends as _list
+        backends = _list() or {}
+    except Exception:
+        backends = {}
+    return {"backends": backends}
 
 
 @router.post(

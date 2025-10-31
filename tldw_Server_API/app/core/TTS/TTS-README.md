@@ -136,7 +136,7 @@ apt-get install ffmpeg espeak-ng  # Ubuntu/Debian
 brew install ffmpeg espeak         # macOS
 
 # Python dependencies
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Quick Start

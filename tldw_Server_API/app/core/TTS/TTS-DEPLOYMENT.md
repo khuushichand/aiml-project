@@ -62,7 +62,7 @@ choco install ffmpeg espeak git
 ### Python Dependencies
 ```bash
 # Core dependencies
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .
 
 # Additional TTS dependencies
 pip install \
@@ -354,7 +354,7 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .
 
 # Configure
 cp Config_Files/Backup_Config.txt config.txt
@@ -390,9 +390,9 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements
-COPY tldw_Server_API/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from pyproject
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e .
 
 # Install additional TTS dependencies
 RUN pip install \

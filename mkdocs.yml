@@ -34,6 +34,7 @@ theme:
 plugins:
   - search
   - git-revision-date-localized:
+      enable_git_follow: false
       fallback_to_build_date: true
       enable_creation_date: true
       type: timeago
@@ -175,3 +176,7 @@ nav:
       - Setting up a local LLM: User_Guides/Setting_up_a_local_LLM.md
       - Chatterbox TTS Setup: User_Guides/Chatterbox_TTS_Setup.md
       - User Guide: User_Guides/User_Guide.md
+  - MCP Unified:
+      - Overview: MCP/Unified_Overview.md
+      - Client Snippets: MCP/Unified_Client_Snippets.md
+      - Tool Catalogs (Quick Ref): MCP/Tool_Catalogs_Quick_Reference.md

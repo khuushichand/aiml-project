@@ -53,7 +53,7 @@ The E2E test suite validates the complete user journey through the tldw_server A
 
 ```bash
 # Install dependencies
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .[dev]
 pip install pytest httpx
 
 # Start the API server
@@ -428,7 +428,7 @@ The tests are organized into 11 sequential phases:
 
 ```bash
 # Install dependencies
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .[dev]
 pip install pytest httpx
 
 # Start the API server
@@ -1619,7 +1619,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install -r requirements.txt
+        pip install -e .[dev]
         pip install pytest httpx pytest-cov
     
     - name: Start API server

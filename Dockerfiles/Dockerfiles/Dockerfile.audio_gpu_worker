@@ -7,14 +7,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY tldw_Server_API/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
-
-COPY . /app
+# Install from pyproject (editable)
+COPY pyproject.toml /app/pyproject.toml
+COPY README.md /app/README.md
+COPY tldw_Server_API /app/tldw_Server_API
+COPY Config_Files /app/Config_Files
+RUN pip install --no-cache-dir -e .
 
 ENV PYTHONUNBUFFERED=1
 ENV AUDIO_JOBS_WORKER_ENABLED=false
 
 # Run the GPU transcription-only worker
 CMD ["python", "-m", "tldw_Server_API.app.services.audio_transcribe_gpu_worker"]
-

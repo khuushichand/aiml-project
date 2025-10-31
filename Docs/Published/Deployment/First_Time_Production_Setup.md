@@ -133,7 +133,7 @@ cd tldw_server
 python3.11 -m venv /opt/tldw_server/venv
 source /opt/tldw_server/venv/bin/activate
 pip install -U pip
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .[multiplayer]
 
 cp .env.authnz.template .env
 vi .env   # set AUTH_MODE, keys, DATABASE_URL, ALLOWED_ORIGINS, tldw_production=true
