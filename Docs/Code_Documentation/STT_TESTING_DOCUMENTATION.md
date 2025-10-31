@@ -278,8 +278,7 @@ jobs:
           python-version: '3.10'
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
+          pip install -e .[dev]
       - name: Run unit tests
         run: |
           pytest -m "unit" tests/Media_Ingestion_Modification/

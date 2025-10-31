@@ -475,7 +475,7 @@ pipeline = build_pipeline(
 
 ## License
 
-Same as tldw_server (GPLv2)
+Same as tldw_server (GPLv3)
 
 ## Feedback & Learning (New)
 

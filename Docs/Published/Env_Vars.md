@@ -9,7 +9,7 @@ Precedence (highest → lowest):
 
 Note: Secrets should be set via environment or `.env`. `config.txt` is supported for convenience in dev; prefer env in production.
 
-For the full, frequently updated raw reference, see `Env_Vars.md` in the repository root.
+For the full, frequently updated raw reference (auto-generated), see `Env_Vars.md` in the repository root.
 
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
@@ -22,6 +22,19 @@ For the full, frequently updated raw reference, see `Env_Vars.md` in the reposit
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).
 - `MAGIC_FILE_PATH`: Path to `magic.mgc` for `python-magic` if needed.
 
+Logging & OpenAPI URLs
+- `LOG_JSON` / `ENABLE_JSON_LOGS`: Enable structured JSON logs (`true|false`).
+- `LOG_STREAM`: Log sink (`stderr|stdout`).
+- `LOG_COLOR`: Force color in logs even when not a TTY (`1|0`). Also respects `FORCE_COLOR` / `PY_COLORS`.
+- `OPENAPI_SERVER_BASE_URL`: Base URL for the API server used in OpenAPI server URLs (defaults to `http://127.0.0.1:8000`).
+- `OPENAPI_EXTERNAL_DOCS_BASE_URL`: Absolute base used for externalDocs links in the OpenAPI spec.
+
+WebUI Access Guard (remote access controls)
+- `TLDW_WEBUI_ALLOW_REMOTE` (or `WEBUI_ALLOW_REMOTE`): Temporarily allow remote access to the legacy WebUI (`/webui`). Only use on trusted networks.
+- `TLDW_WEBUI_ALLOWLIST`: Comma‑separated IPs/CIDRs allowed to access `/webui`.
+- `TLDW_WEBUI_DENYLIST`: Comma‑separated IPs/CIDRs denied from `/webui`.
+- `TLDW_TRUSTED_PROXIES`: Comma‑separated proxy IPs/CIDRs trusted for X‑Forwarded‑For/X‑Real‑IP.
+
 ## AuthNZ (Authentication)
 - `AUTH_MODE`: `single_user` | `multi_user`.
 - `DATABASE_URL`: AuthNZ database URL. For production multi-user, use Postgres.
@@ -32,9 +45,17 @@ For the full, frequently updated raw reference, see `Env_Vars.md` in the reposit
 - `ENABLE_REGISTRATION`, `REQUIRE_REGISTRATION_CODE`.
 - `SHOW_API_KEY_ON_STARTUP`: Avoid in production.
 
+Egress & Outbound Policy (global + Workflows)
+- `EGRESS_ALLOWLIST`, `EGRESS_DENYLIST`: Global DNS allow/deny lists for outbound requests.
+- `WORKFLOWS_EGRESS_PROFILE`: `strict|permissive|custom` profile for Workflows egress.
+- `WORKFLOWS_EGRESS_ALLOWLIST`, `WORKFLOWS_EGRESS_DENYLIST`: Workflows DNS allow/deny lists; support per‑tenant suffix `_TENANT`.
+- `WORKFLOWS_EGRESS_BLOCK_PRIVATE`: Block RFC1918 and reserved ranges (`true|false`).
+- `WORKFLOWS_EGRESS_ALLOWED_PORTS`: Comma‑separated list of allowed ports (default `80,443`).
+
 ## Jobs Backend / Worker
 - `JOBS_DB_URL`: Postgres DSN for Jobs backend; falls back to SQLite when unset.
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
+  - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
 
 ## Audio Quotas & Workers
 - `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`).
@@ -48,6 +69,10 @@ Queues
 
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.
+
+Monitoring & Telemetry
+- `METRICS_ENABLED`: Enable text metrics endpoints.
+- OpenTelemetry export is controlled via standard `OTEL_*` environment variables (e.g., `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`). See the Deployment/Monitoring docs.
 
 ## Workflows (Auth & Scheduler)
 - `WORKFLOWS_DEFAULT_BEARER_TOKEN`: Default Authorization bearer token used by Workflows steps when not explicitly provided in headers.

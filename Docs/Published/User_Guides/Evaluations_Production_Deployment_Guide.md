@@ -17,7 +17,7 @@ This guide covers deploying the tldw_server Evaluations module in a production e
 ### Software Dependencies
 ```bash
 # Core dependencies
-pip install -r requirements.txt
+pip install -e .
 
 # Optional monitoring
 pip install prometheus-client  # For metrics
@@ -122,8 +122,8 @@ sudo systemctl status tldw-evaluations
 FROM python:3.10-slim
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e .
 
 COPY . .
 

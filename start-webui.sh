@@ -90,7 +90,7 @@ if command -v python3 >/dev/null 2>&1; then PY=python3; fi
 if ! $PY -c "import uvicorn" 2>/dev/null; then
   echo -e "${RED}Error:${NC} 'uvicorn' is not installed in the current Python environment."
   echo "Install dependencies first:"
-  echo "  pip install -r tldw_Server_API/requirements.txt"
+  echo "  pip install -e .[dev]   # or add extras like [multiplayer]"
   exit 1
 fi
 

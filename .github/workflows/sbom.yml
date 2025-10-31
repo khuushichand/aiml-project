@@ -39,9 +39,12 @@ jobs:
           fi
 
       - name: Generate Source SBOM with Syft (CycloneDX JSON)
-        uses: anchore/syft-action@v0.16.0
+        uses: anchore/sbom-action@v0
         with:
-          args: dir:. -o cyclonedx-json=sbom-syft.cdx.json
+          path: .
+          format: cyclonedx-json
+          output-file: sbom-syft.cdx.json
+          upload-artifact: false
 
       - name: Setup Python (for merge/validate)
         uses: actions/setup-python@v5

@@ -356,7 +356,7 @@ git clone https://github.com/rmusser01/tldw_server
 cd tldw_server
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
 2. **Configure Environment**

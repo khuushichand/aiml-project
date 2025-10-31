@@ -134,7 +134,17 @@ if "!gpu_choice!"=="cuda" (
 )
 
 :: Install other requirements
-pip install -r requirements.txt
+    if exist pyproject.toml (
+        echo Installing from pyproject (editable)
+        pip install -e .
+    ) else (
+        if exist requirements.txt (
+            echo Installing requirements from requirements.txt (legacy)
+            pip install -r requirements.txt
+        ) else (
+            echo WARNING: No pyproject.toml or requirements.txt found. Some dependencies may be missing.
+        )
+    )
 
 :: Install ffmpeg (if not already installed)
 if not exist "ffmpeg.exe" (

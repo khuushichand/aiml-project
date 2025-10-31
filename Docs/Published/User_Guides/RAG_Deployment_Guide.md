@@ -110,7 +110,7 @@ source venv/bin/activate
 
 ```bash
 pip install --upgrade pip
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .
 
 # Install production server
 pip install gunicorn uvicorn[standard]
@@ -448,8 +448,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY tldw_Server_API/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e .
 RUN pip install gunicorn uvicorn[standard]
 
 # Copy application

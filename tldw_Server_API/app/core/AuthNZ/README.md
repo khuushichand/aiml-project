@@ -154,7 +154,7 @@ Settings merge environment variables, `.env.authnz` files, and global project co
 ---
 
 ## Initialization & Maintenance
-1. **Install dependencies**: `pip install -r tldw_Server_API/requirements.txt`.
+1. **Install dependencies**: `pip install -e .[multiplayer]`.
 2. **Run migrations**:
    ```bash
    python -m tldw_Server_API.app.core.AuthNZ.run_migrations

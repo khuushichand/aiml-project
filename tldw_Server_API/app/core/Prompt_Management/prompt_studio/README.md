@@ -64,7 +64,7 @@ prompt_studio/
 ### Prerequisites
 - Install the project requirements:
 ```bash
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .[dev]
 ```
 
 - Optional extras:

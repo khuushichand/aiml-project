@@ -22,12 +22,20 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 ## 2) Install dependencies
 
+Prefer installing via the project’s pyproject extras:
+
 ```bash
-pip install -r tldw_Server_API/requirements.txt
+# Core server
+pip install -e .
+
+# Useful extras
+# pip install -e ".[dev]"           # tests, linters, tooling
+# pip install -e ".[multiplayer]"   # multi-user/PostgreSQL support
+# pip install -e ".[otel]"          # OpenTelemetry exporters (optional)
 ```
 
 Notes:
-- Some optional features (OCR backends, GPU variants) have extra steps noted inside `requirements.txt` comments.
+- Some optional features (OCR backends, GPU variants) have extra steps noted in their respective docs.
 - Ensure FFmpeg is installed via your OS package manager (e.g., `brew install ffmpeg`, `apt-get install ffmpeg`).
 
 ## 3) Configure authentication
@@ -121,5 +129,4 @@ PUT /api/v1/config/tokenizer
 To set defaults, you can also add environment or config values:
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
 - `TOKEN_CHAR_APPROX_DIVISOR`: integer (default `4`)
-
 

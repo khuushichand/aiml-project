@@ -76,7 +76,7 @@ for local development.
         $ source ./.venv/bin/actiate # activate virtualenv
         $ which python
         /Users/me/tldw/.venv/bin/python
-        $ python -m pip install requirements.txt
+        $ pip install -e .[dev]
 
 1.  Create a branch for local development:
 
@@ -115,4 +115,3 @@ Tips
 ----
 
 To run a subset of tests: `pytest Tests/test_your_test.py`
-

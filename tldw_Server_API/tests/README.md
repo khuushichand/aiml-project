@@ -3,7 +3,7 @@
 This directory contains the end-to-end, integration, and unit tests for `tldw_server`. The notes below summarize how to run the suite and the knobs that control which tests execute.
 
 ## Quick Start
-- Install dependencies with `pip install -r tldw_Server_API/requirements.txt`.
+- Install dependencies with `pip install -e .[dev]`.
 - Run the whole suite: `python -m pytest tldw_Server_API/tests -q`.
 - Run by marker: `python -m pytest -m "unit"` or `pytest -m "integration and not slow"`.
 - Use `pytest --maxfail=1 -x` while iterating to stop on the first failure.
@@ -77,4 +77,3 @@ When a key is missing, the individual test will usually skip with a descriptive 
 - Export environment variables in your shell or create a temporary `.env` when running targeted suites.
 - Many integration fixtures automatically set `TEST_MODE=true` and disable rate limiting; you can do the same when writing new tests.
 - Keep heavy toggles disabled by default in CI to control runtime. Enable them locally when validating provider integrations or stress scenarios.
-

@@ -33,7 +33,7 @@ Backend specifics
 - Env: `DOTS_OCR_PROMPT` (default `prompt_ocr`); `DOTS_OCR_CMD` can point to a script for custom setups.
 
 Docs
-- See `tldw_Server_API/requirements.txt` notes under “OCR (optional)”.
+- See pyproject extras and provider docs for optional OCR dependencies.
 
 Pros/cons
 - Pros: strong layout understanding; good accuracy on scanned docs; vLLM option for scale.

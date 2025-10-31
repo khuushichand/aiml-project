@@ -7,7 +7,7 @@ Welcome to the tldw_server User Guides. This section collects practical, task‑
 1) Install dependencies and required tools
 
 ```bash
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .
 # FFmpeg is required for audio/video processing (install via your OS package manager)
 ```
 

@@ -22,12 +22,20 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 ## 2) Install dependencies
 
+Prefer pyproject‑based installs with extras:
+
 ```bash
-pip install -r tldw_Server_API/requirements.txt
+# Core server
+pip install -e .
+
+# Useful extras
+# pip install -e ".[dev]"           # tests, linters, tooling
+# pip install -e ".[multiplayer]"   # multi-user/PostgreSQL support
+# pip install -e ".[otel]"          # OpenTelemetry exporters (optional)
 ```
 
 Notes:
-- Some optional features (OCR backends, GPU variants) have extra steps noted inside `requirements.txt` comments.
+- Some optional features (OCR backends, GPU variants) have extra steps noted in their docs.
 - Ensure FFmpeg is installed via your OS package manager (e.g., `brew install ffmpeg`, `apt-get install ffmpeg`).
 
 ## 3) Configure authentication
@@ -95,6 +103,5 @@ Tip: You can also use the convenience script from the repo root:
 - Read the User Guide for common tasks: `User_Guide.md`
 - Configure providers and test chat/embeddings via the WebUI and `/docs`
 - See Production Hardening and Multi‑User Deployment guides for production use
-
 
 

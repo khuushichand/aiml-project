@@ -367,7 +367,7 @@ wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=YOUR_API_KEY"
 
 - Nemo models are provided by NVIDIA under their respective licenses
 - Parakeet and Canary models require acceptance of NVIDIA's model licenses
-- This implementation is part of the tldw_server project (GPLv2)
+- This implementation is part of the tldw_server project (GPLv3)
 
 ## Support
 

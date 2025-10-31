@@ -241,7 +241,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 ### 3. Install Dependencies
 
 ```bash
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .[multiplayer]
 ```
 
 ### 4. Configure Environment
@@ -966,8 +966,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY tldw_Server_API/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e .[multiplayer]
 
 # Copy application
 COPY tldw_Server_API/ ./tldw_Server_API/

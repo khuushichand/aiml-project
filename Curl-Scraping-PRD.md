@@ -174,7 +174,7 @@ YAML (`custom_scrapers.yaml`) controls per-domain overrides (backend, UA, impers
 - Add optional dependency: `curl_cffi`.
 - Optional: `playwright_stealth` (already conditionally used).
 - Add decompressors to match Accept-Encoding: `brotli`, `zstandard` (Python decoding), though curl backend can auto-decode.
-- Update `requirements.txt` accordingly; ensure imports are optional with clear errors or fallbacks.
+- Update pyproject extras accordingly; ensure imports are optional with clear errors or fallbacks.
 
 ## 9. Detailed Integration Plan
 

@@ -52,9 +52,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-            tldw_Server_API/requirements.txt
-          requirements-files: |
-            tldw_Server_API/requirements.txt
+          # Install via pyproject extras (composite action default: extras='dev')
 
       - name: Install FFmpeg (+PortAudio)
         uses: ./.github/actions/setup-ffmpeg

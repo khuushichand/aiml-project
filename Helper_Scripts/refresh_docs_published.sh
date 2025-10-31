@@ -27,6 +27,10 @@ preserve_and_copy() {
       if [ "$(basename "$src")" = "Deployment" ] && [ "$(basename "$item")" = "Monitoring" ]; then
         continue
       fi
+      # Avoid README vs index conflicts in MkDocs: skip README files when an index.md is present
+      if [ -f "$dest/index.md" ] && [[ "$(basename "$item")" =~ ^README(\.md)?$ ]]; then
+        continue
+      fi
       cp -R "$item" "$dest" 2>/dev/null || true
     done
     shopt -u dotglob nullglob
@@ -59,4 +63,3 @@ if [ -f "$SRC_DIR/Logo.png" ]; then
 fi
 
 echo "Done."
-

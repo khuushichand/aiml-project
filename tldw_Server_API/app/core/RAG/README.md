@@ -617,7 +617,6 @@ curl -X POST "http://127.0.0.1:8000/api/v1/rag/search" \
     "enable_monitoring": true,
     "enable_analytics": true,
     "use_connection_pool": true,
-    "use_embedding_cache": true,
     "enable_observability": false,
     "trace_id": "trace-abc-123",
 
@@ -736,7 +735,7 @@ Instead of pre-built pipelines, the unified architecture provides direct paramet
     
     # Reranking
     enable_reranking=True,
-    reranking_strategy="hybrid",  # flashrank, cross_encoder, hybrid
+    reranking_strategy="hybrid",  # flashrank | cross_encoder | hybrid | llama_cpp | llm_scoring | two_tier
     
     # Citations
     enable_citations=True,
@@ -819,7 +818,7 @@ results = await unified_batch_pipeline(
 
 ### Document Processing
 - `enable_reranking: bool` - Enable document reranking
-- `reranking_strategy: str` - Strategy ("flashrank", "cross_encoder", "hybrid")
+- `reranking_strategy: str` - Strategy ("flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier")
 - `enable_table_processing: bool` - Process table content
 - `enable_parent_expansion: bool` - Include parent document context
 
@@ -844,7 +843,10 @@ The created hints are appended as additional documents with `metadata.chunk_type
 }
 ```
 
-Backends are shared with ingestion; list available backends via `GET /api/v1/vlm/backends`.
+Backends are shared with the ingestion VLM registry. To check availability:
+- Programmatic: `tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry.list_backends()`
+- API: `GET /api/v1/rag/vlm/backends`
+- High‑level (static defaults): `GET /api/v1/rag/capabilities` (lists names/env keys, not runtime availability)
 
 ### Citations
 - `enable_citations: bool` - Generate citations
@@ -1019,7 +1021,6 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
     "enable_monitoring": true,
     "enable_analytics": true,
     "use_connection_pool": true,
-    "use_embedding_cache": true,
     "enable_observability": false,
     "trace_id": "trace-abc-123",
 
@@ -1202,15 +1203,7 @@ The unified pipeline includes several performance enhancements:
 Connection pooling is handled internally by the service; no explicit flag is required.
 
 ### Embedding Cache
-LRU cache for embeddings with 90%+ hit rates:
-
-```python
-result = await unified_rag_pipeline(
-    query="Repeated query",
-    use_embedding_cache=True,
-    search_mode="vector"
-)
-```
+Embeddings are cached internally by the embeddings subsystem/vector store; there is no per‑request toggle in the unified RAG API. You can keep using `search_mode="vector"` normally — caching behavior is automatic where available.
 
 ### Module-Level Imports
 Pre-loaded modules reduce cold start time by 500ms:
@@ -1320,7 +1313,7 @@ When extending the RAG module:
 
 ## License
 
-Same as tldw_server (GPLv2)
+Same as tldw_server (GPLv3)
 ## Reranking Backends (Details)
 
 You can rerank retrieved documents using either Transformers cross-encoders or llama.cpp GGUF embedding models.

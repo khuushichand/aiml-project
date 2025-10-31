@@ -115,7 +115,13 @@ setup_environment() {
     fi
 
     # Install other requirements
-    pip install -r requirements.txt
+    if [ -f "pyproject.toml" ]; then
+        log "Installing from pyproject (editable)"
+        pip install -e .
+    else
+        log "Installing from requirements.txt (legacy)"
+        pip install -r requirements.txt
+    fi
 }
 
 # Main script execution

@@ -134,12 +134,15 @@ setup_environment() {
     sed -i '' 's/cuda/cpu/' config.txt
 
     # Install requirements from the cloned repository
-    if [ -f "requirements.txt" ]; then
-        log "Installing requirements from requirements.txt"
+    if [ -f "pyproject.toml" ]; then
+        log "Installing from pyproject (editable)"
+        pip install -e .
+    elif [ -f "requirements.txt" ]; then
+        log "Installing requirements from requirements.txt (legacy)"
         pip install -r requirements.txt
     else
-        log "requirements.txt not found in the installation directory"
-        echo "Warning: requirements.txt not found. Some dependencies may be missing."
+        log "No pyproject.toml or requirements.txt found in the installation directory"
+        echo "Warning: dependency manifest not found. Some dependencies may be missing."
     fi
 }
 

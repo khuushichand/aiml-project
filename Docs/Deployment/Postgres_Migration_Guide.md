@@ -11,7 +11,7 @@ workflow jobs.
 
 - Back up all SQLite databases (`Databases/user_databases/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `Databases/user_databases/*/ChaChaNotes.db`, `Analytics.db`).
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
-- Install the Python dependency `psycopg` (now listed in `requirements.txt`). For convenience use the binary extra:
+- Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
 - Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.perf]
+pytestmark = [pytest.mark.integration, pytest.mark.performance]
 
 
 @pytest.fixture()
@@ -65,4 +65,3 @@ def test_opml_export_perf_sanity_beyond_300(client_with_user: TestClient):
     urls = _extract_opml_urls(r.text)
     # Ensure at least N RSS feeds are present
     assert len([u for u in urls if u.startswith("https://example.com/perfmore")]) >= n
-

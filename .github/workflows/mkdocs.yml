@@ -37,6 +37,16 @@ jobs:
         run: |
           chmod +x Helper_Scripts/refresh_docs_published.sh || true
           bash Helper_Scripts/refresh_docs_published.sh
+      - name: Commit refreshed docs locally (for git dates)
+        run: |
+          set -e
+          git config user.email "ci-docs@users.noreply.github.com"
+          git config user.name "CI Docs"
+          # Commit only if there are changes (no push)
+          if [ -n "$(git status --porcelain Docs/Published)" ]; then
+            git add Docs/Published
+            git commit -m "CI: refresh Docs/Published for build"
+          fi
       - name: Verify curated docs
         run: |
           set -e

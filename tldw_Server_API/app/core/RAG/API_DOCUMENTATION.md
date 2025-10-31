@@ -50,7 +50,7 @@ The main RAG endpoint with complete feature access.
   
   // ========== DOCUMENT PROCESSING ==========
   "enable_reranking": true,
-  "reranking_strategy": "two_tier",  // "flashrank" | "cross_encoder" | "hybrid" | "llm_scoring" | "two_tier"
+  "reranking_strategy": "two_tier",  // "flashrank" | "cross_encoder" | "hybrid" | "llm_scoring" | "two_tier" | "llama_cpp"
   "rerank_top_k": 20,             // Docs to rerank (defaults to top_k)
   // Two‑Tier request-level overrides (optional)
   "rerank_min_relevance_prob": 0.50,  // minimum calibrated prob to allow generation
@@ -328,6 +328,29 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
 ### POST `/batch` - Batch RAG Processing
 
 Process multiple queries concurrently.
+
+### GET `/vlm/backends` - VLM Backends
+
+List the available Vision‑Language (VLM) backends used for PDF table/image detection in VLM late chunking.
+
+Request:
+```bash
+curl -s -H "X-API-KEY: $API_KEY" \
+  http://127.0.0.1:8000/api/v1/rag/vlm/backends | jq
+```
+
+Response:
+```json
+{
+  "backends": {
+    "hf_table_transformer": { "available": true },
+    "docling": { "available": false }
+  }
+}
+```
+
+Notes:
+- The capabilities endpoint exposes this route under `features.vlm_late_chunking.backends_endpoint` for discovery.
 
 ## Operational Notes
 
@@ -609,7 +632,6 @@ Check health status of all RAG components.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `use_embedding_cache` | boolean | true | Cache embeddings (vector search) |
 | `enable_monitoring` | boolean | false | Collect performance metrics |
 | `enable_debug_mode` | boolean | false | Include debug information |
 
@@ -659,7 +681,7 @@ Check health status of all RAG components.
 ### Performance Optimization
 
 1. **Use Caching**: Enable `enable_cache=true` for repeated/similar queries
-2. **Embedding Cache**: Keep `use_embedding_cache=true` for semantic search
+2. **Embedding Cache**: Embedding caching is automatic in the embeddings subsystem/vector store when enabled; no request flag is needed
 3. **Limit Results**: Use appropriate `top_k` values (don't over-fetch)
 4. **Batch Processing**: Use `/batch` endpoint for multiple queries
 

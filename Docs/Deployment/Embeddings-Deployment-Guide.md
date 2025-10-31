@@ -61,8 +61,8 @@ Note: The “mode” depends on which processes you run (API only vs API + orche
 
 ### Prerequisites
 ```bash
-# Required packages
-pip install -r tldw_Server_API/requirements.txt
+# Required packages (via pyproject)
+pip install -e .
 
 # Optional (choose what your environment supports)
 pip install torch              # GPU acceleration for HuggingFace models
@@ -98,9 +98,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY tldw_Server_API/requirements.txt ./tldw_Server_API/requirements.txt
-RUN pip install --no-cache-dir -r tldw_Server_API/requirements.txt
+# Install from pyproject (editable)
+COPY pyproject.toml ./pyproject.toml
+RUN pip install --no-cache-dir -e .
 
 # Copy application
 COPY tldw_Server_API/ ./tldw_Server_API/
@@ -161,7 +161,7 @@ WantedBy=multi-user.target
 ### Prerequisites
 ```bash
 # Required packages (same as single-user)
-pip install -r tldw_Server_API/requirements.txt
+pip install -e .
 
 # Redis server (for queues)
 sudo apt-get install -y redis-server
