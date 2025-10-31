@@ -967,19 +967,29 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     try:
         if isinstance(pp, dict) and pp.get("normalize"):
             import shutil, subprocess
-            if shutil.which("ffmpeg"):
+            ffmpeg_path = shutil.which("ffmpeg")
+            if ffmpeg_path:
                 # Use EBU R128 loudness normalization as a sane default
                 target_lufs = float(pp.get("target_lufs", -16.0))
                 true_peak = float(pp.get("true_peak_dbfs", -1.5))
                 lra = float(pp.get("lra", 11.0))
                 norm_out = out_dir / f"normalized.{ext}"
                 cmd = [
-                    "ffmpeg", "-y", "-i", str(out_path),
+                    ffmpeg_path, "-y", "-nostdin", "-i", str(out_path),
                     "-af", f"loudnorm=I={target_lufs}:TP={true_peak}:LRA={lra}",
                     str(norm_out)
                 ]
                 try:
-                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    # Explicit shell=False to avoid any shell interpretation
+                    subprocess.run(
+                        cmd,
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        shell=False,
+                        timeout=120,
+                        cwd=str(out_dir),
+                    )
                     normalized = True
                     normalized_path = norm_out
                 except Exception:
