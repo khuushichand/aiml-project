@@ -625,6 +625,7 @@ async function adminStartJobsEvents() {
           adminJobsFailureTimelines[jid] = arr.slice(-20);
         }
         events.push(obj);
+        if (events.length > 20) events.shift();
       } catch (_) {}
       if (tbody) {
         tbody.innerHTML = '';
