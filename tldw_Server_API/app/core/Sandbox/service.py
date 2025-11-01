@@ -278,6 +278,12 @@ class SandboxService:
                             status.finished_at = real.finished_at
                             status.message = real.message
                             status.image_digest = real.image_digest
+                            # Attach resource usage if produced by runner
+                            try:
+                                if getattr(real, "resource_usage", None):
+                                    status.resource_usage = real.resource_usage  # type: ignore[assignment]
+                            except Exception:
+                                pass
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
@@ -315,6 +321,11 @@ class SandboxService:
                     status.finished_at = real.finished_at
                     status.message = real.message
                     status.image_digest = real.image_digest
+                    try:
+                        if getattr(real, "resource_usage", None):
+                            status.resource_usage = real.resource_usage  # type: ignore[assignment]
+                    except Exception:
+                        pass
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)

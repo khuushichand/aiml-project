@@ -218,6 +218,20 @@ class SandboxOrchestrator:
                     st.message = "queue_ttl_expired"
                     st.finished_at = datetime.utcnow()
                     self._store.update_run(st)
+                    # Metrics: TTL expiry, include runtime label if available
+                    try:
+                        from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                        rt_label = None
+                        try:
+                            rt_label = st.runtime.value if getattr(st, "runtime", None) else None
+                        except Exception:
+                            rt_label = None
+                        labels = {"component": "sandbox", "reason": "queue_ttl_expired"}
+                        if rt_label:
+                            labels["runtime"] = rt_label
+                        _inc("sandbox_queue_ttl_expired_total", labels=labels)
+                    except Exception:
+                        pass
                     try:
                         from .streams import get_hub
                         get_hub().publish_event(rid, "end", {"exit_code": None, "reason": "queue_ttl_expired"})

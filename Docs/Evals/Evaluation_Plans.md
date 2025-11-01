@@ -12,10 +12,17 @@
 - [Embeddings Retrieval Evaluation](#embeddings-retrieval-eval)
 - [VLM Evaluations](#vlm-evals)
 ----------------------------------------------------------------------------------------------------------------
+
+
+
+
 https://review.firstround.com/figma-ai-eval-process/
 https://arxiv.org/pdf/2502.17601
 https://github.com/SalesforceAIResearch/UniDoc-Bench
 https://github.com/AkariAsai/ScholarQABench
+https://arxiv.org/abs/2406.07599
+
+https://github.com/microsoft/SecRL
 https://github.com/semvec/embedstresstest
 https://github.com/t3dotgg/SnitchBench
 https://arxiv.org/abs/2503.10357

@@ -147,7 +147,7 @@ class TestTTSGenerateEndpoint:
             )
             
             # Should handle long text appropriately
-            assert response.status_code in [status.HTTP_200_OK, status.HTTP_413_REQUEST_ENTITY_TOO_LARGE]
+            assert response.status_code in [status.HTTP_200_OK, status.HTTP_413_CONTENT_TOO_LARGE]
 
 # ========================================================================
 # TTS Streaming Endpoint Tests

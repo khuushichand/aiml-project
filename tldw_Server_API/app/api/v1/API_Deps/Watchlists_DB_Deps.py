@@ -16,8 +16,14 @@ async def get_watchlists_db_for_user(
         logger.error("get_watchlists_db_for_user called without a valid User")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed")
     try:
-        return WatchlistsDatabase.for_user(user_id=current_user.id)
+        db = WatchlistsDatabase.for_user(user_id=current_user.id)
+        # Defensive: ensure schema exists for this user's DB in test/minimal app contexts
+        try:
+            db.ensure_schema()
+        except Exception:
+            # Best-effort; creation may have already occurred or be gated by init
+            pass
+        return db
     except Exception as e:
         logger.error(f"Failed to init Watchlists DB for user {current_user.id}: {e}")
         raise HTTPException(status_code=500, detail="Watchlists DB unavailable")
-

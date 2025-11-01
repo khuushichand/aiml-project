@@ -103,6 +103,18 @@ class DockerRunner:
                 get_hub().publish_event(run_id, "end", {"exit_code": 0})
             except Exception:
                 pass
+            # Collect basic usage from hub
+            try:
+                log_bytes_total = int(get_hub().get_log_bytes(run_id))
+            except Exception:
+                log_bytes_total = 0
+            usage = {
+                "cpu_time_sec": 0,
+                "wall_time_sec": 0,
+                "peak_rss_mb": 0,
+                "log_bytes": int(log_bytes_total),
+                "artifact_bytes": 0,
+            }
             return RunStatus(
                 id="",  # caller should set id
                 phase=RunPhase.completed,
@@ -110,6 +122,7 @@ class DockerRunner:
                 finished_at=now,
                 exit_code=0,
                 message="Docker fake execution",
+                resource_usage=usage,
             )
 
         if not docker_available():
@@ -255,6 +268,14 @@ class DockerRunner:
         except subprocess.TimeoutExpired:
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            # Usage (no logs/artifacts expected yet)
+            usage = {
+                "cpu_time_sec": 0,
+                "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
+                "peak_rss_mb": 0,
+                "log_bytes": int(get_hub().get_log_bytes(run_id)),
+                "artifact_bytes": 0,
+            }
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -262,6 +283,7 @@ class DockerRunner:
                 finished_at=finished,
                 exit_code=None,
                 message="startup_timeout",
+                resource_usage=usage,
             )
         except subprocess.CalledProcessError as e:
             # If security opts were provided, retry without them for portability (e.g., profile not loaded)
@@ -313,6 +335,13 @@ class DockerRunner:
                 pass
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            usage = {
+                "cpu_time_sec": 0,
+                "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
+                "peak_rss_mb": 0,
+                "log_bytes": int(get_hub().get_log_bytes(run_id)),
+                "artifact_bytes": 0,
+            }
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -320,6 +349,7 @@ class DockerRunner:
                 finished_at=finished,
                 exit_code=None,
                 message="startup_timeout",
+                resource_usage=usage,
             )
         except subprocess.CalledProcessError as e:
             # Cleanup container
@@ -340,6 +370,18 @@ class DockerRunner:
                 pass
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            # Even if start timed out, try to read any cgroup CPU used (should be minimal)
+            try:
+                cpu_sec = self._read_cgroup_cpu_time_sec_by_cid(cid)
+            except Exception:
+                cpu_sec = None
+            usage = {
+                "cpu_time_sec": int(max(0, cpu_sec or 0)),
+                "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
+                "peak_rss_mb": 0,
+                "log_bytes": int(get_hub().get_log_bytes(run_id)),
+                "artifact_bytes": 0,
+            }
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -347,6 +389,7 @@ class DockerRunner:
                 finished_at=finished,
                 exit_code=None,
                 message="startup_timeout",
+                resource_usage=usage,
             )
         except subprocess.CalledProcessError as e:
             try:
@@ -361,7 +404,15 @@ class DockerRunner:
         except Exception:
             pass
 
+        # Baseline CPU usage after container start (best-effort)
+        baseline_cpu_sec: Optional[int] = None
+        try:
+            baseline_cpu_sec = self._read_cgroup_cpu_time_sec_by_cid(cid)
+        except Exception:
+            baseline_cpu_sec = None
+
         # Stream logs via docker logs -f
+        log_bytes_local = 0
         def _pump_logs():
             try:
                 p = subprocess.Popen(["docker", "logs", "-f", cid], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -370,10 +421,13 @@ class DockerRunner:
                         data = p.stdout.readline()
                         if data:
                             hub.publish_stdout(run_id, data, max_log)
+                            nonlocal log_bytes_local
+                            log_bytes_local += len(data)
                     if p.stderr is not None:
                         data2 = p.stderr.readline()
                         if data2:
                             hub.publish_stderr(run_id, data2, max_log)
+                            log_bytes_local += len(data2)
                     if p.poll() is not None and not (p.stdout and p.stdout.peek() or p.stderr and p.stderr.peek()):
                         break
             except Exception as _:
@@ -402,6 +456,22 @@ class DockerRunner:
                 subprocess.check_call(["docker", "rm", "-f", cid])
             except Exception:
                 pass
+            # CPU time: prefer cgroup delta if baseline captured
+            try:
+                final_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
+            except Exception:
+                final_cpu = None
+            if baseline_cpu_sec is not None and final_cpu is not None:
+                cpu_time_val = max(0, int(final_cpu - baseline_cpu_sec))
+            else:
+                cpu_time_val = self._get_cpu_time_sec(cid, started, finished)
+            usage = {
+                "cpu_time_sec": int(max(0, cpu_time_val)),
+                "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
+                "peak_rss_mb": self._get_mem_usage_mb(cid),
+                "log_bytes": int(get_hub().get_log_bytes(run_id)),
+                "artifact_bytes": 0,
+            }
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -409,6 +479,7 @@ class DockerRunner:
                 finished_at=finished,
                 exit_code=exit_code,
                 message="execution_timeout",
+                resource_usage=usage,
             )
 
         # Join logs thread
@@ -462,6 +533,33 @@ class DockerRunner:
             subprocess.check_call(["docker", "rm", "-f", cid])
         except Exception:
             pass
+        # Compute resource usage (best-effort)
+        try:
+            total_log = int(get_hub().get_log_bytes(run_id))
+        except Exception:
+            total_log = int(log_bytes_local)
+        art_bytes = 0
+        try:
+            if artifacts_map:
+                art_bytes = sum(len(v) for v in artifacts_map.values())
+        except Exception:
+            art_bytes = 0
+        # CPU time: prefer cgroup delta when baseline available
+        try:
+            final_cpu2 = self._read_cgroup_cpu_time_sec_by_cid(cid)
+        except Exception:
+            final_cpu2 = None
+        if baseline_cpu_sec is not None and final_cpu2 is not None:
+            cpu_time = max(0, int(final_cpu2 - baseline_cpu_sec))
+        else:
+            cpu_time = self._get_cpu_time_sec(cid, started, finished)
+        usage = {
+            "cpu_time_sec": int(max(0, cpu_time)),
+            "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
+            "peak_rss_mb": self._get_mem_usage_mb(cid),
+            "log_bytes": int(total_log),
+            "artifact_bytes": int(art_bytes),
+        }
         return RunStatus(
             id="",
             phase=phase,
@@ -471,4 +569,179 @@ class DockerRunner:
             message=msg,
             image_digest=image_digest,
             artifacts=artifacts_map or None,
+            resource_usage=usage,
         )
+
+    @staticmethod
+    def _read_cgroup_cpu_time_sec_by_cid(cid: str) -> Optional[int]:
+        """Read absolute CPU time (seconds) from cgroup for a container by CID.
+
+        Returns None if not available (non-Linux or permissions), so callers can fallback.
+        """
+        try:
+            pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
+            pid = int(pid_out)
+            return DockerRunner._read_cgroup_cpu_time_sec_by_pid(pid)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_cgroup_cpu_time_sec_by_pid(pid: int) -> Optional[int]:
+        """Read absolute CPU time (seconds) from cgroup for a process PID.
+
+        Supports cgroup v1 and v2; returns None if unavailable.
+        """
+        cgroups: Dict[str, str] = {}
+        try:
+            with open(f"/proc/{pid}/cgroup", "r") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    if len(parts) == 3:
+                        subsystems = parts[1]
+                        path = parts[2]
+                        cgroups[subsystems] = path
+        except Exception:
+            return None
+        # cgroup v1
+        path_v1 = None
+        for key, val in cgroups.items():
+            if "cpuacct" in key:
+                path_v1 = val
+                break
+        if path_v1:
+            cg_file = os.path.join("/sys/fs/cgroup", "cpuacct", path_v1.lstrip("/"), "cpuacct.usage")
+            try:
+                with open(cg_file, "r") as f:
+                    ns = int(f.read().strip())
+                    return int(ns / 1_000_000_000)
+            except Exception:
+                pass
+        # cgroup v2
+        path_v2 = cgroups.get("") or cgroups.get("0") or None
+        if not path_v2:
+            for key, val in cgroups.items():
+                if key == "0":
+                    path_v2 = val
+                    break
+        if path_v2:
+            cg_file2 = os.path.join("/sys/fs/cgroup", path_v2.lstrip("/"), "cpu.stat")
+            try:
+                with open(cg_file2, "r") as f:
+                    content = f.read()
+                    for ln in content.splitlines():
+                        if ln.startswith("usage_usec "):
+                            usec = int(ln.split()[1])
+                            return int(usec / 1_000_000)
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _get_mem_usage_mb(cid: str) -> int:
+        """Best-effort memory usage snapshot in MB using `docker stats --no-stream`.
+
+        Returns 0 if stats are unavailable. This is not a true peak metric but
+        offers a coarse indication of memory footprint.
+        """
+        try:
+            out = subprocess.check_output(["docker", "stats", cid, "--no-stream", "--format", "{{.MemUsage}}"], text=True, timeout=3).strip()
+            # Expect forms like "12.3MiB / 2.00GiB" or "800KiB / 2.00GiB"
+            val = out.split("/")[0].strip()
+            num_str, unit = DockerRunner._split_num_unit(val)
+            num = float(num_str)
+            unit_l = unit.lower()
+            if unit_l.startswith("gb") or unit_l.startswith("gib"):
+                return int(num * 1024)
+            if unit_l.startswith("mb") or unit_l.startswith("mib"):
+                return int(num)
+            if unit_l.startswith("kb") or unit_l.startswith("kib"):
+                return int(num / 1024)
+            if unit_l.endswith("b"):
+                return int(num / (1024 * 1024))
+            return int(num)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _split_num_unit(s: str) -> tuple[str, str]:
+        s = s.strip()
+        num = []
+        unit = []
+        dot_seen = False
+        for ch in s:
+            if ch.isdigit() or (ch == "." and not dot_seen):
+                if ch == ".":
+                    dot_seen = True
+                num.append(ch)
+            elif ch.strip():
+                unit.append(ch)
+        return ("".join(num) or "0", "".join(unit) or "B")
+
+    @staticmethod
+    def _get_cpu_time_sec(cid: str, started: datetime, finished: datetime) -> int:
+        """Best-effort CPU time in seconds using cgroup stats, falling back to a CPUPerc sample.
+
+        Strategy:
+        - Try cgroup v1: read /sys/fs/cgroup/cpuacct/<cgroup>/cpuacct.usage (nanoseconds)
+        - Try cgroup v2: read /sys/fs/cgroup/<cgroup>/cpu.stat (usage_usec)
+        - Fallback: sample `docker stats --no-stream --format {{.CPUPerc}}` once and approximate
+          cpu_time = wall_time * (percent/100). This is coarse but better than zero.
+        Returns 0 on failure.
+        """
+        try:
+            # Resolve the container's init PID
+            pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
+            pid = int(pid_out)
+            # Read cgroup membership
+            cgroups = {}
+            with open(f"/proc/{pid}/cgroup", "r") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    if len(parts) == 3:
+                        subsystems = parts[1]
+                        path = parts[2]
+                        cgroups[subsystems] = path
+            # cgroup v1 path for cpuacct
+            path_v1 = None
+            for key, val in cgroups.items():
+                if "cpuacct" in key:
+                    path_v1 = val
+                    break
+            if path_v1:
+                cg_file = os.path.join("/sys/fs/cgroup", "cpuacct", path_v1.lstrip("/"), "cpuacct.usage")
+                try:
+                    with open(cg_file, "r") as f:
+                        ns = int(f.read().strip())
+                        return int(ns / 1_000_000_000)
+                except Exception:
+                    pass
+            # cgroup v2 unified
+            path_v2 = cgroups.get("") or cgroups.get("0") or None
+            if not path_v2:
+                # Detect v2 by lines like '0::/docker/<id>'
+                for key, val in cgroups.items():
+                    if key == "0":
+                        path_v2 = val
+                        break
+            if path_v2:
+                cg_file2 = os.path.join("/sys/fs/cgroup", path_v2.lstrip("/"), "cpu.stat")
+                try:
+                    with open(cg_file2, "r") as f:
+                        content = f.read()
+                        for ln in content.splitlines():
+                            if ln.startswith("usage_usec "):
+                                usec = int(ln.split()[1])
+                                return int(usec / 1_000_000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Fallback: approximate from an instantaneous CPU percentage
+        try:
+            out = subprocess.check_output(["docker", "stats", cid, "--no-stream", "--format", "{{.CPUPerc}}"], text=True, timeout=3).strip()
+            # CPUPerc like '12.34%'
+            pct = float(out.strip().rstrip("% ") or "0")
+            wall = max(0.0, (finished - started).total_seconds())
+            return int((pct / 100.0) * wall)
+        except Exception:
+            return 0

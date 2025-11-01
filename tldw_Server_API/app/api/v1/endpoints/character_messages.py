@@ -221,7 +221,7 @@ async def send_message(
                     _max_img_bytes = 5 * 1024 * 1024
                 if isinstance(img_data, (bytes, bytearray)) and len(img_data) > _max_img_bytes:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail=f"Image too large. Max {_max_img_bytes} bytes allowed."
                     )
                 msg_data['image_data'] = img_data
@@ -270,7 +270,7 @@ async def send_message(
         msg = str(e)
         status_code = status.HTTP_400_BAD_REQUEST
         if "exceeds maximum size" in msg.lower():
-            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            status_code = status.HTTP_413_CONTENT_TOO_LARGE
         logger.warning(f"Input error sending message to chat {chat_id}: {e}")
         raise HTTPException(status_code=status_code, detail=msg)
     except CharactersRAGDBError as e:

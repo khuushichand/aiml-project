@@ -59,6 +59,8 @@ async def test_backoff_defer_until_after_consecutive_304s(monkeypatch):
         return {"status": 304}
 
     monkeypatch.setattr(wl_pipeline, "fetch_rss_feed", _stub_fetch)
+    # Pipeline may use history-aware fetcher by default; stub it too
+    monkeypatch.setattr(wl_pipeline, "fetch_rss_feed_history", _stub_fetch)
 
     job = db.create_job(
         name="Job",

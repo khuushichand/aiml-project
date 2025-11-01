@@ -144,7 +144,9 @@ def _safe_log_format(record: dict) -> str:
         "<dim>{time:YYYY-MM-DD HH:mm:ss.SSS}</dim> | "
         "<level>{level: <8}</level> | "
         "<cyan>trace={extra[trace_id]}</cyan> <cyan>span={extra[span_id]}</cyan> "
-        "<yellow>req={extra[request_id]}</yellow> <yellow>ses={extra[session_id]}</yellow> | "
+        "<cyan>tp={extra[traceparent]}</cyan> "
+        "<yellow>req={extra[request_id]}</yellow> <yellow>job={extra[job_id]}</yellow> "
+        "<yellow>ps={extra[ps_component]}:{extra[ps_job_kind]}</yellow> | "
         "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
     )
 
@@ -228,6 +230,14 @@ def _ensure_log_extra_fields(record: dict) -> bool:
         extra.setdefault("span_id", "")
         extra.setdefault("request_id", "")
         extra.setdefault("session_id", "")
+        # Ensure W3C trace context placeholder exists even before patcher runs
+        extra.setdefault("traceparent", "")
+        # Structured context defaults (Prompt Studio/jobs)
+        extra.setdefault("job_id", "")
+        extra.setdefault("ps_component", "")
+        extra.setdefault("ps_job_kind", "")
+        extra.setdefault("optimization_id", "")
+        extra.setdefault("evaluation_id", "")
     except Exception:
         # Never block a log line due to filter errors
         pass
@@ -750,7 +760,12 @@ async def lifespan(app: FastAPI):
         raise
 
     # Heavy initializations: helpers and shared runner to avoid duplication
+    # Ensure resources are bound in the enclosing scope so shutdown can detect them
+    mcp_server = None
+    provider_manager = None
+    request_queue = None
     async def _init_mcp_server(*, deferred: bool) -> None:
+        nonlocal mcp_server
         try:
             from tldw_Server_API.app.core.MCP_unified import get_mcp_server
             mcp_server = get_mcp_server()
@@ -766,6 +781,7 @@ async def lifespan(app: FastAPI):
                 logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
 
     async def _init_provider_manager(*, deferred: bool) -> None:
+        nonlocal provider_manager
         try:
             from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
             from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
@@ -783,6 +799,7 @@ async def lifespan(app: FastAPI):
                 logger.error(f"App Startup: Failed to initialize provider manager: {e}")
 
     async def _init_request_queue(*, deferred: bool) -> None:
+        nonlocal request_queue
         try:
             from tldw_Server_API.app.core.config import load_comprehensive_config
             from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
@@ -1803,7 +1820,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown MCP Unified server
     try:
-        if 'mcp_server' in locals():
+        if 'mcp_server' in locals() and mcp_server is not None:
             await mcp_server.shutdown()
             logger.info("App Shutdown: MCP Unified server shutdown")
     except Exception as e:
@@ -1832,7 +1849,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown Provider Manager
     try:
-        if 'provider_manager' in locals():
+        if 'provider_manager' in locals() and provider_manager is not None:
             await provider_manager.stop_health_checks()
             logger.info("App Shutdown: Provider manager stopped")
     except Exception as e:
@@ -1840,7 +1857,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown Request Queue
     try:
-        if 'request_queue' in locals():
+        if 'request_queue' in locals() and request_queue is not None:
             await request_queue.stop()
             logger.info("App Shutdown: Request queue stopped")
     except Exception as e:

@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status # For status codes
 from slowapi.util import get_remote_address
 from fastapi import Request as _FastAPIRequest  # for rate limit key typing
+from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -55,8 +56,9 @@ try:
         get_daily_minutes_used as get_daily_minutes_used,
         get_user_tier as get_user_tier,
     )
-except Exception:
-    pass
+except ImportError as e:
+    # Optional helpers may be unavailable in some environments; log at debug level
+    logger.debug(f"audio_quota optional helpers not available: {e}")
 # Expose job quota helpers at module scope for tests to monkeypatch
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -65,9 +67,9 @@ try:
         increment_jobs_started as increment_jobs_started,
         get_limits_for_user as get_limits_for_user,
     )
-except Exception:
-    # In import-guarded contexts, tests may skip or endpoints not mounted
-    pass
+except ImportError as e:
+    # Optional helpers may be unavailable in some environments; log at debug level
+    logger.debug(f"audio_quota job helpers not available: {e}")
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
 
 # Optional DB/Redis drivers (for precise exception handling without hard dependencies)
@@ -92,7 +94,6 @@ if redis_exceptions and hasattr(redis_exceptions, "RedisError"):
     EXPECTED_REDIS_EXC = EXPECTED_REDIS_EXC + (redis_exceptions.RedisError,)  # type: ignore[attr-defined]
 
 # For logging (if you use the same logger as in your PDF endpoint)
-from loguru import logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
@@ -469,7 +470,7 @@ async def create_transcription(
     contents = await file.read()
     if len(contents) > max_file_size:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB"
         )
 

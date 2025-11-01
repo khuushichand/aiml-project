@@ -183,6 +183,9 @@ Endpoints
 
 - GET `/runs/{run_id}`
   - Status: phase (queued|starting|running|completed|failed|killed|timed_out), exit_code, started_at, finished_at, runtime, base_image, image_digest (when available), policy_hash, spec_version, and `resource_usage` with keys: `cpu_time_sec`, `wall_time_sec`, `peak_rss_mb`, `log_bytes`, `artifact_bytes` (plus optional `pids`, `max_open_files`, and `limits`).
+  - Resource usage caveats:
+    - `cpu_time_sec`: On Linux hosts, measured via cgroup CPU accounting when available (v1 `cpuacct.usage` or v2 `cpu.stat usage_usec`); otherwise approximated from a `docker stats` CPU% sample multiplied by `wall_time_sec`.
+    - `peak_rss_mb`: Best-effort memory snapshot derived from a single `docker stats --no-stream` sample. This is not a true peak over time; treat as an approximate high-water mark at collection time.
 
 - WS `/runs/{run_id}/stream`
   - Server→client stream of stdout/stderr and structured events. Message envelope:

@@ -8,7 +8,7 @@ from typing import Optional, Any, List, Union, Dict
 # Third-party imports
 from loguru import logger
 from pydantic import BaseModel, field_validator, Field
-from pydantic_core.core_schema import FieldValidationInfo
+from pydantic import ValidationInfo
 #
 ######################################################################################################################
 #
@@ -39,7 +39,7 @@ class CharacterBase(BaseModel):
 
     @field_validator("alternate_greetings", "tags", "extensions", mode="before")
     @classmethod
-    def parse_json_string(cls, value: Any, info: FieldValidationInfo) -> Any:  # Corrected type hint for info
+    def parse_json_string(cls, value: Any, info: ValidationInfo) -> Any:
         if isinstance(value, str):
             try:
                 return json.loads(value)

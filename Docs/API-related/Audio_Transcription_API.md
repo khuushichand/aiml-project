@@ -18,7 +18,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - [Live Transcription](#live-transcription)
 - [Usage Examples](#usage-examples)
 - [Performance Comparison](#performance-comparison)
- - [Notes & Limitations](#notes--limitations)
+- [Notes & Limitations](#notes--limitations)
 
 ## Features
 
@@ -703,7 +703,7 @@ TTS
 
 ## Related Documentation
 
-- [API Overview](./API_Overview.md)
+- [API Overview](./API_README.md)
 - [Configuration Guide](../User_Guides/Configuration.md)
 - [Live Transcription Guide](../User_Guides/Live_Transcription.md)
 - [Model Selection Guide](../User_Guides/Model_Selection.md)

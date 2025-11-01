@@ -102,12 +102,7 @@ class ChunkingTemplateResponse(ChunkingTemplateBase):
     version: int = Field(1, description="Template version number")
     user_id: Optional[str] = Field(None, description="User ID of template owner")
     
-    model_config = ConfigDict(
-        from_attributes=True,
-        json_encoders={
-            datetime: lambda v: v.isoformat()
-        }
-    )
+    model_config = ConfigDict(from_attributes=True)
     
     @field_validator('template_json')
     @classmethod

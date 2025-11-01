@@ -148,19 +148,19 @@ class PrivilegeCatalog(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_cross_references(cls, model: "PrivilegeCatalog") -> "PrivilegeCatalog":
-        scopes: List[ScopeEntry] = model.scopes
-        feature_flags: List[FeatureFlagEntry] = model.feature_flags
-        limit_classes: List[RateLimitClassEntry] = model.rate_limit_classes
-        ownership_predicates: List[OwnershipPredicateEntry] = model.ownership_predicates
+    def validate_cross_references(self) -> "PrivilegeCatalog":
+        scopes: List[ScopeEntry] = self.scopes
+        feature_flags: List[FeatureFlagEntry] = self.feature_flags
+        limit_classes: List[RateLimitClassEntry] = self.rate_limit_classes
+        ownership_predicates: List[OwnershipPredicateEntry] = self.ownership_predicates
 
-        cls._assert_unique([scope.id for scope in scopes], "scope id")
+        self._assert_unique([scope.id for scope in scopes], "scope id")
         feature_flag_ids = {flag.id for flag in feature_flags}
-        cls._assert_unique(feature_flag_ids, "feature flag id")
+        self._assert_unique(feature_flag_ids, "feature flag id")
         rate_limit_ids = {rl.id for rl in limit_classes}
-        cls._assert_unique(rate_limit_ids, "rate limit class id")
+        self._assert_unique(rate_limit_ids, "rate limit class id")
         ownership_ids = {pred.id for pred in ownership_predicates}
-        cls._assert_unique(ownership_ids, "ownership predicate id")
+        self._assert_unique(ownership_ids, "ownership predicate id")
 
         for scope in scopes:
             if scope.feature_flag_id and scope.feature_flag_id not in feature_flag_ids:
@@ -177,7 +177,7 @@ class PrivilegeCatalog(BaseModel):
                 raise ValueError(
                     f"Scope '{scope.id}' references unknown ownership predicates: {missing_str}"
                 )
-        return model
+        return self
 
     @staticmethod
     def _assert_unique(values: Iterable[str], label: str) -> None:

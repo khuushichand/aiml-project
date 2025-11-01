@@ -33,11 +33,7 @@ class MediaItemResponse(BaseModel):
     keywords: List[str]
     timestamps: List[str]
 
-    model_config = ConfigDict(
-        json_encoders={
-            datetime: lambda v: v.isoformat()
-        }
-    )
+    model_config = ConfigDict()
 
 class PaginationInfo(BaseModel):
     page: int

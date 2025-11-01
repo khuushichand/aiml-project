@@ -5,6 +5,8 @@ import pytest
 def test_agglomerative_metric_fallback(monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
+    calls = []  # track constructor calls to verify fallback path
+
     class FakeAgglomerative:
         def __init__(self, *, n_clusters, linkage="average", metric=None, affinity=None):  # type: ignore[no-redef]
             """
@@ -16,6 +18,7 @@ def test_agglomerative_metric_fallback(monkeypatch):
                 metric: Must be None; providing a value raises TypeError instructing to use `affinity`.
                 affinity: Accepted for compatibility but not used by the fake implementation.
             """
+            calls.append({"metric": metric, "affinity": affinity})
             if metric is not None:
                 raise TypeError("metric not supported in this fake; use affinity")
             self.n_clusters = n_clusters
@@ -67,10 +70,18 @@ def test_agglomerative_metric_fallback(monkeypatch):
     assert isinstance(labels, np.ndarray)
     assert labels.shape[0] == embeddings.shape[0]
     assert set(labels.tolist()).issubset({0, 1})
+    # Verify fallback occurred: first attempt with metric, retry with affinity
+    assert len(calls) >= 2, "Expected metric->affinity fallback to trigger two constructor calls"
+    assert calls[0]["metric"] is not None, "First attempt should pass metric"
+    assert calls[1]["metric"] is None and calls[1]["affinity"] is not None, "Fallback should use affinity"
 
 
 def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
+
+    # Reset global cache to ensure test isolation for VAD lazy import
+    monkeypatch.setattr(dlib, "_silero_vad_model", None)
+    monkeypatch.setattr(dlib, "_silero_vad_utils", None)
 
     monkeypatch.setattr(dlib, "_torch_available", lambda: True)
 

@@ -93,7 +93,7 @@ class TestChatCompletionsEndpoint:
             headers=auth_headers
         )
         
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     
     @pytest.mark.integration
     def test_empty_messages_list(self, test_client, auth_headers):
@@ -107,7 +107,7 @@ class TestChatCompletionsEndpoint:
             headers=auth_headers
         )
         
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 # ========================================================================
 # Provider Routing Tests
@@ -496,7 +496,7 @@ class TestParameterValidation:
             },
             headers=auth_headers
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
@@ -525,4 +525,4 @@ class TestParameterValidation:
             },
             headers=auth_headers
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT

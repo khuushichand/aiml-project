@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 # Authentication
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Configuration
@@ -3362,6 +3363,7 @@ class ReembedScheduleResponse(BaseModel):
 async def schedule_reembed(
     req: ReembedScheduleRequest,
     current_user: User = Depends(get_request_user),
+    request: Request = None,
 ):
     """Create a Jobs row for the re-embed expansion worker to process.
 
@@ -3393,6 +3395,8 @@ async def schedule_reembed(
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
         queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
         row = jm.create_job(
             domain="embeddings",
             queue=queue,
@@ -3401,6 +3405,10 @@ async def schedule_reembed(
             owner_user_id=uid,
             priority=int(req.priority or 50),
             idempotency_key=payload.get("idempotency_key"),
+            request_id=rid,
+        )
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="reembed", traceparent=tp).info(
+            "Scheduled re-embed job: job_id=%s media_id=%s", row.get("id"), payload.get("media_id")
         )
         return ReembedScheduleResponse(
             id=int(row.get("id")),

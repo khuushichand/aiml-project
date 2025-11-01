@@ -9,6 +9,7 @@ from datetime import datetime
 from enum import Enum
 import numpy as np
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import log_context
 
 from .prompt_executor import PromptExecutor
 from .test_runner import TestRunner
@@ -56,6 +57,8 @@ class MIPROOptimizer:
         self.test_runner = test_runner
         self.executor = PromptExecutor(db)
         self.metrics = EvaluationMetrics()
+        # Optional context populated by callers (e.g., JobProcessor)
+        self.optimization_id: Optional[int] = None
     
     async def optimize(self, initial_prompt_id: int, test_case_ids: List[int],
                        model_config: Dict[str, Any], max_iterations: int = 20,
@@ -75,7 +78,8 @@ class MIPROOptimizer:
         Returns:
             Optimization results
         """
-        logger.info(f"Starting MIPRO optimization for prompt {initial_prompt_id}")
+        with log_context(ps_component="opt_engine", strategy="mipro", prompt_id=initial_prompt_id, optimization_id=getattr(self, "optimization_id", None)):
+            logger.info("Starting MIPRO optimization for prompt {}", initial_prompt_id)
         
         # Initialize
         current_prompt_id = initial_prompt_id
@@ -88,7 +92,7 @@ class MIPROOptimizer:
         no_improvement_count = 0
         
         for iteration in range(max_iterations):
-            logger.info(f"MIPRO iteration {iteration + 1}/{max_iterations}")
+            logger.info("MIPRO iteration {}/{}", iteration + 1, max_iterations)
             
             # Generate instruction candidates
             candidates = await self._generate_instruction_candidates(
@@ -383,6 +387,7 @@ class BootstrapOptimizer:
         self.db = db
         self.test_runner = test_runner
         self.executor = PromptExecutor(db)
+        self.optimization_id: Optional[int] = None
     
     async def optimize(self, prompt_id: int, test_case_ids: List[int],
                        model_config: Dict[str, Any], 
@@ -401,7 +406,8 @@ class BootstrapOptimizer:
         Returns:
             Optimization results
         """
-        logger.info(f"Starting Bootstrap optimization for prompt {prompt_id}")
+        with log_context(ps_component="opt_engine", strategy="bootstrap", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
+            logger.info("Starting Bootstrap optimization for prompt {}", prompt_id)
         
         # Run initial evaluation to get examples
         test_runs = []

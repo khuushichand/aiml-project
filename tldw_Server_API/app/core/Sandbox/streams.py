@@ -16,6 +16,7 @@ class RunStreamHub:
         self._buffers: dict[str, list[dict]] = {}
         self._log_bytes: dict[str, int] = {}
         self._truncated: set[str] = set()
+        self._ended: set[str] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = threading.RLock()
         self._max_queue = 1000
@@ -79,6 +80,12 @@ class RunStreamHub:
                 pass
 
     def publish_event(self, run_id: str, event: str, data: Optional[dict] = None) -> None:
+        # Deduplicate final end event to avoid double-emission from runner and service
+        if event == "end":
+            with self._lock:
+                if run_id in self._ended:
+                    return
+                self._ended.add(run_id)
         frame = {"type": "event", "event": event, "data": data or {}}
         self._publish(run_id, frame)
 
@@ -132,6 +139,11 @@ class RunStreamHub:
 
     def close(self, run_id: str) -> None:
         self._publish(run_id, {"type": "event", "event": "end", "data": {}})
+
+    def get_log_bytes(self, run_id: str) -> int:
+        """Return the total number of bytes published to stdout/stderr for a run."""
+        with self._lock:
+            return int(self._log_bytes.get(run_id, 0))
 
 
 _HUB = RunStreamHub()

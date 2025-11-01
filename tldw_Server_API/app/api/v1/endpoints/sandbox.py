@@ -372,7 +372,7 @@ async def start_run(
             raw_body=payload.model_dump(exclude_none=True),
         )
     except Exception as e:
-        from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict
+        from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         if isinstance(e, IdempotencyConflict):
             raise HTTPException(status_code=409, detail={
@@ -382,6 +382,22 @@ async def start_run(
                     "details": {"original_id": e.original_id}
                 }
             })
+        if isinstance(e, QueueFull):
+            # Backpressure: 429 with Retry-After + metric
+            retry_after = getattr(e, "retry_after", 30)
+            try:
+                # Include runtime label where possible for taxonomy consistency
+                rt_label = str(payload.runtime or "unknown")
+                increment_counter("sandbox_queue_full_total", labels={"component": "sandbox", "runtime": rt_label, "reason": "queue_full"})
+            except Exception:
+                pass
+            raise HTTPException(status_code=429, detail={
+                "error": {
+                    "code": "queue_full",
+                    "message": "Sandbox run queue is full",
+                    "details": {"retry_after": retry_after}
+                }
+            }, headers={"Retry-After": str(int(retry_after))})
         if isinstance(e, _Svc.InvalidSpecVersion):
             raise HTTPException(status_code=400, detail={
                 "error": {

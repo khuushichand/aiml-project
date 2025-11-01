@@ -566,17 +566,31 @@ class ReportManager:
         results = self._get_evaluation_results(evaluation_id)
         if not results:
             raise ValueError(f"Evaluation {evaluation_id} not found")
+        try:
+            project_id = results.get("project_id")
+            logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id, project_id=project_id).info(
+                "PS report.start format={}", format
+            )
+        except Exception:
+            pass
         
         # Generate report based on format
         if format == "text":
-            return self.generator.generate_text_report(results)
+            out = self.generator.generate_text_report(results)
+            logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id).info("PS report.done format=text")
+            return out
         elif format == "csv":
-            return self.generator.generate_csv_report(results)
+            out = self.generator.generate_csv_report(results)
+            logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id).info("PS report.done format=csv")
+            return out
         elif format == "json":
-            return self.generator.generate_json_report(results)
+            out = self.generator.generate_json_report(results)
+            logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id).info("PS report.done format=json")
+            return out
         elif format == "pdf":
             output_path = f"evaluation_{evaluation_id}_report.pdf"
             self.generator.generate_visual_report(results, output_path)
+            logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id).info("PS report.done format=pdf path={}", output_path)
             return output_path
         else:
             raise ValueError(f"Unknown report format: {format}")
@@ -628,7 +642,9 @@ class ReportManager:
             "success_rate": (sum(1 for run in test_runs if not run.get("error_message")) / len(test_runs) * 100) if test_runs else 0,
             "test_runs": test_runs,
             "aggregated_metrics": aggregate_metrics,
-            "completed_at": evaluation.get("completed_at")
+            "completed_at": evaluation.get("completed_at"),
+            "project_id": evaluation.get("project_id"),
+            "prompt_id": evaluation.get("prompt_id"),
         }
         
         return results

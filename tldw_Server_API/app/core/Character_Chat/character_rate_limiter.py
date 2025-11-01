@@ -219,7 +219,7 @@ class CharacterRateLimiter:
                 f"(max: {max_bytes} bytes)"
             )
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail=f"File too large. Maximum size is {self.max_import_size_mb}MB."
             )
         return True

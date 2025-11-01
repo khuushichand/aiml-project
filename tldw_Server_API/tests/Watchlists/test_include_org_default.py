@@ -26,12 +26,35 @@ def _test_env(monkeypatch, tmp_path):
     # Ensure a fresh DB per run to avoid leftover rows across test sessions
     try:
         auth_db_path.unlink(missing_ok=True)  # type: ignore[arg-type]
-    except Exception:
-        pass
+    except TypeError:
+        # Python <3.8: Path.unlink() has no missing_ok
+        try:
+            auth_db_path.unlink()
+        except FileNotFoundError:
+            # File already absent; acceptable for cleanup
+            pass
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{auth_db_path}")
 
     # Ensure AuthNZ tables exist
     ensure_authnz_tables(auth_db_path)
+    # Remove any pre-existing test org slug to avoid UNIQUE violations across runs
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        async def _cleanup():
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get
+            p = await _get()
+            try:
+                await p.execute("DELETE FROM organizations WHERE slug = ?", ("orga",))
+            except Exception:
+                pass
+        if loop.is_running():
+            # In pytest-asyncio, we might already be in an event loop; best-effort
+            loop.run_until_complete(_cleanup())
+        else:
+            loop.run_until_complete(_cleanup())
+    except Exception:
+        pass
     yield
 
 

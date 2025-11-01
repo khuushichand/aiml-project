@@ -44,6 +44,8 @@ class TestRunner:
             Test run result
         """
         start_time = time.time()
+        _log = logger.bind(ps_component="test_runner", prompt_id=prompt_id, test_case_id=test_case_id, model=model)
+        _log.info("PS testrun.start temperature={} max_tokens={}", temperature, max_tokens)
         prompt = self.db.get_prompt(prompt_id)
         if not prompt or prompt.get("deleted"):
             raise ValueError(f"Prompt {prompt_id} not found")
@@ -75,9 +77,10 @@ class TestRunner:
             )
             
             actual_output = {"response": response[0] if response else ""}
+            _log.info("PS testrun.llm.done time_ms={}", int((time.time() - start_time) * 1000))
             
         except Exception as e:
-            logger.error(f"Error calling LLM: {e}")
+            _log.error("PS testrun.llm.error error={} time_ms={}", e, int((time.time() - start_time) * 1000))
             actual_output = {"error": str(e)}
 
         execution_time_ms = int((time.time() - start_time) * 1000)
@@ -96,6 +99,7 @@ class TestRunner:
             tokens_used=tokens_used,
             client_id=self.db.client_id,
         )
+        _log.info("PS testrun.persisted id={} exec_ms={}", stored_run.get("id"), execution_time_ms)
 
         return {
             "id": stored_run.get("id"),
@@ -125,6 +129,9 @@ class TestRunner:
         temperature = float(params.get("temperature", 0.7)) if params is not None else 0.7
         max_tokens = int(params.get("max_tokens", 1000)) if params is not None else 1000
 
+        _log = logger.bind(ps_component="test_runner", prompt_id=prompt_id, test_case_id=test_case_id, model=model)
+        _log.info("PS single_test.start temperature={} max_tokens={}", temperature, max_tokens)
+        t0 = time.perf_counter()
         result = await self.run_test_case(
             prompt_id=prompt_id,
             test_case_id=test_case_id,
@@ -162,6 +169,7 @@ class TestRunner:
             )
             reward = eval_res.reward
             score = max(0.0, min(1.0, reward / 10.0))
+            _log.info("PS single_test.code_eval reward={} score={}", round(reward, 3), round(score, 3))
         else:
             # Provide a basic aggregate score based on expected vs actual overlap
             expected = result.get("expected", {}) or {}
@@ -183,6 +191,11 @@ class TestRunner:
         result = dict(result)
         result["success"] = True
         result["scores"] = {"aggregate_score": float(score)}
+        _log.info(
+            "PS single_test.done aggregate_score={} duration_ms={}",
+            round(float(score), 3),
+            int((time.perf_counter() - t0) * 1000),
+        )
         return result
     
     async def run_multiple_tests(
@@ -210,6 +223,8 @@ class TestRunner:
         """
         if parallel:
             # Run tests concurrently
+            _log = logger.bind(ps_component="test_runner", prompt_id=prompt_id, total_tests=len(test_case_ids))
+            _log.info("PS testrun.multi.start mode=parallel total_tests={}", len(test_case_ids))
             tasks = [
                 self.run_test_case(prompt_id, test_id, model, temperature, max_tokens)
                 for test_id in test_case_ids
@@ -228,10 +243,13 @@ class TestRunner:
                 else:
                     processed_results.append(result)
             
+            _log.info("PS testrun.multi.done mode=parallel ok={} failed={}", sum(1 for r in processed_results if not isinstance(r, dict) or not r.get("error")), sum(1 for r in processed_results if isinstance(r, dict) and r.get("error")))
             return processed_results
         else:
             # Run tests sequentially
             results = []
+            _log = logger.bind(ps_component="test_runner", prompt_id=prompt_id, total_tests=len(test_case_ids))
+            _log.info("PS testrun.multi.start mode=sequential total_tests={}", len(test_case_ids))
             for test_id in test_case_ids:
                 try:
                     result = await self.run_test_case(
@@ -239,10 +257,12 @@ class TestRunner:
                     )
                     results.append(result)
                 except Exception as e:
-                    logger.error(f"Test case {test_id} failed: {e}")
+                    _log.error("PS testrun.multi.error test_case_id={} error={}", test_id, e)
                     results.append({
                         "test_case_id": test_id,
                         "error": str(e)
                     })
-            
+            ok = sum(1 for r in results if isinstance(r, dict) and not r.get("error"))
+            failed = sum(1 for r in results if isinstance(r, dict) and r.get("error"))
+            _log.info("PS testrun.multi.done mode=sequential ok={} failed={}", ok, failed)
             return results

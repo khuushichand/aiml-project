@@ -6,24 +6,15 @@ providing a clean API interface with all features accessible.
 """
 
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 try:
     # Pydantic v2
     from pydantic import model_validator, field_validator  # type: ignore
 except Exception:
     model_validator = None  # type: ignore
     from pydantic import validator as field_validator  # type: ignore
-    # Pydantic v1 compatibility: ensure root_validator symbol exists for conditional use below
-    try:  # type: ignore
-        from pydantic import root_validator  # type: ignore
-    except Exception:  # pragma: no cover - defensive fallback
-        root_validator = None  # type: ignore
-try:
-    # Pydantic v2
-    from pydantic import model_validator  # type: ignore
-except Exception:
-    model_validator = None  # type: ignore
 from pydantic import ConfigDict
+from ._compat import Field
 
 # Load contextual retrieval defaults from settings (config.txt/env)
 try:
@@ -79,15 +70,6 @@ class UnifiedRAGRequest(BaseModel):
     if model_validator is not None:
         @model_validator(mode="before")
         def _map_legacy_min_relevance(cls, values):  # type: ignore
-            try:
-                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
-                    values["min_score"] = values.get("min_relevance_score")
-            except Exception:
-                pass
-            return values
-    elif root_validator:
-        @root_validator(pre=True)
-        def _map_legacy_min_relevance_v1(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
                     values["min_score"] = values.get("min_relevance_score")

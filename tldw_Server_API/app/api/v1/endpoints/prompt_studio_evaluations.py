@@ -15,7 +15,7 @@ Security
 - Background execution via FastAPI BackgroundTasks or job queue
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
 from typing import List, Optional, Dict, Any
 import uuid
 import json
@@ -35,6 +35,12 @@ from ..schemas.prompt_studio_schemas import (
 )
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
+from tldw_Server_API.app.core.Logging.log_context import (
+    ensure_request_id,
+    ensure_traceparent,
+    get_ps_logger,
+    log_context,
+)
 
 @router.post(
     "/evaluations",
@@ -101,7 +107,8 @@ async def create_evaluation(
     evaluation: EvaluationCreate,
     background_tasks: BackgroundTasks,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> EvaluationResponse:
     """
     Create a new evaluation for a prompt.
@@ -235,8 +242,17 @@ async def create_evaluation(
                     created_at=datetime.now().isoformat(),
                 )
             else:
-                # Schedule via FastAPI BackgroundTasks for normal operation
-                background_tasks.add_task(run_evaluation_async, eval_id, db)
+                # Schedule via FastAPI BackgroundTasks for normal operation.
+                # Propagate request_id/traceparent for log correlation.
+                req_id = ensure_request_id(request) if request is not None else None
+                tp = ensure_traceparent(request) if request is not None else ""
+                background_tasks.add_task(
+                    run_evaluation_async,
+                    eval_id,
+                    db,
+                    request_id=req_id,
+                    traceparent=tp,
+                )
                 return EvaluationResponse(
                     id=eval_id,
                     uuid=eval_uuid,
@@ -270,7 +286,11 @@ async def create_evaluation(
             )
         
     except Exception as e:
-        logger.error(f"Failed to create evaluation: {e}")
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
+            "Failed to create evaluation: %s", e
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/evaluations", response_model=EvaluationList, openapi_extra={
@@ -282,7 +302,8 @@ async def list_evaluations(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> List[EvaluationResponse]:
     """
     List evaluations for a project.
@@ -336,7 +357,11 @@ async def list_evaluations(
         }
         
     except Exception as e:
-        logger.error(f"Failed to list evaluations: {e}")
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
+            "Failed to list evaluations: %s", e
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get(
@@ -368,7 +393,8 @@ async def list_evaluations(
 async def get_evaluation(
     evaluation_id: int,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> EvaluationResponse:
     """
     Get a specific evaluation.
@@ -450,7 +476,11 @@ async def get_evaluation(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get evaluation: {e}")
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
+            "Failed to get evaluation: %s", e
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/evaluations/{evaluation_id}", openapi_extra={
@@ -459,7 +489,8 @@ async def get_evaluation(
 async def delete_evaluation(
     evaluation_id: int,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> Dict[str, str]:
     """
     Delete an evaluation (soft delete).
@@ -493,7 +524,11 @@ async def delete_evaluation(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete evaluation: {e}")
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
+            "Failed to delete evaluation: %s", e
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 ########################################################################################################################
@@ -532,7 +567,13 @@ async def get_ping_status(ping_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Ping not found")
     return _BG_PINGS[ping_id]
 
-async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
+async def run_evaluation_async(
+    evaluation_id: int,
+    db: PromptStudioDatabase,
+    *,
+    request_id: str | None = None,
+    traceparent: str = "",
+):
     """
     Execute an evaluation and update the existing record.
 
@@ -545,6 +586,15 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
     conn = db.get_connection()
     cursor = conn.cursor()
     try:
+        with log_context(
+            request_id=request_id,
+            traceparent=traceparent,
+            ps_component="evaluation_bg",
+        ) as _log:
+            _log.info(
+                "PS evaluation.async.start evaluation_id=%s",
+                evaluation_id,
+            )
         # Load the evaluation record
         cursor.execute(
             """
@@ -734,6 +784,15 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
             ),
         )
         conn.commit()
+        try:
+            _log.info(
+                "PS evaluation.async.done evaluation_id=%s total_tests=%s pass_rate=%s",
+                evaluation_id,
+                aggregate_metrics.get("total_tests", 0),
+                round(aggregate_metrics.get("pass_rate", 0.0), 3),
+            )
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"Failed to run async evaluation: {e}")

@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from slowapi.util import get_remote_address
 
@@ -172,6 +173,8 @@ async def create_chatbook(
             content_selections[ContentType(ct_val)] = ids
         
         # Create chatbook
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
         success, message, result = await service.create_chatbook(
             name=request_data.name,
             description=request_data.description,
@@ -183,7 +186,8 @@ async def create_chatbook(
             include_generated_content=request_data.include_generated_content,
             tags=request_data.tags,
             categories=request_data.categories,
-            async_mode=request_data.async_mode
+            async_mode=request_data.async_mode,
+            request_id=rid
         )
         
         if success:
@@ -290,7 +294,9 @@ async def create_chatbook(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating chatbook for user {user.id}: {e}")
+        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
+            "Error creating chatbook for user %s: %s", user.id, e
+        )
         raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook")
 
 
@@ -421,6 +427,8 @@ async def import_chatbook(
                 content_selections[ContentType(ct_val)] = ids
         
         # Import chatbook
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
         success, message, result = await service.import_chatbook(
             file_path=str(temp_file),
             content_selections=content_selections,
@@ -428,7 +436,8 @@ async def import_chatbook(
             prefix_imported=import_request.prefix_imported,
             import_media=import_request.import_media,
             import_embeddings=import_request.import_embeddings,
-            async_mode=import_request.async_mode
+            async_mode=import_request.async_mode,
+            request_id=rid
         )
         
         if success:
@@ -484,7 +493,9 @@ async def import_chatbook(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error importing chatbook for user {user.id}: {e}")
+        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
+            "Error importing chatbook for user %s: %s", user.id, e
+        )
         raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook")
     finally:
         # Cleanup uploaded file if not async
@@ -666,7 +677,9 @@ async def preview_chatbook(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error previewing chatbook for user {user.id}: {e}")
+        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
+            "Error previewing chatbook for user %s: %s", user.id, e
+        )
         raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
 
 

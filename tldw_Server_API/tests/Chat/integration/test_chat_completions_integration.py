@@ -622,7 +622,7 @@ def test_chat_integration_bad_request_missing_messages_standalone(
     }
     response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
     # This is a Pydantic validation error from FastAPI itself before hitting your logic.
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     errors = response.json().get("detail")
     assert isinstance(errors, list)
     assert any("messages" in e.get("loc", []) and "field required" in e.get("msg", "").lower() for e in errors)

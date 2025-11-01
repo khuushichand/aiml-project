@@ -460,7 +460,7 @@ class TestPromptEndpoints:
         payload["name"] = ""
         response = client.post(f"{API_V1_PROMPTS_PREFIX}/", json=payload)
         # Pydantic validation should catch this before DBInputError
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, response.text
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, response.text
 
     def test_create_prompt_input_error_from_db(self, client: TestClient, monkeypatch):
         payload = get_sample_prompt_payload("DBInputError")
@@ -553,9 +553,9 @@ class TestPromptEndpoints:
         assert "total_items" in data
 
     @pytest.mark.parametrize("page, per_page, expected_status", [
-        (0, 10, status.HTTP_422_UNPROCESSABLE_ENTITY),  # page < 1
-        (1, 0, status.HTTP_422_UNPROCESSABLE_ENTITY),  # per_page < 1
-        (1, 101, status.HTTP_422_UNPROCESSABLE_ENTITY)  # per_page > 100
+        (0, 10, status.HTTP_422_UNPROCESSABLE_CONTENT),  # page < 1
+        (1, 0, status.HTTP_422_UNPROCESSABLE_CONTENT),  # per_page < 1
+        (1, 101, status.HTTP_422_UNPROCESSABLE_CONTENT)  # per_page > 100
     ])
     def test_list_prompts_invalid_pagination_params(self, client: TestClient, page, per_page, expected_status):
         response = client.get(f"{API_V1_PROMPTS_PREFIX}/?page={page}&per_page={per_page}")
@@ -671,7 +671,7 @@ class TestPromptEndpoints:
 
     def test_search_prompts_invalid_query(self, client: TestClient):
         response = client.post(f"{API_V1_PROMPTS_PREFIX}/search", params={"search_query": ""})
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY  # Query('') fails min_length=1
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT  # Query('') fails min_length=1
 
 
 #######################################################################################################################
@@ -711,7 +711,7 @@ class TestKeywordEndpoints:
     def test_create_keyword_invalid_input(self, client: TestClient):
         response = client.post(f"{API_V1_PROMPTS_PREFIX}/keywords/", json={"keyword_text": ""})
         # Depends on Pydantic schema for KeywordCreate or InputError from DB
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY or response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT or response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_list_keywords(self, client: TestClient):
         kw1_payload = get_sample_keyword_payload("ListKW1")

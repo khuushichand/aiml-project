@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 from typing import Callable
-import hmac
-import hashlib
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -13,8 +11,7 @@ from loguru import logger
 from fastapi import HTTPException
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
 
 
@@ -38,12 +35,13 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         # Do not cache settings; fetch fresh each request to honor test resets
         self._settings = None
 
-    def _set_key_state(self, request: Request, key_id, user_id) -> None:
+    def _set_key_state(self, request: Request, key_id, user_id):
         """Helper to safely set API key state on request with robust error handling.
 
         Ensures both `api_key_id` and `user_id` are attached to `request.state`.
-        Mirrors guard behavior by logging context and raising HTTP 500 on failure
-        so downstream consumers can rely on these attributes when a key is present.
+        On failure, logs with context and returns a JSONResponse(500) to avoid
+        BaseHTTPMiddleware task group bubbling. Callers should return the
+        response when not None.
         """
         try:
             request.state.api_key_id = key_id
@@ -59,17 +57,14 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 key_id=key_id,
                 user_id=user_id,
             )
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "internal_state_error",
-                    "message": "Failed to attach authorization context to request state",
-                    "details": {
-                        "path": path_ctx,
-                        "attributes": ["api_key_id", "user_id"],
-                    },
+            return JSONResponse({
+                "error": "internal_state_error",
+                "message": "Failed to attach authorization context to request state",
+                "details": {
+                    "path": path_ctx,
+                    "attributes": ["api_key_id", "user_id"],
                 },
-            ) from _state_exc
+            }, status_code=500)
 
     def _should_check(self, path: str) -> bool:
         """
@@ -152,36 +147,16 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
             # 1) Direct DB lookup by HMAC(hash)
             if api_key:
                 try:
-                    digests: list[str] = []
-                    candidates = list(derive_hmac_key_candidates(get_settings()))
-                    if _mw_debug:
-                        try:
-                            logger.debug(f"LLM budget: hash candidates={len(candidates)}")
-                        except Exception:
-                            pass
-                    for key in candidates:
-                        digest = hmac.new(key, api_key.encode('utf-8'), hashlib.sha256).hexdigest()
-                        if digest not in digests:
-                            digests.append(digest)
-                    if _mw_debug and digests:
-                        logger.debug(f"LLM budget: first digest={digests[0][:12]}… total={len(digests)}")
-                    if digests:
-                        pool = await get_db_pool()
-                        placeholders = ",".join("?" for _ in digests)
-                        query = (
-                            f"SELECT id, user_id FROM api_keys "
-                            f"WHERE key_hash IN ({placeholders}) AND status = ? "
-                            f"ORDER BY created_at DESC LIMIT 1"
-                        )
-                        row = await pool.fetchone(query, (*digests, "active"))
-                        if row:
-                            key_id = row.get('id') if isinstance(row, dict) else row[0]
-                            user_id_value = (row.get('user_id') if isinstance(row, dict) else row[1])
-                            self._set_key_state(request, key_id, user_id_value)
-                            if _mw_debug:
-                                logger.debug(f"LLM budget: resolved key_id via hash lookup: {key_id}")
-                        elif _mw_debug:
-                            logger.debug("LLM budget: hash lookup found no matching key")
+                    info = await resolve_api_key_by_hash(api_key, settings=get_settings())
+                    if info:
+                        key_id = info.get('id')
+                        _resp = self._set_key_state(request, key_id, info.get('user_id'))
+                        if _resp is not None:
+                            return _resp
+                        if _mw_debug:
+                            logger.debug(f"LLM budget: resolved key_id via hash lookup: {key_id}")
+                    elif _mw_debug:
+                        logger.debug("LLM budget: hash lookup found no matching key")
                 except Exception as _e_hash:
                     if _mw_debug:
                         logger.debug(f"LLM budget: hash-lookup failed: {_e_hash}")
@@ -196,7 +171,9 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     info = await mgr.validate_api_key(api_key=api_key, ip_address=(request.client.host if request.client else None))
                     if info:
                         key_id = info.get('id')
-                        self._set_key_state(request, key_id, info.get('user_id'))
+                        _resp = self._set_key_state(request, key_id, info.get('user_id'))
+                        if _resp is not None:
+                            return _resp
                         if _mw_debug:
                             logger.debug(f"LLM budget: resolved key_id via manager.validate: {key_id}")
                     elif _mw_debug:
@@ -302,6 +279,16 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     "details": result,
                 }, status_code=402)
         except Exception as e:
-            logger.debug("LLM budget: budget check skipped/failed: {}", e)
+            # Fail-closed: if we cannot evaluate the budget, do NOT allow the request.
+            # Log with full exception details for operational visibility.
+            logger.exception("LLM budget: budget check failed; rejecting request")
+            return JSONResponse(
+                {
+                    "error": "budget_check_failed",
+                    "message": "Failed to evaluate budget enforcement; request rejected",
+                    "details": {"reason": str(e)},
+                },
+                status_code=503,
+            )
 
         return await call_next(request)

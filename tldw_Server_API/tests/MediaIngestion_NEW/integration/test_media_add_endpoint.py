@@ -104,7 +104,7 @@ class TestAddMediaEndpoint:
             data=form,
             headers=auth_headers
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     
     @pytest.mark.unit
     def test_add_without_required_fields(self, test_client, auth_headers):

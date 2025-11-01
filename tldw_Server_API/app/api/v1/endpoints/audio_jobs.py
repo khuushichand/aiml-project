@@ -10,6 +10,7 @@ try:
 except Exception:  # pragma: no cover - fallback for older environments
     model_validator = None  # type: ignore
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -94,13 +95,9 @@ async def submit_audio_job(
         else:
             payload["local_path"] = req.local_path.strip()
 
-        # Correlation IDs from middleware
-        rid = None
-        try:
-            if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
-                rid = str(request.state.request_id)
-        except Exception:
-            rid = None
+        # Correlation IDs
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
         row = jm.create_job(
             domain="audio",
             queue="default",
@@ -110,6 +107,9 @@ async def submit_audio_job(
             priority=5,
             max_retries=3,
             request_id=rid,
+        )
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio", traceparent=tp).info(
+            "Submitted audio job: job_id=%s type=%s", row.get("id"), job_type
         )
         return SubmitAudioJobResponse(
             id=int(row.get("id")),
@@ -122,7 +122,9 @@ async def submit_audio_job(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to submit audio job: {e}")
+        get_ps_logger(request_id=ensure_request_id(request) if request is not None else None, ps_component="endpoint", ps_job_kind="audio", traceparent=ensure_traceparent(request) if request is not None else "").error(
+            "Failed to submit audio job: %s", e
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit job")
 
 

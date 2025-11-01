@@ -74,20 +74,17 @@ async def enforce_llm_budget(request: Request) -> None:
     if not key_id:
         # JWT or anonymous path; budgets apply only to API keys
         if _dbg:
-            from loguru import logger
             logger.debug("LLM guard: skipping budget enforcement (no api_key_id)")
         return
 
     limits = await get_key_limits(int(key_id))
     if not limits or not limits.get("is_virtual"):
         if _dbg:
-            from loguru import logger
             logger.debug(f"LLM guard: key {key_id} not virtual or limits missing; skipping")
         return
 
     result = await is_key_over_budget(int(key_id))
     if _dbg:
-        from loguru import logger
         limits = result.get('limits', {}) or {}
         subset = {
             'llm_budget_day_tokens': limits.get('llm_budget_day_tokens'),

@@ -66,7 +66,7 @@ chunking_router = APIRouter()
     response_model=ChunkingResponse,
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "Invalid input, options, or chunking error (e.g., invalid JSON in text for 'json' method)."},
-        status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Validation error in request payload."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "Validation error in request payload."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error during chunking."},
     }
 )
@@ -250,7 +250,7 @@ async def process_text_for_chunking_json(
                 effective_options[key_to_check] = int(effective_options[key_to_check])
             except (ValueError, TypeError) as e:
                  raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Option '{key_to_check}' must be an integer. Value: {effective_options[key_to_check]}. Error: {e}"
                 )
 
@@ -405,7 +405,7 @@ async def process_text_for_chunking_json(
     response_model=ChunkingResponse,
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "No file uploaded, or chunking error."},
-        status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Validation error in form parameters."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "Validation error in form parameters."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error during chunking."},
     }
 )

@@ -193,7 +193,7 @@ class TestChatUnit:
             json_data=request_data
         )
         
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     
     def test_empty_messages(self, unit_test_client):
@@ -370,4 +370,4 @@ class TestChatErrorHandling:
             json_data=request_data
         )
         
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT

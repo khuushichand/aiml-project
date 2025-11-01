@@ -200,14 +200,14 @@ class EvaluationSpec(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_rag_pipeline(cls, values: "EvaluationSpec") -> "EvaluationSpec":  # type: ignore[name-defined]
-        # If rag_pipeline subtype is selected, ensure nested spec exists
+    def _validate_rag_pipeline(self) -> "EvaluationSpec":  # type: ignore[name-defined]
+        """Ensure nested rag_pipeline spec exists when subtype requires it."""
         try:
-            if values.sub_type == 'rag_pipeline' and values.rag_pipeline is None:
+            if self.sub_type == 'rag_pipeline' and self.rag_pipeline is None:
                 raise ValueError("rag_pipeline subtype requires eval_spec.rag_pipeline configuration")
         except Exception:
             pass
-        return values
+        return self
 
 
 class RunConfig(BaseModel):

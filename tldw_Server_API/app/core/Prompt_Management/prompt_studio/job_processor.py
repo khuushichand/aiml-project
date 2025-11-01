@@ -95,41 +95,49 @@ class JobProcessor:
         try:
             project_id = entity_id
             generation_type = payload.get("type", "description")
-            
-            logger.info(
-                "PS generation.start project_id={} type={}",
-                project_id,
-                generation_type,
-            )
-            
-            if generation_type == "diverse":
-                # Generate diverse test cases
-                generated = await self._generate_diverse_cases(project_id, payload)
-            elif generation_type == "description":
-                # Generate from description
-                generated = await self._generate_from_description(project_id, payload)
-            elif generation_type == "data":
-                # Generate from existing data
-                generated = await self._generate_from_data(project_id, payload)
-            else:
-                raise ValueError(f"Unknown generation type: {generation_type}")
-            
-            result = {
-                "generated_count": len(generated),
-                "test_case_ids": [tc["id"] for tc in generated],
-                "generation_type": generation_type,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            
-            logger.info(
-                "PS generation.done project_id={} type={} generated_count={} timestamp={}",
-                project_id,
-                generation_type,
-                len(generated),
-                result["timestamp"],
-            )
-            return result
-            
+            req_id = payload.get("request_id") or new_request_id()
+            with log_context(
+                ps_component="job_processor",
+                ps_job_kind="generation",
+                request_id=req_id,
+                project_id=project_id,
+                generation_type=generation_type,
+                job_id=payload.get("job_id"),
+            ):
+                logger.info(
+                    "PS generation.start project_id={} type={}",
+                    project_id,
+                    generation_type,
+                )
+
+                if generation_type == "diverse":
+                    # Generate diverse test cases
+                    generated = await self._generate_diverse_cases(project_id, payload)
+                elif generation_type == "description":
+                    # Generate from description
+                    generated = await self._generate_from_description(project_id, payload)
+                elif generation_type == "data":
+                    # Generate from existing data
+                    generated = await self._generate_from_data(project_id, payload)
+                else:
+                    raise ValueError(f"Unknown generation type: {generation_type}")
+
+                result = {
+                    "generated_count": len(generated),
+                    "test_case_ids": [tc["id"] for tc in generated],
+                    "generation_type": generation_type,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+
+                logger.info(
+                    "PS generation.done project_id={} type={} generated_count={} timestamp={}",
+                    project_id,
+                    generation_type,
+                    len(generated),
+                    result["timestamp"],
+                )
+                return result
+
         except Exception as e:
             logger.error(
                 "PS generation.error project_id={} type={} error={}",
@@ -208,95 +216,103 @@ class JobProcessor:
             prompt_id = payload.get("prompt_id")
             test_case_ids = payload.get("test_case_ids", [])
             model_configs = payload.get("model_configs", [])
-            
-            logger.info(
-                "PS evaluation.start evaluation_id={} prompt_id={} test_cases={} models={}",
-                evaluation_id,
-                prompt_id,
-                len(test_case_ids),
-                len(model_configs),
-            )
-            
-            evaluation = self.db.get_evaluation(evaluation_id)
-            if evaluation:
-                self._ensure_ps_prompt_exists(
-                    evaluation.get("prompt_id"),
-                    evaluation.get("project_id"),
+            req_id = payload.get("request_id") or new_request_id()
+            with log_context(
+                ps_component="job_processor",
+                ps_job_kind="evaluation",
+                request_id=req_id,
+                evaluation_id=evaluation_id,
+                prompt_id=prompt_id,
+                job_id=payload.get("job_id"),
+            ):
+                logger.info(
+                    "PS evaluation.start evaluation_id={} prompt_id={} test_cases={} models={}",
+                    evaluation_id,
+                    prompt_id,
+                    len(test_case_ids),
+                    len(model_configs),
                 )
 
-            self.db.update_evaluation(
-                evaluation_id,
-                {
-                    "status": "running",
-                    "started_at": datetime.now(timezone.utc),
-                },
-            )
-            
-            # Process test cases
-            test_runs = []
-            total_tokens = 0
-            total_cost = 0.0
-            
-            for test_case_id in test_case_ids:
-                for model_config in model_configs:
-                    # Simulate test execution (would call actual LLM here)
-                    test_run = await self._execute_test_case(
-                        prompt_id, test_case_id, model_config
+                evaluation = self.db.get_evaluation(evaluation_id)
+                if evaluation:
+                    self._ensure_ps_prompt_exists(
+                        evaluation.get("prompt_id"),
+                        evaluation.get("project_id"),
                     )
-                    test_runs.append(test_run)
-                    total_tokens += test_run.get("tokens_used", 0)
-                    total_cost += test_run.get("cost_estimate", 0.0)
-                
-                # Add small delay to avoid rate limiting
-                await asyncio.sleep(0.1)
-            
-            # Calculate aggregate metrics
-            aggregate_metrics = self._calculate_aggregate_metrics(test_runs)
-            
-            evaluation = self.db.get_evaluation(evaluation_id)
-            if evaluation:
-                self._ensure_ps_prompt_exists(
-                    evaluation.get("prompt_id"),
-                    evaluation.get("project_id"),
+
+                self.db.update_evaluation(
+                    evaluation_id,
+                    {
+                        "status": "running",
+                        "started_at": datetime.now(timezone.utc),
+                    },
                 )
 
-            self.db.update_evaluation(
-                evaluation_id,
-                {
-                    "status": "completed",
-                    "completed_at": datetime.now(timezone.utc),
-                    "test_run_ids": [tr["id"] for tr in test_runs],
+                # Process test cases
+                test_runs = []
+                total_tokens = 0
+                total_cost = 0.0
+
+                for test_case_id in test_case_ids:
+                    for model_config in model_configs:
+                        # Simulate test execution (would call actual LLM here)
+                        test_run = await self._execute_test_case(
+                            prompt_id, test_case_id, model_config
+                        )
+                        test_runs.append(test_run)
+                        total_tokens += test_run.get("tokens_used", 0)
+                        total_cost += test_run.get("cost_estimate", 0.0)
+
+                    # Add small delay to avoid rate limiting
+                    await asyncio.sleep(0.1)
+
+                # Calculate aggregate metrics
+                aggregate_metrics = self._calculate_aggregate_metrics(test_runs)
+
+                evaluation = self.db.get_evaluation(evaluation_id)
+                if evaluation:
+                    self._ensure_ps_prompt_exists(
+                        evaluation.get("prompt_id"),
+                        evaluation.get("project_id"),
+                    )
+
+                self.db.update_evaluation(
+                    evaluation_id,
+                    {
+                        "status": "completed",
+                        "completed_at": datetime.now(timezone.utc),
+                        "test_run_ids": [tr["id"] for tr in test_runs],
+                        "aggregate_metrics": aggregate_metrics,
+                        "total_tokens": total_tokens,
+                        "total_cost": total_cost,
+                    },
+                )
+
+                result = {
+                    "evaluation_id": evaluation_id,
+                    "test_runs": len(test_runs),
                     "aggregate_metrics": aggregate_metrics,
                     "total_tokens": total_tokens,
                     "total_cost": total_cost,
-                },
-            )
-            
-            result = {
-                "evaluation_id": evaluation_id,
-                "test_runs": len(test_runs),
-                "aggregate_metrics": aggregate_metrics,
-                "total_tokens": total_tokens,
-                "total_cost": total_cost,
-                "status": "completed"
-            }
-            
-            logger.info(
-                "PS evaluation.done evaluation_id={} runs={} tokens={} cost={}",
-                evaluation_id,
-                len(test_runs),
-                total_tokens,
-                total_cost,
-            )
-            return result
-            
+                    "status": "completed"
+                }
+
+                logger.info(
+                    "PS evaluation.done evaluation_id={} runs={} tokens={} cost={}",
+                    evaluation_id,
+                    len(test_runs),
+                    total_tokens,
+                    total_cost,
+                )
+                return result
+
         except Exception as e:
             logger.error(
                 "PS evaluation.error evaluation_id={} error={}",
                 entity_id,
                 e,
             )
-            
+
             # Update evaluation status to failed
             self.db.update_evaluation(
                 entity_id,
@@ -306,7 +322,7 @@ class JobProcessor:
                     "completed_at": datetime.now(timezone.utc),
                 },
             )
-            
+
             raise
     
     async def _execute_test_case(self, prompt_id: int, test_case_id: int, 
@@ -411,12 +427,21 @@ class JobProcessor:
             optimizer_type = payload.get("optimizer_type", "basic")
             max_iterations = payload.get("max_iterations", 20)
 
-            logger.info(
-                "Processing optimization job %s with optimizer '%s' (max_iterations=%s)",
-                optimization_id,
-                optimizer_type,
-                max_iterations,
-            )
+            req_id = payload.get("request_id") or new_request_id()
+            with log_context(
+                ps_component="job_processor",
+                ps_job_kind="optimization",
+                request_id=req_id,
+                optimization_id=optimization_id,
+                optimizer_type=optimizer_type,
+                job_id=payload.get("job_id"),
+            ):
+                logger.info(
+                    "Processing optimization job %s with optimizer '%s' (max_iterations=%s)",
+                    optimization_id,
+                    optimizer_type,
+                    max_iterations,
+                )
 
             optimization = self.db.get_optimization(optimization_id, include_deleted=True)
             if optimization is None:

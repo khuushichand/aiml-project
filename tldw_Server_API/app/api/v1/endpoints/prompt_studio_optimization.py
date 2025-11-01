@@ -19,7 +19,7 @@ Security
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, BackgroundTasks, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, BackgroundTasks, Header, Request
 import json
 from datetime import datetime
 from loguru import logger
@@ -46,6 +46,11 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.Logging.log_context import (
+    ensure_request_id,
+    ensure_traceparent,
+    log_context,
+)
 
 ########################################################################################################################
 # Router Setup
@@ -417,17 +422,27 @@ def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
 async def create_optimization_simple(
     payload: Dict[str, Any],
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     # Minimal creation: create a job with provided payload
     prompt_id = int(payload.get("prompt_id") or payload.get("initial_prompt_id") or 0)
     job_manager = JobManager(db)
+    # Correlate job with request_id if available
+    req_id = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
     job = job_manager.create_job(
         job_type=JobType.OPTIMIZATION,
         entity_id=prompt_id if prompt_id else 0,
-        payload={"prompt_id": prompt_id, "config": payload.get("config", {})},
+        payload={
+            "prompt_id": prompt_id,
+            "config": payload.get("config", {}),
+            **({"request_id": req_id} if req_id else {}),
+        },
         priority=5,
     )
+    with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
+        logger.info("Created optimization job via simple endpoint: job_id=%s", job.get("id"))
     return {"id": job.get("id"), "status": job.get("status", "pending")}
 
 async def _rl_optimizations(
@@ -534,7 +549,8 @@ async def create_optimization(
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user),
-    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    request: Request = None,  # type: ignore[assignment]
 ) -> StandardResponse:
     """
     Create and start a new optimization.
@@ -644,6 +660,8 @@ async def create_optimization(
                 pass
 
         job_manager = JobManager(db)
+        req_id = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
         job = job_manager.create_job(
             job_type=JobType.OPTIMIZATION,
             entity_id=optimization_record["id"],
@@ -656,16 +674,17 @@ async def create_optimization(
                 "project_id": project_id,
                 "created_by": user_context.get("user_id"),
                 "submitted_at": datetime.utcnow().isoformat(),
+                **({"request_id": req_id} if req_id else {}),
             },
             project_id=project_id,
             priority=5,
         )
-
-        logger.info(
-            "User %s created optimization %s",
-            user_context.get("user_id"),
-            optimization_record.get("id"),
-        )
+        with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
+            logger.info(
+                "User %s created optimization %s",
+                user_context.get("user_id"),
+                optimization_record.get("id"),
+            )
 
         # In test mode, avoid spawning background optimization to keep tests fast and deterministic
         import os as _os
@@ -856,7 +875,8 @@ async def cancel_optimization(
     optimization_id: int = Path(..., description="Optimization ID"),
     reason: str = Body(None, description="Cancellation reason"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> StandardResponse:
     """
     Cancel a running optimization.
@@ -903,7 +923,10 @@ async def cancel_optimization(
             mark_completed=True,
         )
 
-        logger.info(
+        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(ps_component="endpoint", ps_job_kind="optimization", optimization_id=optimization_id, request_id=rid, traceparent=tp).info(
             "User %s cancelled optimization %s",
             user_context.get("user_id"),
             optimization_id,
@@ -915,7 +938,12 @@ async def cancel_optimization(
         )
 
     except DatabaseError as exc:
-        logger.error(f"Database error cancelling optimization {optimization_id}: {exc}")
+        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(ps_component="endpoint", ps_job_kind="optimization", optimization_id=optimization_id, request_id=rid, traceparent=tp).error(
+            "Database error cancelling optimization %s: %s", optimization_id, exc
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cancel optimization",
@@ -923,7 +951,12 @@ async def cancel_optimization(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"Unexpected error cancelling optimization {optimization_id}: {exc}")
+        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
+        get_ps_logger(ps_component="endpoint", ps_job_kind="optimization", optimization_id=optimization_id, request_id=rid, traceparent=tp).error(
+            "Unexpected error cancelling optimization %s: %s", optimization_id, exc
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cancel optimization",
@@ -1279,7 +1312,8 @@ async def compare_strategies(
     background_tasks: BackgroundTasks = None,
     _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    http_request: Request = None,  # type: ignore[assignment]
 ) -> StandardResponse:
     """
     Compare multiple optimization strategies.
@@ -1299,6 +1333,8 @@ async def compare_strategies(
         await require_project_write_access(project_id, user_context=user_context, db=db)
 
         job_manager = JobManager(db)
+        req_id = ensure_request_id(http_request) if http_request is not None else None
+        tp = ensure_traceparent(http_request) if http_request is not None else ""
         optimization_ids: List[int] = []
         job_ids: List[int] = []
 
@@ -1334,17 +1370,18 @@ async def compare_strategies(
                     "project_id": project_id,
                     "created_by": user_context.get("user_id"),
                     "submitted_at": datetime.utcnow().isoformat(),
+                    **({"request_id": req_id} if req_id else {}),
                 },
                 project_id=project_id,
                 priority=5,
             )
             job_ids.append(job["id"])
-
-        logger.info(
-            "User %s created strategy comparison for prompt %s",
-            user_context.get("user_id"),
-            request.prompt_id,
-        )
+        with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
+            logger.info(
+                "User %s created strategy comparison for prompt %s",
+                user_context.get("user_id"),
+                request.prompt_id,
+            )
 
         return StandardResponse(
             success=True,

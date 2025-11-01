@@ -19,45 +19,57 @@ def _build_app_with_middleware():
     return app
 
 
-@pytest.mark.asyncio
-async def test_middleware_virtual_over_budget(monkeypatch):
+# Shared fixture for common middleware dependencies
+@pytest.fixture
+def mock_middleware_dependencies(monkeypatch):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
 
     class StubSettings:
         VIRTUAL_KEYS_ENABLED = True
         LLM_BUDGET_ENFORCE = True
+        LLM_BUDGET_ENDPOINTS = [
+            "/api/v1/chat/completions",
+            "/api/v1/embeddings",
+        ]
 
+    # Core settings
     monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
 
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 77, "user_id": 88}
+    # Key resolution: return a fixed key/user pair
+    async def _fake_resolve_api_key_by_hash(_api_key: str, *, settings=None):
+        return {"id": 77, "user_id": 88}
 
-    async def fake_get_db_pool():
-        return FakePool()
+    monkeypatch.setattr(mw, "resolve_api_key_by_hash", _fake_resolve_api_key_by_hash)
 
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Helper to set budget status per test
+    def set_budget_status(over: bool, day_tokens: int, day_usd: float):
+        async def fake_get_key_limits(_key_id: int):
+            return {"is_virtual": True}
 
-    async def fake_get_key_limits(_key_id: int):
-        return {"is_virtual": True}
+        async def fake_is_key_over_budget(_key_id: int):
+            return {
+                "over": over,
+                "reasons": ["day_tokens"] if over else [],
+                "day": {"tokens": day_tokens, "usd": day_usd},
+                "month": {"tokens": 50000, "usd": 50.0},
+                "limits": {
+                    "llm_budget_day_tokens": 10000,
+                    "llm_budget_day_usd": 5.0,
+                    "llm_budget_month_tokens": 300000,
+                    "llm_budget_month_usd": 150.0,
+                },
+            }
 
-    async def fake_is_key_over_budget(_key_id: int):
-        return {
-            "over": True,
-            "reasons": ["day_tokens"],
-            "day": {"tokens": 20000, "usd": 10.0},
-            "month": {"tokens": 50000, "usd": 50.0},
-            "limits": {
-                "llm_budget_day_tokens": 10000,
-                "llm_budget_day_usd": 5.0,
-                "llm_budget_month_tokens": 300000,
-                "llm_budget_month_usd": 150.0,
-            },
-        }
+        monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
+        monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
 
-    monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    return set_budget_status
+
+
+def test_middleware_virtual_over_budget(mock_middleware_dependencies):
+    # Over budget scenario
+    set_budget = mock_middleware_dependencies
+    set_budget(True, 20000, 10.0)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -76,45 +88,10 @@ async def test_middleware_virtual_over_budget(monkeypatch):
     assert data["details"].get("over") is True
 
 
-@pytest.mark.asyncio
-async def test_middleware_virtual_under_budget_allows(monkeypatch):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 77, "user_id": 88}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
-
-    async def fake_get_key_limits(_key_id: int):
-        return {"is_virtual": True}
-
-    async def fake_is_key_over_budget(_key_id: int):
-        return {
-            "over": False,
-            "reasons": [],
-            "day": {"tokens": 100, "usd": 0.1},
-            "month": {"tokens": 1000, "usd": 1.0},
-            "limits": {
-                "llm_budget_day_tokens": 10000,
-                "llm_budget_day_usd": 5.0,
-                "llm_budget_month_tokens": 300000,
-                "llm_budget_month_usd": 150.0,
-            },
-        }
-
-    monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+def test_middleware_virtual_under_budget_allows(mock_middleware_dependencies):
+    # Under budget scenario
+    set_budget = mock_middleware_dependencies
+    set_budget(False, 100, 0.1)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -129,25 +106,10 @@ async def test_middleware_virtual_under_budget_allows(monkeypatch):
     assert r.json() == {"ok": True}
 
 
-@pytest.mark.asyncio
-async def test_middleware_endpoint_allowlist_forbidden(monkeypatch):
+def test_middleware_endpoint_allowlist_forbidden(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 1, "user_id": 2}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Ensure budgets allow
+    mock_middleware_dependencies(False, 100, 0.1)
 
     # Allowlist only 'embeddings' so 'chat.completions' should be forbidden
     async def fake_get_key_limits(_key_id: int):
@@ -173,25 +135,10 @@ async def test_middleware_endpoint_allowlist_forbidden(monkeypatch):
     assert "Endpoint 'chat.completions' not allowed" in data.get("message", "")
 
 
-@pytest.mark.asyncio
-async def test_middleware_provider_allowlist_forbidden(monkeypatch):
+def test_middleware_provider_allowlist_forbidden(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 1, "user_id": 2}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Ensure budgets allow
+    mock_middleware_dependencies(False, 100, 0.1)
 
     async def fake_get_key_limits(_key_id: int):
         return {"is_virtual": True, "llm_allowed_providers": ["OpenAI", "Anthropic"]}
@@ -216,25 +163,10 @@ async def test_middleware_provider_allowlist_forbidden(monkeypatch):
     assert "Provider 'OtherProv' not allowed" in data.get("message", "")
 
 
-@pytest.mark.asyncio
-async def test_middleware_model_allowlist_forbidden(monkeypatch):
+def test_middleware_model_allowlist_forbidden(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 1, "user_id": 2}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Ensure budgets allow
+    mock_middleware_dependencies(False, 100, 0.1)
 
     async def fake_get_key_limits(_key_id: int):
         return {"is_virtual": True, "llm_allowed_models": ["allowed-model"]}
@@ -259,25 +191,10 @@ async def test_middleware_model_allowlist_forbidden(monkeypatch):
     assert "Model 'forbidden-model' not allowed" in data.get("message", "")
 
 
-@pytest.mark.asyncio
-async def test_middleware_endpoint_allowlist_allowed(monkeypatch):
+def test_middleware_endpoint_allowlist_allowed(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 1, "user_id": 2}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Ensure budgets allow
+    mock_middleware_dependencies(False, 100, 0.1)
 
     # Allowlist includes chat.completions, so request should proceed
     async def fake_get_key_limits(_key_id: int):
@@ -301,25 +218,10 @@ async def test_middleware_endpoint_allowlist_allowed(monkeypatch):
     assert r.json() == {"ok": True}
 
 
-@pytest.mark.asyncio
-async def test_middleware_provider_allowlist_allowed(monkeypatch):
+def test_middleware_provider_allowlist_allowed(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 1, "user_id": 2}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Ensure budgets allow
+    mock_middleware_dependencies(False, 100, 0.1)
 
     async def fake_get_key_limits(_key_id: int):
         return {"is_virtual": True, "llm_allowed_providers": ["OpenAI", "Anthropic", "OtherProv"]}
@@ -342,25 +244,10 @@ async def test_middleware_provider_allowlist_allowed(monkeypatch):
     assert r.json() == {"ok": True}
 
 
-@pytest.mark.asyncio
-async def test_middleware_model_allowlist_allowed(monkeypatch):
+def test_middleware_model_allowlist_allowed(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
-
-    class StubSettings:
-        VIRTUAL_KEYS_ENABLED = True
-        LLM_BUDGET_ENFORCE = True
-
-    monkeypatch.setattr(mw, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(mw, "derive_hmac_key_candidates", lambda _s: [b"k"])
-
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 1, "user_id": 2}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(mw, "get_db_pool", fake_get_db_pool)
+    # Ensure budgets allow
+    mock_middleware_dependencies(False, 100, 0.1)
 
     async def fake_get_key_limits(_key_id: int):
         return {"is_virtual": True, "llm_allowed_models": ["allowed-model"]}
@@ -381,3 +268,34 @@ async def test_middleware_model_allowlist_allowed(monkeypatch):
     )
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middleware_dependencies):
+    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+    # Ensure middleware path and settings are active and key resolves
+    mock_middleware_dependencies(False, 100, 0.1)
+
+    # Force get_key_limits to mark the key as virtual
+    async def fake_get_key_limits(_key_id: int):
+        return {"is_virtual": True}
+
+    # Make the budget check raise to simulate an internal failure
+    async def fake_is_key_over_budget(_key_id: int):
+        raise RuntimeError("simulated budget failure")
+
+    monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
+    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+
+    app = _build_app_with_middleware()
+    client = TestClient(app)
+
+    r = client.post(
+        "/api/v1/chat/completions",
+        headers={"X-API-KEY": "dummy-key"},
+        json={"model": "m", "messages": []},
+    )
+
+    assert r.status_code == 503
+    data = r.json()
+    assert data.get("error") == "budget_check_failed"
+    assert "Failed to evaluate budget enforcement" in data.get("message", "")

@@ -706,7 +706,8 @@ class ChatbookService:
         include_generated_content: bool = True,
         tags: List[str] = None,
         categories: List[str] = None,
-        async_mode: bool = False
+        async_mode: bool = False,
+        request_id: Optional[str] = None
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Create a chatbook from selected content.
@@ -744,7 +745,7 @@ class ChatbookService:
                     "categories": categories or [],
                 }
                 try:
-                    ps_job = self._ps_job_adapter.create_export_job(payload)
+                    ps_job = self._ps_job_adapter.create_export_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
                 except Exception:
@@ -790,6 +791,7 @@ class ChatbookService:
                         owner_user_id=self.user_id,
                         priority=5,
                         max_retries=3,
+                        request_id=request_id,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to enqueue export job into core Jobs: {e}")
@@ -1104,7 +1106,8 @@ class ChatbookService:
         prefix_imported: bool = False,
         import_media: bool = True,
         import_embeddings: bool = False,
-        async_mode: bool = False
+        async_mode: bool = False,
+        request_id: Optional[str] = None
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Import a chatbook.
@@ -1150,7 +1153,7 @@ class ChatbookService:
                     "conflict_resolution": str(conflict_resolution.value if hasattr(conflict_resolution, 'value') else conflict_resolution),
                 }
                 try:
-                    ps_job = self._ps_job_adapter.create_import_job(payload)
+                    ps_job = self._ps_job_adapter.create_import_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
                 except Exception:
@@ -1191,6 +1194,7 @@ class ChatbookService:
                         owner_user_id=self.user_id,
                         priority=5,
                         max_retries=3,
+                        request_id=request_id,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")

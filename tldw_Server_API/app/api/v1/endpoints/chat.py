@@ -604,7 +604,7 @@ async def _save_message_turn_to_db(
         status.HTTP_401_UNAUTHORIZED: {"description": "Invalid authentication token."},
         status.HTTP_404_NOT_FOUND: {"description": "Resource not found (e.g., character)."},
         status.HTTP_409_CONFLICT: {"description": "Data conflict (e.g., version mismatch during DB operation)."},
-        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Request payload too large (e.g., too many messages, too many images)."},
+        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "Request payload too large (e.g., too many messages, too many images)."},
         status.HTTP_429_TOO_MANY_REQUESTS: {"description": "Rate limit exceeded."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error."},
         status.HTTP_502_BAD_GATEWAY: {"description": "Error received from an upstream LLM provider."},
@@ -733,7 +733,7 @@ async def create_chat_completion(
             metrics.track_validation_failure("payload", error_message)
             logger.warning(f"Request validation failed: {error_message}")
             if "too many" in error_message.lower() or "too long" in error_message.lower():
-                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=error_message)
+                raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
 
@@ -1159,6 +1159,13 @@ async def create_chat_completion(
                     # Use user_id for per-client fairness; HIGH priority for streaming
                     priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
                     # Use request_id generated for this call
+                    logger.debug(
+                        "Queue admission: enqueue request_id=%s client_id=%s priority=%s est_tokens=%s",
+                        request_id,
+                        str(user_id),
+                        getattr(priority, "name", str(priority)),
+                        est_tokens_for_queue,
+                    )
                     q_future = await queue.enqueue(
                         request_id=request_id,
                         request_data={"endpoint": "/api/v1/chat/completions"},
@@ -1168,13 +1175,20 @@ async def create_chat_completion(
                     )
                     # Await admission; if queue times out internally, it will raise
                     await q_future
+                    logger.debug(
+                        "Queue admission: admitted request_id=%s", request_id
+                    )
                 except ValueError as e:
                     # Queue full or rate limit in queue -> 429
-                    logger.warning(f"Queue admission rejected: {e}")
+                    logger.warning(
+                        "Queue admission rejected for request_id=%s: %s", request_id, e
+                    )
                     raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
                 except Exception as e:
                     # Treat unexpected queue errors as service unavailable
-                    logger.error(f"Queue admission error: {e}")
+                    logger.error(
+                        "Queue admission error for request_id=%s: %s", request_id, e
+                    )
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
             # The request queue system has been initialized in main.py but is not yet
             # integrated here. Once the central scheduling/queue module is built, this
@@ -1362,7 +1376,7 @@ async def create_chat_completion(
                 status.HTTP_403_FORBIDDEN,
                 status.HTTP_404_NOT_FOUND,
                 status.HTTP_409_CONFLICT,
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status.HTTP_413_CONTENT_TOO_LARGE,
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
                 status.HTTP_502_BAD_GATEWAY,
@@ -1389,8 +1403,8 @@ async def create_chat_completion(
                 ChatErrorCode.AUTH_EXPIRED_TOKEN: status.HTTP_401_UNAUTHORIZED,
                 ChatErrorCode.AUTH_INSUFFICIENT_PERMISSIONS: status.HTTP_403_FORBIDDEN,
                 ChatErrorCode.VAL_INVALID_REQUEST: status.HTTP_400_BAD_REQUEST,
-                ChatErrorCode.VAL_MESSAGE_TOO_LONG: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                ChatErrorCode.VAL_FILE_TOO_LARGE: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                ChatErrorCode.VAL_MESSAGE_TOO_LONG: status.HTTP_413_CONTENT_TOO_LARGE,
+                ChatErrorCode.VAL_FILE_TOO_LARGE: status.HTTP_413_CONTENT_TOO_LARGE,
                 ChatErrorCode.DB_NOT_FOUND: status.HTTP_404_NOT_FOUND,
                 ChatErrorCode.RATE_LIMIT_EXCEEDED: status.HTTP_429_TOO_MANY_REQUESTS,
                 ChatErrorCode.EXT_PROVIDER_ERROR: status.HTTP_502_BAD_GATEWAY,

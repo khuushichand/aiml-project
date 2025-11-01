@@ -2,6 +2,7 @@
 # Manages evaluation runs for prompt testing
 
 from datetime import datetime
+import time
 from typing import Dict, List, Any, Optional
 from loguru import logger
 
@@ -62,10 +63,19 @@ class EvaluationManager:
 
         eval_id = evaluation_record.get("id")
         eval_uuid = evaluation_record.get("uuid")
+        _log = logger.bind(ps_component="evaluation_manager", evaluation_id=eval_id, evaluation_uuid=eval_uuid, prompt_id=prompt_id, project_id=prompt.get("project_id"))
+        _log.info(
+            "PS evaluation.sync.start test_cases={} model={} temperature={} max_tokens={}",
+            len(test_case_ids),
+            model,
+            temperature,
+            max_tokens,
+        )
         
         # Run each test case
         results = []
         total_score = 0
+        t0 = time.perf_counter()
         
         for test_case in test_cases:
             test_id = test_case.get("id")
@@ -79,6 +89,7 @@ class EvaluationManager:
             
             # Call LLM
             try:
+                t_case0 = time.perf_counter()
                 response = chat_api_call(
                     api_endpoint="openai",
                     model=model,
@@ -91,6 +102,11 @@ class EvaluationManager:
                 )
                 
                 actual_output = response[0] if response else ""
+                _log.debug(
+                    "PS evaluation.sync.test_done test_case_id={} duration_ms={}",
+                    test_id,
+                    int((time.perf_counter() - t_case0) * 1000),
+                )
                 
                 # Simple scoring - exact match = 1.0, partial match = 0.5, no match = 0.0
                 score = self._calculate_score(expected, {"response": actual_output})
@@ -106,7 +122,7 @@ class EvaluationManager:
                 })
                 
             except Exception as e:
-                logger.error(f"Error running test case {test_id}: {e}")
+                _log.error("PS evaluation.sync.test_error test_case_id={} error={}", test_id, e)
                 results.append({
                     "test_case_id": test_id,
                     "inputs": inputs,
@@ -119,6 +135,7 @@ class EvaluationManager:
         # Calculate metrics
         avg_score = total_score / len(results) if results else 0.0
         passed_count = sum(1 for r in results if r["passed"])
+        duration_ms = int((time.perf_counter() - t0) * 1000)
         
         aggregate_metrics = {
             "average_score": avg_score,
@@ -137,6 +154,14 @@ class EvaluationManager:
                 "test_run_ids": [r["test_case_id"] for r in results],
                 "aggregate_metrics": aggregate_metrics,
             },
+        )
+
+        _log.info(
+            "PS evaluation.sync.done total_tests={} passed={} avg_score={} duration_ms={}",
+            len(results),
+            passed_count,
+            round(avg_score, 3),
+            duration_ms,
         )
 
         return {

@@ -774,7 +774,7 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: Optional[b
         return row
 
 
-async def create_import_job(user_id: int, source_id: int) -> Dict[str, Any]:
+async def create_import_job(user_id: int, source_id: int, *, request_id: Optional[str] = None) -> Dict[str, Any]:
     """Create a generic job in the core Jobs manager for connector import.
 
     Scaffold behavior: creates a job with payload but does not perform ingestion.
@@ -786,7 +786,9 @@ async def create_import_job(user_id: int, source_id: int) -> Dict[str, Any]:
             "source_id": source_id,
             "user_id": user_id,
         }
-        job = jm.create_job(domain="connectors", queue="default", job_type="import", owner_user_id=str(user_id), payload=payload, priority=50)
+        if request_id:
+            payload["request_id"] = request_id
+        job = jm.create_job(domain="connectors", queue="default", job_type="import", owner_user_id=str(user_id), payload=payload, priority=50, request_id=request_id)
         job_id = job.get("id") or job.get("job_id") or job.get("uuid")
         return {
             "id": str(job_id),

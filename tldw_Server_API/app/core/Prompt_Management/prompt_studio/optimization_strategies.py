@@ -9,6 +9,7 @@ from datetime import datetime
 import numpy as np
 from scipy import stats
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import log_context
 
 from .prompt_executor import PromptExecutor
 from .test_runner import TestRunner
@@ -29,6 +30,7 @@ class HyperparameterOptimizer:
         self.db = db
         self.test_runner = test_runner
         self.executor = PromptExecutor(db)
+        self.optimization_id: Optional[int] = None
         
         # Define parameter search spaces
         self.param_spaces = {
@@ -56,7 +58,8 @@ class HyperparameterOptimizer:
         Returns:
             Optimization results with best parameters
         """
-        logger.info(f"Starting hyperparameter optimization for prompt {prompt_id}")
+        with log_context(ps_component="opt_strategies", strategy="hyperparams", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
+            logger.info("Starting hyperparameter optimization for prompt {}", prompt_id)
         
         if params_to_optimize is None:
             params_to_optimize = ["temperature", "max_tokens", "top_p"]
@@ -71,7 +74,7 @@ class HyperparameterOptimizer:
                 prompt_id, test_case_ids, base_model_config, params
             )
             observations.append((params, score))
-            logger.info(f"Random sample {i+1}: score={score:.3f}, params={params}")
+            logger.info("Random sample {}: score={:.3f}, params={}", i + 1, score, params)
         
         # Bayesian optimization phase
         best_params = observations[0][0]
@@ -87,13 +90,13 @@ class HyperparameterOptimizer:
             )
             
             observations.append((next_params, score))
-            logger.info(f"Iteration {i+1}: score={score:.3f}, params={next_params}")
+            logger.info("Iteration {}: score={:.3f}, params={}", i + 1, score, next_params)
             
             # Update best
             if score > best_score:
                 best_score = score
                 best_params = next_params
-                logger.info(f"New best score: {best_score:.3f}")
+                logger.info("New best score: {:.3f}", best_score)
             
             # Early stopping if converged
             if self._has_converged(observations):
@@ -218,6 +221,7 @@ class IterativeRefinementOptimizer:
         self.db = db
         self.test_runner = test_runner
         self.executor = PromptExecutor(db)
+        self.optimization_id: Optional[int] = None
     
     async def optimize(self, prompt_id: int, test_case_ids: List[int],
                        model_config: Dict[str, Any],
@@ -234,7 +238,8 @@ class IterativeRefinementOptimizer:
         Returns:
             Optimization results
         """
-        logger.info(f"Starting iterative refinement for prompt {prompt_id}")
+        with log_context(ps_component="opt_strategies", strategy="iterative", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
+            logger.info("Starting iterative refinement for prompt {}", prompt_id)
         
         current_prompt_id = prompt_id
         iteration_history = []
