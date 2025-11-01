@@ -166,20 +166,21 @@ async function monListAlerts() {
     const limit = (document.getElementById('monAlerts_limit')?.value || '').trim();
     if (uid) params.append('user_id', uid);
     if (since) params.append('since', since);
-    if (unread) params.append('unread', unread);
+    if (unread) params.append('unread_only', unread);
     if (limit) params.append('limit', limit);
     const res = await window.apiClient.get('/api/v1/monitoring/alerts' + (params.toString() ? ('?' + params.toString()) : ''));
     const list = Array.isArray(res.items) ? res.items : (res.alerts || []);
     const box = document.getElementById('monitoringAlerts_list');
     if (!list.length) { box.innerHTML = '<p>No alerts.</p>'; return; }
-    let html = '<table class="simple-table"><thead><tr><th>Time</th><th>User</th><th>Severity</th><th>Category</th><th>Message</th><th>Actions</th></tr></thead><tbody>';
+    let html = '<table class="simple-table"><thead><tr><th>Time</th><th>User</th><th>Category</th><th>Severity</th><th>Pattern</th><th>Text Snippet</th><th>Actions</th></tr></thead><tbody>';
     for (const a of list) {
       html += `<tr>
         <td>${esc(a.created_at || '')}</td>
         <td>${esc(a.user_id ?? '')}</td>
-        <td>${esc(a.severity || '')}</td>
-        <td>${esc(a.category || '')}</td>
-        <td>${esc(a.message || '')}</td>
+        <td>${esc(a.rule_category || '')}</td>
+        <td>${esc(a.rule_severity || '')}</td>
+        <td>${esc(a.pattern || '')}</td>
+        <td>${esc(a.text_snippet || '')}</td>
         <td>${a.id ? `<button class="btn mon-alert-mark" data-id="${esc(a.id)}">Mark read</button>` : ''}</td>
       </tr>`;
     }
@@ -204,12 +205,16 @@ async function monMarkAlertRead(id) {
 async function monLoadRecentAlerts() {
   try {
     const limit = parseInt(document.getElementById('monAlerts_recent_limit')?.value || '10', 10);
-    const unread = (document.getElementById('monAlerts_recent_unread')?.value || 'true');
-    const res = await window.apiClient.get(`/api/v1/monitoring/alerts?limit=${limit}&unread=${unread}`);
+    const unreadOnly = (document.getElementById('monAlerts_recent_unread')?.value === 'true');
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (unreadOnly) qs.set('unread_only','true');
+    const res = await window.apiClient.get(`/api/v1/monitoring/alerts?${qs.toString()}`);
     const list = Array.isArray(res.items) ? res.items : (res.alerts || []);
     const box = document.getElementById('monitoringAlerts_recent');
     if (!list.length) { box.innerHTML = '<p>No recent alerts.</p>'; return; }
-    box.innerHTML = '<ul>' + list.map(a => `<li><strong>${esc(a.severity || '')}</strong> ${esc(a.message || '')} <em>${esc(a.created_at || '')}</em></li>`).join('') + '</ul>';
+    box.innerHTML = '<ul>' + list.map(a => (
+      `<li><strong>${esc(a.rule_severity || '')}</strong> [${esc(a.rule_category || '')}] ${esc(String((a.text_snippet || '')).slice(0,100))} <em>${esc(a.created_at || '')}</em></li>`
+    )).join('') + '</ul>';
     const ts = new Date().toISOString();
     const label = document.getElementById('monAlerts_last_update'); if (label) label.textContent = ts;
   } catch (e) { document.getElementById('monitoringAlerts_recent').innerHTML = `<pre>${esc(JSON.stringify(e.response || e, null, 2))}</pre>`; }
@@ -246,6 +251,7 @@ async function monSaveNotifSettings() {
       smtp_port: parseInt(document.getElementById('monNotif_smtp_port')?.value || '587', 10),
       smtp_starttls: (document.getElementById('monNotif_smtp_starttls')?.value === 'true'),
       smtp_user: document.getElementById('monNotif_smtp_user')?.value || '',
+      smtp_password: document.getElementById('monNotif_smtp_pass')?.value || '',
     };
     const res = await window.apiClient.put('/api/v1/monitoring/notifications/settings', body);
     document.getElementById('monitoringNotif_result').textContent = JSON.stringify(res, null, 2);
@@ -254,8 +260,23 @@ async function monSaveNotifSettings() {
 }
 
 function monClearNotifDrafts() {
-  const ids = ['monNotif_enabled','monNotif_min_sev','monNotif_file','monNotif_webhook','monNotif_email_to','monNotif_smtp_host','monNotif_smtp_port','monNotif_smtp_starttls','monNotif_smtp_user','monNotif_email_from'];
+  const ids = ['monNotif_enabled','monNotif_min_sev','monNotif_file','monNotif_webhook','monNotif_email_to','monNotif_smtp_host','monNotif_smtp_port','monNotif_smtp_starttls','monNotif_smtp_user','monNotif_email_from','monNotif_smtp_pass'];
   for (const id of ids) { try { localStorage.removeItem(id); } catch (_) {} }
+  // Reset UI fields to sane defaults so the form matches cleared state
+  try {
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = String(val); };
+    setVal('monNotif_enabled', 'false');
+    setVal('monNotif_min_sev', 'critical');
+    setVal('monNotif_file', '');
+    setVal('monNotif_webhook', '');
+    setVal('monNotif_email_to', '');
+    setVal('monNotif_email_from', '');
+    setVal('monNotif_smtp_host', '');
+    setVal('monNotif_smtp_port', 587);
+    setVal('monNotif_smtp_starttls', 'false');
+    setVal('monNotif_smtp_user', '');
+    setVal('monNotif_smtp_pass', '');
+  } catch (_) { /* ignore */ }
   Toast.success('Drafts cleared');
 }
 
@@ -281,7 +302,9 @@ async function monLoadRecentNotifications() {
     const items = Array.isArray(res.items) ? res.items : (res.notifications || []);
     const box = document.getElementById('monitoringNotif_recent');
     if (!items.length) { box.innerHTML = '<p>No recent notifications.</p>'; return; }
-    box.innerHTML = '<ul>' + items.map(n => `<li>[${esc(n.severity||'')}] ${esc(n.message || '')} <em>${esc(n.created_at||'')}</em></li>`).join('') + '</ul>';
+    box.innerHTML = '<ul>' + items.map(n => (
+      `<li>[${esc(n.rule_severity || '')}] (${esc(n.rule_category || '')}) ${esc(n.source || '')} user:${esc(n.user_id ?? '')} - ${esc(n.snippet || '')} <em>${esc(n.ts || '')}</em></li>`
+    )).join('') + '</ul>';
     const ts = new Date().toISOString();
     const last = document.getElementById('monNotif_last_update'); if (last) last.textContent = ts;
     const upd = document.getElementById('monNotif_updated'); if (upd) { upd.textContent = '✓'; setTimeout(() => upd.textContent = '', 1000); }

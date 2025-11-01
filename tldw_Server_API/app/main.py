@@ -201,7 +201,7 @@ def _unwrap_logger_add(func):
         if not next_candidate or next_candidate is candidate or next_candidate in seen:
             return candidate
         seen.add(candidate)
-    candidate = next_candidate
+        candidate = next_candidate
 
 # Ensure any subsequent logger.add calls wrap raw streams with SafeStreamWrapper
 _original_logger_add = logger.add
@@ -880,7 +880,7 @@ async def lifespan(app: FastAPI):
                         pass
                     return mms
 
-                auth_mode = str(_emb_settings.get("AUTH_MODE", _os.getenv("AUTH_MODE", "single_user")))
+                auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
                 mismatches: list[tuple[str, int, int, str]] = []
                 if auth_mode == "multi_user":
                     base: _Path = _emb_settings.get("USER_DB_BASE_DIR")

@@ -199,7 +199,7 @@ async function _applyOverrideChange(pid, action, opts = {}) {
       renderOverridesTable();
       renderEffectiveOut();
     }
-    Toast?.success && Toast.success('Override updated');
+    if (!opts.silent) Toast?.success && Toast.success('Override updated');
   } catch (e) {
     Toast?.error && Toast.error('Failed to update override');
   }
@@ -211,10 +211,28 @@ async function bulkApplyOverrides(action, which = 'all') {
   let all;
   if (which === 'tools') all = tools; else if (which === 'std') all = std; else all = [...tools, ...std];
   if (!all.length) return Toast?.error && Toast.error('No filtered permissions to update');
+  const actionLabel = action === 'allow' ? 'Allow' : action === 'deny' ? 'Deny' : 'Inherit';
+  const sectionLabel = which === 'tools' ? 'tool permissions' : which === 'std' ? 'standard permissions' : 'filtered permissions';
+  const confirmed = window.confirm(`${actionLabel} ${all.length} ${sectionLabel}?`);
+  if (!confirmed) return;
   try {
-    // Apply without refreshing each time
-    for (const p of all) {
-      await _applyOverrideChange(p.id, action, { deferRefresh: true });
+    const container = document.getElementById('adminUserPerms') || document.getElementById('tabAdminUserPermissions');
+    let loaderId = null;
+    const useOverlay = (all.length > 10);
+    if (useOverlay && typeof Loading !== 'undefined' && container) {
+      loaderId = Loading.show(container, `${actionLabel} 0/${all.length}…`);
+    }
+    // Apply without refreshing each time; update progress text
+    for (let i = 0; i < all.length; i++) {
+      const p = all[i];
+      await _applyOverrideChange(p.id, action, { deferRefresh: true, silent: true });
+      try {
+        if (loaderId) {
+          const overlay = document.getElementById(loaderId);
+          const msg = overlay && overlay.querySelector('.loading-message');
+          if (msg) msg.textContent = `${actionLabel} ${i + 1}/${all.length}…`;
+        }
+      } catch (_) { /* ignore */ }
     }
     // Single refresh
     const uid = UP_STATE.selectedUser.id;
@@ -222,7 +240,8 @@ async function bulkApplyOverrides(action, which = 'all') {
     UP_STATE.effective = new Set(Array.isArray(effRes?.permissions) ? effRes.permissions : []);
     renderOverridesTable();
     renderEffectiveOut();
-    Toast?.success && Toast.success(`Applied '${action}' to ${all.length} permissions`);
+    Toast?.success && Toast.success(`Applied '${action}' to ${all.length} ${sectionLabel}`);
+    try { if (loaderId && container) Loading.hide(container); } catch (_) { /* ignore */ }
   } catch (e) {
     Toast?.error && Toast.error('Bulk update failed');
   }
