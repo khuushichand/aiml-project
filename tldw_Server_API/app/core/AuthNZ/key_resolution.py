@@ -48,10 +48,10 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
         key_materials = ()
 
-    for km in key_materials:
+    # Important: mirror APIKeyManager.hash_candidates (HMAC-SHA256 with secret key)
+    for key in key_materials:
         try:
-            # Compute a computationally expensive hash using PBKDF2-HMAC-SHA256 (100,000 iterations)
-            d = hashlib.pbkdf2_hmac("sha256", api_key.encode("utf-8"), km, 100_000).hex()
+            d = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
             if d not in digests:
                 digests.append(d)
         except Exception as _e:

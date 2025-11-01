@@ -43,6 +43,59 @@ router = APIRouter(prefix="/sandbox", tags=["sandbox"])
 _service = SandboxService()
 
 
+def _normalize_reason(outcome: str, message: Optional[str]) -> str:
+    """Normalize a possibly long/unique error message into a small, bounded set for metrics labels.
+
+    Prefers bucketing into a fixed taxonomy to prevent Prometheus label cardinality explosions.
+    If no mapping applies, falls back to the outcome string.
+    """
+    try:
+        o = (outcome or "").strip().lower() or "unknown"
+        msg = (message or "").strip().lower()
+
+        # Outcome-driven buckets
+        if o in {"timeout", "timed_out"}:
+            return "timeout"
+        if o in {"killed"}:
+            return "killed"
+        if o in {"success", "completed"}:
+            return "success"
+        if o in {"failed", "error", "internal"} and not msg:
+            return "internal"
+
+        # Message-driven buckets (substring checks)
+        if msg:
+            if "out of memory" in msg or "oom" in msg or "memory limit" in msg:
+                return "oom"
+            if "validation" in msg or "invalid" in msg or "schema" in msg:
+                return "validation_error"
+            if "unauthorized" in msg or "forbidden" in msg or "permission denied" in msg:
+                return "permission_denied"
+            if "rate limit" in msg or "too many requests" in msg or "status code 429" in msg:
+                return "rate_limited"
+            if "queue full" in msg:
+                return "queue_full"
+            if "deadline exceeded" in msg:
+                return "timeout"
+            if "sigkill" in msg or "signal 9" in msg:
+                return "killed"
+            if "not found" in msg or "no such file" in msg:
+                return "not_found"
+            if "image pull" in msg or "manifest" in msg:
+                return "image_error"
+            if "network timeout" in msg or "connection timed out" in msg:
+                return "timeout"
+            if "cancelled" in msg or "canceled" in msg:
+                return "killed"
+
+        # Generic fallback buckets
+        if o in {"failed", "error"}:
+            return "internal"
+        return o or "other"
+    except Exception:
+        return "other"
+
+
 @router.get("/runtimes", response_model=SandboxRuntimesResponse, summary="Discover available runtimes")
 async def get_runtimes(current_user: User = Depends(get_request_user)) -> SandboxRuntimesResponse:
     info = _service.feature_discovery()
@@ -421,35 +474,24 @@ async def start_run(
                 "failed" if status.phase.value == "failed" else
                 status.phase.value
             )
-            # Metrics: completion + duration (include reason when available)
+            # Metrics: completion + duration with normalized reason label
             try:
-                # Map reason where applicable
-                reason_code = None
-                try:
-                    if outcome in ("timeout", "failed", "killed"):
-                        reason_code = (status.message or None)
-                except Exception:
-                    reason_code = None
+                reason_norm = _normalize_reason(outcome, getattr(status, "message", None))
                 labels_completed = {
                     "runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")),
                     "outcome": outcome,
+                    "reason": reason_norm,
                 }
-                if reason_code:
-                    labels_completed["reason"] = str(reason_code)
-                else:
-                    labels_completed["reason"] = outcome
                 increment_counter("sandbox_runs_completed_total", labels=labels_completed)
             except Exception:
                 logger.debug("metrics: sandbox_runs_completed_total failed")
             try:
+                reason_norm = _normalize_reason(outcome, getattr(status, "message", None))
                 labels_duration = {
                     "runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")),
                     "outcome": outcome,
+                    "reason": reason_norm,
                 }
-                if reason_code:
-                    labels_duration["reason"] = str(reason_code)
-                else:
-                    labels_duration["reason"] = outcome
                 observe_histogram("sandbox_run_duration_seconds", value=float(duration), labels=labels_duration)
             except Exception:
                 logger.debug("metrics: sandbox_run_duration_seconds failed")
@@ -634,12 +676,20 @@ async def download_artifact(
         or ".." in raw
     ):
         raise HTTPException(status_code=400, detail="invalid_path")
-    # Also inspect raw URL path to catch traversal/double-slash that may be normalized
+    # Also inspect ASGI scope raw path to catch traversal/double-slash that may be normalized
     try:
-        url_path = str(request.url.path) if request else ""
+        url_path = str(request.scope.get("path", "")) if request else ""
     except Exception:
         url_path = ""
-    if "/artifacts/../" in url_path or "/artifacts//" in url_path:
+    try:
+        raw_path = request.scope.get("raw_path") if request else None
+        raw_path_decoded = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else ""
+    except Exception:
+        raw_path_decoded = ""
+    if (
+        "/artifacts/../" in url_path or "/artifacts//" in url_path or
+        "/artifacts/../" in raw_path_decoded or "/artifacts//" in raw_path_decoded
+    ):
         raise HTTPException(status_code=400, detail="invalid_path")
     data = _service._orch.get_artifact(run_id, path)  # type: ignore[attr-defined]
     if data is None:

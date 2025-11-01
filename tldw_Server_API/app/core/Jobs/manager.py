@@ -873,24 +873,46 @@ class JobManager:
                             except Exception:
                                 pass
                             try:
-                                # Write to outbox within the same transaction to avoid SQLite write-lock issues
+                                # Write to outbox within the same transaction (Postgres path)
                                 attrs_json = json.dumps({
                                     "idempotent": (not was_insert),
                                     "owner_user_id": d.get("owner_user_id"),
                                     "retry_count": int(d.get("retry_count") or 0),
                                 })
-                                conn.execute(
+                                cur.execute(
                                     (
-                                        "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
-                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
+                                        "INSERT INTO job_events("
+                                        "job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at"
+                                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())"
                                     ),
                                     (
-                                        int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
-                                        "job.created", attrs_json, d.get("owner_user_id"), d.get("request_id"), d.get("trace_id"),
+                                        int(d.get("id")),
+                                        d.get("domain"),
+                                        d.get("queue"),
+                                        d.get("job_type"),
+                                        "job.created",
+                                        attrs_json,
+                                        d.get("owner_user_id"),
+                                        d.get("request_id"),
+                                        d.get("trace_id"),
                                     ),
                                 )
                             except Exception:
                                 # Best-effort; do not fail job create on outbox errors
+                                pass
+                            # Emit event for in-process listeners when outbox is disabled
+                            try:
+                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1","true","yes","y","on"}:
+                                    emit_job_event(
+                                        "job.created",
+                                        job=d,
+                                        attrs={
+                                            "idempotent": (not was_insert),
+                                            "owner_user_id": d.get("owner_user_id"),
+                                            "retry_count": int(d.get("retry_count") or 0),
+                                        },
+                                    )
+                            except Exception:
                                 pass
                             # Audit bridge (best-effort)
                             try:
@@ -967,16 +989,38 @@ class JobManager:
                                 "owner_user_id": d.get("owner_user_id"),
                                 "retry_count": int(d.get("retry_count") or 0),
                             })
-                            conn.execute(
+                            cur.execute(
                                 (
-                                    "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
-                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
+                                    "INSERT INTO job_events("
+                                    "job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at"
+                                    ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())"
                                 ),
                                 (
-                                    int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
-                                    "job.created", attrs_json, d.get("owner_user_id"), d.get("request_id"), d.get("trace_id"),
+                                    int(d.get("id")),
+                                    d.get("domain"),
+                                    d.get("queue"),
+                                    d.get("job_type"),
+                                    "job.created",
+                                    attrs_json,
+                                    d.get("owner_user_id"),
+                                    d.get("request_id"),
+                                    d.get("trace_id"),
                                 ),
                             )
+                        except Exception:
+                            pass
+                        # Emit event for in-process listeners when outbox is disabled
+                        try:
+                            if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1","true","yes","y","on"}:
+                                emit_job_event(
+                                    "job.created",
+                                    job=d,
+                                    attrs={
+                                        "idempotent": False,
+                                        "owner_user_id": d.get("owner_user_id"),
+                                        "retry_count": int(d.get("retry_count") or 0),
+                                    },
+                                )
                         except Exception:
                             pass
                         try:
@@ -1133,6 +1177,20 @@ class JobManager:
                                 "job.created", attrs_json, d.get("owner_user_id"), request_id, trace_id,
                             ),
                         )
+                    except Exception:
+                        pass
+                    # Emit event for in-process listeners when outbox is disabled
+                    try:
+                        if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1","true","yes","y","on"}:
+                            emit_job_event(
+                                "job.created",
+                                job={**d, "request_id": request_id, "trace_id": trace_id},
+                                attrs={
+                                    "idempotent": False,
+                                    "owner_user_id": d.get("owner_user_id"),
+                                    "retry_count": int(d.get("retry_count") or 0),
+                                },
+                            )
                     except Exception:
                         pass
                     try:
@@ -2007,6 +2065,7 @@ class JobManager:
                                     pass
                             except Exception:
                                 pass
+                            # Outbox insert within the same transaction (avoid lock)
                             try:
                                 # Insert completion event within the same transaction to avoid cross-connection locks
                                 conn.execute(
@@ -2019,6 +2078,12 @@ class JobManager:
                                         d.get("request_id"), d.get("trace_id"),
                                     ),
                                 )
+                            except Exception:
+                                pass
+                            # Emit event for in-process listeners when outbox is disabled
+                            try:
+                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1","true","yes","y","on"}:
+                                    emit_job_event("job.completed", job={"id": int(job_id), "domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")})
                             except Exception:
                                 pass
                             try:
