@@ -1021,24 +1021,18 @@ async def websocket_transcribe(
     token: Optional[str] = Query(None)  # Get token from query parameter
 ):
     """
-    WebSocket endpoint for real-time audio transcription.
-
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
-          `Docs/API-related/Audio_Transcription_API.md`
-
-    Protocol:
-    1. Client connects via WebSocket
-    2. Client sends configuration message:
-       {"type": "config", "sample_rate": 16000, "language": "en", "model_variant": "mlx"}
-    3. Client sends audio chunks:
-       {"type": "audio", "data": "<base64_encoded_float32_audio>"}
-    4. Server responds with transcriptions:
-       {"type": "transcription", "text": "...", "timestamp": ..., "is_final": true}
-       {"type": "partial", "text": "...", "timestamp": ..., "is_final": false}
-    5. Client can send commit to finalize:
-       {"type": "commit"}
-    6. Server sends final transcript:
-       {"type": "full_transcript", "text": "..."}
+    Handle a WebSocket connection to perform real-time streaming audio transcription.
+    
+    Accepts a WebSocket and an optional query token. Authentication is supported via:
+    - Multi-user: X-API-KEY header, Authorization: Bearer <JWT>, or an initial auth message.
+    - Single-user: API key via header, query token, or an initial auth message; an IP allowlist may be enforced.
+    Supported incoming message types: "auth" (for token-based auth), "config" (streaming configuration), "audio" (base64-encoded audio chunks), and "commit" (finalize current utterance).
+    Outgoing message types include partial updates ("partial"), interim/final transcriptions ("transcription"), the final transcript ("full_transcript"), and structured error frames ("error").
+    Per-user limits are enforced (concurrent streams and daily minute quotas); when a quota is exceeded the server sends an "error" with "error_type": "quota_exceeded" and closes the connection with code 4003.
+    A server-side default streaming configuration is used if the client does not provide one before audio arrives.
+    Parameters:
+        websocket (WebSocket): The active WebSocket connection.
+        token (Optional[str]): Optional API key token supplied via the query string for single-user authentication.
     """
     # Accept the WebSocket connection first
     await websocket.accept()
@@ -1408,6 +1402,20 @@ async def websocket_transcribe(
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import QuotaExceeded as _QuotaExceeded
 
             async def _on_audio_quota(seconds: float, sr: int) -> None:
+                """
+                Handle a chunk of audio for daily-minute quota accounting and enforcement.
+                
+                Parameters:
+                    seconds (float): Duration of the audio chunk in seconds.
+                    sr (int): Sample rate of the audio chunk in Hz (unused by this function but provided for callback compatibility).
+                
+                Raises:
+                    _QuotaExceeded: If adding this chunk would exceed the user's daily minutes quota.
+                
+                Notes:
+                    - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
+                      `used_minutes` counter and records the minutes via `add_daily_minutes`.
+                """
                 nonlocal used_minutes
                 minutes_chunk = float(seconds) / 60.0
                 allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
@@ -1419,6 +1427,11 @@ async def websocket_transcribe(
 
             try:
                 async def _on_heartbeat() -> None:
+                    """
+                    Send a heartbeat to update streaming quota/timestamp for the current user.
+                    
+                    Invokes the module-level `heartbeat_stream` callback with `user_id_for_usage` to record activity; any exceptions raised by the callback are suppressed.
+                    """
                     try:
                         await heartbeat_stream(user_id_for_usage)
                     except Exception:
@@ -1499,10 +1512,14 @@ async def websocket_transcribe(
 @router.get("/stream/status", summary="Check streaming transcription availability")
 async def streaming_status():
     """
-    Check if streaming transcription is available.
+    Report availability and capabilities of the streaming transcription WebSocket endpoint.
     
     Returns:
-        JSON with status and available models
+        A JSON object with the following keys:
+          - `status` (str): "available" if at least one streaming model is present, "unavailable" otherwise, or "error" on failure.
+          - `available_models` (list[str]): Names of detected streaming model variants (e.g., "parakeet-mlx", "parakeet-standard", "parakeet-onnx").
+          - `websocket_endpoint` (str): URL path of the streaming transcription WebSocket.
+          - `supported_features` (dict): Feature flags indicating supported streaming capabilities (boolean values).
     """
     try:
         # Check available models
@@ -1568,7 +1585,17 @@ async def streaming_limits(
     current_user: User = Depends(get_request_user),
 ):
     """
-    Reports per-user daily minutes remaining and current active stream count.
+    Return the current user's streaming quota and usage summary.
+    
+    Returns:
+        JSONResponse: A JSON object with the following keys:
+            - user_id (str): The user's identifier.
+            - tier (str): The user's tier name (e.g., "free").
+            - limits (dict): The resolved limit values (e.g., daily_minutes, concurrent_streams, concurrent_jobs, max_file_size_mb).
+            - used_today_minutes (float): Minutes already used today (0.0 if unavailable).
+            - remaining_minutes (float|None): Minutes remaining today (0.0 if none left, `None` if unknown/unbounded).
+            - active_streams (int): Number of currently active streams (0 if unavailable).
+            - can_start_stream (bool): Whether the user may start another stream given current active streams and concurrent_streams limit.
     """
     try:
         limits = await get_limits_for_user(current_user.id)
@@ -1613,10 +1640,20 @@ async def streaming_limits(
 @router.post("/stream/test", summary="Test streaming transcription setup")
 async def test_streaming():
     """
-    Test endpoint to verify streaming setup.
+    Run a lightweight end-to-end check of the streaming transcription pipeline using a short generated audio sample.
+    
+    Performs a minimal initialization of the Parakeet streaming transcriber, sends a short synthetic audio chunk, and returns the transcriber's immediate response or a buffering status.
     
     Returns:
-        Test results
+        JSONResponse: On success, a JSON object with keys:
+            - "status": "success"
+            - "test_passed": True
+            - "message": Human-readable success message
+            - "test_result": Transcriber response or the string "Buffer accumulating"
+        On failure, a JSONResponse with status_code 500 and a JSON object containing:
+            - "status": "error"
+            - "test_passed": False
+            - "message": Error message describing the failure
     """
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (

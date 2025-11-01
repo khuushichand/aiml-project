@@ -24,11 +24,29 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(self, app):
+        """
+        Initialize the LLMBudgetMiddleware and prepare per-request settings handling.
+        
+        Parameters:
+            app: The ASGI application to wrap.
+        
+        Notes:
+            Sets self._settings to None to avoid caching configuration across requests so settings are reloaded for every request (useful for tests and dynamic configuration).
+        """
         super().__init__(app)
         # Do not cache settings; fetch fresh each request to honor test resets
         self._settings = None
 
     def _should_check(self, path: str) -> bool:
+        """
+        Determine whether LLM budget and virtual-key enforcement should be applied to the given request path.
+        
+        Parameters:
+            path (str): The request URL path to evaluate (e.g., "/api/v1/chat/completions").
+        
+        Returns:
+            `True` if enforcement should be applied to the provided request path, `False` otherwise.
+        """
         try:
             settings = get_settings()
             if not getattr(settings, 'VIRTUAL_KEYS_ENABLED', True):
@@ -56,6 +74,14 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         return path
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """
+        Enforces virtual API-key LLM allowlists and budget limits for incoming requests to configured LLM endpoints.
+        
+        If the request targets a monitored LLM endpoint and the resolved API key is a virtual key, this middleware will validate endpoint, provider, and model allowlists and check the key's budget; it forwards the request unchanged when enforcement is not applicable or passes all checks.
+        
+        Returns:
+            Response: An HTTP response. May be a 403 JSONResponse when the key is forbidden, a 402 JSONResponse when the virtual key is over budget, or the downstream handler's Response when the request is allowed or enforcement is skipped.
+        """
         path = request.url.path
         if not self._should_check(path):
             return await call_next(request)

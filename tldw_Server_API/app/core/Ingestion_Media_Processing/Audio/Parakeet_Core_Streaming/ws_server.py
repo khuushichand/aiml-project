@@ -64,6 +64,15 @@ async def websocket_parakeet_core(
     websocket: WebSocket,
     decode_fn: Optional[DecodeFn] = None,
 ):
+    """
+    Handle a long-lived WebSocket session for Parakeet Core streaming: accept configuration, receive audio chunks, stream partial and final transcript frames, and manage session lifecycle.
+    
+    This endpoint implements a minimal Parakeet Core streaming protocol over a WebSocket. It accepts a JSON "config" message to initialize or reconfigure the transcriber (including model and variant changes), processes "audio" messages containing audio payloads into transcript frames, supports "commit" to flush and emit a final transcript and optional diarization summary, and responds to "reset", "stop", and "ping" control messages. When available and enabled, it integrates optional live insights and streaming diarization engines; it also returns structured error and status messages and performs cleanup of optional engines and the WebSocket on exit.
+    
+    Parameters:
+        websocket (WebSocket): WebSocket connection to receive messages from and send responses to.
+        decode_fn (Optional[DecodeFn]): Optional decoding callback used by the ParakeetCoreTranscriber; if not provided or unavailable for the selected model variant, model-unavailable errors will be sent.
+    """
     await websocket.accept()
 
     config = StreamingConfig()

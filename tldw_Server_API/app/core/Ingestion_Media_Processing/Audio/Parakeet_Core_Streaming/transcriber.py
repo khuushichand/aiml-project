@@ -49,6 +49,16 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
             )
 
             def _fn(audio_np: np.ndarray, sr: int) -> str:
+                """
+                Transcribe a NumPy audio buffer using the ONNX Parakeet backend.
+                
+                Parameters:
+                    audio_np (np.ndarray): Mono float32 audio samples.
+                    sr (int): Sample rate in Hertz.
+                
+                Returns:
+                    str: Transcribed text.
+                """
                 return _tx_onnx(audio_np, sample_rate=sr)
 
             return _fn
@@ -61,6 +71,12 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
             )
 
             def _fn(audio_np: np.ndarray, sr: int) -> str:
+                """
+                Transcribe the given audio using the Parakeet MLX backend.
+                
+                Returns:
+                    The transcription text produced by the MLX model.
+                """
                 return _tx_mlx(audio_np, sample_rate=sr)
 
             return _fn
@@ -74,6 +90,16 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
             )
 
             def _fn(audio_np: np.ndarray, sr: int) -> str:
+                """
+                Transcribe the given audio array using the Nemo Parakeet "standard" variant.
+                
+                Parameters:
+                    audio_np (np.ndarray): Mono float32 audio samples to transcribe.
+                    sr (int): Sample rate of the audio in Hertz.
+                
+                Returns:
+                    transcription (str): Decoded text produced from the audio.
+                """
                 return _tx_nemo(audio_np, sample_rate=sr, variant="standard")
 
             return _fn
@@ -87,6 +113,11 @@ class ParakeetCoreTranscriber:
     decode_fn: Optional[DecodeFn] = None
 
     def __post_init__(self) -> None:
+        """
+        Initialize internal buffers and runtime state for the transcriber.
+        
+        Sets up the audio buffer using configured sample rate and maximum buffer duration, initializes timing, segment and history counters, and selects a decode function based on the configured model/variant when no decode function was provided.
+        """
         self.buffer = AudioBuffer(sample_rate=self.config.sample_rate, max_duration=self.config.max_buffer_duration)
         self._last_partial_time = 0.0
         self._total_processed_seconds = 0.0
@@ -97,6 +128,11 @@ class ParakeetCoreTranscriber:
 
     # --- Public API ---
     def reset(self) -> None:
+        """
+        Reset the transcriber to its initial empty state.
+        
+        Clears the audio buffer and transcript history, and resets partial-timing, total-processed time, and segment index counters to zero.
+        """
         self.buffer.clear()
         self._history.clear()
         self._last_partial_time = 0.0
@@ -104,15 +140,32 @@ class ParakeetCoreTranscriber:
         self._segment_index = 0
 
     def get_full_transcript(self) -> str:
+        """
+        Get the entire accumulated transcript as a single string.
+        
+        Returns:
+            A string containing all history entries joined by single spaces; empty string if there are no entries.
+        """
         return " ".join(self._history)
 
     async def process_audio_chunk(self, audio: Union[bytes, str, np.ndarray]) -> Optional[Dict[str, Any]]:
-        """Ingest an audio chunk and possibly emit a partial or final frame.
-
-        Accepts:
-        - raw float32 bytes
-        - base64 string (float32 bytes)
-        - numpy float32 array
+        """
+        Process an incoming audio chunk and emit a partial or final transcription frame when available.
+        
+        Accepts audio as raw float32 bytes, a base64 string encoding float32 bytes, or a numpy float32 array. Depending on streaming configuration and buffered audio duration, this may produce:
+        - a partial frame (when partials are enabled and the partial cadence has elapsed), or
+        - a final frame (when buffered audio reaches the configured chunk duration).
+        
+        Returned frame structure (when produced):
+        - "type": "partial" or "final"
+        - "text": transcribed text
+        - "timestamp": UNIX time of emission
+        - "is_final": boolean indicating finality
+        - additional metadata from internal metadata helpers (segment and timing fields)
+        - for final frames only: "_audio_chunk": numpy array copy of the audio used for the final transcript
+        
+        Returns:
+            dict: A partial or final frame as described above, or `None` if no frame is emitted for this chunk.
         """
         audio_np = self._coerce_to_np(audio)
         if audio_np is None or audio_np.size == 0:
@@ -185,6 +238,15 @@ class ParakeetCoreTranscriber:
         return None
 
     async def flush(self) -> Optional[Dict[str, Any]]:
+        """
+        Emit any remaining buffered audio as a final transcription frame, clear the buffer, and append the transcript to history.
+        
+        If there is buffered audio, decode it to text, apply optional post-processing, append the text to the transcriber history, and return a final frame containing transcription, timestamp, is_final=True, and the segment/chunk metadata produced by _prepare_final_metadata. The buffer is cleared regardless of whether decoding yields text.
+        
+        Returns:
+            dict: A final frame with keys including `"type"`, `"text"`, `"timestamp"`, `"is_final"` and segment/chunk metadata (e.g., `segment_id`, `segment_start`, `segment_end`, `chunk_duration`, `overlap`, `chunk_start`, `chunk_end`, `new_audio_duration`, `cumulative_audio`) when a transcript was produced.
+            None: If there is no buffered audio or decoding produced no text.
+        """
         if self.buffer.get_duration() <= 0:
             return None
         audio_np = self.buffer.get_audio()
@@ -218,6 +280,18 @@ class ParakeetCoreTranscriber:
 
     # --- Internals ---
     def _coerce_to_np(self, audio: Union[bytes, str, np.ndarray]) -> Optional[np.ndarray]:
+        """
+        Convert an audio input into a mono float32 NumPy array suitable for decoding.
+        
+        Parameters:
+            audio (bytes | str | numpy.ndarray): Input audio as one of:
+                - a NumPy array (any dtype/shape), which will be converted to float32 and averaged to mono if multi-channel;
+                - a base64-encoded string containing raw float32 samples;
+                - raw bytes or bytearray containing either ASCII/base64 text (will be decoded) or raw float32 bytes.
+        
+        Returns:
+            numpy.ndarray | None: A 1-D NumPy array of dtype float32 with mono audio samples, or `None` if the input type or conversion fails. The function aligns raw byte input to 4-byte (float32) boundaries and averages channels to produce mono.
+        """
         if isinstance(audio, np.ndarray):
             arr = audio
         elif isinstance(audio, str):
@@ -253,6 +327,15 @@ class ParakeetCoreTranscriber:
 
     def _decode(self, audio_np: np.ndarray) -> str:
         # (Re)select decoder if needed (model/variant may have been updated externally)
+        """
+        Attempt to decode a mono float32 audio numpy array into text using the configured decode function.
+        
+        Parameters:
+            audio_np (np.ndarray): Mono float32 audio samples to decode.
+        
+        Returns:
+            str: Decoded transcription as a string, or an empty string if no decoder is available or decoding fails.
+        """
         if not self.decode_fn:
             self.decode_fn = _variant_decode_fn(self.config.model, self.config.model_variant)
         if not self.decode_fn:
@@ -263,7 +346,15 @@ class ParakeetCoreTranscriber:
             return ""
 
     async def _decode_async(self, audio_np: np.ndarray) -> str:
-        """Run decode in a thread to avoid blocking the event loop."""
+        """
+        Decode the given mono float32 audio array to text using the configured decode function in a worker thread.
+        
+        If no decode function is set, attempts to select one based on the current model/variant; on any error or if no decoder is available, returns an empty string. Parameters:
+            audio_np (np.ndarray): Mono float32 audio samples to decode.
+        
+        Returns:
+            str: Decoded transcript, or an empty string on failure or when no decoder is available.
+        """
         if not self.decode_fn:
             self.decode_fn = _variant_decode_fn(self.config.model, self.config.model_variant)
         if not self.decode_fn:
@@ -274,6 +365,20 @@ class ParakeetCoreTranscriber:
             return ""
 
     def _prepare_partial_metadata(self, buffer_duration: float) -> Dict[str, float]:
+        """
+        Compute metadata for a partial transcription frame based on the current buffered audio.
+        
+        Parameters:
+            buffer_duration (float): Duration of audio currently buffered, in seconds.
+        
+        Returns:
+            dict: Mapping with the following keys:
+                - segment_id: The 1-based index of the upcoming segment.
+                - segment_start: Timestamp (seconds) where this partial segment begins relative to the audio stream.
+                - segment_end: Timestamp (seconds) where this partial segment ends (segment_start + buffer_duration).
+                - buffer_duration: The provided buffer duration in seconds.
+                - cumulative_audio: Total processed audio duration (seconds) before this partial.
+        """
         start = float(self._total_processed_seconds)
         return {
             "segment_id": self._segment_index + 1,
@@ -284,6 +389,24 @@ class ParakeetCoreTranscriber:
         }
 
     def _prepare_final_metadata(self, chunk_duration: float) -> Dict[str, float]:
+        """
+        Compute metadata for a finalized audio segment including timing, overlap, and cumulative totals.
+        
+        Parameters:
+            chunk_duration (float): Duration in seconds of the chunk being finalized.
+        
+        Returns:
+            Dict[str, float]: Metadata for the finalized segment containing:
+                - segment_id: Sequential segment index (1-based after update).
+                - segment_start: Start time (seconds) of the new audio portion before overlap.
+                - segment_end: End time (seconds) of the new audio portion before overlap.
+                - chunk_duration: The input chunk duration (seconds).
+                - overlap: Amount of overlap (seconds) applied to this chunk.
+                - chunk_start: Start time (seconds) of the full chunk including overlap.
+                - chunk_end: End time (seconds) of the full chunk including overlap.
+                - new_audio_duration: Duration (seconds) of audio from this chunk that advances the processed timeline.
+                - cumulative_audio: Total processed audio duration (seconds) after this chunk.
+        """
         chunk_duration = max(float(chunk_duration), 0.0)
         overlap_cfg = max(float(self.config.overlap_duration or 0.0), 0.0)
         if self._segment_index == 0:

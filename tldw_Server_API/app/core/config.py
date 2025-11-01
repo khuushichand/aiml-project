@@ -432,7 +432,17 @@ openai_tts_mappings = {
 
 # --- Helper Function (Optional but can keep dictionary creation clean) ---
 def load_settings():
-    """Loads all settings from environment variables or defaults into a dictionary."""
+    """
+    Assembles application configuration from environment variables and configuration files into a single mapping.
+    
+    Builds a consolidated dictionary of runtime settings (paths, feature flags, numeric limits, provider blocks, and raw comprehensive config) used by the application. The returned mapping contains keys such as PROJECT_ROOT, DATABASE_URL, USER_DB_BASE_DIR, REDIS_*, SANDBOX_*, feature-flag knobs, and COMPREHENSIVE_CONFIG_RAW among many others.
+    
+    Returns:
+        dict: A dictionary of consolidated configuration values keyed by setting name.
+    
+    Notes:
+        This function may load .env files, consult on-disk config files, emit startup warnings, and create filesystem directories (for the main SQLite database and the user data base directory) as needed.
+    """
 
     # Determine Actual Project Root based on the location of this file
     # config.py is in project_root/tldw_server_api/app/core/config.py

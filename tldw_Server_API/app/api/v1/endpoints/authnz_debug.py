@@ -18,6 +18,20 @@ router = APIRouter()
 
 async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dict[str, Any]:
     # Prefer earlier resolution from auth middlewares/deps
+    """
+    Resolve an API key to its `api_key_id` and associated `user_id` for the incoming request.
+    
+    The function prefers values previously set on `request.state` and otherwise extracts an API key from the provided `x_api_key` parameter or a Bearer token in the Authorization header. If an API key is found, it derives candidate HMAC-SHA256 digests and looks up the active API key record in the database, returning the most recently created match.
+    
+    Parameters:
+        request (Request): The incoming FastAPI request; may contain pre-resolved `state.api_key_id` and `state.user_id`.
+        x_api_key (Optional[str]): An explicit API key (typically from the X-API-KEY header) to resolve; if omitted, the Authorization header is inspected.
+    
+    Returns:
+        dict: A mapping with keys:
+            - "api_key_id": int or None — the resolved API key ID as an integer when found, otherwise None.
+            - "user_id": Any or None — the associated user identifier when available, otherwise None.
+    """
     key_id = getattr(request.state, "api_key_id", None)
     user_id = getattr(request.state, "user_id", None)
     if key_id:
@@ -60,9 +74,13 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
 
 @router.get("/authnz/debug/api-key-id", tags=["authnz-debug"])
 async def debug_api_key_id(request: Request, X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY")):
-    """Return the resolved api_key_id/user_id for the provided API key header.
-
-    Only intended for test/debug use; no auth enforced.
+    """
+    Resolve the provided API key and return its associated api_key_id and user_id.
+    
+    This endpoint is for debugging and does not enforce authentication.
+    
+    Returns:
+        result (dict): A dictionary with `"status": "ok"` plus `api_key_id` (int or None) and `user_id` (user identifier or None).
     """
     resolved = await _resolve_api_key_id(request, X_API_KEY)
     return {"status": "ok", **resolved}
@@ -70,7 +88,22 @@ async def debug_api_key_id(request: Request, X_API_KEY: Optional[str] = Header(N
 
 @router.get("/authnz/debug/budget-summary", tags=["authnz-debug"])
 async def debug_budget_summary(request: Request, X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY")):
-    """Return limits and current day/month usage and over-budget flag for the key."""
+    """
+    Provide limits, daily and monthly usage summaries, and an over-budget evaluation for the resolved API key.
+    
+    If no API key is resolved from the request or headers, returns a response with `"api_key_id": None` and a `"message"` explaining no key was resolved.
+    
+    Returns:
+        dict: A response object containing:
+            - status (str): Always `"ok"`.
+            - api_key_id (int | None): The resolved API key ID, or `None` if no key was resolved.
+            - message (str, optional): Present when no API key was resolved.
+            - limits (Any): Key limits as returned by `get_key_limits`.
+            - day (Any): Daily usage summary as returned by `summarize_usage_for_key_day`.
+            - month (Any): Monthly usage summary as returned by `summarize_usage_for_key_month`.
+            - over_budget (bool): `true` if the key is over its budget, `false` otherwise.
+            - reasons (Any): Explanation or list of reasons from `is_key_over_budget`.
+    """
     resolved = await _resolve_api_key_id(request, X_API_KEY)
     key_id = resolved.get("api_key_id")
     if not key_id:
@@ -89,4 +122,3 @@ async def debug_budget_summary(request: Request, X_API_KEY: Optional[str] = Head
         "over_budget": decision.get("over"),
         "reasons": decision.get("reasons"),
     }
-

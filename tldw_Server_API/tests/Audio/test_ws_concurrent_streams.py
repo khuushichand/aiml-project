@@ -7,15 +7,37 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.asyncio
 async def test_ws_concurrent_streams_denied(monkeypatch):
-    """Ensure WS denies when concurrent_streams quota is exhausted."""
+    """
+    Verify the audio WebSocket endpoint rejects connections when concurrent-streams quota is exceeded.
+    
+    The test monkeypatches quota helpers to simulate active streams and then attempts a WebSocket connection
+    to the transcribe endpoint with a valid token. If the endpoint is available, it asserts an incoming error
+    frame whose `type` is "error" and whose message mentions "Concurrent streams", and verifies the connection
+    is then closed (further receives raise). If the endpoint is not available, the test is skipped.
+    """
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
 
     async def _deny_stream(user_id: int):
+        """
+        Simulate that a user already has two active streams.
+        
+        Parameters:
+            user_id (int): The user's identifier (unused; present for interface compatibility).
+        
+        Returns:
+            int: `2` indicating two active streams.
+        """
         return 2  # pretend two streams active
 
     async def _can_start_stream(user_id: int):
+        """
+        Indicates that a user cannot start a new stream because the concurrent streams quota is exceeded.
+        
+        Returns:
+            (bool, str): `False` and an error message stating the concurrent streams limit.
+        """
         return False, "Concurrent streams limit reached (1)"
 
     # Force can_start_stream denial
@@ -45,4 +67,3 @@ async def test_ws_concurrent_streams_denied(monkeypatch):
             # Any further receive should raise
             with pytest.raises(Exception):
                 ws.receive_json()
-
