@@ -2623,8 +2623,13 @@ async def _save_uploaded_files(
             except Exception as write_err:
                 # Cleanup and report
                 if local_file_path.exists():
-                    try: local_file_path.unlink(missing_ok=True)
-                    except Exception: pass
+                    try:
+                        local_file_path.unlink(missing_ok=True)
+                    except Exception as unlink_err:
+                        logger.warning(
+                            f"Failed to remove partially written upload file: {local_file_path}",
+                            exc_info=unlink_err,
+                        )
                 file_handling_errors.append({
                     "original_filename": original_filename,
                     "input_ref": input_ref,
@@ -2641,8 +2646,13 @@ async def _save_uploaded_files(
                     "status": "Error",
                     "error": "Uploaded file content is empty.",
                 })
-                try: local_file_path.unlink(missing_ok=True)
-                except Exception: pass
+                try:
+                    local_file_path.unlink(missing_ok=True)
+                except Exception as unlink_err:
+                    logger.warning(
+                        f"Failed to remove empty upload file: {local_file_path}",
+                        exc_info=unlink_err,
+                    )
                 continue
 
             try:

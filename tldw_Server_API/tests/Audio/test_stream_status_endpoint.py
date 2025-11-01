@@ -43,7 +43,6 @@ def test_stream_status_shape(client_user_only):
     ):
         assert key in sf
 
-    # If models are advertised, they should be known strings
-    known_prefixes = ("parakeet-standard", "parakeet-onnx", "parakeet-mlx")
+    # If models are advertised, they should start with a known base model
     for m in data["available_models"]:
-        assert any(m.startswith(p.split("-")[0]) for p in known_prefixes)
+        assert m.startswith("parakeet"), f"Unknown model: {m}"

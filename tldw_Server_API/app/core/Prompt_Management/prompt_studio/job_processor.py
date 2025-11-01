@@ -72,8 +72,9 @@ class JobProcessor:
             )
         except Exception as exc:  # noqa: BLE001 - defensive guard for legacy sqlite paths
             logger.warning(
-                "Failed to ensure prompt_studio_prompts(id={}) exists: {}",
+                "PS ensure_prompt_stub failed: prompt_id={} project_id={} error={}",
                 prompt_id,
+                project_id,
                 exc,
             )
     
@@ -95,7 +96,11 @@ class JobProcessor:
             project_id = entity_id
             generation_type = payload.get("type", "description")
             
-            logger.info(f"Processing generation job for project {project_id}")
+            logger.info(
+                "PS generation.start project_id={} type={}",
+                project_id,
+                generation_type,
+            )
             
             if generation_type == "diverse":
                 # Generate diverse test cases
@@ -116,11 +121,22 @@ class JobProcessor:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
-            logger.info(f"Generated {len(generated)} test cases for project {project_id}")
+            logger.info(
+                "PS generation.done project_id={} type={} generated_count={} timestamp={}",
+                project_id,
+                generation_type,
+                len(generated),
+                result["timestamp"],
+            )
             return result
             
         except Exception as e:
-            logger.error(f"Generation job failed: {e}")
+            logger.error(
+                "PS generation.error project_id={} type={} error={}",
+                payload.get("project_id") or entity_id,
+                payload.get("type"),
+                e,
+            )
             raise
     
     async def _generate_diverse_cases(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -193,7 +209,13 @@ class JobProcessor:
             test_case_ids = payload.get("test_case_ids", [])
             model_configs = payload.get("model_configs", [])
             
-            logger.info(f"Processing evaluation job {evaluation_id}")
+            logger.info(
+                "PS evaluation.start evaluation_id={} prompt_id={} test_cases={} models={}",
+                evaluation_id,
+                prompt_id,
+                len(test_case_ids),
+                len(model_configs),
+            )
             
             evaluation = self.db.get_evaluation(evaluation_id)
             if evaluation:
@@ -259,11 +281,21 @@ class JobProcessor:
                 "status": "completed"
             }
             
-            logger.info(f"Completed evaluation {evaluation_id} with {len(test_runs)} test runs")
+            logger.info(
+                "PS evaluation.done evaluation_id={} runs={} tokens={} cost={}",
+                evaluation_id,
+                len(test_runs),
+                total_tokens,
+                total_cost,
+            )
             return result
             
         except Exception as e:
-            logger.error(f"Evaluation job failed: {e}")
+            logger.error(
+                "PS evaluation.error evaluation_id={} error={}",
+                entity_id,
+                e,
+            )
             
             # Update evaluation status to failed
             self.db.update_evaluation(
@@ -431,7 +463,8 @@ class JobProcessor:
                     )
                 except Exception as iteration_exc:  # noqa: BLE001
                     logger.warning(
-                        "Failed to record optimization iteration %s: %s",
+                        "PS optimization.iteration_record_failed optimization_id={} iteration={} error={}",
+                        optimization_id,
                         iteration_index,
                         iteration_exc,
                     )
@@ -443,10 +476,10 @@ class JobProcessor:
 
                 if best_metric > 0.95:
                     logger.info(
-                        "Early stopping optimization %s at iteration %s with metric %.3f",
+                        "PS optimization.early_stop optimization_id={} iteration={} metric={}",
                         optimization_id,
                         iteration_index,
-                        best_metric,
+                        round(best_metric, 3),
                     )
                     break
 
@@ -462,7 +495,8 @@ class JobProcessor:
                         )
                 except Exception as broadcast_exc:  # noqa: BLE001
                     logger.warning(
-                        "Failed broadcasting optimization iteration %s: %s",
+                        "PS optimization.broadcast_failed optimization_id={} iteration={} error={}",
+                        optimization_id,
                         iteration_index,
                         broadcast_exc,
                     )
@@ -496,14 +530,22 @@ class JobProcessor:
             }
 
             logger.info(
-                "Completed optimization %s with %.1f%% improvement",
+                "PS optimization.done optimization_id={} iterations={} best_metric={} improvement_pct={} tokens={} cost={}",
                 optimization_id,
-                improvement,
+                len(iterations),
+                round(best_metric, 3),
+                round(improvement, 1),
+                total_tokens,
+                total_cost,
             )
             return result
 
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Optimization job failed: {e}")
+            logger.error(
+                "PS optimization.error optimization_id={} error={}",
+                locals().get("optimization_id"),
+                e,
+            )
 
             try:
                 self.db.set_optimization_status(
@@ -514,7 +556,7 @@ class JobProcessor:
                 )
             except Exception as status_exc:  # noqa: BLE001
                 logger.warning(
-                    "Failed to mark optimization %s as failed: %s",
+                    "PS optimization.mark_failed_failed optimization_id={} error={}",
                     optimization_id,
                     status_exc,
                 )

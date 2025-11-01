@@ -8,8 +8,7 @@ from fastapi import Request, HTTPException
 import os
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
 from loguru import logger
 
@@ -42,56 +41,35 @@ async def enforce_llm_budget(request: Request) -> None:
                 api_key = auth.split(" ", 1)[1].strip()
 
         if api_key:
-            digests: list[str] = []
-            candidates = list(derive_hmac_key_candidates(settings))
-            if _dbg:
-                from loguru import logger
-                logger.debug(f"LLM guard: hash candidates={len(candidates)}")
-            for key in candidates:
-                digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
-                if digest not in digests:
-                    digests.append(digest)
-            if _dbg and digests:
-                from loguru import logger
-                logger.debug(f"LLM guard: first digest={digests[0][:12]}… total={len(digests)}")
-            if digests:
-                pool = await get_db_pool()
-                placeholders = ",".join("?" for _ in digests)
-                query = (
-                    f"SELECT id, user_id FROM api_keys "
-                    f"WHERE key_hash IN ({placeholders}) AND status = ? "
-                    f"ORDER BY created_at DESC LIMIT 1"
-                )
-                row = await pool.fetchone(query, (*digests, "active"))
-                if row:
-                    key_id = row.get("id") if isinstance(row, dict) else row[0]
-                    try:
-                        request.state.api_key_id = key_id
-                        request.state.user_id = row.get("user_id") if isinstance(row, dict) else row[1]
-                    except Exception as exc:
-                        # Do not proceed silently with missing auth state; log with context and stop.
-                        user_id_value = row.get("user_id") if isinstance(row, dict) else row[1]
-                        path = getattr(getattr(request, "url", None), "path", None) or request.scope.get("path")
-                        logger.exception(
-                            "LLM guard: failed to set request.state attributes (path={path}, api_key_id={key_id}, user_id={user_id})",
-                            path=path,
-                            key_id=key_id,
-                            user_id=user_id_value,
-                        )
-                        raise HTTPException(
-                            status_code=500,
-                            detail={
-                                "error": "internal_state_error",
-                                "message": "Failed to attach authorization context to request state",
-                                "details": {
-                                    "path": path,
-                                    "attributes": ["api_key_id", "user_id"],
-                                },
+            info = await resolve_api_key_by_hash(api_key, settings=settings)
+            if info:
+                key_id = info.get("id")
+                try:
+                    request.state.api_key_id = key_id
+                    request.state.user_id = info.get("user_id")
+                except Exception as exc:
+                    # Do not proceed silently with missing auth state; log with context and stop.
+                    user_id_value = info.get("user_id") if isinstance(info, dict) else None
+                    path = getattr(getattr(request, "url", None), "path", None) or request.scope.get("path")
+                    logger.exception(
+                        "LLM guard: failed to set request.state attributes (path={path}, api_key_id={key_id}, user_id={user_id})",
+                        path=path,
+                        key_id=key_id,
+                        user_id=user_id_value,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": "internal_state_error",
+                            "message": "Failed to attach authorization context to request state",
+                            "details": {
+                                "path": path,
+                                "attributes": ["api_key_id", "user_id"],
                             },
-                        ) from exc
-                elif _dbg:
-                    from loguru import logger
-                    logger.debug("LLM guard: no key_id found via hash lookup")
+                        },
+                    ) from exc
+            elif _dbg:
+                logger.debug("LLM guard: no key_id found via hash lookup")
 
     if not key_id:
         # JWT or anonymous path; budgets apply only to API keys

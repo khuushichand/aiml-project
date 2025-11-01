@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
+import { toBool } from '@/lib/authz';
 
 interface RunRow {
   id: number;
@@ -44,17 +46,8 @@ export default function AdminWatchlistsRunsPage() {
   const hasMore = useMemo(() => (page * size) < (total || 0), [page, size, total]);
   const hasMoreByJob = useMemo(() => (pageByJob * sizeByJob) < (total || 0), [pageByJob, sizeByJob, total]);
 
-  const runsRequireAdmin = (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === '1' || (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === 'true';
-  const roleVal = (user as any)?.role?.toString?.().toLowerCase?.();
-  const rolesArr = ((user as any)?.roles || []).map((r: any) => r?.toString?.().toLowerCase?.());
-  const userIsAdmin = !!(
-    (user as any)?.is_admin ||
-    (user as any)?.isAdmin ||
-    roleVal === 'admin' ||
-    rolesArr?.includes?.('admin') ||
-    (user as any)?.permissions?.includes?.('admin') ||
-    (user as any)?.scopes?.includes?.('admin')
-  );
+  const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
+  const userIsAdmin = useIsAdmin();
 
   const fetchRunsByJob = async (opts?: { page?: number; size?: number }) => {
     const text = jobIdInput.trim();

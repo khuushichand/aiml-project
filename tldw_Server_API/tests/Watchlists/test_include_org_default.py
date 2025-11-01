@@ -23,6 +23,11 @@ def _test_env(monkeypatch, tmp_path):
 
     # Isolate AuthNZ DB as well
     auth_db_path = Path.cwd() / "Databases" / "authnz_org_default.db"
+    # Ensure a fresh DB per run to avoid leftover rows across test sessions
+    try:
+        auth_db_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+    except Exception:
+        pass
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{auth_db_path}")
 
     # Ensure AuthNZ tables exist
@@ -89,4 +94,3 @@ async def test_include_only_gating_enabled_by_org_default():
         assert all(i.status == "filtered" for i in items)
     finally:
         reset_scope(scope_token)
-

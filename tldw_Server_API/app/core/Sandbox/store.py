@@ -264,7 +264,7 @@ class SQLiteStore(SandboxStore):
         """
         Initialize the SQLite database schema for sandbox storage and apply a migration to add the `resource_usage` column if it is missing.
         
-        Creates the tables used by the store: `sandbox_runs` (run metadata, including `resource_usage`), `sandbox_idempotency` (idempotency records keyed by endpoint, user_key, and key), and `sandbox_usage` (per-user artifact byte usage). After creating tables, attempts to add the `resource_usage` column to `sandbox_runs` for backfill compatibility; any error during the ALTER (e.g., column already exists) is ignored.
+        Creates the tables used by the store: `sandbox_runs` (run metadata, including `resource_usage`), `sandbox_idempotency` (idempotency records keyed by endpoint, user_key, and key), and `sandbox_usage` (per-user artifact byte usage). After creating tables, attempts to add the `resource_usage` column to `sandbox_runs` for backfill compatibility; ignores only the specific "column already exists" error and re-raises any other migration failure.
         """
         with self._conn() as con:
             con.executescript(
@@ -301,11 +301,25 @@ class SQLiteStore(SandboxStore):
                 """
             )
             # Backfill migrations for older schemas: add resource_usage if missing
+            # Only ignore the specific case where the column already exists.
             try:
                 con.execute("ALTER TABLE sandbox_runs ADD COLUMN resource_usage TEXT")
-            except Exception:
-                # Column likely exists; ignore
-                pass
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if (
+                    "duplicate" in msg
+                    or "already exists" in msg
+                    or "duplicate column" in msg
+                ):
+                    logger.debug(
+                        "SQLite migration: resource_usage column already exists; skipping ALTER TABLE"
+                    )
+                else:
+                    # Log full exception (with stack trace) and re-raise to avoid masking real issues
+                    logger.exception(
+                        "SQLite migration failed adding resource_usage column to sandbox_runs"
+                    )
+                    raise
 
     def _fp(self, body: Dict[str, Any]) -> str:
         """

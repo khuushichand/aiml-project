@@ -8,6 +8,7 @@ import os
 import tempfile
 import io
 from pathlib import Path as PathLib
+import sqlite3  # for DB-specific exception handling in limits endpoints
 from typing import AsyncGenerator, Optional, Dict, Any
 import numpy as np
 import soundfile as sf
@@ -68,6 +69,27 @@ except Exception:
     # In import-guarded contexts, tests may skip or endpoints not mounted
     pass
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
+
+# Optional DB/Redis drivers (for precise exception handling without hard dependencies)
+try:  # asyncpg is optional; used when PostgreSQL is configured
+    import asyncpg  # type: ignore
+except Exception:  # pragma: no cover - absence is fine
+    asyncpg = None  # type: ignore
+try:  # redis is optional; used for active stream counters if enabled
+    from redis import exceptions as redis_exceptions  # type: ignore
+except Exception:  # pragma: no cover
+    redis_exceptions = None  # type: ignore
+
+# Build precise exception tuples we’ll catch in quota-limit helpers
+EXPECTED_DB_EXC = (NameError,)  # NameError if optional imports are unavailable
+if hasattr(sqlite3, "Error"):
+    EXPECTED_DB_EXC = EXPECTED_DB_EXC + (sqlite3.Error,)  # type: ignore[attr-defined]
+if asyncpg and hasattr(asyncpg, "PostgresError"):
+    EXPECTED_DB_EXC = EXPECTED_DB_EXC + (asyncpg.PostgresError,)  # type: ignore[attr-defined]
+
+EXPECTED_REDIS_EXC = (NameError,)
+if redis_exceptions and hasattr(redis_exceptions, "RedisError"):
+    EXPECTED_REDIS_EXC = EXPECTED_REDIS_EXC + (redis_exceptions.RedisError,)  # type: ignore[attr-defined]
 
 # For logging (if you use the same logger as in your PDF endpoint)
 from loguru import logger
@@ -419,10 +441,30 @@ async def create_transcription(
         )
     
     # Resolve per-tier file size limit
+    rid = None
+    try:
+        if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+            rid = str(request.state.request_id)
+    except Exception:
+        rid = None
     try:
         limits = await get_limits_for_user(current_user.id)
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to get limits for user {current_user.id} during upload, using defaults: {e}; request_id={rid}"
+        )
+        limits = {
+            "daily_minutes": 30.0,
+            "concurrent_streams": 1,
+            "concurrent_jobs": 1,
+            "max_file_size_mb": 25,
+        }
+    try:
         max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            f"Could not parse max_file_size_mb for user {current_user.id}; defaulting to 25MB: {e}; request_id={rid}"
+        )
         max_file_size = 25 * 1024 * 1024
     contents = await file.read()
     if len(contents) > max_file_size:
@@ -441,8 +483,10 @@ async def create_transcription(
     try:
         await increment_jobs_started(current_user.id)
         acquired_job_slot = True
-    except Exception as e:
-        logger.warning(f"Failed to increment jobs started: user_id={current_user.id}, error={e}")
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to increment jobs started: user_id={current_user.id}, error={e}; request_id={rid}"
+        )
 
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
@@ -518,16 +562,20 @@ async def create_transcription(
         minutes_est = duration_seconds / 60.0
         try:
             allow, remaining_after = await check_daily_minutes_allow(current_user.id, minutes_est)
-        except Exception as e:
-            logger.debug(f"check_daily_minutes_allow failed; allowing by default: user_id={current_user.id}, error={e}")
+        except EXPECTED_DB_EXC as e:
+            logger.exception(
+                f"check_daily_minutes_allow failed; allowing by default: user_id={current_user.id}, error={e}; request_id={rid}"
+            )
             allow = True
             remaining_after = None
         if not allow:
             # Release job slot before returning
             try:
                 await finish_job(current_user.id)
-            except Exception as e:
-                logger.warning(f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}")
+            except EXPECTED_DB_EXC as e:
+                logger.exception(
+                    f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}; request_id={rid}"
+                )
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Transcription quota exceeded (daily minutes)"
@@ -589,8 +637,10 @@ async def create_transcription(
             try:
                 if acquired_job_slot:
                     await finish_job(current_user.id)
-            except Exception:
-                pass
+            except EXPECTED_DB_EXC as e:
+                logger.exception(
+                    f"Failed to release job slot in finally: user_id={current_user.id}, error={e}; request_id={rid}"
+                )
 
         # Check for errors in transcription
         if transcribed_text.startswith("[Error") or transcribed_text.startswith("[Transcription error"):
@@ -612,8 +662,10 @@ async def create_transcription(
         # On success, record minutes used
         try:
             await add_daily_minutes(current_user.id, minutes_est)
-        except Exception as e:
-            logger.debug(f"Failed to record daily minutes: user_id={current_user.id}, error={e}")
+        except EXPECTED_DB_EXC as e:
+            logger.exception(
+                f"Failed to record daily minutes: user_id={current_user.id}, error={e}; request_id={rid}"
+            )
 
         # Format response based on requested format
         if response_format == "text":
@@ -726,7 +778,7 @@ async def create_transcription(
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
                 os.remove(temp_audio_path)
-            except Exception as e:
+            except OSError as e:
                 logger.warning(f"Failed to remove temp audio file: path={temp_audio_path}, error={e}")
                 try:
                     increment_counter("app_warning_events_total", labels={"component": "audio", "event": "tempfile_remove_failed"})
@@ -1418,12 +1470,25 @@ async def websocket_transcribe(
                 """
                 nonlocal used_minutes
                 minutes_chunk = float(seconds) / 60.0
-                allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                try:
+                    allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                except Exception as e:
+                    # WebSocket does not carry request_id; include user and context
+                    logger.warning(
+                        f"check_daily_minutes_allow failed during streaming; allowing by default: user_id={user_id_for_usage}, error={e}"
+                    )
+                    allow = True
                 if not allow:
                     # Raise structured signal to outer scope
                     raise _QuotaExceeded("daily_minutes")
                 used_minutes += minutes_chunk
-                await add_daily_minutes(user_id_for_usage, minutes_chunk)
+                try:
+                    await add_daily_minutes(user_id_for_usage, minutes_chunk)
+                except Exception as e:
+                    # WebSocket does not carry request_id; include user and context
+                    logger.warning(
+                        f"Failed to record streaming minutes: user_id={user_id_for_usage}, error={e}"
+                    )
 
             try:
                 async def _on_heartbeat() -> None:
@@ -1583,6 +1648,7 @@ async def streaming_status():
 @router.get("/stream/limits", summary="Get user's streaming quota and usage")
 async def streaming_limits(
     current_user: User = Depends(get_request_user),
+    request: Request = None,
 ):
     """
     Return the current user's streaming quota and usage summary.
@@ -1597,14 +1663,31 @@ async def streaming_limits(
             - active_streams (int): Number of currently active streams (0 if unavailable).
             - can_start_stream (bool): Whether the user may start another stream given current active streams and concurrent_streams limit.
     """
+    rid = None
+    try:
+        if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+            rid = str(request.state.request_id)
+    except Exception:
+        rid = None
     try:
         limits = await get_limits_for_user(current_user.id)
-    except Exception:
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to get limits for user {current_user.id}, falling back to defaults: {e}; request_id={rid}"
+        )
         # Fallback to default free limits
-        limits = {"daily_minutes": 30.0, "concurrent_streams": 1, "concurrent_jobs": 1, "max_file_size_mb": 25}
+        limits = {
+            "daily_minutes": 30.0,
+            "concurrent_streams": 1,
+            "concurrent_jobs": 1,
+            "max_file_size_mb": 25,
+        }
     try:
         used_minutes = await get_daily_minutes_used(current_user.id)
-    except Exception:
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to get used minutes for user {current_user.id}, falling back to 0: {e}; request_id={rid}"
+        )
         used_minutes = 0.0
     limit_minutes = limits.get("daily_minutes")
     if limit_minutes is None:
@@ -1612,19 +1695,31 @@ async def streaming_limits(
     else:
         try:
             remaining_minutes = max(0.0, float(limit_minutes) - float(used_minutes))
-        except Exception:
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not calculate remaining minutes for user {current_user.id}: {e}; request_id={rid}"
+            )
             remaining_minutes = None
     try:
         active_streams = await active_streams_count(current_user.id)
-    except Exception:
+    except EXPECTED_REDIS_EXC as e:
+        logger.exception(
+            f"Failed to get active streams for user {current_user.id}, falling back to 0: {e}; request_id={rid}"
+        )
         active_streams = 0
     try:
         tier = await get_user_tier(current_user.id)
-    except Exception:
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to get tier for user {current_user.id}, falling back to 'free': {e}; request_id={rid}"
+        )
         tier = "free"
     try:
         max_streams = int(limits.get("concurrent_streams") or 0)
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            f"Could not parse concurrent_streams limit for user {current_user.id}: {e}; request_id={rid}"
+        )
         max_streams = 0
     can_start = (max_streams == 0) or (active_streams < max_streams)
     return JSONResponse({

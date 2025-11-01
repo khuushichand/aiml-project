@@ -349,6 +349,7 @@ class OwnerProcessingSummary(BaseModel):
 async def owner_processing_summary(
     owner_user_id: str,
     _=Depends(require_admin),
+    request: Request = None,
 ):
     try:
         import os
@@ -375,12 +376,32 @@ async def owner_processing_summary(
         finally:
             conn.close()
         # Limit
+        # Correlate logs with request_id if available
+        rid = None
+        try:
+            if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+                rid = str(request.state.request_id)
+        except Exception:
+            rid = None
+
         try:
             from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user
             limits = await get_limits_for_user(int(owner_user_id))
-            limit = int(limits.get("concurrent_jobs") or 0)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"Failed to get limits for owner {owner_user_id}; returning limit=None: {e}; request_id={rid}"
+            )
+            limits = None
+        if limits is None:
             limit = None
+        else:
+            try:
+                limit = int(limits.get("concurrent_jobs") or 0)
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    f"Could not parse concurrent_jobs limit for owner {owner_user_id}; returning limit=None: {e}; request_id={rid}"
+                )
+                limit = None
         return OwnerProcessingSummary(owner_user_id=str(owner_user_id), processing=processing, limit=limit)
     except HTTPException:
         raise

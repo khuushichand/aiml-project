@@ -492,7 +492,9 @@ def _is_youtube_feed_url(url: str) -> bool:
         path_ok = u.path.lower().startswith("/feeds/videos.xml")
         if not path_ok:
             return False
-        qs = parse_qs(u.query or "")
+        raw_qs = parse_qs(u.query or "")
+        # Treat query keys case-insensitively (CHANNEL_ID, LIST, USER, etc.)
+        qs = {str(k).lower(): v for k, v in raw_qs.items()}
         return any(k in qs for k in ("channel_id", "playlist_id", "user"))
     except Exception:
         return False

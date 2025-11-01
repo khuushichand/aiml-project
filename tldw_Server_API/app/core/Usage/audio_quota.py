@@ -17,6 +17,7 @@ import asyncio
 from datetime import datetime, timezone
 import os
 from typing import Dict, Optional, Tuple
+from functools import lru_cache
 
 from loguru import logger
 
@@ -66,6 +67,7 @@ _lock = asyncio.Lock()
 _redis_client = None
 
 
+@lru_cache(maxsize=1)
 def _get_stream_ttl_seconds() -> int:
     """
     Determine the TTL (in seconds) to use for Redis stream counters.
@@ -99,6 +101,19 @@ def _get_stream_ttl_seconds() -> int:
         pass
     # 3) Hard default
     return 120
+
+
+def clear_stream_ttl_cache() -> None:
+    """Clear the cached TTL value so subsequent calls re-read configuration.
+
+    Use this after reloading application configuration or changing
+    AUDIO_STREAM_TTL_SECONDS at runtime.
+    """
+    try:
+        _get_stream_ttl_seconds.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        # If decoration is missing for any reason, ignore
+        pass
 
 
 def _use_redis() -> bool:

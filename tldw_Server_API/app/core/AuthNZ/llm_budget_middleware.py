@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 import os
 from loguru import logger
+from fastapi import HTTPException
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
@@ -36,6 +37,39 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         # Do not cache settings; fetch fresh each request to honor test resets
         self._settings = None
+
+    def _set_key_state(self, request: Request, key_id, user_id) -> None:
+        """Helper to safely set API key state on request with robust error handling.
+
+        Ensures both `api_key_id` and `user_id` are attached to `request.state`.
+        Mirrors guard behavior by logging context and raising HTTP 500 on failure
+        so downstream consumers can rely on these attributes when a key is present.
+        """
+        try:
+            request.state.api_key_id = key_id
+            request.state.user_id = user_id
+        except Exception as _state_exc:
+            try:
+                path_ctx = getattr(getattr(request, "url", None), "path", None) or request.scope.get("path")
+            except Exception:
+                path_ctx = None
+            logger.exception(
+                "LLM budget: failed to set request.state attributes (path={path}, api_key_id={key_id}, user_id={user_id})",
+                path=path_ctx,
+                key_id=key_id,
+                user_id=user_id,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "internal_state_error",
+                    "message": "Failed to attach authorization context to request state",
+                    "details": {
+                        "path": path_ctx,
+                        "attributes": ["api_key_id", "user_id"],
+                    },
+                },
+            ) from _state_exc
 
     def _should_check(self, path: str) -> bool:
         """
@@ -142,11 +176,8 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                         row = await pool.fetchone(query, (*digests, "active"))
                         if row:
                             key_id = row.get('id') if isinstance(row, dict) else row[0]
-                            try:
-                                request.state.api_key_id = key_id
-                                request.state.user_id = row.get('user_id') if isinstance(row, dict) else row[1]
-                            except Exception:
-                                pass
+                            user_id_value = (row.get('user_id') if isinstance(row, dict) else row[1])
+                            self._set_key_state(request, key_id, user_id_value)
                             if _mw_debug:
                                 logger.debug(f"LLM budget: resolved key_id via hash lookup: {key_id}")
                         elif _mw_debug:
@@ -154,6 +185,8 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 except Exception as _e_hash:
                     if _mw_debug:
                         logger.debug(f"LLM budget: hash-lookup failed: {_e_hash}")
+                    else:
+                        logger.warning("LLM budget: hash-lookup failed (enable BUDGET_MW_DEBUG for details)")
 
             # 2) Fallback to manager validation if still unresolved
             if not key_id and api_key:
@@ -163,11 +196,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     info = await mgr.validate_api_key(api_key=api_key, ip_address=(request.client.host if request.client else None))
                     if info:
                         key_id = info.get('id')
-                        try:
-                            request.state.api_key_id = key_id
-                            request.state.user_id = info.get('user_id')
-                        except Exception:
-                            pass
+                        self._set_key_state(request, key_id, info.get('user_id'))
                         if _mw_debug:
                             logger.debug(f"LLM budget: resolved key_id via manager.validate: {key_id}")
                     elif _mw_debug:
@@ -175,6 +204,8 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 except Exception as _e_mgr:
                     if _mw_debug:
                         logger.debug(f"LLM budget: manager.validate failed: {_e_mgr}")
+                    else:
+                        logger.warning("LLM budget: manager.validate failed (enable BUDGET_MW_DEBUG for details)")
 
             # If still no key_id, treat as JWT/no-key and skip enforcement
             if not key_id:

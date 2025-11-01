@@ -20,6 +20,13 @@ def client_with_user(monkeypatch):
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("TEST_MODE", "1")
+    # Ensure a clean per-user DB for user 909 (default path used by settings)
+    try:
+        default_user_db = Path.cwd() / "Databases" / "user_databases" / "909" / "Media_DB_v2.db"
+        if default_user_db.exists():
+            default_user_db.unlink()
+    except Exception:
+        pass
 
     from fastapi import FastAPI
     from tldw_Server_API.app.core.config import API_V1_PREFIX

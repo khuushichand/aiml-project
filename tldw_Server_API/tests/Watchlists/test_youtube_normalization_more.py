@@ -25,6 +25,14 @@ def client_with_user(monkeypatch, tmp_path):
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
+    # Ensure a clean per-user DB for user 777 (default path used by settings)
+    try:
+        default_user_db = Path.cwd() / "Databases" / "user_databases" / "777" / "Media_DB_v2.db"
+        if default_user_db.exists():
+            default_user_db.unlink()
+    except Exception:
+        pass
+
     # Build a minimal app including only the Watchlists router to avoid heavy imports
     from fastapi import FastAPI
     from tldw_Server_API.app.core.config import API_V1_PREFIX

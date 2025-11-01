@@ -134,7 +134,7 @@ Transcription results from Nemo models (Hypothesis objects) are automatically co
 - WebSocket endpoints use a separate router to avoid conflicts with HTTP authentication middleware
 - Token validation happens after WebSocket upgrade
 - CSRF protection is bypassed for WebSocket connections
- - See also `Docs/API-related/Audio_Transcription_API.md` for detailed auth flows, quota error frames, and close codes (4401/4403/4003/1008/1011). The `GET /api/v1/audio/stream/limits` endpoint provides per-user minutes remaining and active stream counts.
+- See also `Docs/API-related/Audio_Transcription_API.md` for detailed auth flows, quota error frames, and close codes (4401/4403/4003/1008/1011). The `GET /api/v1/audio/stream/limits` endpoint provides per-user minutes remaining and active stream counts.
 
 ## Usage Examples
 
