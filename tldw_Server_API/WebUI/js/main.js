@@ -291,7 +291,7 @@ class WebUI {
         scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
         mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
         // For migrated groups, skip executing inline scripts (no eval) and only load external src scripts.
-        const MIGRATED_GROUPS = new Set(['keywords', 'jobs', 'rag', 'evaluations']);
+        const MIGRATED_GROUPS = new Set(['keywords', 'jobs', 'rag', 'evaluations', 'admin']);
         for (const s of scripts) {
             try {
                 if (s.src) {
@@ -553,6 +553,20 @@ class WebUI {
                     }
                 });
             } catch (e) { /* ignore */ }
+        }
+
+        // Quick Actions buttons (no inline handlers due to CSP)
+        const btnTestConnection = document.getElementById('btnTestConnection');
+        if (btnTestConnection) {
+            btnTestConnection.addEventListener('click', () => this.checkApiStatus());
+        }
+        const btnViewHistory = document.getElementById('btnViewHistory');
+        if (btnViewHistory) {
+            btnViewHistory.addEventListener('click', () => this.showRequestHistory());
+        }
+        const btnRefreshPage = document.getElementById('btnRefreshPage');
+        if (btnRefreshPage) {
+            btnRefreshPage.addEventListener('click', () => window.location.reload());
         }
 
         // Add theme toggle handler

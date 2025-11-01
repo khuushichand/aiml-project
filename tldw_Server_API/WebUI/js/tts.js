@@ -81,6 +81,7 @@ const TTS = {
         this.checkProviderStatus();
         this.refreshVoiceList();
         this.setupEventListeners();
+        this._bindUIHandlers();
 
         // Initialize per-provider recorder states
         this._recorders = {}; // { provider: { mediaRecorder, chunks, isRecording, blob, url } }
@@ -102,6 +103,74 @@ const TTS = {
                 } catch (_) {}
             });
         } catch (_) {}
+    },
+
+    _bindUIHandlers() {
+        const root = document.getElementById('tts-content') || document;
+        // Refresh provider status
+        document.getElementById('tts-refresh-status')?.addEventListener('click', () => this.checkProviderStatus());
+        // Sub-tab switching
+        root.querySelectorAll('.sub-tab-btn[data-provider]')?.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const p = btn.getAttribute('data-provider');
+                if (p) this.switchProvider(p);
+            });
+        });
+        // Text input
+        document.getElementById('tts-text-input')?.addEventListener('input', () => this.updateCharCounter());
+        document.getElementById('btnTtsLoadSample')?.addEventListener('click', () => this.loadSampleText());
+        document.getElementById('btnTtsClearText')?.addEventListener('click', () => this.clearText());
+        // Record controls per provider
+        const bindRec = (prov) => {
+            document.getElementById(`${prov}-rec-start`)?.addEventListener('click', () => this.startProviderRecording(prov));
+            document.getElementById(`${prov}-rec-stop`)?.addEventListener('click', () => this.stopProviderRecording(prov));
+            document.getElementById(`${prov}-rec-clear`)?.addEventListener('click', () => this.clearProviderRecording(prov));
+        };
+        ['vibevoice','higgs','chatterbox'].forEach(bindRec);
+        // NeuTTS special
+        document.getElementById('neutts-rec-start')?.addEventListener('click', () => this.startNeuTTSRecording());
+        document.getElementById('neutts-rec-stop')?.addEventListener('click', () => this.stopNeuTTSRecording());
+        document.getElementById('neutts-rec-clear')?.addEventListener('click', () => this.clearNeuTTSRecording());
+        // Rec settings headers and reset links
+        root.querySelectorAll('.rec-settings-header[data-provider]')?.forEach(h => {
+            h.addEventListener('click', () => {
+                const p = h.getAttribute('data-provider');
+                if (p) this.toggleRecSettings(p);
+            });
+        });
+        root.addEventListener('click', (e) => {
+            const a = e.target.closest('a.rec-reset[data-provider]');
+            if (a) {
+                e.preventDefault();
+                const p = a.getAttribute('data-provider');
+                if (p) this.setRecMaxSec(p, 15);
+            }
+        });
+        // Ranges for vibevoice labels
+        const bindRange = (id, labelId) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', () => { const lab = document.getElementById(labelId); if (lab) lab.textContent = el.value; });
+            }
+        };
+        bindRange('vibevoice-cfg', 'vibevoice-cfg-value');
+        bindRange('vibevoice-steps', 'vibevoice-steps-value');
+        bindRange('vibevoice-temperature', 'vibevoice-temp-value');
+        bindRange('vibevoice-topp', 'vibevoice-topp-value');
+        // Generate/Stop/Download/Save
+        document.getElementById('tts-generate-btn')?.addEventListener('click', () => this.generate());
+        document.getElementById('tts-stop-btn')?.addEventListener('click', () => this.stop());
+        document.getElementById('tts-download-btn')?.addEventListener('click', () => this.downloadAudio());
+        document.getElementById('tts-save-history-btn')?.addEventListener('click', () => this.saveToHistory());
+        // Provider-specific extras
+        document.getElementById('higgs-upload-voice-clone')?.addEventListener('click', () => this.uploadVoiceClone('higgs'));
+        document.getElementById('chatterbox-upload-voice-clone')?.addEventListener('click', () => this.uploadVoiceClone('chatterbox'));
+        document.getElementById('vibevoice-open-upload')?.addEventListener('click', () => this.openVoiceUpload('vibevoice'));
+        document.getElementById('tts-voices-refresh')?.addEventListener('click', () => this.refreshVoiceList());
+        document.getElementById('tts-history-clear')?.addEventListener('click', () => this.clearHistory());
+        document.getElementById('tts-upload-close')?.addEventListener('click', () => this.closeVoiceUpload());
+        document.getElementById('tts-upload-cancel')?.addEventListener('click', () => this.closeVoiceUpload());
+        document.getElementById('tts-upload-submit')?.addEventListener('click', () => this.uploadVoice());
     },
 
     // Internal: initialize per-provider recording settings controls

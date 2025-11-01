@@ -6,7 +6,7 @@
         
         <div class="form-group">
             <label for="batchOperation">Operation Type:</label>
-            <select id="batchOperation" onchange="updateBatchFields()">
+            <select id="batchOperation">
                 <option value="delete_media">Delete Media Items</option>
                 <option value="cleanup_orphans">Cleanup Orphaned Records</option>
                 <option value="rebuild_fts">Rebuild Full-Text Search</option>
@@ -22,10 +22,10 @@
         </div>
         
         <div class="btn-group">
-            <button class="btn btn-warning" onclick="performBatchOperation()">
+            <button class="btn btn-warning" id="btnBatchExecute">
                 Execute Batch Operation
             </button>
-            <button class="btn btn-secondary" onclick="previewBatchOperation()">
+            <button class="btn btn-secondary" id="btnBatchPreview">
                 Preview
             </button>
         </div>
@@ -82,7 +82,7 @@
             </label>
         </div>
         
-        <button class="btn btn-warning" onclick="performDatabaseCleanup()">
+        <button class="btn btn-warning" id="btnCleanupRun">
             Run Cleanup
         </button>
         
@@ -133,7 +133,7 @@
             </select>
         </div>
         
-        <button class="btn btn-primary" onclick="exportConfiguration()">
+        <button class="btn btn-primary" id="btnExportConfig">
             Export Configuration
         </button>
         
@@ -168,7 +168,7 @@
             </label>
         </div>
         
-        <button class="btn btn-warning" onclick="importConfiguration()">
+        <button class="btn btn-warning" id="btnImportConfig">
             Import Configuration
         </button>
         
@@ -212,7 +212,7 @@
             </label>
         </div>
         
-        <button class="btn btn-primary" onclick="createBackup()">
+        <button class="btn btn-primary" id="btnCreateBackup">
             Create Backup
         </button>
         
@@ -234,7 +234,7 @@
             </label>
         </div>
         
-        <button class="btn btn-danger" onclick="restoreBackup()" disabled id="restoreBtn">
+        <button class="btn btn-danger" disabled id="restoreBtn">
             Restore Backup
         </button>
         
@@ -253,8 +253,8 @@
                     <input id="claims_media_id" type="number" min="1" placeholder="Enter media_id" />
                 </div>
                 <div class="btn-group">
-                    <button class="btn" onclick="uiClaimsLoad()">Load Claims</button>
-                    <button class="btn btn-warning" onclick="uiClaimsRebuildOne()">Rebuild (Background)</button>
+                    <button class="btn" id="btnClaimsLoad">Load Claims</button>
+                    <button class="btn btn-warning" id="btnClaimsRebuildOne">Rebuild (Background)</button>
                 </div>
             </div>
             <div class="column">
@@ -267,8 +267,8 @@
                     </select>
                 </div>
                 <div class="btn-group">
-                    <button class="btn btn-warning" onclick="uiClaimsRebuildAll()">Rebuild All</button>
-                    <button class="btn btn-secondary" onclick="uiClaimsRebuildFTS()">Rebuild FTS Index</button>
+                    <button class="btn btn-warning" id="btnClaimsRebuildAll">Rebuild All</button>
+                    <button class="btn btn-secondary" id="btnClaimsRebuildFTS">Rebuild FTS Index</button>
                 </div>
             </div>
         </div>
@@ -373,13 +373,10 @@
 }
 </style>
 
-<script>
-// Enable restore button only when confirmed
-document.getElementById('restore_confirm')?.addEventListener('change', (e) => {
-    document.getElementById('restoreBtn').disabled = !e.target.checked;
-});
+<script type="module" src="js/maintenance.js"></script>
 
-// Update batch operation fields dynamically
+<!-- Legacy inline script removed; migrated to js/maintenance.js -->
+<!--
 function updateBatchFields() {
     const operation = document.getElementById('batchOperation').value;
     const fieldsDiv = document.getElementById('batchFields');
@@ -442,7 +439,6 @@ function updateBatchFields() {
     fieldsDiv.innerHTML = html;
 }
 
-// Perform batch operation
 async function performBatchOperation() {
     const operation = document.getElementById('batchOperation').value;
     const resultEl = document.getElementById('batchResult');
@@ -593,7 +589,6 @@ async function exportConfiguration() {
     }
 }
 
-// Import configuration
 async function importConfiguration() {
     const resultEl = document.getElementById('importResult');
     const fileInput = document.getElementById('importFile');
@@ -625,7 +620,6 @@ async function importConfiguration() {
     }
 }
 
-// Create backup
 async function createBackup() {
     const resultEl = document.getElementById('backupResult');
     
@@ -653,7 +647,6 @@ async function createBackup() {
     }
 }
 
-// Restore backup
 async function restoreBackup() {
     const resultEl = document.getElementById('restoreResult');
     const fileInput = document.getElementById('restore_file');
@@ -685,7 +678,4 @@ async function restoreBackup() {
         Loading.hide(resultEl.parentElement);
     }
 }
-
-// Initialize on load
-updateBatchFields();
-</script>
+-->

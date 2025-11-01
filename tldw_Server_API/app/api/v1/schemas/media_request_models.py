@@ -554,6 +554,10 @@ class IngestWebContentRequest(BaseModel):
     cookies: Optional[str] = None
     perform_confabulation_check_of_analysis: bool = False
     custom_chapter_pattern: Optional[str] = None
+    # Optional crawl controls (used for recursive/url_level when supported)
+    crawl_strategy: Optional[str] = None  # e.g., "best_first" or "default"
+    include_external: Optional[bool] = None
+    score_threshold: Optional[float] = None
 
 #
 # End of Web-Scraping ingestion and analysis model schema

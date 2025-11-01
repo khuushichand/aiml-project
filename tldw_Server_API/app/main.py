@@ -2655,6 +2655,12 @@ else:
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
     _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    # Tools (MCP-backed server tool execution)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+        _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
+    except Exception as _tools_e:
+        logger.warning(f"Tools endpoints unavailable; skipping import: {_tools_e}")
     _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
@@ -2749,7 +2755,7 @@ else:
     if _HAS_JOBS_ADMIN:
         _include_if_enabled("jobs", jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"], default_stable=False)
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
-    _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
+    # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
     _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
     _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=False)

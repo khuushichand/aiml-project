@@ -41,14 +41,16 @@ def _inject_nonce_into_html(html: bytes, nonce: str) -> bytes:
         return html
 
 
-def _build_webui_csp(nonce: str) -> str:
+def _build_webui_csp(nonce: str, *, allow_inline_scripts: bool, allow_eval: bool) -> str:
     """Build CSP for WebUI.
 
-    By default, keep a relaxed policy for legacy inline scripts.
-    Set env TLDW_WEBUI_NO_EVAL=1 to drop 'unsafe-eval' once migrated tabs avoid eval.
+    - For /webui we drop 'unsafe-inline' for scripts by default (migrated tabs use modules/bindings).
+    - For /setup we keep inline scripts allowed as the setup flow still uses inline helpers.
+    - Set env TLDW_WEBUI_NO_EVAL=1 to drop 'unsafe-eval' once migrated tabs avoid eval.
     """
-    allow_eval = os.getenv("TLDW_WEBUI_NO_EVAL", "0") not in ("1", "true", "TRUE")
-    script_parts = ["'self'", "'unsafe-inline'"]
+    script_parts = ["'self'"]
+    if allow_inline_scripts:
+        script_parts.append("'unsafe-inline'")
     if allow_eval:
         script_parts.append("'unsafe-eval'")
     policy = (
@@ -89,7 +91,14 @@ class WebUICSPMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         try:
-            response.headers.setdefault("Content-Security-Policy", _build_webui_csp(nonce))
+            # Allow inline scripts only for /setup pages; drop for /webui.
+            allow_inline_scripts = path.startswith("/setup")
+            # Eval allowed unless TLDW_WEBUI_NO_EVAL=1
+            allow_eval = os.getenv("TLDW_WEBUI_NO_EVAL", "0") not in ("1", "true", "TRUE")
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                _build_webui_csp(nonce, allow_inline_scripts=allow_inline_scripts, allow_eval=allow_eval),
+            )
         except Exception:
             # Best-effort header set; return original response
             pass

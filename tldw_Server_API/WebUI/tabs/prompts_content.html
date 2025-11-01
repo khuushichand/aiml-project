@@ -22,7 +22,7 @@
             </div>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsList', 'GET', '/api/v1/prompts', 'query')">
+        <button class="api-button" id="btnPromptsList">
             List Prompts
         </button>
         
@@ -67,7 +67,7 @@
             </label>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsSearch', 'POST', '/api/v1/prompts/search', 'query')">
+        <button class="api-button" id="btnPromptsSearch">
             Search Prompts
         </button>
         
@@ -90,7 +90,7 @@
             <input type="text" id="promptsGet_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsGet', 'GET', '/api/v1/prompts/{prompt_identifier}', 'none')">
+        <button class="api-button" id="btnPromptsGet">
             Get Prompt
         </button>
         
@@ -116,7 +116,7 @@
             </select>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsExport', 'GET', '/api/v1/prompts/export', 'query')">
+        <button class="api-button" id="btnPromptsExport">
             Export Prompts
         </button>
         
@@ -172,7 +172,7 @@
             </div>
         </div>
         
-        <button class="api-button" onclick="createPrompt()">
+        <button class="api-button" id="btnPromptsCreate">
             Create Prompt
         </button>
         
@@ -208,7 +208,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsUpdate', 'PUT', '/api/v1/prompts/{prompt_identifier}', 'json')">
+        <button class="api-button" id="btnPromptsUpdate">
             Update Prompt
         </button>
         
@@ -231,7 +231,7 @@
             <input type="text" id="promptsDelete_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
         
-        <button class="api-button btn-danger" onclick="if(confirm('Are you sure you want to delete this prompt?')) makeRequest('promptsDelete', 'DELETE', '/api/v1/prompts/{prompt_identifier}', 'none')">
+        <button class="api-button btn-danger" id="btnPromptsDelete">
             Delete Prompt
         </button>
         
@@ -249,14 +249,14 @@
             <h3>Add Keyword</h3>
             <label for="promptsKeyword_text">Keyword Text <span class="required">*</span>:</label>
             <input type="text" id="promptsKeyword_text" placeholder="Enter keyword">
-            <button class="api-button" onclick="addPromptKeyword()">
+            <button class="api-button" id="btnPromptKeywordAdd">
                 Add Keyword
             </button>
         </div>
         
         <div class="form-group mt-3">
             <h3>List Keywords</h3>
-            <button class="api-button" onclick="listPromptKeywords()">
+            <button class="api-button" id="btnPromptKeywordList">
                 List All Keywords
             </button>
         </div>
@@ -265,7 +265,7 @@
             <h3>Delete Keyword</h3>
             <label for="promptsKeyword_delete">Keyword to Delete:</label>
             <input type="text" id="promptsKeyword_delete" placeholder="keyword-text">
-            <button class="api-button btn-danger" onclick="deletePromptKeyword()">
+            <button class="api-button btn-danger" id="btnPromptKeywordDelete">
                 Delete Keyword
             </button>
         </div>
@@ -273,53 +273,5 @@
         <h3>Response:</h3>
         <pre id="promptsKeywords_response">---</pre>
     </div>
-    
-    <script>
-    async function addPromptKeyword() {
-        const keywordText = document.getElementById('promptsKeyword_text').value.trim();
-        if (!keywordText) {
-            alert('Please enter a keyword');
-            return;
-        }
-        
-        try {
-            const response = await apiClient.post('/api/v1/prompts/keywords/', {
-                keyword_text: keywordText
-            });
-            document.getElementById('promptsKeywords_response').textContent = JSON.stringify(response, null, 2);
-            document.getElementById('promptsKeyword_text').value = '';
-        } catch (error) {
-            document.getElementById('promptsKeywords_response').textContent = `Error: ${error.message}`;
-        }
-    }
-    
-    async function listPromptKeywords() {
-        try {
-            const keywords = await apiClient.get('/api/v1/prompts/keywords/');
-            document.getElementById('promptsKeywords_response').textContent = JSON.stringify(keywords, null, 2);
-        } catch (error) {
-            document.getElementById('promptsKeywords_response').textContent = `Error: ${error.message}`;
-        }
-    }
-    
-    async function deletePromptKeyword() {
-        const keywordText = document.getElementById('promptsKeyword_delete').value.trim();
-        if (!keywordText) {
-            alert('Please enter a keyword to delete');
-            return;
-        }
-        
-        if (!confirm(`Delete keyword "${keywordText}"?`)) {
-            return;
-        }
-        
-        try {
-            await apiClient.delete(`/api/v1/prompts/keywords/${encodeURIComponent(keywordText)}`);
-            document.getElementById('promptsKeywords_response').textContent = 'Keyword deleted successfully';
-            document.getElementById('promptsKeyword_delete').value = '';
-        } catch (error) {
-            document.getElementById('promptsKeywords_response').textContent = `Error: ${error.message}`;
-        }
-    }
-    </script>
+    <script type="module" src="js/prompts.js"></script>
 </div>

@@ -8209,51 +8209,83 @@ async def ingest_web_content(
     # URL LEVEL
     #####################################################################
     elif scrape_method == ScrapeMethod.URL_LEVEL:
-        # Typically the user will supply only 1 base URL
+        # Route to enhanced service to honor crawl flags and modern traversal
         base_url = request.urls[0]
         level = request.url_level or 2
 
-        # `scrape_by_url_level(base_url, level)` is presumably synchronous in your code.
-        def scrape_in_thread():
-            return scrape_by_url_level(base_url, level)
-
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, scrape_in_thread)
-
-        if not results:
-            logging.warning("No articles returned from URL-level scraping.")
-        else:
-            for r in results:
-                # Summarize if needed
-                r = await maybe_summarize_one(r)
-                raw_results.append(r)
+        try:
+            service_result = await process_web_scraping_task(
+                scrape_method="URL Level",
+                url_input=base_url,
+                url_level=level,
+                max_pages=request.max_pages or 10,
+                max_depth=level,
+                summarize_checkbox=bool(getattr(request, 'perform_analysis', False)),
+                custom_prompt=getattr(request, 'custom_prompt', None),
+                api_name=getattr(request, 'api_name', None),
+                api_key=None,
+                keywords=",".join(request.keywords or []) if isinstance(request.keywords, list) else (request.keywords or ""),
+                custom_titles=None,
+                system_prompt=getattr(request, 'system_prompt', None),
+                temperature=0.7,
+                custom_cookies=custom_cookies_list,
+                mode="ephemeral",
+                user_agent=getattr(request, 'user_agent', None) if hasattr(request, 'user_agent') else None,
+                custom_headers=None,
+                crawl_strategy=getattr(request, 'crawl_strategy', None),
+                include_external=getattr(request, 'include_external', None),
+                score_threshold=getattr(request, 'score_threshold', None),
+            )
+            articles = service_result.get("articles", []) if isinstance(service_result, dict) else []
+            # Map summary->analysis for compatibility with Friendly endpoint
+            for r in articles:
+                if isinstance(r, dict) and 'summary' in r and 'analysis' not in r:
+                    r['analysis'] = r.get('summary')
+            raw_results.extend(articles)
+        except Exception as e:
+            logging.error(f"Enhanced URL Level crawl failed: {e}")
+            raise
 
     #####################################################################
     # RECURSIVE SCRAPING
     #####################################################################
     elif scrape_method == ScrapeMethod.RECURSIVE:
+        # Route to enhanced service to honor crawl flags and modern traversal
         base_url = request.urls[0]
         max_pages = request.max_pages or 10
         max_depth = request.max_depth or 3
 
-        # The function is already async, so we can call it directly
-        # You also have `progress_callback` in your code.
-        # For an API scenario, we might skip progress callbacks or store them in logs.
-        results = await recursive_scrape(
-            base_url=base_url,
-            max_pages=max_pages,
-            max_depth=max_depth,
-            progress_callback=logging.info,  # or None if you want silent
-            custom_cookies=custom_cookies_list
-        )
-
-        if not results:
-            logging.warning("No articles returned from recursive scraping.")
-        else:
-            for r in results:
-                # Summarize if needed
-                r = await maybe_summarize_one(r)
-                raw_results.append(r)
+        try:
+            service_result = await process_web_scraping_task(
+                scrape_method="Recursive Scraping",
+                url_input=base_url,
+                url_level=None,
+                max_pages=max_pages,
+                max_depth=max_depth,
+                summarize_checkbox=bool(getattr(request, 'perform_analysis', False)),
+                custom_prompt=getattr(request, 'custom_prompt', None),
+                api_name=getattr(request, 'api_name', None),
+                api_key=None,
+                keywords=",".join(request.keywords or []) if isinstance(request.keywords, list) else (request.keywords or ""),
+                custom_titles=None,
+                system_prompt=getattr(request, 'system_prompt', None),
+                temperature=0.7,
+                custom_cookies=custom_cookies_list,
+                mode="ephemeral",
+                user_agent=getattr(request, 'user_agent', None) if hasattr(request, 'user_agent') else None,
+                custom_headers=None,
+                crawl_strategy=getattr(request, 'crawl_strategy', None),
+                include_external=getattr(request, 'include_external', None),
+                score_threshold=getattr(request, 'score_threshold', None),
+            )
+            articles = service_result.get("articles", []) if isinstance(service_result, dict) else []
+            for r in articles:
+                if isinstance(r, dict) and 'summary' in r and 'analysis' not in r:
+                    r['analysis'] = r.get('summary')
+            raw_results.extend(articles)
+        except Exception as e:
+            logging.error(f"Enhanced recursive crawl failed: {e}")
+            raise
 
     else:
         raise HTTPException(

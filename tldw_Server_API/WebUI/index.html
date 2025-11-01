@@ -9,8 +9,7 @@
     <!-- External CSS -->
     <link rel="stylesheet" href="css/styles.css">
     <script defer src="js/setup-guard.js"></script>
-    <!-- Shim to convert inline event attributes to addEventListener handlers -->
-    <script src="js/inline-handler-shim.js"></script>
+    <!-- Inline handler shim removed after migrating handlers to modules -->
     
     <!-- Additional styles for JSON syntax highlighting -->
     <style>
@@ -443,7 +442,19 @@
         <div id="auth-subtabs" class="sub-tab-row" role="navigation" aria-label="Auth sub-navigation">
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabAuth" data-load-group="auth" role="tab">
-                    Authentication
+                    Basic
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthSecurity" data-load-group="auth" role="tab">
+                    Security
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthApiKeys" data-load-group="auth" role="tab">
+                    My API Keys
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthMfa" data-load-group="auth" role="tab">
+                    MFA
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthVirtualKey" data-load-group="auth" role="tab">
+                    Virtual Key
                 </button>
             </div>
         </div>
@@ -921,13 +932,13 @@
                     <div class="form-group mt-3">
                         <h3>Quick Actions</h3>
                         <div class="btn-group">
-                            <button class="btn btn-primary" onclick="webUI.checkApiStatus()">
+                            <button class="btn btn-primary" id="btnTestConnection">
                                 Test Connection
                             </button>
-                            <button class="btn btn-secondary" onclick="webUI.showRequestHistory()">
+                            <button class="btn btn-secondary" id="btnViewHistory">
                                 View History
                             </button>
-                            <button class="btn btn-secondary" onclick="location.reload()">
+                            <button class="btn btn-secondary" id="btnRefreshPage">
                                 Refresh Page
                             </button>
                         </div>

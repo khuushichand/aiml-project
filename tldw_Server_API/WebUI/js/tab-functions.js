@@ -1536,6 +1536,11 @@ function updateFriendlyScrapeMethodUI() {
     show('group_friendlyIngest_max_pages', method === 'recursive_scraping' || method === 'sitemap');
     // recursive_scraping: needs both max_pages and max_depth
     show('group_friendlyIngest_max_depth', method === 'recursive_scraping');
+    // Crawl controls for recursive/url_level
+    const needsCrawlControls = (method === 'recursive_scraping' || method === 'url_level');
+    show('group_friendlyIngest_crawl_strategy', needsCrawlControls);
+    show('group_friendlyIngest_include_external', needsCrawlControls);
+    show('group_friendlyIngest_score_threshold', needsCrawlControls);
 }
 
 function validateFriendlyCookies() {
@@ -1793,6 +1798,18 @@ function submitWebScrapingIngestFriendly(previewOnly = false) {
             custom_chapter_pattern: customChapterPattern || undefined
         };
 
+        // Optional crawl controls (only applicable for recursive/url_level)
+        try {
+            const crawlStrategy = document.getElementById('friendlyIngest_crawl_strategy')?.value || null;
+            const includeExternal = !!(document.getElementById('friendlyIngest_include_external')?.checked);
+            const scoreThreshold = parseFloat(document.getElementById('friendlyIngest_score_threshold')?.value || '0');
+            if (scrapeMethod === 'recursive_scraping' || scrapeMethod === 'url_level') {
+                payload.crawl_strategy = crawlStrategy || undefined;
+                payload.include_external = includeExternal;
+                payload.score_threshold = isNaN(scoreThreshold) ? undefined : scoreThreshold;
+            }
+        } catch (_) {}
+
         // Toggle proposition controls based on method
         const methodSelect = document.getElementById('friendlyIngest_chunk_method');
         const togglePropControls = () => {
@@ -1897,6 +1914,9 @@ function updateProcessingTypeUI() {
     show('group_multi_url_level', webMode);
     show('group_multi_max_pages', webMode);
     show('group_multi_max_depth', webMode);
+    show('group_multi_crawl_strategy', webMode);
+    show('group_multi_include_external', webMode);
+    show('group_multi_score_threshold', webMode);
     // Advanced groups
     show('adv_videos', type === 'videos');
     show('adv_audios', type === 'audios');
@@ -2074,6 +2094,10 @@ async function multiIngestUrlsToQueue() {
                 url_level: method === 'URL Level' ? urlLevel : null,
                 max_pages: (method === 'Recursive Scraping' || method === 'Sitemap') ? maxPages : 10,
                 max_depth: method === 'Recursive Scraping' ? maxDepth : 3,
+                // Crawl controls (optional)
+                crawl_strategy: (document.getElementById('multi_crawl_strategy')?.value || 'best_first'),
+                include_external: !!(document.getElementById('multi_include_external')?.checked),
+                score_threshold: parseFloat(document.getElementById('multi_score_threshold')?.value || '0'),
                 summarize_checkbox: false,
                 custom_prompt: null,
                 api_name: null,
@@ -2596,6 +2620,7 @@ let chatMessages = [
 ];
 let chatStreamHandle = null; // active SSE handle for streaming chat
 let chatConversationId = null; // current conversation id if any
+let chatAutoContinueInProgress = false; // guard for auto-continue
 
 // ------------------------------------------------------------
 // Minimal Markdown Renderer (safe)
@@ -2624,7 +2649,12 @@ function createCodeBlockElement(codeText, lang) {
 
     const code = document.createElement('code');
     if (lang) code.setAttribute('data-lang', lang);
-    code.textContent = codeText;
+    // Use lightweight highlighter for display (keeps original for copy)
+    try {
+        code.innerHTML = highlightCode(codeText, lang);
+    } catch (_) {
+        code.textContent = codeText;
+    }
     pre.appendChild(code);
 
     const btn = document.createElement('button');
@@ -2689,6 +2719,67 @@ function appendPlainMarkdown(text, container) {
         div.innerHTML = html;
         container.appendChild(div);
     });
+}
+
+// Very lightweight highlighter for common languages (json, js/ts, python)
+function highlightCode(src, lang) {
+    const s = String(src || '');
+    const esc = (v) => v
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;');
+    let out = esc(s);
+    const langNorm = (lang || '').toLowerCase();
+
+    if (langNorm === 'json') {
+        // Try to pretty print JSON
+        try { out = esc(JSON.stringify(JSON.parse(s), null, 2)); } catch(_) {}
+        // Keys: &quot;key&quot;:
+        out = out.replace(/(^|\n)\s*(&quot;[^&]*?&quot;)(\s*:\s*)/g, (m, a, key, sep) => `${a}<span class="tok-key">${key}</span>${sep}`);
+        // Strings
+        out = out.replace(/&quot;(?:[^&]|&(?!quot;))*&quot;/g, (m) => `<span class="tok-string">${m}</span>`);
+        // Numbers (no lookbehind): capture and reinsert prefix
+        out = out.replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`);
+        // Booleans/null
+        out = out.replace(/\b(true|false)\b/g, '<span class="tok-boolean">$1</span>');
+        out = out.replace(/\bnull\b/g, '<span class="tok-null">null</span>');
+        return out;
+    }
+
+    // Basic JS/TS highlighting
+    if (/(js|javascript|ts|typescript)/.test(langNorm)) {
+        const kw = /(\b)(break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|let|new|return|super|switch|this|throw|try|typeof|var|void|while|with|yield)(\b)/g;
+        out = out
+            // comments
+            .replace(/(\/\/.*?$)/gm, '<span class="tok-comment">$1</span>')
+            .replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="tok-comment">$1</span>')
+            // strings
+            .replace(/(['"`])([^\\\n]|\\.|\n)*?\1/g, '<span class="tok-string">$&</span>')
+            // numbers (no lookbehind)
+            .replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`) 
+            // keywords
+            .replace(kw, '$1<span class="tok-kw">$2</span>$3')
+            // function names (simple heuristic)
+            .replace(/\b([A-Za-z_][\w]*)\s*(?=\()/g, '<span class="tok-func">$1</span>');
+        return out;
+    }
+
+    // Basic Python highlighting
+    if (/(py|python)/.test(langNorm)) {
+        const kw = /(\b)(and|as|assert|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield)(\b)/g;
+        out = out
+            .replace(/(#.*?$)/gm, '<span class="tok-comment">$1</span>')
+            .replace(/(['"]).*?\1/g, '<span class="tok-string">$&</span>')
+            .replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`) 
+            .replace(kw, '$1<span class="tok-kw">$2</span>$3');
+        return out;
+    }
+
+    // Default: no specific highlighting beyond escaping
+    return out;
 }
 
 // Function to update the system prompt
@@ -2819,6 +2910,8 @@ async function sendChatMessage() {
 
             let assembled = '';
             const toolCallsAcc = [];
+            const toolResultsAcc = [];
+            const debugChunks = [];
             let renderScheduled = false;
             const scheduleRender = () => {
                 if (renderScheduled) return;
@@ -2828,6 +2921,7 @@ async function sendChatMessage() {
                     try {
                         renderMarkdownToElement(assembled, answerContainer);
                         renderToolCalls(toolCallsAcc, toolsContainer);
+                        renderToolResults(toolResultsAcc, toolsContainer);
                     } catch (_) {}
                 });
             };
@@ -2836,6 +2930,7 @@ async function sendChatMessage() {
                 body: requestPayload,
                 onEvent: (evt) => {
                     try {
+                        debugChunks.push(evt);
                         const delta = evt?.choices?.[0]?.delta?.content;
                         if (typeof delta === 'string' && delta.length > 0) {
                             assembled += delta;
@@ -2851,6 +2946,16 @@ async function sendChatMessage() {
                                 const fn = tc.function || {};
                                 if (fn.name) toolCallsAcc[idx].name = fn.name;
                                 if (typeof fn.arguments === 'string') toolCallsAcc[idx].args += fn.arguments;
+                            });
+                            scheduleRender();
+                        }
+                        // Accumulate streamed tool results if present
+                        const dResults = evt?.tool_results || evt?.tldw_tool_results;
+                        if (Array.isArray(dResults) && dResults.length) {
+                            dResults.forEach((r) => {
+                                const name = r?.name || r?.tool || '';
+                                const content = typeof r?.content === 'string' ? r.content : JSON.stringify(r?.content ?? r);
+                                toolResultsAcc.push({ name, content });
                             });
                             scheduleRender();
                         }
@@ -2876,6 +2981,10 @@ async function sendChatMessage() {
                 if (stopBtn) stopBtn.style.display = 'none';
                 if (sendBtn) sendBtn.disabled = false;
                 chatStreamHandle = null;
+                // Append debug JSON panel
+                appendAssistantDebugPanel(assistantDiv, { chunks: debugChunks });
+                // Auto-continue if configured and tools present
+                maybeAutoContinueAfterTools(toolCallsAcc.length > 0, toolResultsAcc.length > 0, !!(streamToggle && streamToggle.checked));
             }
             return;
         }
@@ -2913,6 +3022,22 @@ async function sendChatMessage() {
                     renderToolCalls(acc, tools);
                 }
             } catch (_) {}
+            // Render tool results if present in payload (best-effort)
+            try {
+                const toolMsgs = response.tool_messages || response.tldw_tool_results || [];
+                if (Array.isArray(toolMsgs) && toolMsgs.length) {
+                    const acc = toolMsgs.map(tm => ({ name: tm?.name || tm?.tool || '', content: typeof tm?.content === 'string' ? tm.content : JSON.stringify(tm?.content ?? tm) }));
+                    renderToolResults(acc, tools);
+                } else if (Array.isArray(response.messages)) {
+                    const toolOnly = response.messages.filter(m => m?.role === 'tool');
+                    if (toolOnly.length) {
+                        const acc2 = toolOnly.map(m => ({ name: m?.name || '', content: typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? m) }));
+                        renderToolResults(acc2, tools);
+                    }
+                }
+            } catch(_) {}
+            // Append raw JSON debug panel
+            appendAssistantDebugPanel(assistantDiv, response);
 
             // Capture conversation id from non-streaming response
             try {
@@ -3073,6 +3198,227 @@ function renderToolCalls(toolCalls, container) {
         block.appendChild(codeEl);
         container.appendChild(block);
     });
+}
+
+// Render tool results block(s)
+function renderToolResults(toolResults, container) {
+    if (!container) return;
+    const results = (Array.isArray(toolResults) ? toolResults : []).filter(tr => (tr && (tr.name || tr.content)));
+    if (!results.length) return;
+    // Add header once if not present
+    const presentHeader = container.querySelector('.assistant-tools-header[data-kind="results"]');
+    if (!presentHeader) {
+        const header = document.createElement('div');
+        header.className = 'assistant-tools-header';
+        header.setAttribute('data-kind', 'results');
+        header.textContent = 'Tool results:';
+        container.appendChild(header);
+    }
+    results.forEach((r) => {
+        const block = document.createElement('div');
+        block.className = 'tool-result-block';
+        block.style.borderLeft = '3px solid #ccc';
+        block.style.paddingLeft = '8px';
+        block.style.margin = '4px 0';
+        const name = document.createElement('div');
+        name.innerHTML = `<strong>${mdEscape(r.name || 'result')}</strong>`;
+        block.appendChild(name);
+        const content = typeof r.content === 'string' ? r.content : JSON.stringify(r.content || r);
+        const codeEl = createCodeBlockElement(content, 'json');
+        block.appendChild(codeEl);
+        container.appendChild(block);
+    });
+}
+
+// Add a collapsible raw JSON debug panel under an assistant message
+function appendAssistantDebugPanel(assistantDiv, data) {
+    try {
+        const details = document.createElement('details');
+        details.className = 'assistant-debug';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Debug: raw JSON';
+        const pre = document.createElement('pre');
+        pre.innerHTML = Utils.syntaxHighlightJSON(data);
+        details.appendChild(summary);
+        details.appendChild(pre);
+        assistantDiv.appendChild(details);
+    } catch (_) {}
+}
+
+// Auto-continue after tools if server persisted tool results into conversation
+function maybeAutoContinueAfterTools(hadToolCalls, hadToolResults, streaming) {
+    try {
+        const autoEl = document.getElementById('chat-auto-continue');
+        const saveEl = document.getElementById('chat-save-to-db');
+        if (!autoEl || !autoEl.checked) return;
+        if (!saveEl || !saveEl.checked) return; // require persistence
+        if (!chatConversationId) return; // need conv id to continue
+        if (chatAutoContinueInProgress) return;
+        // Only continue if we saw tool results (server executed) or at least tool calls (best-effort)
+        if (!hadToolCalls && !hadToolResults) return;
+        chatAutoContinueInProgress = true;
+        setTimeout(() => {
+            continueConversation().finally(() => { chatAutoContinueInProgress = false; });
+        }, 250); // small delay to let UI settle
+    } catch (_) {}
+}
+
+// Continue conversation without adding a new user message
+async function continueConversation() {
+    const messagesDiv = document.getElementById('chat-messages');
+    const model = document.getElementById('chat-model').value;
+    const providerSelect = document.getElementById('chat-provider');
+    const provider = providerSelect ? providerSelect.value : '';
+    const streamToggle = document.getElementById('chat-stream');
+    const saveToggle = document.getElementById('chat-save-to-db');
+    const convIdInput = document.getElementById('chat-conversation-id');
+    const sendBtn = document.getElementById('chat-send-btn');
+    const stopBtn = document.getElementById('chat-stop-btn');
+    const tempEl = document.getElementById('chat-temp');
+    const topPEl = document.getElementById('chat-top-p');
+    const maxTokEl = document.getElementById('chat-max-tokens');
+
+    // Create assistant placeholder
+    const assistantDiv = document.createElement('div');
+    assistantDiv.className = 'chat-message assistant';
+    const assistantLabel = document.createElement('strong');
+    assistantLabel.textContent = 'Assistant:';
+    const answerContainer = document.createElement('div');
+    answerContainer.className = 'assistant-answer';
+    answerContainer.textContent = 'Continuing...';
+    const toolsContainer = document.createElement('div');
+    toolsContainer.className = 'assistant-tools';
+    toolsContainer.style.marginTop = '6px';
+    assistantDiv.appendChild(assistantLabel);
+    assistantDiv.appendChild(document.createTextNode(' '));
+    assistantDiv.appendChild(answerContainer);
+    assistantDiv.appendChild(toolsContainer);
+    messagesDiv.appendChild(assistantDiv);
+    requestAnimationFrame(() => { messagesDiv.scrollTop = messagesDiv.scrollHeight; });
+
+    const requestPayload = {
+        model: model,
+        messages: chatMessages,
+        conversation_id: chatConversationId,
+        temperature: tempEl && tempEl.value ? parseFloat(tempEl.value) : 0.7,
+        top_p: topPEl && topPEl.value ? parseFloat(topPEl.value) : 1,
+        max_tokens: maxTokEl && maxTokEl.value ? parseInt(maxTokEl.value) : 1000
+    };
+    if (provider) requestPayload.api_provider = provider;
+    if (saveToggle && saveToggle.checked) requestPayload.save_to_db = true;
+
+    // Streaming path
+    if (streamToggle && streamToggle.checked) {
+        if (sendBtn) sendBtn.disabled = true;
+        if (stopBtn) stopBtn.style.display = '';
+        let assembled = '';
+        const toolCallsAcc = [];
+        const toolResultsAcc = [];
+        const debugChunks = [];
+        let renderScheduled = false;
+        const scheduleRender = () => {
+            if (renderScheduled) return;
+            renderScheduled = true;
+            requestAnimationFrame(() => {
+                renderScheduled = false;
+                try {
+                    renderMarkdownToElement(assembled, answerContainer);
+                    renderToolCalls(toolCallsAcc, toolsContainer);
+                    renderToolResults(toolResultsAcc, toolsContainer);
+                } catch (_) {}
+            });
+        };
+        const handle = apiClient.streamSSE('/api/v1/chat/completions', {
+            method: 'POST',
+            body: requestPayload,
+            onEvent: (evt) => {
+                try {
+                    debugChunks.push(evt);
+                    const delta = evt?.choices?.[0]?.delta?.content;
+                    if (typeof delta === 'string' && delta.length > 0) {
+                        assembled += delta;
+                        scheduleRender();
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    }
+                    const dTools = evt?.choices?.[0]?.delta?.tool_calls;
+                    if (Array.isArray(dTools) && dTools.length) {
+                        dTools.forEach((tc) => {
+                            const idx = typeof tc.index === 'number' ? tc.index : 0;
+                            if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { name: '', args: '' };
+                            const fn = tc.function || {};
+                            if (fn.name) toolCallsAcc[idx].name = fn.name;
+                            if (typeof fn.arguments === 'string') toolCallsAcc[idx].args += fn.arguments;
+                        });
+                        scheduleRender();
+                    }
+                    const dResults = evt?.tool_results || evt?.tldw_tool_results;
+                    if (Array.isArray(dResults) && dResults.length) {
+                        dResults.forEach((r) => {
+                            const name = r?.name || r?.tool || '';
+                            const content = typeof r?.content === 'string' ? r.content : JSON.stringify(r?.content ?? r);
+                            toolResultsAcc.push({ name, content });
+                        });
+                        scheduleRender();
+                    }
+                } catch(_) {}
+            },
+            timeout: 600000
+        });
+        try {
+            await handle.done;
+            chatMessages.push({ role: 'assistant', content: assembled });
+        } catch (e) {
+            const suffix = (e && e.name === 'AbortError') ? ' [stopped]' : ` [error: ${e?.message || 'failed'}]`;
+            renderMarkdownToElement(assembled + suffix, answerContainer);
+        } finally {
+            if (stopBtn) stopBtn.style.display = 'none';
+            if (sendBtn) sendBtn.disabled = false;
+            appendAssistantDebugPanel(assistantDiv, { chunks: debugChunks });
+        }
+        return;
+    }
+
+    // Non-stream
+    try {
+        const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
+        const assistantMessage = response?.choices?.[0]?.message?.content || '';
+        chatMessages.push({ role: 'assistant', content: assistantMessage });
+        assistantDiv.innerHTML = '';
+        const label = document.createElement('strong');
+        label.textContent = 'Assistant:';
+        const ans = document.createElement('div');
+        const tools = document.createElement('div');
+        tools.className = 'assistant-tools';
+        tools.style.marginTop = '6px';
+        renderMarkdownToElement(assistantMessage, ans);
+        assistantDiv.appendChild(label);
+        assistantDiv.appendChild(document.createTextNode(' '));
+        assistantDiv.appendChild(ans);
+        assistantDiv.appendChild(tools);
+        // tool calls/results
+        try {
+            const tcs = response.choices?.[0]?.message?.tool_calls;
+            if (Array.isArray(tcs) && tcs.length) {
+                const acc = tcs.map(tc => ({ name: tc?.function?.name || '', args: String(tc?.function?.arguments || '') }));
+                renderToolCalls(acc, tools);
+            }
+            const toolMsgs = response.tool_messages || response.tldw_tool_results || [];
+            if (Array.isArray(toolMsgs) && toolMsgs.length) {
+                const rs = toolMsgs.map(tm => ({ name: tm?.name || tm?.tool || '', content: typeof tm?.content === 'string' ? tm.content : JSON.stringify(tm?.content ?? tm) }));
+                renderToolResults(rs, tools);
+            }
+        } catch(_) {}
+        appendAssistantDebugPanel(assistantDiv, response);
+    } catch (error) {
+        assistantDiv.innerHTML = '';
+        const errorLabel = document.createElement('strong');
+        errorLabel.textContent = 'Assistant:';
+        const errorMsg = document.createElement('em');
+        errorMsg.textContent = `Error: ${error.message}`;
+        assistantDiv.appendChild(errorLabel);
+        assistantDiv.appendChild(document.createTextNode(' '));
+        assistantDiv.appendChild(errorMsg);
+    }
 }
 
 async function exportCharacter() {

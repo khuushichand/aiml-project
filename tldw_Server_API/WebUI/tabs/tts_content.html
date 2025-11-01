@@ -37,7 +37,7 @@
                     <span>NeuTTS</span>
                 </div>
             </div>
-            <button class="btn btn-sm btn-secondary" onclick="TTS.checkProviderStatus()">
+            <button class="btn btn-sm btn-secondary" id="tts-refresh-status">
                 <i class="fas fa-sync"></i> Refresh Status
             </button>
         </div>
@@ -45,25 +45,25 @@
         <!-- Provider Sub-tabs -->
         <div class="tts-tabs">
             <div class="sub-tab-buttons">
-                <button class="sub-tab-btn active" data-provider="vibevoice" onclick="TTS.switchProvider('vibevoice')">
+                <button class="sub-tab-btn active" data-provider="vibevoice">
                     <i class="fas fa-wave-square"></i> VibeVoice
                 </button>
-                <button class="sub-tab-btn" data-provider="kokoro" onclick="TTS.switchProvider('kokoro')">
+                <button class="sub-tab-btn" data-provider="kokoro">
                     <i class="fas fa-heart"></i> Kokoro
                 </button>
-                <button class="sub-tab-btn" data-provider="higgs" onclick="TTS.switchProvider('higgs')">
+                <button class="sub-tab-btn" data-provider="higgs">
                     <i class="fas fa-atom"></i> Higgs
                 </button>
-                <button class="sub-tab-btn" data-provider="chatterbox" onclick="TTS.switchProvider('chatterbox')">
+                <button class="sub-tab-btn" data-provider="chatterbox">
                     <i class="fas fa-comments"></i> Chatterbox
                 </button>
-                <button class="sub-tab-btn" data-provider="openai" onclick="TTS.switchProvider('openai')">
+                <button class="sub-tab-btn" data-provider="openai">
                     <i class="fas fa-brain"></i> OpenAI
                 </button>
-                <button class="sub-tab-btn" data-provider="elevenlabs" onclick="TTS.switchProvider('elevenlabs')">
+                <button class="sub-tab-btn" data-provider="elevenlabs">
                     <i class="fas fa-podcast"></i> ElevenLabs
                 </button>
-                <button class="sub-tab-btn" data-provider="neutts" onclick="TTS.switchProvider('neutts')">
+                <button class="sub-tab-btn" data-provider="neutts">
                     <i class="fas fa-cloud"></i> NeuTTS
                 </button>
             </div>
@@ -77,13 +77,13 @@
                 <div class="card-body">
                     <textarea id="tts-text-input" class="form-control" rows="6" 
                         placeholder="Enter the text you want to convert to speech..."
-                        maxlength="5000" oninput="TTS.updateCharCounter()"></textarea>
+                        maxlength="5000"></textarea>
                     
                     <div class="input-controls">
-                        <button class="btn btn-sm btn-secondary" onclick="TTS.loadSampleText()">
+                        <button class="btn btn-sm btn-secondary" id="btnTtsLoadSample">
                             <i class="fas fa-file-alt"></i> Load Sample
                         </button>
-                        <button class="btn btn-sm btn-secondary" onclick="TTS.clearText()">
+                        <button class="btn btn-sm btn-secondary" id="btnTtsClearText">
                             <i class="fas fa-eraser"></i> Clear
                         </button>
                     </div>
@@ -119,7 +119,7 @@
                                 <select id="vibevoice-custom-voice" class="form-control">
                                     <option value="">None</option>
                                 </select>
-                                <button class="btn btn-sm btn-primary mt-2" onclick="TTS.openVoiceUpload('vibevoice')">
+                                <button class="btn btn-sm btn-primary mt-2" id="vibevoice-open-upload">
                                     <i class="fas fa-upload"></i> Upload Voice
                                 </button>
                             </div>
@@ -127,13 +127,13 @@
                                 <label>Voice Reference (optional)</label>
                                 <input type="file" id="vibevoice-ref-audio" class="form-control" accept="audio/*" />
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
-                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startProviderRecording('vibevoice')" id="vibevoice-rec-start">
+                                    <button class="btn btn-sm btn-outline-primary" id="vibevoice-rec-start">
                                         <i class="fas fa-microphone"></i> Record
                                     </button>
-                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopProviderRecording('vibevoice')" id="vibevoice-rec-stop" disabled>
+                                    <button class="btn btn-sm btn-outline-danger" id="vibevoice-rec-stop" disabled>
                                         <i class="fas fa-stop"></i> Stop
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearProviderRecording('vibevoice')" id="vibevoice-rec-clear" disabled>
+                                    <button class="btn btn-sm btn-outline-secondary" id="vibevoice-rec-clear" disabled>
                                         <i class="fas fa-times"></i> Clear
                                     </button>
                                     <span id="vibevoice-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
@@ -142,7 +142,7 @@
                                 <audio id="vibevoice-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
                                 <!-- Recording Settings (collapsible) -->
                                 <div class="rec-settings" style="margin-top:8px;">
-                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('vibevoice')">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" data-provider="vibevoice">
                                         <span id="rec-settings-caret-vibevoice">▸</span> Recording Settings
                                     </div>
                                     <div id="rec-settings-vibevoice" class="rec-settings-body" style="display:none; margin-top:6px;">
@@ -158,7 +158,7 @@
                                             />
                                             <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
-                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('vibevoice', 15); return false;">Reset</a></small>
+                                        <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="vibevoice">Reset</a></small>
                                     </div>
                                 </div>
                             </div>
@@ -183,29 +183,25 @@
                             <div class="setting-group">
                                 <label>CFG Scale <span class="param-value" id="vibevoice-cfg-value">1.3</span></label>
                                 <input type="range" id="vibevoice-cfg" class="form-control-range" 
-                                    min="1.0" max="2.0" step="0.1" value="1.3"
-                                    oninput="document.getElementById('vibevoice-cfg-value').textContent = this.value">
+                                    min="1.0" max="2.0" step="0.1" value="1.3">
                                 <small class="form-text text-muted">Controls generation guidance strength</small>
                             </div>
                             <div class="setting-group">
                                 <label>Diffusion Steps <span class="param-value" id="vibevoice-steps-value">20</span></label>
                                 <input type="range" id="vibevoice-steps" class="form-control-range" 
-                                    min="5" max="100" step="5" value="20"
-                                    oninput="document.getElementById('vibevoice-steps-value').textContent = this.value">
+                                    min="5" max="100" step="5" value="20">
                                 <small class="form-text text-muted">Quality vs speed tradeoff</small>
                             </div>
                             <div class="setting-group">
                                 <label>Temperature <span class="param-value" id="vibevoice-temp-value">1.0</span></label>
                                 <input type="range" id="vibevoice-temperature" class="form-control-range" 
-                                    min="0.1" max="2.0" step="0.1" value="1.0"
-                                    oninput="document.getElementById('vibevoice-temp-value').textContent = this.value">
+                                    min="0.1" max="2.0" step="0.1" value="1.0">
                                 <small class="form-text text-muted">Sampling randomness</small>
                             </div>
                             <div class="setting-group">
                                 <label>Top-p <span class="param-value" id="vibevoice-topp-value">0.95</span></label>
                                 <input type="range" id="vibevoice-topp" class="form-control-range" 
-                                    min="0.1" max="1.0" step="0.05" value="0.95"
-                                    oninput="document.getElementById('vibevoice-topp-value').textContent = this.value">
+                                    min="0.1" max="1.0" step="0.05" value="0.95">
                                 <small class="form-text text-muted">Nucleus sampling</small>
                             </div>
                             <div class="setting-group">
@@ -326,20 +322,20 @@
                                 <label>Voice Clone (3-10s audio)</label>
                                 <input type="file" id="higgs-voice-upload" class="form-control-file" 
                                     accept="audio/*">
-                                <button class="btn btn-sm btn-primary mt-2" onclick="TTS.uploadVoiceClone('higgs')">
+                                <button class="btn btn-sm btn-primary mt-2" id="higgs-upload-voice-clone">
                                     <i class="fas fa-clone"></i> Clone Voice
                                 </button>
                             </div>
                             <div class="setting-group">
                                 <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3–15 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startProviderRecording('higgs')" id="higgs-rec-start">
+                                    <button class="btn btn-sm btn-outline-primary" id="higgs-rec-start">
                                         <i class="fas fa-microphone"></i> Record
                                     </button>
-                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopProviderRecording('higgs')" id="higgs-rec-stop" disabled>
+                                    <button class="btn btn-sm btn-outline-danger" id="higgs-rec-stop" disabled>
                                         <i class="fas fa-stop"></i> Stop
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearProviderRecording('higgs')" id="higgs-rec-clear" disabled>
+                                    <button class="btn btn-sm btn-outline-secondary" id="higgs-rec-clear" disabled>
                                         <i class="fas fa-times"></i> Clear
                                     </button>
                                     <span id="higgs-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
@@ -348,7 +344,7 @@
                                 <audio id="higgs-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
                                 <!-- Recording Settings (collapsible) -->
                                 <div class="rec-settings" style="margin-top:8px;">
-                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('higgs')">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" data-provider="higgs">
                                         <span id="rec-settings-caret-higgs">▸</span> Recording Settings
                                     </div>
                                     <div id="rec-settings-higgs" class="rec-settings-body" style="display:none; margin-top:6px;">
@@ -364,7 +360,7 @@
                                             />
                                             <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
-                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('higgs', 15); return false;">Reset</a></small>
+                                        <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="higgs">Reset</a></small>
                                     </div>
                                 </div>
                             </div>
@@ -420,20 +416,20 @@
                                 <label>Voice Clone (5-20s audio)</label>
                                 <input type="file" id="chatterbox-voice-upload" class="form-control-file" 
                                     accept="audio/*">
-                                <button class="btn btn-sm btn-primary mt-2" onclick="TTS.uploadVoiceClone('chatterbox')">
+                                <button class="btn btn-sm btn-primary mt-2" id="chatterbox-upload-voice-clone">
                                     <i class="fas fa-clone"></i> Clone Voice
                                 </button>
                             </div>
                             <div class="setting-group">
                                 <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 5–20 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startProviderRecording('chatterbox')" id="chatterbox-rec-start">
+                                    <button class="btn btn-sm btn-outline-primary" id="chatterbox-rec-start">
                                         <i class="fas fa-microphone"></i> Record
                                     </button>
-                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopProviderRecording('chatterbox')" id="chatterbox-rec-stop" disabled>
+                                    <button class="btn btn-sm btn-outline-danger" id="chatterbox-rec-stop" disabled>
                                         <i class="fas fa-stop"></i> Stop
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearProviderRecording('chatterbox')" id="chatterbox-rec-clear" disabled>
+                                    <button class="btn btn-sm btn-outline-secondary" id="chatterbox-rec-clear" disabled>
                                         <i class="fas fa-times"></i> Clear
                                     </button>
                                     <span id="chatterbox-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
@@ -442,7 +438,7 @@
                                 <audio id="chatterbox-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
                                 <!-- Recording Settings (collapsible) -->
                                 <div class="rec-settings" style="margin-top:8px;">
-                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('chatterbox')">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" data-provider="chatterbox">
                                         <span id="rec-settings-caret-chatterbox">▸</span> Recording Settings
                                     </div>
                                     <div id="rec-settings-chatterbox" class="rec-settings-body" style="display:none; margin-top:6px;">
@@ -458,7 +454,7 @@
                                             />
                                             <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
-                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('chatterbox', 15); return false;">Reset</a></small>
+                                        <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="chatterbox">Reset</a></small>
                                     </div>
                                 </div>
                             </div>
@@ -575,13 +571,13 @@
                             <div class="setting-group">
                                 <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3–10 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startNeuTTSRecording()" id="neutts-rec-start">
+                                    <button class="btn btn-sm btn-outline-primary" id="neutts-rec-start">
                                         <i class="fas fa-microphone"></i> Record
                                     </button>
-                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopNeuTTSRecording()" id="neutts-rec-stop" disabled>
+                                    <button class="btn btn-sm btn-outline-danger" id="neutts-rec-stop" disabled>
                                         <i class="fas fa-stop"></i> Stop
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearNeuTTSRecording()" id="neutts-rec-clear" disabled>
+                                    <button class="btn btn-sm btn-outline-secondary" id="neutts-rec-clear" disabled>
                                         <i class="fas fa-times"></i> Clear
                                     </button>
                                     <span id="neutts-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
@@ -589,7 +585,7 @@
                                 </div>
                                 <!-- Recording Settings (collapsible) -->
                                 <div class="rec-settings" style="margin-top:8px;">
-                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="TTS.toggleRecSettings('neutts')">
+                                    <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" data-provider="neutts">
                                         <span id="rec-settings-caret-neutts">▸</span> Recording Settings
                                     </div>
                                     <div id="rec-settings-neutts" class="rec-settings-body" style="display:none; margin-top:6px;">
@@ -605,7 +601,7 @@
                                             />
                                             <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
-                                        <small style="margin-left:8px;"><a href="#" onclick="TTS.setRecMaxSec('neutts', 15); return false;">Reset</a></small>
+                                        <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="neutts">Reset</a></small>
                                     </div>
                                 </div>
                                 <audio id="neutts-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
@@ -644,10 +640,10 @@
                             </label>
                         </div>
                         <div class="control-group">
-                            <button id="tts-generate-btn" class="btn btn-primary btn-lg" onclick="TTS.generate()">
+                            <button id="tts-generate-btn" class="btn btn-primary btn-lg">
                                 <i class="fas fa-play"></i> Generate Speech
                             </button>
-                            <button id="tts-stop-btn" class="btn btn-danger btn-lg" style="display:none;" onclick="TTS.stop()">
+                            <button id="tts-stop-btn" class="btn btn-danger btn-lg" style="display:none;">
                                 <i class="fas fa-stop"></i> Stop
                             </button>
                         </div>
@@ -664,10 +660,10 @@
                     <div id="tts-audio-container">
                         <audio id="tts-audio-player" controls style="width: 100%;"></audio>
                         <div class="audio-controls">
-                            <button class="btn btn-secondary" onclick="TTS.downloadAudio()" id="tts-download-btn" disabled>
+                            <button class="btn btn-secondary" id="tts-download-btn" disabled>
                                 <i class="fas fa-download"></i> Download
                             </button>
-                            <button class="btn btn-secondary" onclick="TTS.saveToHistory()">
+                            <button class="btn btn-secondary" id="tts-save-history-btn">
                                 <i class="fas fa-history"></i> Save to History
                             </button>
                         </div>
@@ -680,7 +676,7 @@
             <div class="voice-management card">
                 <div class="card-header">
                     <h4>Voice Library</h4>
-                    <button class="btn btn-sm btn-primary" onclick="TTS.refreshVoiceList()">
+                    <button class="btn btn-sm btn-primary" id="tts-voices-refresh">
                         <i class="fas fa-sync"></i> Refresh
                     </button>
                 </div>
@@ -695,7 +691,7 @@
             <div class="generation-history card">
                 <div class="card-header">
                     <h4>Generation History</h4>
-                    <button class="btn btn-sm btn-secondary" onclick="TTS.clearHistory()">
+                    <button class="btn btn-sm btn-secondary" id="tts-history-clear">
                         <i class="fas fa-trash"></i> Clear
                     </button>
                 </div>
@@ -714,7 +710,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>Upload Voice Sample</h3>
-            <span class="close" onclick="TTS.closeVoiceUpload()">&times;</span>
+            <span class="close" id="tts-upload-close">&times;</span>
         </div>
         <div class="modal-body">
             <div class="form-group">
@@ -739,10 +735,10 @@
                 </small>
             </div>
             <div class="form-group">
-                <button class="btn btn-primary" onclick="TTS.uploadVoice()">
+                <button class="btn btn-primary" id="tts-upload-submit">
                     <i class="fas fa-upload"></i> Upload Voice
                 </button>
-                <button class="btn btn-secondary" onclick="TTS.closeVoiceUpload()">Cancel</button>
+                <button class="btn btn-secondary" id="tts-upload-cancel">Cancel</button>
             </div>
         </div>
     </div>
