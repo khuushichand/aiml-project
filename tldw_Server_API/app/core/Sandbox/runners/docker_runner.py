@@ -11,7 +11,7 @@ from ..streams import get_hub
 from tldw_Server_API.app.core.config import settings as app_settings
 import tempfile
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import time
 
@@ -133,7 +133,6 @@ class DockerRunner:
             startup_budget = int(spec.startup_timeout_sec) if spec.startup_timeout_sec else int(getattr(app_settings, "SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC", 20))
         except Exception:
             startup_budget = 20
-        from datetime import datetime, timedelta
         deadline = datetime.utcnow() + timedelta(seconds=max(1, startup_budget))
 
         # Prepare tar stream from inline files (session workspace integration TBD)
@@ -364,10 +363,6 @@ class DockerRunner:
             remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
             subprocess.check_call(["docker", "start", cid], timeout=remaining)
         except subprocess.TimeoutExpired:
-            try:
-                subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
-                pass
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
             # Even if start timed out, try to read any cgroup CPU used (should be minimal)
@@ -382,6 +377,11 @@ class DockerRunner:
                 "log_bytes": int(get_hub().get_log_bytes(run_id)),
                 "artifact_bytes": 0,
             }
+            # Remove after collecting stats
+            try:
+                subprocess.check_call(["docker", "rm", "-f", cid])
+            except Exception:
+                pass
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -445,6 +445,7 @@ class DockerRunner:
             except Exception:
                 exit_code = waited.returncode if waited.returncode is not None else 1
         except subprocess.TimeoutExpired:
+            # Kill, compute stats while container still exists, then remove
             try:
                 subprocess.check_call(["docker", "kill", cid])
             except Exception:
@@ -452,10 +453,6 @@ class DockerRunner:
             exit_code = None
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": exit_code, "reason": "execution_timeout"})
-            try:
-                subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
-                pass
             # CPU time: prefer cgroup delta if baseline captured
             try:
                 final_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
@@ -472,6 +469,10 @@ class DockerRunner:
                 "log_bytes": int(get_hub().get_log_bytes(run_id)),
                 "artifact_bytes": 0,
             }
+            try:
+                subprocess.check_call(["docker", "rm", "-f", cid])
+            except Exception:
+                pass
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -529,11 +530,7 @@ class DockerRunner:
         phase = RunPhase.completed if exit_code == 0 else RunPhase.failed
         msg = "Docker execution finished" if exit_code == 0 else f"Docker execution failed (exit={exit_code})"
         hub.publish_event(run_id, "end", {"exit_code": exit_code})
-        try:
-            subprocess.check_call(["docker", "rm", "-f", cid])
-        except Exception:
-            pass
-        # Compute resource usage (best-effort)
+        # Compute resource usage (best-effort) before removing container
         try:
             total_log = int(get_hub().get_log_bytes(run_id))
         except Exception:
@@ -560,6 +557,11 @@ class DockerRunner:
             "log_bytes": int(total_log),
             "artifact_bytes": int(art_bytes),
         }
+        # Remove container after collecting stats
+        try:
+            subprocess.check_call(["docker", "rm", "-f", cid])
+        except Exception:
+            pass
         return RunStatus(
             id="",
             phase=phase,

@@ -888,11 +888,8 @@ def reset_settings():
     global _settings
     global _settings_generation
     _settings = None
-    try:
-        _settings_generation += 1
-    except Exception:
-        # Best effort; generation is an optimization hint
-        _settings_generation = (_settings_generation or 0) + 1
+    # Increment generation without swallowing errors
+    _settings_generation = (_settings_generation or 0) + 1
 
 
 def get_settings_generation() -> int:

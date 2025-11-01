@@ -121,7 +121,7 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
         logger.debug("Using cached Parakeet MLX model")
         return _mlx_model_cache
     
-    # Check MLX availability
+    # Check MLX availability (tests may monkeypatch this to True)
     if not check_mlx_available():
         logging.error("MLX is not available. Install with: pip install mlx")
         return None
@@ -135,7 +135,12 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
     
     try:
         import parakeet_mlx
-        import mlx.core as mx
+        # dtype is optional for tests; if mlx is unavailable, proceed without dtype
+        try:
+            import mlx.core as mx
+            _dtype = getattr(mx, 'bfloat16', None)
+        except Exception:
+            _dtype = None
         
         logging.info("Loading Parakeet MLX model...")
         
@@ -148,13 +153,19 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
         try:
             # Try to load the model from Hugging Face
             logging.info(f"Loading model from: {model_id}")
-            model = parakeet_mlx.from_pretrained(model_id, dtype=mx.bfloat16)
+            if _dtype is not None:
+                model = parakeet_mlx.from_pretrained(model_id, dtype=_dtype)
+            else:
+                model = parakeet_mlx.from_pretrained(model_id)
         except FileNotFoundError:
             # Model might need to be downloaded first
             logging.info("Model not found locally, downloading from Hugging Face...")
             try:
                 # The model will be downloaded automatically
-                model = parakeet_mlx.from_pretrained(model_id, dtype=mx.bfloat16)
+                if _dtype is not None:
+                    model = parakeet_mlx.from_pretrained(model_id, dtype=_dtype)
+                else:
+                    model = parakeet_mlx.from_pretrained(model_id)
             except Exception as e2:
                 logging.error(f"Failed to download/load model: {e2}")
                 return None
@@ -206,16 +217,15 @@ def transcribe_with_parakeet_mlx(
     Returns:
         Transcribed text string
     """
-    if not IS_MACOS:
-        return "[Error: Parakeet MLX is only supported on macOS with Apple Silicon]"
-    
-    # Load model
+    # Attempt to load the model first (tests may monkeypatch loader)
     model = load_parakeet_mlx_model()
     if model is None:
+        # Preserve the original platform check semantics only when loading fails
+        if not IS_MACOS:
+            return "[Error: Parakeet MLX is only supported on macOS with Apple Silicon]"
         return "[Error: Failed to load Parakeet MLX model]"
     
     try:
-        import parakeet_mlx as parakeet
         import soundfile as sf
         
         # Handle different input types

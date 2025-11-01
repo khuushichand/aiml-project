@@ -19,6 +19,15 @@ class DummyUploadFile:
     async def read(self, n: int) -> bytes:
         return self._bio.read(n)
 
+    async def close(self) -> None:
+        """Mimic FastAPI's UploadFile.close() as an awaitable.
+        Ensures production code awaiting file.close() does not raise.
+        """
+        try:
+            self._bio.close()
+        except Exception:
+            pass
+
 
 @pytest.fixture
 def tmp_media_dir(tmp_path: Path) -> Path:
@@ -81,4 +90,3 @@ async def test_save_uploaded_files_write_failure_cleanup(tmp_media_dir, monkeypa
     assert len(errors) == 1
     assert errors[0]["status"] == "Error"
     assert "simulated write open error" in str(errors[0]["error"])
-

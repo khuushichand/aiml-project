@@ -43,6 +43,13 @@ from .Audio_Transcription_Nemo import (
 )
 from .model_utils import normalize_model_and_variant
 
+# Expose config loader for tests to monkeypatch at module scope
+try:  # pragma: no cover - import may fail in minimal test environments
+    from tldw_Server_API.app.core.config import load_comprehensive_config as load_comprehensive_config  # type: ignore
+except Exception:  # pragma: no cover
+    def load_comprehensive_config():  # type: ignore
+        return None
+
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
 try:  # pragma: no cover - import availability varies in test contexts
@@ -104,6 +111,30 @@ try:  # pragma: no cover - optional integration path
             )
             self._core = _CoreTranscriber(config=c)
             # Ensure chosen variant is available; if not, raise to trigger fallback logic
+            try:
+                # Prefer explicit check against the core helper so tests can monkeypatch it
+                from .Parakeet_Core_Streaming import transcriber as _core_tx  # type: ignore
+                _fn = getattr(_core_tx, "_variant_decode_fn", None)
+                if callable(_fn):
+                    available = _fn(c.model, c.model_variant)
+                    if available is None:
+                        raise RuntimeError(f"parakeet_variant_unavailable: {c.model_variant}")
+                # Fallback: inspect instantiated core transcriber
+                if getattr(self._core, "decode_fn", None) is None:
+                    raise RuntimeError(f"parakeet_variant_unavailable: {c.model_variant}")
+            except RuntimeError:
+                # Re-raise variant unavailability to be caught by higher-level handler
+                raise
+            except Exception:
+                # If validation fails unexpectedly, defer to runtime; do not block initialization
+                # The streaming path will still handle decode failures gracefully.
+                pass
+            try:
+                decode_fn = getattr(self._core, 'decode_fn', None)
+            except Exception:
+                decode_fn = None
+            if decode_fn is None:
+                raise RuntimeError(f"parakeet_variant_unavailable: {self._uconf.model_variant}")
         async def process_audio_chunk(self, audio_data: bytes):  # -> Optional[Dict[str, Any]]
             """
             Forward an incoming audio chunk to the underlying core transcriber and return any resulting transcription data.
@@ -1320,8 +1351,7 @@ async def handle_unified_websocket(
             except Exception:
                 pass
             
-            # Check if fallback to Whisper is enabled in config
-            from tldw_Server_API.app.core.config import load_comprehensive_config
+            # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
             comprehensive_config = load_comprehensive_config()
             
             # ConfigParser returns a ConfigParser object, not a dict
@@ -1385,6 +1415,7 @@ async def handle_unified_websocket(
                 # Send error with more details
                 await websocket.send_json({
                     "type": "error",
+                    "error_type": "model_unavailable",
                     "message": error_msg,
                     "details": {
                         "model": config.model,

@@ -261,8 +261,37 @@ async def get_prompt_studio_user(
         )
 
     # 3) Default path: use unified request user dependency (supports single and multi user)
-    # Use unified request-user dependency, passing the current Request explicitly
-    current_user: User = await get_request_user(request)  # direct call to avoid hard FastAPI DI coupling here
+    # IMPORTANT: When calling a FastAPI dependency directly, its Header/Depends defaults are not populated.
+    # Extract the needed header values from the Request and pass them explicitly.
+    try:
+        hdr_api_key = request.headers.get("X-API-KEY")
+    except Exception:
+        hdr_api_key = None
+    try:
+        hdr_authz = request.headers.get("Authorization")
+    except Exception:
+        hdr_authz = None
+    try:
+        hdr_legacy = request.headers.get("Token")
+    except Exception:
+        hdr_legacy = None
+
+    bearer_token = None
+    try:
+        if hdr_authz and isinstance(hdr_authz, str):
+            scheme, _, credential = hdr_authz.partition(" ")
+            if scheme.lower() == "bearer":
+                bearer_token = credential.strip()
+    except Exception:
+        bearer_token = None
+
+    # Use unified request-user dependency, passing extracted headers explicitly
+    current_user: User = await get_request_user(
+        request,
+        api_key=hdr_api_key,
+        token=bearer_token,
+        legacy_token_header=hdr_legacy,
+    )
 
     # Build user context from normalized User model
     try:

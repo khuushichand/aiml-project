@@ -249,7 +249,11 @@ class SandboxService:
                 if background:
                     # Return early and execute in background
                     status.phase = RunPhase.starting
-                    self._orch.update_run(status.id, status)
+                    # Best-effort status update; do not abort if orchestrator lacks method
+                    try:
+                        self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
+                    except Exception as _e:
+                        logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
                     # Proactively publish a 'start' event so WS subscribers connecting
                     # immediately after POST observe at least one event.
                     try:
@@ -286,7 +290,10 @@ class SandboxService:
                                 pass
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
-                            self._orch.update_run(status.id, status)
+                            try:
+                                self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
+                            except Exception as _e:
+                                logger.debug(f"sandbox: update_run(completed) skipped: {_e}")
                             # Ensure an 'end' event is published even if the runner didn't
                             try:
                                 get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code})

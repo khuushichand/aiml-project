@@ -1,12 +1,12 @@
 from __future__ import annotations
 #
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import os
 #
 # Third-Party-Libs
-from argon2 import PasswordHasher
 from loguru import logger
-from passlib.handlers import digests
+import hmac
+import hashlib
 
 #
 # Local Imports
@@ -17,12 +17,13 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
 async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Dict[str, Any]]:
     """
-    Resolve an API key to its database identity via Argon2 password hash lookup.
+    Resolve an API key to its database identity via HMAC-SHA256 hash lookup.
 
-    Attempts Argon2 verification of the provided API key against all configured
-    key-derivation candidates and queries the `api_keys` table for a matching
-    active key. Returns a mapping with `id` and `user_id` when found, otherwise
-    None.
+    Computes ordered HMAC-SHA256 digests of the provided API key using
+    current and legacy HMAC key materials (derive_hmac_key_candidates), and
+    performs a dialect-aware query against the `api_keys.key_hash` column to
+    find an active key. Returns a mapping with `id` and `user_id` on success,
+    otherwise None. Mirrors the hashing used by APIKeyManager.hash_candidates.
 
     Parameters:
         api_key: The raw API key string provided by the client.
@@ -35,64 +36,58 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         return None
 
     s = settings or get_settings()
-    hashes: list[str] = []
+    digests: List[str] = []
     try:
-        candidates = tuple(derive_hmac_key_candidates(s))
-        # Minimal debug insight with safe fallback
+        key_materials = tuple(derive_hmac_key_candidates(s))
         if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"} or os.getenv("PYTEST_CURRENT_TEST"):
             try:
-                logger.debug(f"resolve_api_key_by_hash: hash candidates={len(candidates)}")
+                logger.debug(f"resolve_api_key_by_hash: key_materials={len(key_materials)}")
             except Exception as _dbg_exc:
                 logger.trace(f"resolve_api_key_by_hash: debug logging failed: {_dbg_exc}")
     except Exception as e:
-        logger.debug("resolve_api_key_by_hash: failed to derive candidates: {}", e)
-        candidates = ()
-    ph = PasswordHasher()
+        logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
+        key_materials = ()
 
-    for key in candidates:
+    for km in key_materials:
         try:
-            # Instead of deriving HMAC digests, assume key is an argon2 hash candidate.
-            # In legacy case, adapt accordingly; here we treat 'key' as stored Argon2 hash
-            # Attempt Argon2 verification:
-            if ph.verify(key, api_key):
-                hashes.append(key)
+            d = hmac.new(km, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+            if d not in digests:
+                digests.append(d)
         except Exception as _e:
-            logger.debug("resolve_api_key_by_hash: Argon2 verify failed: {}", _e)
+            logger.debug("resolve_api_key_by_hash: HMAC derive failed: {}", _e)
 
-    if not hashes:
+    if not digests:
         return None
 
     pool = await get_db_pool()
-    # Dialect-aware query (match api_key_manager implementation)
-    if getattr(pool, 'pool', None) is not None:
-        # Postgres
-        row = await pool.fetchone(
-            """
-            SELECT id, user_id
-            FROM api_keys
-            WHERE key_hash = ANY($1::text[]) AND status = $2
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            digests,
-            "active",
-        )
-    else:
-        # SQLite
-        placeholders = ",".join("?" for _ in digests)
-        query = (
-            f"SELECT id, user_id FROM api_keys "
-            f"WHERE key_hash IN ({placeholders}) AND status = ? "
-            f"ORDER BY created_at DESC LIMIT 1"
-        )
-        row = await pool.fetchone(query, (*digests, "active"))
-    placeholders = ",".join("?" for _ in hashes)
-    query = (
-        f"SELECT id, user_id FROM api_keys "
-        f"WHERE key_hash IN ({placeholders}) AND status = ? "
-        f"ORDER BY created_at DESC LIMIT 1"
-    )
-    row = await pool.fetchone(query, (*hashes, "active"))
+    # Dialect-aware query (aligns with APIKeyManager.validate_api_key)
+    try:
+        if getattr(pool, 'pool', None) is not None:
+            # PostgreSQL
+            row = await pool.fetchone(
+                """
+                SELECT id, user_id
+                FROM api_keys
+                WHERE key_hash = ANY($1::text[]) AND status = $2
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                digests,
+                "active",
+            )
+        else:
+            # SQLite
+            placeholders = ",".join("?" for _ in digests)
+            query = (
+                f"SELECT id, user_id FROM api_keys "
+                f"WHERE key_hash IN ({placeholders}) AND status = ? "
+                f"ORDER BY created_at DESC LIMIT 1"
+            )
+            row = await pool.fetchone(query, (*digests, "active"))
+    except Exception as e:
+        logger.debug("resolve_api_key_by_hash: DB lookup failed: {}", e)
+        return None
+
     if not row:
         return None
 

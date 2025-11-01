@@ -22,6 +22,7 @@ import asyncio
 from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
+from loguru import logger
 
 from .buffer import AudioBuffer
 from .config import StreamingConfig
@@ -62,7 +63,8 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
                 return _tx_onnx(audio_np, sample_rate=sr)
 
             return _fn
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to import ONNX backend: {}", e)
             return None
     elif v == "mlx":
         try:
@@ -80,7 +82,8 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
                 return _tx_mlx(audio_np, sample_rate=sr)
 
             return _fn
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to import MLX backend: {}", e)
             return None
     else:
         # standard (Nemo Parakeet TDT, greedy)
@@ -103,7 +106,8 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
                 return _tx_nemo(audio_np, sample_rate=sr, variant="standard")
 
             return _fn
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to import standard Parakeet backend: {}", e)
             return None
 
 
@@ -179,7 +183,7 @@ class ParakeetCoreTranscriber:
         if (
             self.config.enable_partial
             and (now - self._last_partial_time) >= float(self.config.partial_interval)
-            and buf_dur > 0.5
+            and buf_dur > float(self.config.min_partial_duration)
         ):
             audio_for_partial = self.buffer.get_audio()
             if audio_for_partial is not None and audio_for_partial.size > 0:
@@ -192,8 +196,8 @@ class ParakeetCoreTranscriber:
                             postprocess_text_if_enabled as _cv_post,
                         )
                         text = _cv_post(text) or text
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Custom vocabulary post-processing failed: {}", e)
                 self._last_partial_time = now
                 if text:
                     frame = {
@@ -218,8 +222,8 @@ class ParakeetCoreTranscriber:
                             postprocess_text_if_enabled as _cv_post,
                         )
                         text = _cv_post(text) or text
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Custom vocabulary post-processing failed: {}", e)
                 self.buffer.consume(self.config.chunk_duration, self.config.overlap_duration)
                 if text:
                     self._history.append(text)
@@ -262,8 +266,8 @@ class ParakeetCoreTranscriber:
                     postprocess_text_if_enabled as _cv_post,
                 )
                 text = _cv_post(text) or text
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Custom vocabulary post-processing failed: {}", e)
         if text:
             self._history.append(text)
             now = time.time()
@@ -276,12 +280,7 @@ class ParakeetCoreTranscriber:
             }
             frame.update(self._prepare_final_metadata(chunk_seconds))
             # include optional audio reference for downstream (e.g., diarization)
-            try:
-                import numpy as _np  # local import to avoid top-level cost
-                frame["_audio_chunk"] = _np.array(audio_np, copy=True)
-            except Exception:
-                # If numpy import or copy fails, omit audio reference gracefully
-                pass
+            frame["_audio_chunk"] = np.array(audio_np, copy=True)
             return frame
         return None
 
@@ -302,8 +301,15 @@ class ParakeetCoreTranscriber:
         if isinstance(audio, np.ndarray):
             arr = audio
         elif isinstance(audio, str):
+            # Treat strings as base64-encoded float32 bytes; be strict and validate the alphabet.
             try:
-                raw = base64.b64decode(audio)
+                # Remove all ASCII whitespace to tolerate wrapped base64 input
+                s = "".join(audio.split())
+                # Normalize padding for providers that omit '='
+                pad_len = (-len(s)) % 4
+                if pad_len:
+                    s = s + ("=" * pad_len)
+                raw = base64.b64decode(s, validate=True)
             except Exception:
                 return None
             # align to float32 sample size
@@ -312,12 +318,17 @@ class ParakeetCoreTranscriber:
             arr = np.frombuffer(raw, dtype=np.float32)
         elif isinstance(audio, (bytes, bytearray)):
             raw = bytes(audio)
-            # detect if base64-ish ASCII; if so, decode
+            # Robust auto-detection: try strict base64 decode; if it fails, treat as raw float32 bytes
             try:
-                sample = raw[:16]
-                if all(32 <= b <= 126 or b in (10, 13) for b in sample):
-                    raw = base64.b64decode(raw)
+                # Remove ASCII whitespace before validating; keep original for fallback
+                candidate = b"".join(raw.split())
+                pad_len = (-len(candidate)) % 4
+                if pad_len:
+                    candidate = candidate + (b"=" * pad_len)
+                decoded = base64.b64decode(candidate, validate=True)
+                raw = decoded
             except Exception:
+                # Not valid base64: proceed with raw bytes
                 pass
             if (len(raw) % 4) != 0:
                 raw = raw[: len(raw) - (len(raw) % 4)]
@@ -349,7 +360,8 @@ class ParakeetCoreTranscriber:
             return ""
         try:
             return str(self.decode_fn(audio_np, int(self.config.sample_rate)))
-        except Exception:
+        except Exception as e:
+            logger.opt(exception=True).warning("Decode failed: {}", e)
             return ""
 
     async def _decode_async(self, audio_np: np.ndarray) -> str:
@@ -368,7 +380,8 @@ class ParakeetCoreTranscriber:
             return ""
         try:
             return str(await asyncio.to_thread(self.decode_fn, audio_np, int(self.config.sample_rate)))
-        except Exception:
+        except Exception as e:
+            logger.opt(exception=True).warning("Decode failed (async): {}", e)
             return ""
 
     def _prepare_partial_metadata(self, buffer_duration: float) -> Dict[str, float]:
@@ -448,4 +461,4 @@ class ParakeetCoreTranscriber:
         }
 
 
-__all__ = ["ParakeetCoreTranscriber", "DecodeFn"]
+__all__ = ["DecodeFn", "ParakeetCoreTranscriber"]

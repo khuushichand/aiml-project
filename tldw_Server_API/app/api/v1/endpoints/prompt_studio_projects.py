@@ -66,6 +66,7 @@ router = APIRouter(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_project_simple(
     project_data: ProjectCreate,
+    request: Request,
     user_context: Dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> Dict[str, Any]:
@@ -74,7 +75,12 @@ async def create_project_simple(
     Mirrors the pattern used by test-cases simple create.
     """
     # Delegate to the primary creation endpoint to keep behavior consistent
-    resp = await create_project(project_data, user_context, db)  # type: ignore[arg-type]
+    resp = await create_project(
+        project_data=project_data,
+        request=request,
+        user_context=user_context,
+        db=db,
+    )  # type: ignore[arg-type]
     # Unwrap StandardResponse regardless of Pydantic/dict
     if hasattr(resp, "model_dump"):
         obj = resp.model_dump()
@@ -142,11 +148,11 @@ async def _rl_create_project(
 )
 async def create_project(
     project_data: ProjectCreate,
+    request: Request,
     user_context: Dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     _: bool = Depends(_rl_create_project),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
-    request: Request = None,
 ) -> StandardResponse:
     """
     Create a new Prompt Studio project.
@@ -181,15 +187,10 @@ async def create_project(
             user_id=user_id_str
         )
 
-        rid = ensure_request_id(request) if request is not None else None
-        tp = None
-        try:
-            tp = ensure_traceparent(request)  # type: ignore[name-defined]
-        except Exception:
-            tp = None
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger as _getlog
-        _getlog(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", traceparent=tp).info(
-            "User %s created project: %s", user_context.get('user_id'), project.get('name')
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", traceparent=tp).info(
+            "User {} created project: {}", user_context.get('user_id'), project.get('name')
         )
 
         # Record idempotency mapping
@@ -540,14 +541,9 @@ async def archive_project(
         project = db.update_project(project_id, {"status": "archived"})
         
         rid = ensure_request_id(request) if request is not None else None
-        tp = None
-        try:
-            tp = ensure_traceparent(request)  # type: ignore[name-defined]
-        except Exception:
-            tp = None
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger as _getlog
-        _getlog(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", project_id=project_id, traceparent=tp).info(
-            "User %s archived project %s", user_context.get('user_id'), project_id
+        tp = ensure_traceparent(request)
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", project_id=project_id, traceparent=tp).info(
+            "User {} archived project {}", user_context.get('user_id'), project_id
         )
         
         return StandardResponse(
@@ -596,14 +592,9 @@ async def unarchive_project(
         project = db.update_project(project_id, {"status": "active"})
         
         rid = ensure_request_id(request) if request is not None else None
-        tp = None
-        try:
-            tp = ensure_traceparent(request)  # type: ignore[name-defined]
-        except Exception:
-            tp = None
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger as _getlog
-        _getlog(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", project_id=project_id, traceparent=tp).info(
-            "User %s unarchived project %s", user_context.get('user_id'), project_id
+        tp = ensure_traceparent(request)
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", project_id=project_id, traceparent=tp).info(
+            "User {} unarchived project {}", user_context.get('user_id'), project_id
         )
         
         return StandardResponse(

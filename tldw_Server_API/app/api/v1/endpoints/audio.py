@@ -118,6 +118,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 
 # Initialize rate limiter
 def _rate_limit_key(request: _FastAPIRequest) -> str:
@@ -176,9 +177,9 @@ try:
             labels=["reason"],
         )
     )
-except Exception:
-    # Metrics must never break imports
-    pass
+except Exception as e:
+    # Metrics must never break imports; log for diagnostics
+    logger.debug(f"audio: metrics registration skipped/failed: {e}")
 
 
 def _get_failopen_cap_minutes() -> float:
@@ -191,14 +192,14 @@ def _get_failopen_cap_minutes() -> float:
       4) Default 5.0
     """
     # Env override
-    try:
-        v = os.getenv("AUDIO_FAILOPEN_CAP_MINUTES")
-        if v is not None:
+    v = os.getenv("AUDIO_FAILOPEN_CAP_MINUTES")
+    if v is not None:
+        try:
             f = float(v)
             if f > 0:
                 return f
-    except Exception:
-        pass
+        except (ValueError, TypeError) as e:
+            logger.debug(f"AUDIO_FAILOPEN_CAP_MINUTES parse failed: {e}")
     # Config-based override
     try:
         cfg = load_comprehensive_config()
@@ -208,17 +209,17 @@ def _get_failopen_cap_minutes() -> float:
                     f = float(cfg.get("Audio-Quota", "failopen_cap_minutes", fallback=""))
                     if f > 0:
                         return f
-                except Exception:
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[Audio-Quota].failopen_cap_minutes parse failed: {e}")
             if cfg.has_section("Audio"):
                 try:
                     f = float(cfg.get("Audio", "failopen_cap_minutes", fallback=""))
                     if f > 0:
                         return f
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[Audio].failopen_cap_minutes parse failed: {e}")
+    except Exception as e:
+        logger.debug(f"Config read for failopen cap failed: {e}")
     return 5.0
 
 
@@ -1794,17 +1795,13 @@ async def streaming_limits(
             - active_streams (int): Number of currently active streams (0 if unavailable).
             - can_start_stream (bool): Whether the user may start another stream given current active streams and concurrent_streams limit.
     """
-    rid = None
-    try:
-        if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
-            rid = str(request.state.request_id)
-    except Exception:
-        rid = None
+    # Correlate logs with request_id if available
+    rid = ensure_request_id(request) if request is not None else None
     try:
         limits = await get_limits_for_user(current_user.id)
     except EXPECTED_DB_EXC as e:
-        logger.exception(
-            f"Failed to get limits for user {current_user.id}, falling back to defaults: {e}; request_id={rid}"
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get limits for user %s, falling back to defaults: %s", current_user.id, e
         )
         # Fallback to default free limits
         limits = {
@@ -1816,8 +1813,8 @@ async def streaming_limits(
     try:
         used_minutes = await get_daily_minutes_used(current_user.id)
     except EXPECTED_DB_EXC as e:
-        logger.exception(
-            f"Failed to get used minutes for user {current_user.id}, falling back to 0: {e}; request_id={rid}"
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get used minutes for user %s, falling back to 0: %s", current_user.id, e
         )
         used_minutes = 0.0
     limit_minutes = limits.get("daily_minutes")
@@ -1827,29 +1824,29 @@ async def streaming_limits(
         try:
             remaining_minutes = max(0.0, float(limit_minutes) - float(used_minutes))
         except (ValueError, TypeError) as e:
-            logger.warning(
-                f"Could not calculate remaining minutes for user {current_user.id}: {e}; request_id={rid}"
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                "Could not calculate remaining minutes for user %s: %s", current_user.id, e
             )
             remaining_minutes = None
     try:
         active_streams = await active_streams_count(current_user.id)
     except EXPECTED_REDIS_EXC as e:
-        logger.exception(
-            f"Failed to get active streams for user {current_user.id}, falling back to 0: {e}; request_id={rid}"
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get active streams for user %s, falling back to 0: %s", current_user.id, e
         )
         active_streams = 0
     try:
         tier = await get_user_tier(current_user.id)
     except EXPECTED_DB_EXC as e:
-        logger.exception(
-            f"Failed to get tier for user {current_user.id}, falling back to 'free': {e}; request_id={rid}"
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get tier for user %s, falling back to 'free': %s", current_user.id, e
         )
         tier = "free"
     try:
         max_streams = int(limits.get("concurrent_streams") or 0)
     except (ValueError, TypeError) as e:
-        logger.warning(
-            f"Could not parse concurrent_streams limit for user {current_user.id}: {e}; request_id={rid}"
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Could not parse concurrent_streams limit for user %s: %s", current_user.id, e
         )
         max_streams = 0
     can_start = (max_streams == 0) or (active_streams < max_streams)

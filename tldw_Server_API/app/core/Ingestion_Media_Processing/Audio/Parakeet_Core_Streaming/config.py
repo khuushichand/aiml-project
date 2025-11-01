@@ -21,6 +21,7 @@ class StreamingConfig:
     - max_buffer_duration: cap the buffer size (prevents runaway memory)
     - enable_partial: whether to emit partials between finals
     - partial_interval: minimum seconds between partial frames
+    - min_partial_duration: minimum buffered seconds before emitting partials
     - language: optional language hint (not required for Parakeet)
     """
 
@@ -34,6 +35,7 @@ class StreamingConfig:
     max_buffer_duration: float = 30.0
     enable_partial: bool = True
     partial_interval: float = 0.5
+    min_partial_duration: float = 0.5
     language: Optional[str] = None
 
 

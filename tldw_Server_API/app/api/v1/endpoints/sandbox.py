@@ -674,26 +674,44 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     hub.set_loop(asyncio.get_running_loop())
     q = hub.subscribe(run_id)
     hub.drain_buffer(run_id, q)
-    # In test environments (when explicitly enabled), proactively publish
-    # minimal frames so clients immediately receive non-heartbeat messages
-    # even if they connected early.
     try:
-        if bool(getattr(app_settings, "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", False)):
+        logger.debug(f"WS stream[{run_id}]: after drain_buffer qsize={getattr(q, 'qsize', lambda: -1)()} ")
+    except Exception:
+        pass
+    # In test environments (when explicitly enabled), proactively enqueue
+    # minimal frames directly into this subscriber's queue if it's empty so
+    # the client immediately receives non-heartbeat messages.
+    try:
+        _synth_env = os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
+        synth_enabled = str(_synth_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+        if synth_enabled:
             st = _service.get_run(run_id)
-            if st is not None:
-                hub.publish_event(run_id, "start", {"source": "ws_synthetic"})
-                async def _publish_end_later():
-                    """
-                    Publish a synthetic "end" event to the run's hub after a short delay.
-                    
-                    Waits approximately 50 milliseconds, then publishes an event of type "end" to the surrounding `hub` for the current `run_id` with payload {"source": "ws_synthetic"}. Any exceptions raised during the sleep or publish are caught and ignored.
-                    """
+            try:
+                q_empty = q.empty()
+            except Exception:
+                q_empty = False
+            logger.debug(f"WS stream[{run_id}]: synth_enabled, run_found={bool(st)}, q_empty={q_empty}")
+            if st is not None and q_empty:
+                # Inject start for this subscriber only with proper seq
+                try:
+                    seq1 = hub._next_seq(run_id)  # type: ignore[attr-defined]
+                except Exception:
+                    seq1 = 1
+                try:
+                    q.put_nowait({"type": "event", "event": "start", "data": {"source": "ws_synthetic"}, "seq": seq1})
+                except Exception:
+                    pass
+                async def _enqueue_end_later():
                     try:
                         await asyncio.sleep(0.05)
-                        hub.publish_event(run_id, "end", {"source": "ws_synthetic"})
+                        try:
+                            seq2 = hub._next_seq(run_id)  # type: ignore[attr-defined]
+                        except Exception:
+                            seq2 = (seq1 + 1)
+                        q.put_nowait({"type": "event", "event": "end", "data": {"source": "ws_synthetic"}, "seq": seq2})
                     except Exception:
                         return
-                asyncio.create_task(_publish_end_later())
+                asyncio.create_task(_enqueue_end_later())
     except Exception:
         pass
     # Metrics: connection opened
@@ -721,9 +739,10 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
 
     hb_task = asyncio.create_task(_heartbeats())
     try:
-        # Allow tests to reduce the poll timeout via settings/env
+        # Allow tests to reduce the poll timeout via settings/env (prefer env at runtime)
         try:
-            poll_timeout = float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
+            _pt_env = os.getenv("SANDBOX_WS_POLL_TIMEOUT_SEC")
+            poll_timeout = float(_pt_env) if _pt_env is not None else float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
         except Exception:
             poll_timeout = 30.0
         while True:
@@ -732,11 +751,10 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             except asyncio.TimeoutError:
                 continue
             await websocket.send_json(frame)
-            if isinstance(frame, dict) and frame.get("type") == "event" and frame.get("event") == "end":
-                # In synthetic test mode, keep the socket open so the client can close
-                # cleanly without hitting ClosedResourceError on the test harness.
-                if not bool(getattr(app_settings, "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", False)):
-                    break
+            # Do not forcibly close on 'end'; allow clients/tests to disconnect.
+            # This avoids race conditions with the Starlette TestClient where the
+            # server closing first can lead to ClosedResourceError during reads.
+            # We intentionally keep the socket open in both synthetic and normal modes.
     except WebSocketDisconnect:
         logger.info(f"WS disconnected for run {run_id}")
         try:

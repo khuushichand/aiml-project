@@ -75,6 +75,10 @@ async def submit_audio_job(
     - url → audio_download
     - local_path → audio_convert
     """
+    # Correlation IDs
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+
     try:
         # Determine backend from env similar to jobs admin
         import os
@@ -95,9 +99,6 @@ async def submit_audio_job(
         else:
             payload["local_path"] = req.local_path.strip()
 
-        # Correlation IDs
-        rid = ensure_request_id(request) if request is not None else None
-        tp = ensure_traceparent(request) if request is not None else ""
         row = jm.create_job(
             domain="audio",
             queue="default",
@@ -122,7 +123,7 @@ async def submit_audio_job(
     except HTTPException:
         raise
     except Exception as e:
-        get_ps_logger(request_id=ensure_request_id(request) if request is not None else None, ps_component="endpoint", ps_job_kind="audio", traceparent=ensure_traceparent(request) if request is not None else "").error(
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio", traceparent=tp).error(
             "Failed to submit audio job: %s", e
         )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit job")
@@ -379,19 +380,14 @@ async def owner_processing_summary(
             conn.close()
         # Limit
         # Correlate logs with request_id if available
-        rid = None
-        try:
-            if request is not None:
-                rid = str(request.state.request_id)
-        except (AttributeError, TypeError):
-            rid = None
+        rid = ensure_request_id(request) if request is not None else None
 
         try:
             from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user
             limits = await get_limits_for_user(int(owner_user_id))
         except Exception as e:
-            logger.warning(
-                f"Failed to get limits for owner {owner_user_id}; returning limit=None: {e}; request_id={rid}"
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                "Failed to get limits for owner %s; returning limit=None: %s", owner_user_id, e
             )
             limits = None
         if limits is None:
@@ -400,8 +396,8 @@ async def owner_processing_summary(
             try:
                 limit = int(limits.get("concurrent_jobs") or 0)
             except (ValueError, TypeError) as e:
-                logger.warning(
-                    f"Could not parse concurrent_jobs limit for owner {owner_user_id}; returning limit=None: {e}; request_id={rid}"
+                get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                    "Could not parse concurrent_jobs limit for owner %s; returning limit=None: %s", owner_user_id, e
                 )
                 limit = None
         return OwnerProcessingSummary(owner_user_id=str(owner_user_id), processing=processing, limit=limit)

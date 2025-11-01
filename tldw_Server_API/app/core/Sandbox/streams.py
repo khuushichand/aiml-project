@@ -12,7 +12,8 @@ class RunStreamHub:
     """In-memory pub/sub for run log/event streaming with caps and backpressure."""
 
     def __init__(self) -> None:
-        self._queues: dict[str, asyncio.Queue] = {}
+        # Map run_id -> list of subscriber queues (fan-out to all subscribers)
+        self._queues: dict[str, list[asyncio.Queue]] = {}
         self._buffers: dict[str, list[dict]] = {}
         self._log_bytes: dict[str, int] = {}
         self._truncated: set[str] = set()
@@ -31,11 +32,14 @@ class RunStreamHub:
             self._loop = loop
 
     def _get_queue(self, run_id: str) -> asyncio.Queue:
+        """Create a new subscriber queue for the given run_id and register it.
+
+        Each call returns a distinct asyncio.Queue so multiple subscribers
+        receive the same frames independently and in the same order.
+        """
         with self._lock:
-            q = self._queues.get(run_id)
-            if q is None:
-                q = asyncio.Queue(self._max_queue)
-                self._queues[run_id] = q
+            q = asyncio.Queue(self._max_queue)
+            self._queues.setdefault(run_id, []).append(q)
             return q
 
     def subscribe(self, run_id: str) -> asyncio.Queue:
@@ -57,12 +61,13 @@ class RunStreamHub:
             buf = self._buffers[run_id]
             if len(buf) > 100:
                 del buf[:-100]
-            q = self._queues.get(run_id)
-            if q is not None and self._loop is not None:
-                try:
-                    self._loop.call_soon_threadsafe(self._queue_put_nowait, q, frame)
-                except Exception as e:
-                    logger.debug(f"queue publish failed: {e}")
+            subs = self._queues.get(run_id)
+            if subs and self._loop is not None:
+                for q in list(subs):
+                    try:
+                        self._loop.call_soon_threadsafe(self._queue_put_nowait, q, frame)
+                    except Exception as e:
+                        logger.debug(f"queue publish failed: {e}")
 
     @staticmethod
     def _queue_put_nowait(q: asyncio.Queue, item: dict) -> None:
@@ -83,6 +88,7 @@ class RunStreamHub:
         # Deduplicate final end event to avoid double-emission from runner and service
         if event == "end":
             with self._lock:
+                # Protect _ended access with the lock and avoid duplicates
                 if run_id in self._ended:
                     return
                 self._ended.add(run_id)
@@ -138,12 +144,34 @@ class RunStreamHub:
                     break
 
     def close(self, run_id: str) -> None:
-        self._publish(run_id, {"type": "event", "event": "end", "data": {}})
+        # Use publish_event so end-event deduplication applies
+        self.publish_event(run_id, "end", {})
+        # Cleanup all per-run state to prevent memory leaks
+        self.cleanup_run(run_id)
 
     def get_log_bytes(self, run_id: str) -> int:
         """Return the total number of bytes published to stdout/stderr for a run."""
         with self._lock:
             return int(self._log_bytes.get(run_id, 0))
+
+    def cleanup_run(self, run_id: str) -> None:
+        """Remove all references for a run to avoid memory leaks.
+
+        Thread-safe: acquires the internal lock before mutating any structures.
+        Removes entries from queues, buffers, log counters, truncation/end markers,
+        and sequence tracking.
+        """
+        with self._lock:
+            # Remove any queue reference (the queue object may still be held by subscribers)
+            self._queues.pop(run_id, None)
+            # Drop buffered frames and counters
+            self._buffers.pop(run_id, None)
+            self._log_bytes.pop(run_id, None)
+            # Clear truncation and end flags
+            self._truncated.discard(run_id)
+            self._ended.discard(run_id)
+            # Clear sequence counter
+            self._seq.pop(run_id, None)
 
 
 _HUB = RunStreamHub()

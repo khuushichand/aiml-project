@@ -28,12 +28,12 @@ def _admin_user_dep():
     return User(id=1, username="admin", roles=["admin"], is_admin=True)
 
 
-def test_admin_details_includes_resource_usage(monkeypatch) -> None:
-    # Override dependency for admin route
+def test_admin_details_includes_resource_usage() -> None:
+    # Override dependency for admin route using the app from TestClient
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-    app.dependency_overrides[get_request_user] = _admin_user_dep
 
     with _client() as client:
+        client.app.dependency_overrides[get_request_user] = _admin_user_dep
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",
@@ -56,5 +56,5 @@ def test_admin_details_includes_resource_usage(monkeypatch) -> None:
         for k in ("cpu_time_sec", "wall_time_sec", "peak_rss_mb", "log_bytes", "artifact_bytes"):
             assert k in ru
             assert isinstance(ru[k], int)
-
-    app.dependency_overrides.clear()
+        # Clear overrides to avoid leaking into other tests
+        client.app.dependency_overrides.clear()

@@ -288,9 +288,12 @@ async def create_evaluation(
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
-        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
-            "Failed to create evaluation: %s", e
-        )
+        get_ps_logger(
+            request_id=rid,
+            ps_component="endpoint",
+            ps_job_kind="evaluations",
+            traceparent=tp,
+        ).exception("Failed to create evaluation: {}", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/evaluations", response_model=EvaluationList, openapi_extra={
@@ -359,9 +362,12 @@ async def list_evaluations(
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
-        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
-            "Failed to list evaluations: %s", e
-        )
+        get_ps_logger(
+            request_id=rid,
+            ps_component="endpoint",
+            ps_job_kind="evaluations",
+            traceparent=tp,
+        ).exception("Failed to list evaluations: {}", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get(
@@ -478,9 +484,12 @@ async def get_evaluation(
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
-        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
-            "Failed to get evaluation: %s", e
-        )
+        get_ps_logger(
+            request_id=rid,
+            ps_component="endpoint",
+            ps_job_kind="evaluations",
+            traceparent=tp,
+        ).exception("Failed to get evaluation: {}", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/evaluations/{evaluation_id}", openapi_extra={
@@ -526,9 +535,12 @@ async def delete_evaluation(
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
-        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="evaluations", traceparent=tp).error(
-            "Failed to delete evaluation: %s", e
-        )
+        get_ps_logger(
+            request_id=rid,
+            ps_component="endpoint",
+            ps_job_kind="evaluations",
+            traceparent=tp,
+        ).exception("Failed to delete evaluation: {}", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 ########################################################################################################################
@@ -592,7 +604,7 @@ async def run_evaluation_async(
             ps_component="evaluation_bg",
         ) as _log:
             _log.info(
-                "PS evaluation.async.start evaluation_id=%s",
+                "PS evaluation.async.start evaluation_id={}",
                 evaluation_id,
             )
         # Load the evaluation record
@@ -786,7 +798,7 @@ async def run_evaluation_async(
         conn.commit()
         try:
             _log.info(
-                "PS evaluation.async.done evaluation_id=%s total_tests=%s pass_rate=%s",
+                "PS evaluation.async.done evaluation_id={} total_tests={} pass_rate={}",
                 evaluation_id,
                 aggregate_metrics.get("total_tests", 0),
                 round(aggregate_metrics.get("pass_rate", 0.0), 3),
@@ -795,7 +807,12 @@ async def run_evaluation_async(
             pass
 
     except Exception as e:
-        logger.error(f"Failed to run async evaluation: {e}")
+        get_ps_logger(
+            request_id=request_id,
+            ps_component="evaluation_bg",
+            ps_job_kind="evaluations",
+            traceparent=traceparent,
+        ).exception("Failed to run async evaluation: {}", e)
         try:
             cursor.execute(
                 """

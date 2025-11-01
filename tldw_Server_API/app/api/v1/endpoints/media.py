@@ -53,6 +53,17 @@ from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from fastapi import Response as FastAPIResponse
 
+# Compatibility aliases for status codes across Starlette versions
+try:
+    HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
+except AttributeError:  # Starlette < 0.27
+    HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
+
+try:
+    HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
+except AttributeError:  # Starlette < 0.27
+    HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
 # FastAPI router must be defined before any @router decorators are executed
 router = APIRouter()
 
@@ -262,7 +273,7 @@ async def get_process_code_form(
             if isinstance(ctx, dict):
                 err['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in ctx.items()}
             serializable_errors.append(err)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=serializable_errors) from e
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
 
 
 @router.post(
@@ -973,7 +984,7 @@ def get_add_media_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for /add endpoint: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e: # Catch other potential errors during instantiation
@@ -2154,9 +2165,9 @@ async def list_all_media(
             logger.debug(f"Data causing validation error: items_count={len(formatted_items)}, pagination={pagination_info.model_dump_json(indent=2) if pagination_info else 'None'}")
             raise HTTPException(status_code=500, detail="Internal server error: Response creation failed.")
 
-    except ValueError as ve: # Catch ValueError from db.get_paginated_media_list
+    except ValueError as ve:  # Catch ValueError from db.get_paginated_media_list
         logger.warning(f"Invalid pagination parameters for list_all_media: {ve}")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(ve))
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=str(ve)) from ve
     except DatabaseError as e:
         logger.error(f"Database error fetching paginated media in list_all_media endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database error retrieving media list.")
@@ -2361,9 +2372,9 @@ async def search_media_items(
             logger.error(f"Pydantic validation error creating MediaListResponse for search: {ve.errors()}", exc_info=True)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error: Response creation failed.")
 
-    except ValueError as ve: # Catch custom ValueErrors from db.search_media_db or param validation
+    except ValueError as ve:  # Catch custom ValueErrors from db.search_media_db or param validation
         logger.warning(f"Invalid parameters for media search: {ve}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(ve))
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=str(ve)) from ve
     except DatabaseError as e:
         logger.error(f"Database error during media search: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="A database error occurred during the search.")
@@ -3735,7 +3746,7 @@ async def _process_document_like_item(
                          has_quota, info = await quota_service.check_quota(user_id, size_bytes, raise_on_exceed=False)
                          if not has_quota:
                              raise HTTPException(
-                                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                                 status_code=HTTP_413_TOO_LARGE,
                                  detail=(
                                      f"Storage quota exceeded. Current: {info['current_usage_mb']}MB, "
                                      f"New: {info['new_size_mb']}MB, Quota: {info['quota_mb']}MB, "
@@ -4615,7 +4626,7 @@ async def add_media(
                 error_msg = err_info.get("error", "")
                 if "exceeds maximum allowed size" in error_msg:
                     raise HTTPException(
-                       status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                       status_code=HTTP_413_TOO_LARGE,
                         detail=error_msg
                     )
                 elif "not allowed for security reasons" in error_msg:
@@ -4663,7 +4674,7 @@ async def add_media(
                                 f"New: {info['new_size_mb']}MB, Quota: {info['quota_mb']}MB, "
                                 f"Available: {info['available_mb']}MB"
                             )
-                            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=detail)
+                            raise HTTPException(status_code=HTTP_413_TOO_LARGE, detail=detail)
                         # Record upload metrics
                         try:
                             reg = get_metrics_registry()
@@ -5045,7 +5056,7 @@ def get_process_videos_form(
         logger.warning(f"Pydantic validation failed: {json.dumps(serializable_errors)}")
         # Raise HTTPException with the processed, serializable error details
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,  # Pass the cleaned list
         ) from e
     except Exception as e: # Catch other potential errors during instantiation
@@ -5506,7 +5517,7 @@ def get_process_audios_form(
         # Log the validation error details for debugging
         logger.warning(f"Form validation failed for /process-audios: {e.errors()}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=e.errors(),
         ) from e
     except Exception as e:
@@ -6075,7 +6086,7 @@ def get_process_ebooks_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for Ebook processing: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e:
@@ -6506,7 +6517,7 @@ def get_process_emails_form(
             serializable_error['input'] = serializable_error.get('input', serializable_error.get('loc'))
             serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for Email processing: {json.dumps(serializable_errors)}")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=serializable_errors) from e
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
     except Exception as e:
         logger.error(f"Unexpected error creating ProcessEmailsForm: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error during form processing: {type(e).__name__}")
@@ -6865,7 +6876,7 @@ def get_process_documents_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for Document processing: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e:
@@ -7343,7 +7354,7 @@ def get_process_pdfs_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for PDF processing: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e:
@@ -7842,8 +7853,10 @@ def get_mediawiki_form_data(
         try:
             namespaces = [int(ns.strip()) for ns in namespaces_str.split(',')]
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                detail="Invalid namespace format. Must be comma-separated integers.")
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail="Invalid namespace format. Must be comma-separated integers."
+            ) from ve
 
     chunk_options_override = {'max_size': chunk_max_size}
     # Potentially add other chunk options from config or form here if needed by optimized_chunking
