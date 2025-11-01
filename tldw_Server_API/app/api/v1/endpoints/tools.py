@@ -24,9 +24,11 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
         out = await executor.list_tools(user_id=str(current_user.id), client_id=str(current_user.username or current_user.id))
         tools = []
         for t in out.get("tools", []) or []:
+        for t in out.get("tools", []) or []:
             try:
                 tools.append(ToolInfo(**t))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to parse tool info, falling back to best-effort mapping. Tool: {t.get('name')}, Error: {e}")
                 # Best-effort mapping from dynamic tool dicts
                 tools.append(ToolInfo(name=str(t.get("name")), description=t.get("description"), module=t.get("module"), canExecute=bool(t.get("canExecute"))))
         return ToolListResponse(tools=tools)
