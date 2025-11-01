@@ -42,7 +42,13 @@ async def enforce_llm_budget(request: Request) -> None:
         if api_key:
             digests: list[str] = []
             for key in derive_hmac_key_candidates(settings):
-                digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+                # Use PBKDF2-HMAC-SHA256 for a slow, strong digest. Use HMAC key as salt for determinism.
+                digest = hashlib.pbkdf2_hmac(
+                    'sha256',
+                    api_key.encode('utf-8'),
+                    key,  # salt (using HMAC key for determinism)
+                    100_000  # number of iterations
+                ).hex()
                 if digest not in digests:
                     digests.append(digest)
             if digests:
