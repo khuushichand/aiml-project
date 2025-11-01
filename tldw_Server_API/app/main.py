@@ -491,8 +491,12 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
-    # Tools Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+    # Tools Endpoint (optional; guard import to avoid startup failure on optional module issues)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router  # noqa: F401
+    except Exception as _tools_import_err:  # noqa: BLE001
+        logger.warning(f"Tools endpoints unavailable at import time; deferring: {_tools_import_err}")
+        tools_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
     # Privilege Maps Endpoint
