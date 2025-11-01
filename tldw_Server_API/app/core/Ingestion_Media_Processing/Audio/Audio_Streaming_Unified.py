@@ -154,6 +154,7 @@ class StreamingDiarizer:
         self._last_result: Dict[str, Any] = {}
         self._dirty = False
         self._persist_path: Optional[Path] = None
+        self._persist_method: Optional[str] = None  # 'soundfile' | 'scipy' | 'wave' | None
         self._lock = asyncio.Lock()
         self._service = None
         self.available = False
@@ -199,6 +200,7 @@ class StreamingDiarizer:
             self._last_result = {}
             self._dirty = False
             self._persist_path = None
+            self._persist_method = None
 
     async def close(self) -> None:
         await self.reset()
@@ -307,8 +309,30 @@ class StreamingDiarizer:
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         tmp_path = Path(tmp.name)
         tmp.close()
-        import soundfile as sf
-        sf.write(str(tmp_path), audio_np, self.sample_rate)
+        # Prefer soundfile; fall back to scipy.io.wavfile or wave if unavailable
+        try:
+            import soundfile as sf  # type: ignore
+            sf.write(str(tmp_path), audio_np, self.sample_rate)
+        except Exception as sf_err:
+            logger.warning(f"soundfile unavailable for temp WAV write: {sf_err}; falling back")
+            # Try scipy
+            try:
+                from scipy.io import wavfile  # type: ignore
+                # Convert float32 [-1,1] to int16 for scipy
+                pcm16 = np.clip(audio_np, -1.0, 1.0)
+                pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                wavfile.write(str(tmp_path), self.sample_rate, pcm16)
+            except Exception as scipy_err:
+                logger.warning(f"scipy.io.wavfile write failed: {scipy_err}; using wave module")
+                # Fallback to wave module (int16 PCM)
+                import wave
+                pcm16 = np.clip(audio_np, -1.0, 1.0)
+                pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                with wave.open(str(tmp_path), 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(self.sample_rate)
+                    wf.writeframes(pcm16.tobytes())
         return tmp_path
 
     async def _persist_audio(self) -> Optional[str]:
@@ -327,9 +351,47 @@ class StreamingDiarizer:
         if not self._persist_path:
             filename = f"stream_{uuid4().hex}.wav"
             self._persist_path = out_dir / filename
-        import soundfile as sf
-        sf.write(str(self._persist_path), audio_np, self.sample_rate)
-        return str(self._persist_path)
+        # Prefer soundfile; fall back to scipy.io.wavfile or wave if unavailable
+        try:
+            try:
+                import soundfile as sf  # type: ignore
+                sf.write(str(self._persist_path), audio_np, self.sample_rate)
+                self._persist_method = "soundfile"
+                return str(self._persist_path)
+            except Exception as sf_err:
+                logger.warning(f"soundfile unavailable for persistence: {sf_err}; falling back")
+                try:
+                    from scipy.io import wavfile  # type: ignore
+                    pcm16 = np.clip(audio_np, -1.0, 1.0)
+                    pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                    wavfile.write(str(self._persist_path), self.sample_rate, pcm16)
+                    self._persist_method = "scipy"
+                    return str(self._persist_path)
+                except Exception as scipy_err:
+                    logger.warning(f"scipy.io.wavfile persistence failed: {scipy_err}; using wave module")
+                    try:
+                        import wave
+                        pcm16 = np.clip(audio_np, -1.0, 1.0)
+                        pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                        with wave.open(str(self._persist_path), 'wb') as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(self.sample_rate)
+                            wf.writeframes(pcm16.tobytes())
+                        self._persist_method = "wave"
+                        return str(self._persist_path)
+                    except Exception as wave_err:
+                        logger.warning(f"wave module persistence failed: {wave_err}")
+                        self._persist_method = None
+                        return None
+        except Exception as persist_err:
+            logger.error(f"Audio persistence failed: {persist_err}")
+            self._persist_method = None
+            return None
+
+    @property
+    def persistence_method(self) -> Optional[str]:
+        return self._persist_method
 
 
 class QuotaExceeded(Exception):
@@ -1405,7 +1467,21 @@ async def handle_unified_websocket(
                                     "speaker_map": speaker_map,
                                     "audio_path": audio_path,
                                     "speakers": speakers,
+                                    "persistence_method": getattr(diarizer, "persistence_method", None),
                                 })
+                                # Emit structured warning when persistence requested but unavailable
+                                try:
+                                    if (
+                                        config.diarization_store_audio
+                                        and (audio_path is None or not audio_path)
+                                    ):
+                                        await websocket.send_json({
+                                            "type": "warning",
+                                            "warning_type": "audio_persistence_unavailable",
+                                            "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
+                                        })
+                                except Exception:
+                                    pass
                         except Exception as diar_err:
                             logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
                 

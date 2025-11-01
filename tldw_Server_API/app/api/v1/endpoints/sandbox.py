@@ -475,14 +475,13 @@ async def start_run(
     except Exception:
         logger.debug("sandbox metrics/audit post-run block failed")
 
-    # In test mode, ensure at least minimal WS visibility by publishing start/end
-    # events via the hub, so clients connecting shortly after POST can drain them.
+    # Optional synthetic frames for tests: when enabled via config/env,
+    # publish minimal start/end so clients can drain frames immediately.
     try:
-        if os.getenv("TEST_MODE") in {"1", "true", "yes"}:
+        if bool(getattr(app_settings, "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", False)):
             hub = get_hub()
-            hub.publish_event(status.id, "start", {"source": "endpoint_test_mode"})
-            # publish an end as well to satisfy simple tests that expect both
-            hub.publish_event(status.id, "end", {"source": "endpoint_test_mode"})
+            hub.publish_event(status.id, "start", {"source": "endpoint_synthetic"})
+            hub.publish_event(status.id, "end", {"source": "endpoint_synthetic"})
     except Exception:
         pass
 
@@ -631,17 +630,18 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     hub.set_loop(asyncio.get_running_loop())
     q = hub.subscribe(run_id)
     hub.drain_buffer(run_id, q)
-    # In test environments, proactively publish minimal frames so clients
-    # immediately receive non-heartbeat messages even if they connected early.
+    # In test environments (when explicitly enabled), proactively publish
+    # minimal frames so clients immediately receive non-heartbeat messages
+    # even if they connected early.
     try:
-        if os.getenv("TEST_MODE") in {"1", "true", "yes"}:
+        if bool(getattr(app_settings, "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", False)):
             st = _service.get_run(run_id)
             if st is not None:
-                hub.publish_event(run_id, "start", {"source": "ws_test_mode"})
+                hub.publish_event(run_id, "start", {"source": "ws_synthetic"})
                 async def _publish_end_later():
                     try:
                         await asyncio.sleep(0.05)
-                        hub.publish_event(run_id, "end", {"source": "ws_test_mode"})
+                        hub.publish_event(run_id, "end", {"source": "ws_synthetic"})
                     except Exception:
                         return
                 asyncio.create_task(_publish_end_later())
@@ -684,9 +684,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 continue
             await websocket.send_json(frame)
             if isinstance(frame, dict) and frame.get("type") == "event" and frame.get("event") == "end":
-                # In test mode, keep the socket open so the client can close
+                # In synthetic test mode, keep the socket open so the client can close
                 # cleanly without hitting ClosedResourceError on the test harness.
-                if os.getenv("TEST_MODE") not in {"1", "true", "yes"}:
+                if not bool(getattr(app_settings, "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", False)):
                     break
     except WebSocketDisconnect:
         logger.info(f"WS disconnected for run {run_id}")

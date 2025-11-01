@@ -252,10 +252,19 @@ def _lazy_import_silero_vad():
     try:
         logger.info("Loading Silero VAD model from torch hub...")
 
-        # Set torch hub directory if not set
-        default_hub_dir = str(Path.home() / '.cache' / 'torch' / 'hub')
-        hub_dir = Path(os.environ.get('TORCH_HUB', default_hub_dir))
+        # Configure torch hub cache directory
+        # Prefer TORCH_HOME (root), fallback to default; allow explicit TORCH_HUB as hub dir
+        default_home_dir = Path.home() / '.cache' / 'torch'
+        torch_home = Path(os.environ.get('TORCH_HOME', str(default_home_dir)))
+        # If TORCH_HUB is set, treat it as explicit hub dir; otherwise derive from TORCH_HOME
+        hub_dir = Path(os.environ.get('TORCH_HUB', str(torch_home / 'hub')))
         hub_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Ensure torch uses the directory we just created
+            if hasattr(torch, 'hub') and hasattr(torch.hub, 'set_dir'):
+                torch.hub.set_dir(str(hub_dir))
+        except Exception as _hub_dir_err:  # pragma: no cover - best-effort
+            logger.debug(f"torch.hub.set_dir failed: {_hub_dir_err}")
 
         # Load model with explicit parameters
         result = torch.hub.load(
@@ -503,6 +512,10 @@ class DiarizationService:
             'vad_threshold': DEFAULT_VAD_THRESHOLD,
             'vad_min_speech_duration': 0.25,
             'vad_min_silence_duration': 0.25,
+            # Allow fallback when VAD unavailable (e.g., no network/cache)
+            'allow_vad_fallback': True,
+            # Allow torch.hub to fetch Silero VAD when not cached (set False to fail fast)
+            'enable_torch_hub_fetch': True,
 
             # Segmentation settings
             'segment_duration': DEFAULT_SEGMENT_DURATION,
@@ -513,6 +526,7 @@ class DiarizationService:
             # Embedding model
             'embedding_model': DEFAULT_EMBEDDING_MODEL,
             'embedding_device': EmbeddingDevice.AUTO.value,
+            'embedding_local_only': False,  # If True, do not download; require local model files
 
             # Clustering settings
             'clustering_method': ClusteringMethod.SPECTRAL.value,
@@ -642,12 +656,37 @@ class DiarizationService:
 
                     # Use pathlib for path construction
                     model_dir = Path('pretrained_models') / safe_model_name
+                    model_dir.mkdir(parents=True, exist_ok=True)
 
-                    self._embedding_model = EncoderClassifier.from_hparams(
-                        source=self.config['embedding_model'],
-                        savedir=str(model_dir),
-                        run_opts={"device": device}
-                    )
+                    # Local-only behavior: never fetch from network; require local files
+                    local_only = bool(self.config.get('embedding_local_only', False))
+                    local_source: Optional[Path] = None
+                    # If user provided a path that exists, prefer it
+                    candidate_path = Path(model_name)
+                    if candidate_path.exists():
+                        local_source = candidate_path
+                    elif model_dir.exists() and any(model_dir.iterdir()):
+                        # Use pre-populated cache directory
+                        local_source = model_dir
+
+                    if local_only:
+                        if not local_source:
+                            raise DiarizationError(
+                                "Embedding model files not found locally. "
+                                "Set embedding_local_only=false to allow download or provide a local path in embedding_model."
+                            )
+                        self._embedding_model = EncoderClassifier.from_hparams(
+                            source=str(local_source),
+                            savedir=str(local_source),
+                            run_opts={"device": device}
+                        )
+                    else:
+                        # Allow download/resolve from repo string, but cache under model_dir
+                        self._embedding_model = EncoderClassifier.from_hparams(
+                            source=model_name,
+                            savedir=str(model_dir),
+                            run_opts={"device": device}
+                        )
                     logger.info(f"Embedding model loaded successfully on {device}")
                 except Exception as e:
                     logger.error(f"Failed to load embedding model: {e}")
@@ -663,6 +702,11 @@ class DiarizationService:
         with self._model_lock:  # Add thread safety
             if self._vad_model is None:
                 try:
+                    # Optionally prevent torch.hub fetching for locked-down environments
+                    if not bool(self.config.get('enable_torch_hub_fetch', True)):
+                        raise DiarizationError(
+                            "Silero VAD load skipped: enable_torch_hub_fetch is False"
+                        )
                     model, utils = _lazy_import_silero_vad()
                     if not model or not utils:
                         raise DiarizationError("Silero VAD model or utilities not available")
@@ -778,7 +822,7 @@ class DiarizationService:
             # Use streaming VAD if memory-efficient mode is enabled
             streaming_vad = self.config.get('memory_efficient', False)
             speech_timestamps = self._detect_speech(waveform, sample_rate, streaming=streaming_vad)
-            logger.info(f"Found {len(speech_timestamps)} speech segments")
+            logger.debug(f"Found {len(speech_timestamps)} speech segments")
 
             if not speech_timestamps:
                 logger.warning("No speech detected in audio")
@@ -794,23 +838,29 @@ class DiarizationService:
                 progress_callback(20, "Creating analysis segments...", None)
 
             segments = self._create_segments(waveform, speech_timestamps, sample_rate)
-            logger.info(f"Created {len(segments)} analysis segments")
+            logger.debug(f"Created {len(segments)} analysis segments")
 
             # Step 3: Extract embeddings
             if progress_callback:
                 progress_callback(30, "Extracting speaker embeddings...", None)
 
             embeddings = self._extract_embeddings(segments, progress_callback)
-            logger.info(f"Extracted {len(embeddings)} embeddings")
+            logger.debug(f"Extracted {len(embeddings)} embeddings")
 
-            # Step 4: Cluster speakers
+            # Step 4: Determine speakers (fast path for single-speaker)
             if progress_callback:
                 progress_callback(70, "Clustering speakers...", None)
 
-            speaker_labels = self._cluster_speakers(
-                embeddings,
-                num_speakers=num_speakers
-            )
+            if num_speakers == 1:
+                np = _lazy_import_numpy()
+                if not np:
+                    raise DiarizationError("NumPy not available for single-speaker labeling")
+                speaker_labels = np.zeros(len(embeddings), dtype=int)
+            else:
+                speaker_labels = self._cluster_speakers(
+                    embeddings,
+                    num_speakers=num_speakers
+                )
 
             # Count unique speakers
             unique_speakers = len(set(speaker_labels))
@@ -930,7 +980,7 @@ class DiarizationService:
                 ) from e
 
     def _detect_speech(self, waveform, sample_rate: int, streaming: bool = False) -> List[Dict]:
-        """Detect speech segments using VAD.
+        """Detect speech segments using VAD; fall back to full-span if VAD unavailable.
 
         Args:
             waveform: Audio waveform tensor
@@ -938,99 +988,103 @@ class DiarizationService:
             streaming: If True, use streaming VAD for lower memory usage
 
         Returns:
-            List of speech segments with start/end times
-
-        Raises:
-            DiarizationError: If VAD fails or utilities are not properly loaded
+            List of speech segments with start/end times (in seconds)
         """
-        # Ensure VAD model is loaded
-        if not self._vad_model:
-            self._load_vad_model()
+        allow_fallback: bool = bool(self.config.get('allow_vad_fallback', True))
 
-        # Validate VAD utilities are loaded
-        if not self._vad_utils or 'get_speech_timestamps' not in self._vad_utils:
-            raise DiarizationError(
-                "VAD utilities not properly loaded. Missing 'get_speech_timestamps' function."
-            )
+        def _fallback_full_span() -> List[Dict]:
+            dur = float(len(waveform) / max(1, sample_rate))
+            if allow_fallback:
+                logger.warning("VAD unavailable; falling back to single full-span speech region")
+                return [{'start': 0.0, 'end': dur}]
+            raise DiarizationError("VAD unavailable and allow_vad_fallback is False")
 
-        if streaming and 'VADIterator' in self._vad_utils:
-            # Use streaming VAD for lower memory usage
-            try:
-                VADIterator = self._get_vad_utility('VADIterator')
-                vad_iterator = VADIterator(
-                    model=self._vad_model,
-                    threshold=self.config['vad_threshold'],
-                    sampling_rate=sample_rate,
-                    min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000),
-                    speech_pad_ms=int(self.config.get('vad_speech_pad_ms', 30))
-                )
+        try:
+            # Ensure VAD model is loaded
+            if not self._vad_model:
+                self._load_vad_model()
 
-                # Process in chunks for streaming
-                chunk_size = int(sample_rate * 10)  # 10 second chunks
-                speech_timestamps = []
+            # Validate VAD utilities are loaded
+            if not self._vad_utils or 'get_speech_timestamps' not in self._vad_utils:
+                logger.debug("VAD utilities missing get_speech_timestamps; using fallback")
+                return _fallback_full_span()
 
-                for i in range(0, len(waveform), chunk_size):
-                    chunk = waveform[i:i + chunk_size]
-                    speech_dict = vad_iterator(chunk, return_seconds=False)
-
-                    if speech_dict:
-                        # Adjust timestamps for chunk offset
-                        for ts in speech_dict.get('speech_timestamps', []):
-                            ts['start'] = ts['start'] + i
-                            ts['end'] = ts['end'] + i
-                            speech_timestamps.append(ts)
-
-                # Reset iterator
-                vad_iterator.reset_states()
-
-            except Exception as e:
-                logger.warning(f"Streaming VAD failed, falling back to standard VAD: {e}")
-                streaming = False
-
-        if not streaming:
-            # Standard (non-streaming) VAD
-            # Get the speech detection function using safe getter
-            get_speech_timestamps = self._get_vad_utility('get_speech_timestamps')
-
-            try:
-                # Call the VAD function with proper parameters
-                # NOTE: Parameter names and order are critical for Silero VAD
-                speech_timestamps = get_speech_timestamps(
-                    waveform,
-                    self._vad_model,
-                    sampling_rate=sample_rate,  # Must be 'sampling_rate', not 'sample_rate'
-                    threshold=self.config['vad_threshold'],
-                    min_speech_duration_ms=int(self.config['vad_min_speech_duration'] * 1000),
-                    min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000)
-                )
-
-                # Validate the output format
-                if not isinstance(speech_timestamps, list):
-                    raise DiarizationError(
-                        f"Expected list of timestamps, got {type(speech_timestamps).__name__}"
+            if streaming and 'VADIterator' in self._vad_utils:
+                # Use streaming VAD for lower memory usage
+                try:
+                    VADIterator = self._get_vad_utility('VADIterator')
+                    vad_iterator = VADIterator(
+                        model=self._vad_model,
+                        threshold=self.config['vad_threshold'],
+                        sampling_rate=sample_rate,
+                        min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000),
+                        speech_pad_ms=int(self.config.get('vad_speech_pad_ms', 30))
                     )
 
-                # Validate each timestamp has required fields
-                for i, ts in enumerate(speech_timestamps):
-                    if not isinstance(ts, dict):
-                        raise DiarizationError(
-                            f"Timestamp {i} is not a dict: {type(ts).__name__}"
-                        )
-                    if 'start' not in ts or 'end' not in ts:
-                        raise DiarizationError(
-                            f"Timestamp {i} missing 'start' or 'end' field: {ts.keys()}"
-                        )
+                    # Process in chunks for streaming
+                    chunk_size = int(sample_rate * 10)  # 10 second chunks
+                    speech_timestamps = []
 
-            except Exception as e:
-                logger.error(f"VAD detection failed: {e}")
-                raise DiarizationError(f"Speech detection failed: {str(e)}") from e
+                    for i in range(0, len(waveform), chunk_size):
+                        chunk = waveform[i:i + chunk_size]
+                        speech_dict = vad_iterator(chunk, return_seconds=False)
 
-        # Convert to seconds
-        for ts in speech_timestamps:
-            ts['start'] = ts['start'] / sample_rate
-            ts['end'] = ts['end'] / sample_rate
+                        if speech_dict:
+                            # Adjust timestamps for chunk offset
+                            for ts in speech_dict.get('speech_timestamps', []):
+                                ts['start'] = ts['start'] + i
+                                ts['end'] = ts['end'] + i
+                                speech_timestamps.append(ts)
 
-        return speech_timestamps
+                    # Reset iterator
+                    vad_iterator.reset_states()
+
+                except Exception as e:
+                    logger.warning(f"Streaming VAD failed, falling back to standard VAD: {e}")
+                    streaming = False
+
+            if not streaming:
+                # Standard (non-streaming) VAD
+                # Get the speech detection function using safe getter
+                get_speech_timestamps = self._get_vad_utility('get_speech_timestamps')
+
+                try:
+                    # Call the VAD function with proper parameters
+                    # NOTE: Parameter names and order are critical for Silero VAD
+                    speech_timestamps = get_speech_timestamps(
+                        waveform,
+                        self._vad_model,
+                        sampling_rate=sample_rate,  # Must be 'sampling_rate', not 'sample_rate'
+                        threshold=self.config['vad_threshold'],
+                        min_speech_duration_ms=int(self.config['vad_min_speech_duration'] * 1000),
+                        min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000)
+                    )
+
+                    # Validate the output format
+                    if not isinstance(speech_timestamps, list):
+                        logger.debug("Unexpected VAD output type; using fallback full-span")
+                        return _fallback_full_span()
+
+                    # Validate each timestamp has required fields
+                    for i, ts in enumerate(speech_timestamps):
+                        if not isinstance(ts, dict) or 'start' not in ts or 'end' not in ts:
+                            logger.debug("Invalid VAD timestamp format; using fallback full-span")
+                            return _fallback_full_span()
+
+                except Exception as e:
+                    logger.warning(f"VAD detection failed: {e}; using fallback full-span")
+                    return _fallback_full_span()
+
+            # Convert to seconds
+            for ts in speech_timestamps:
+                ts['start'] = ts['start'] / sample_rate
+                ts['end'] = ts['end'] / sample_rate
+
+            return speech_timestamps
+
+        except Exception as outer:
+            logger.warning(f"VAD unavailable or failed early: {outer}; using fallback full-span")
+            return _fallback_full_span()
 
     def _create_segments(
             self,
@@ -1215,16 +1269,31 @@ class DiarizationService:
 
             # Extract embeddings for the batch
             try:
-                if hasattr(torch, 'no_grad'):
+                # Prefer inference_mode (lower autograd overhead), fallback to no_grad, then raw call
+                if hasattr(torch, 'inference_mode'):
+                    try:
+                        with torch.inference_mode():  # type: ignore[attr-defined]
+                            batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                    except Exception as e:
+                        logger.debug(f"torch.inference_mode failed: {e}; trying no_grad")
+                        if hasattr(torch, 'no_grad'):
+                            try:
+                                with torch.no_grad():
+                                    batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                            except Exception as e2:
+                                logger.debug(f"torch.no_grad failed: {e2}; calling directly")
+                                batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                        else:
+                            batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                elif hasattr(torch, 'no_grad'):
                     try:
                         with torch.no_grad():
                             batch_embeddings = self._embedding_model.encode_batch(waveforms)
-                    except (AttributeError, RuntimeError) as e:
-                        logger.debug(f"Failed to use torch.no_grad(): {e}")
-                        # Fallback without no_grad context
+                    except Exception as e:
+                        logger.debug(f"torch.no_grad failed: {e}; calling directly")
                         batch_embeddings = self._embedding_model.encode_batch(waveforms)
                 else:
-                    # No no_grad available, run without context manager
+                    # No inference helpers available, run without context manager
                     batch_embeddings = self._embedding_model.encode_batch(waveforms)
 
                 # Convert to numpy
@@ -1301,11 +1370,20 @@ class DiarizationService:
             )
         else:  # agglomerative
             AgglomerativeClustering = sklearn_modules['AgglomerativeClustering']
-            clustering = AgglomerativeClustering(
-                n_clusters=num_speakers,
-                affinity='cosine',
-                linkage='average'
-            )
+            # scikit-learn >= 1.4 uses 'metric' instead of deprecated 'affinity'
+            try:
+                clustering = AgglomerativeClustering(
+                    n_clusters=num_speakers,
+                    linkage='average',
+                    metric='cosine',
+                )
+            except TypeError:
+                # Backward compatibility with older sklearn versions
+                clustering = AgglomerativeClustering(
+                    n_clusters=num_speakers,
+                    affinity='cosine',
+                    linkage='average',
+                )
 
         labels = clustering.fit_predict(embeddings)
         return labels
@@ -1534,8 +1612,9 @@ class DiarizationService:
             # Get cosine_similarity function
             cosine_similarity = sklearn_modules['cosine_similarity']
 
-            # Get cluster centers (mean of embeddings per cluster)
+            # Get cluster centers (mean of embeddings per cluster) with explicit label→index mapping
             unique_labels = sorted(set(primary_labels))
+            label_to_index = {lbl: idx for idx, lbl in enumerate(unique_labels)}
             cluster_centers = []
             for label in unique_labels:
                 mask = primary_labels == label
@@ -1549,17 +1628,19 @@ class DiarizationService:
 
             # Detect overlapping speech
             for i, (segment, sim_scores) in enumerate(zip(segments, similarities)):
-                primary_speaker = primary_labels[i]
-                primary_confidence = sim_scores[primary_speaker]
+                primary_label = primary_labels[i]
+                primary_index = label_to_index.get(primary_label, 0)
+                primary_confidence = sim_scores[primary_index]
 
                 # Check if confidence is low (potential overlap)
                 if primary_confidence < confidence_threshold:
                     # Find secondary speaker(s)
                     secondary_speakers = []
-                    for speaker_id, confidence in enumerate(sim_scores):
-                        if speaker_id != primary_speaker and confidence > 0.3:
+                    for idx, confidence in enumerate(sim_scores):
+                        label = unique_labels[idx]
+                        if label != primary_label and confidence > 0.3:
                             secondary_speakers.append({
-                                'speaker_id': speaker_id,
+                                'speaker_id': int(label),
                                 'confidence': float(confidence)
                             })
 
@@ -1573,7 +1654,7 @@ class DiarizationService:
                         )[:2]  # Keep top 2 secondary speakers
                         logger.debug(
                             f"Potential overlap detected at {segment['start']:.2f}s: "
-                            f"Primary speaker {primary_speaker} ({primary_confidence:.2f}), "
+                            f"Primary speaker {primary_label} ({primary_confidence:.2f}), "
                             f"Secondary: {secondary_speakers[0]}"
                         )
                 else:

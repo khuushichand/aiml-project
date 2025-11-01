@@ -332,6 +332,48 @@ Add a `diarization` object inside the config message to enable per-segment speak
 - On `commit`, the server emits a `diarization_summary` frame containing `speaker_map`, aggregate speaker stats, and (optionally) the path to the persisted WAV file for replay or offline reprocessing.
 - `store_audio` writes the full session audio to the provided directory (defaults to the system temp directory).
 
+##### VAD Fallback Behavior
+
+- The diarization pipeline uses Silero VAD to detect speech regions. Loading Silero via `torch.hub` can be network‑bound and may fail in locked‑down environments.
+- When VAD is unavailable or fails at runtime, the server can optionally fall back to a single full‑span speech region so diarization and transcript alignment can still proceed.
+- This behavior is controlled by a configuration flag: `diarization.allow_vad_fallback` (default: `true`).
+  - `true`: On VAD failures, use one region from 0.0s to full duration.
+  - `false`: Treat VAD failure as fatal for diarization and return an error.
+- Torch Hub cache directory is configured via `TORCH_HOME` (preferred) or `TORCH_HUB`, and the server sets `torch.hub.set_dir(...)` to ensure the directory is respected.
+- To run in a locked‑down/no‑network environment, set `diarization.enable_torch_hub_fetch=false` to disable hub fetching entirely. With `diarization.allow_vad_fallback=true` (default), the server will fall back to a single full‑span speech region when VAD is not available.
+- Audio persistence prefers `soundfile`. If not available, the server falls back to `scipy.io.wavfile` or the standard `wave` module (16‑bit PCM). A warning is logged when falling back.
+
+##### Embedding Model Local‑Only Mode
+
+- The diarization pipeline uses a speaker embedding model (default: `speechbrain/spkrec-ecapa-voxceleb`). By default, the server may download this model when missing.
+- To run fully offline, set `diarization.embedding_local_only=true`. In this mode, the server will only load models from local paths and will never attempt a network fetch.
+- Resolution order when `embedding_local_only=true`:
+  1) If `diarization.embedding_model` is a local filesystem path that exists, load from that directory.
+  2) Else, look under the pre‑seeded cache directory: `pretrained_models/<sanitized_name>`.
+  3) If neither exists, diarization raises a structured error indicating local files are required.
+
+Example config snippet (config.txt or env‑equivalent):
+
+```
+[diarization]
+embedding_model = /opt/models/speechbrain/spkrec-ecapa-voxceleb
+embedding_local_only = true
+```
+
+Expected directory layout for a SpeechBrain model (simplified):
+
+```
+/opt/models/speechbrain/spkrec-ecapa-voxceleb/
+├── hyperparams.yaml
+├── model.ckpt          # or equivalent checkpoint
+├── README.md           # optional
+└── additional files…
+```
+
+Notes:
+- `embedding_model` also accepts repo identifiers (e.g., `speechbrain/spkrec-ecapa-voxceleb`) when `embedding_local_only=false` (default). In that case the server caches into `pretrained_models/<sanitized_name>/`.
+- Combine with `diarization.enable_torch_hub_fetch=false` and `diarization.allow_vad_fallback=true` to operate in fully offline/locked‑down environments.
+
 ### Basic Live Transcription (Local Python)
 
 ```python

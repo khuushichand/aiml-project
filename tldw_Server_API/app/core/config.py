@@ -663,6 +663,16 @@ def load_settings():
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
+    # Test-only helper: when true, the WS endpoint will publish synthetic
+    # start/end frames to ensure subscribers see frames immediately. Disabled
+    # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
+    SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS = (
+        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    )(
+        os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
+        or _sbx_get("ws_synthetic_frames_for_tests", "false")
+        or "false"
+    )
     SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0"])
     SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
         os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"

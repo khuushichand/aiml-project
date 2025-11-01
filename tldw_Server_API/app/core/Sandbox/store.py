@@ -276,7 +276,8 @@ class SQLiteStore(SandboxStore):
                     finished_at TEXT,
                     message TEXT,
                     image_digest TEXT,
-                    policy_hash TEXT
+                    policy_hash TEXT,
+                    resource_usage TEXT
                 );
                 CREATE TABLE IF NOT EXISTS sandbox_idempotency (
                     endpoint TEXT,
@@ -294,6 +295,12 @@ class SQLiteStore(SandboxStore):
                 );
                 """
             )
+            # Backfill migrations for older schemas: add resource_usage if missing
+            try:
+                con.execute("ALTER TABLE sandbox_runs ADD COLUMN resource_usage TEXT")
+            except Exception:
+                # Column likely exists; ignore
+                pass
 
     def _fp(self, body: Dict[str, Any]) -> str:
         try:
@@ -360,7 +367,7 @@ class SQLiteStore(SandboxStore):
     def put_run(self, user_id: Any, st: RunStatus) -> None:
         with self._lock, self._conn() as con:
             con.execute(
-                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     st.id,
                     self._user_key(user_id),
@@ -374,6 +381,7 @@ class SQLiteStore(SandboxStore):
                     st.message,
                     st.image_digest,
                     st.policy_hash,
+                    (json.dumps(st.resource_usage) if isinstance(st.resource_usage, dict) else None),
                 ),
             )
 
@@ -384,6 +392,11 @@ class SQLiteStore(SandboxStore):
             if not row:
                 return None
             try:
+                ru = None
+                try:
+                    ru = json.loads(row["resource_usage"]) if row["resource_usage"] else None
+                except Exception:
+                    ru = None
                 st = RunStatus(
                     id=row["id"],
                     phase=RunPhase(row["phase"]),
@@ -396,6 +409,7 @@ class SQLiteStore(SandboxStore):
                     started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
                     finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
                     message=row["message"],
+                    resource_usage=ru,
                 )
                 return st
             except Exception:

@@ -2811,6 +2811,12 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    # AuthNZ debug routes for tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
+        app.include_router(authnz_debug_router, prefix=f"{API_V1_PREFIX}", tags=["authnz-debug"])
+    except Exception as _e:
+        logger.debug(f"Skipping authnz_debug router in tests: {_e}")
     # Sandbox (scaffold) — include only if import succeeded
     try:
         if '_HAS_SANDBOX' in globals() and _HAS_SANDBOX:
@@ -2848,6 +2854,20 @@ else:
     if _HAS_AUTH_ENHANCED:
         _include_if_enabled("auth-enhanced", auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+
+    # Include AuthNZ debug endpoints in TEST_MODE unconditionally to aid debugging
+    if _TEST_MODE:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
+            app.include_router(authnz_debug_router, prefix=f"{API_V1_PREFIX}", tags=["authnz-debug"])
+        except Exception as _e:
+            logger.debug(f"Skipping authnz_debug router in TEST_MODE: {_e}")
+    # Optional: include AuthNZ debug endpoints when enabled
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
+        _include_if_enabled("authnz-debug", authnz_debug_router, prefix=f"{API_V1_PREFIX}", tags=["authnz-debug"], default_stable=False)
+    except Exception as _e:
+        logger.debug(f"Skipping authnz_debug router: {_e}")
     _include_if_enabled("privileges", privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
     from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
     from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router

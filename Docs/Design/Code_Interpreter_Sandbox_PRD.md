@@ -192,6 +192,7 @@ Endpoints
     - `{ "type": "truncated", "reason": "log_cap", "seq": n }`
   - Limits: max message size 64KB; server enforces per-run log cap (e.g., 10 MB) and backpressure with buffered ring. Implemented.
   - Compatibility note: Earlier drafts used alternative shapes (e.g., `channel`, `chunk`, or `data_b64`). Those are deprecated in v1.0. Clients MUST use the final envelope with fields `type`, `encoding`, `data`, and `seq`.
+  - Test-only behavior: when `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true`, the server MAY emit synthetic `start` and `end` events to ensure immediate frames for CI; sockets may stay open after `end` so clients can close cleanly. This flag is disabled by default and MUST NOT be used in production.
 
 - GET `/runs/{run_id}/artifacts`
   - List artifact files with sizes and signed download URLs (or direct GET with auth).
@@ -925,8 +926,9 @@ See also: [Security Defaults](#security-defaults-quick-reference)
 - `SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC` (default 60)
 - `SANDBOX_CANCEL_GRACE_SECONDS` (default 5)
 - `SANDBOX_QUEUE_MAX_LENGTH` (default 100)
-- `SANDBOX_QUEUE_TTL_SEC` (default 120)
-- `SANDBOX_WS_POLL_TIMEOUT_SEC` (default 30) — server WS loop poll timeout for pending frames
+  - `SANDBOX_QUEUE_TTL_SEC` (default 120)
+  - `SANDBOX_WS_POLL_TIMEOUT_SEC` (default 30) — server WS loop poll timeout for pending frames
+  - `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS` (default false) — test-only; when true, WS streams emit synthetic start/end frames and keep the socket open after `end` for CI stability. Not for production use.
 
 ### Security Defaults (quick reference)
 
@@ -957,6 +959,7 @@ See also: [Security Defaults](#security-defaults-quick-reference)
   - Execution toggles: `SANDBOX_ENABLE_EXECUTION`, `SANDBOX_BACKGROUND_EXECUTION`,
   - Security profiles: `SANDBOX_DOCKER_SECCOMP` (profile name or canonicalized contents hash), `SANDBOX_DOCKER_APPARMOR_PROFILE` (profile name),
   - Spec support: `SANDBOX_SUPPORTED_SPEC_VERSIONS`.
+  - Exclusions: Test-only toggles (e.g., `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS`) are intentionally excluded from `policy_hash`.
 - Algorithm:
   - Construct a JSON object with the above keys and their effective values, normalize types (numbers as numbers, booleans as booleans), and sort keys lexicographically.
   - Serialize to UTF‑8 JSON without whitespace differences (canonical form) and compute SHA‑256.

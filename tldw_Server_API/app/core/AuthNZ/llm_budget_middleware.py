@@ -60,8 +60,19 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         if not self._should_check(path):
             return await call_next(request)
 
-        # Optional debug toggle for flaky test diagnosis (quiet by default)
-        _mw_debug = os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+        # Optional debug toggle for diagnosis. Enabled automatically in pytest contexts.
+        _mw_debug = (
+            os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+            or os.getenv("PYTEST_CURRENT_TEST") is not None
+        )
+        if _mw_debug:
+            try:
+                settings = get_settings()
+                logger.debug(
+                    f"LLM budget dispatch path={path} enforce={getattr(settings,'LLM_BUDGET_ENFORCE', True)} vkeys={getattr(settings,'VIRTUAL_KEYS_ENABLED', True)}"
+                )
+            except Exception:
+                logger.debug(f"LLM budget dispatch path={path} (settings unavailable)")
 
         # Resolve key_id deterministically from header first (DB hash lookup),
         # then fall back to manager validation if needed. This avoids cases
@@ -74,15 +85,26 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 auth = request.headers.get('authorization') or request.headers.get('Authorization')
                 if isinstance(auth, str) and auth.lower().startswith('bearer '):
                     api_key = auth.split(' ', 1)[1].strip()
+            if _mw_debug:
+                redacted = (api_key[:8] + "…") if api_key else None
+                logger.debug(f"LLM budget: resolving api_key via headers -> {bool(api_key)} ({redacted})")
 
             # 1) Direct DB lookup by HMAC(hash)
             if api_key:
                 try:
                     digests: list[str] = []
-                    for key in derive_hmac_key_candidates(get_settings()):
+                    candidates = list(derive_hmac_key_candidates(get_settings()))
+                    if _mw_debug:
+                        try:
+                            logger.debug(f"LLM budget: hash candidates={len(candidates)}")
+                        except Exception:
+                            pass
+                    for key in candidates:
                         digest = hmac.new(key, api_key.encode('utf-8'), hashlib.sha256).hexdigest()
                         if digest not in digests:
                             digests.append(digest)
+                    if _mw_debug and digests:
+                        logger.debug(f"LLM budget: first digest={digests[0][:12]}… total={len(digests)}")
                     if digests:
                         pool = await get_db_pool()
                         placeholders = ",".join("?" for _ in digests)
@@ -101,6 +123,8 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                                 pass
                             if _mw_debug:
                                 logger.debug(f"LLM budget: resolved key_id via hash lookup: {key_id}")
+                        elif _mw_debug:
+                            logger.debug("LLM budget: hash lookup found no matching key")
                 except Exception as _e_hash:
                     if _mw_debug:
                         logger.debug(f"LLM budget: hash-lookup failed: {_e_hash}")
@@ -120,12 +144,16 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                             pass
                         if _mw_debug:
                             logger.debug(f"LLM budget: resolved key_id via manager.validate: {key_id}")
+                    elif _mw_debug:
+                        logger.debug("LLM budget: manager.validate returned no info for api key")
                 except Exception as _e_mgr:
                     if _mw_debug:
                         logger.debug(f"LLM budget: manager.validate failed: {_e_mgr}")
 
             # If still no key_id, treat as JWT/no-key and skip enforcement
             if not key_id:
+                if _mw_debug:
+                    logger.debug("LLM budget: no api_key_id resolved; skipping budget enforcement")
                 return await call_next(request)
 
         try:
@@ -135,6 +163,8 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
             limits = None
 
         if not limits or not limits.get('is_virtual'):
+            if _mw_debug:
+                logger.debug(f"LLM budget: key {key_id} not virtual or limits missing; skipping")
             return await call_next(request)
 
         # Endpoint allowlist enforcement
@@ -143,6 +173,8 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
             if allowed_raw:
                 allowed = json.loads(allowed_raw) if isinstance(allowed_raw, str) else allowed_raw
                 code = self._endpoint_code(path)
+                if _mw_debug:
+                    logger.debug(f"LLM budget: endpoint allowlist={allowed} code={code}")
                 if isinstance(allowed, list) and code not in allowed:
                     return JSONResponse({
                         "error": "forbidden",
@@ -194,6 +226,18 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         # Budget enforcement
         try:
             result = await is_key_over_budget(int(key_id))
+            if _mw_debug:
+                limits = result.get('limits', {}) or {}
+                subset = {
+                    'llm_budget_day_tokens': limits.get('llm_budget_day_tokens'),
+                    'llm_budget_day_usd': limits.get('llm_budget_day_usd'),
+                    'llm_budget_month_tokens': limits.get('llm_budget_month_tokens'),
+                    'llm_budget_month_usd': limits.get('llm_budget_month_usd'),
+                }
+                logger.debug(
+                    f"LLM budget: over_budget={result.get('over')} reasons={result.get('reasons')} "
+                    f"day={result.get('day')} month={result.get('month')} limits={subset}"
+                )
             if result.get('over'):
                 return JSONResponse({
                     "error": "budget_exceeded",

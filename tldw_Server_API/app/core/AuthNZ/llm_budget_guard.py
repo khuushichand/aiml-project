@@ -5,6 +5,7 @@ import hmac
 import hashlib
 
 from fastapi import Request, HTTPException
+import os
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
@@ -23,6 +24,10 @@ async def enforce_llm_budget(request: Request) -> None:
     - If no API key is present (e.g., JWT flow), this dependency is a no-op.
     """
     settings = get_settings()
+    _dbg = (
+        os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
     if not getattr(settings, "VIRTUAL_KEYS_ENABLED", True):
         return
     if not getattr(settings, "LLM_BUDGET_ENFORCE", True):
@@ -41,10 +46,17 @@ async def enforce_llm_budget(request: Request) -> None:
 
         if api_key:
             digests: list[str] = []
-            for key in derive_hmac_key_candidates(settings):
+            candidates = list(derive_hmac_key_candidates(settings))
+            if _dbg:
+                from loguru import logger
+                logger.debug(f"LLM guard: hash candidates={len(candidates)}")
+            for key in candidates:
                 digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
                 if digest not in digests:
                     digests.append(digest)
+            if _dbg and digests:
+                from loguru import logger
+                logger.debug(f"LLM guard: first digest={digests[0][:12]}… total={len(digests)}")
             if digests:
                 pool = await get_db_pool()
                 placeholders = ",".join("?" for _ in digests)
@@ -61,20 +73,41 @@ async def enforce_llm_budget(request: Request) -> None:
                         request.state.user_id = row.get("user_id") if isinstance(row, dict) else row[1]
                     except Exception:
                         pass
+                elif _dbg:
+                    from loguru import logger
+                    logger.debug("LLM guard: no key_id found via hash lookup")
 
     if not key_id:
         # JWT or anonymous path; budgets apply only to API keys
+        if _dbg:
+            from loguru import logger
+            logger.debug("LLM guard: skipping budget enforcement (no api_key_id)")
         return
 
     limits = await get_key_limits(int(key_id))
     if not limits or not limits.get("is_virtual"):
+        if _dbg:
+            from loguru import logger
+            logger.debug(f"LLM guard: key {key_id} not virtual or limits missing; skipping")
         return
 
     result = await is_key_over_budget(int(key_id))
+    if _dbg:
+        from loguru import logger
+        limits = result.get('limits', {}) or {}
+        subset = {
+            'llm_budget_day_tokens': limits.get('llm_budget_day_tokens'),
+            'llm_budget_day_usd': limits.get('llm_budget_day_usd'),
+            'llm_budget_month_tokens': limits.get('llm_budget_month_tokens'),
+            'llm_budget_month_usd': limits.get('llm_budget_month_usd'),
+        }
+        logger.debug(
+            f"LLM guard: over_budget={result.get('over')} reasons={result.get('reasons')} "
+            f"day={result.get('day')} month={result.get('month')} limits={subset}"
+        )
     if result.get("over"):
         raise HTTPException(status_code=402, detail={
             "error": "budget_exceeded",
             "message": "Virtual key budget exceeded",
             "details": result,
         })
-

@@ -35,6 +35,14 @@ def set_ws_poll_timeout_for_tests():
     # Default to enabling execution and background mode in WS tests unless a test overrides
     os.environ.setdefault("SANDBOX_ENABLE_EXECUTION", "true")
     os.environ.setdefault("SANDBOX_BACKGROUND_EXECUTION", "true")
+    # Enable synthetic WS frames to avoid hangs in CI for sandbox tests only
+    os.environ.setdefault("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", "true")
+    # Ensure the experimental sandbox router is enabled for these tests
+    existing_enable = os.environ.get("ROUTES_ENABLE", "")
+    parts = [p.strip().lower() for p in existing_enable.split(",") if p.strip()]
+    if "sandbox" not in parts:
+        parts.append("sandbox")
+    os.environ["ROUTES_ENABLE"] = ",".join(parts)
 
 
 @pytest.fixture()
