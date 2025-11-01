@@ -156,8 +156,13 @@ async function exportConfiguration() {
     format: document.getElementById('export_format')?.value || 'json',
   };
   try {
-    const response = await window.apiClient.post('/api/v1/maintenance/export-config', options, { responseType: 'blob' });
-    if (options.format === 'zip') {
+    const expectZip = options.format === 'zip';
+    const response = await window.apiClient.post(
+      '/api/v1/maintenance/export-config',
+      options,
+      expectZip ? { responseType: 'blob' } : {}
+    );
+    if (expectZip) {
       const blob = (typeof Blob !== 'undefined' && response instanceof Blob)
         ? response
         : new Blob([response], { type: 'application/zip' });
@@ -174,7 +179,9 @@ async function exportConfiguration() {
       }, 100);
       resultEl.textContent = 'Configuration exported successfully';
     } else {
-      resultEl.textContent = JSON.stringify(response, null, 2);
+      resultEl.textContent = typeof response === 'string'
+        ? response
+        : JSON.stringify(response, null, 2);
     }
     if (window.Toast) Toast.success('Configuration exported');
   } catch (e) { resultEl.textContent = `Error: ${e.message}`; if (window.Toast) Toast.error(`Export failed: ${e.message}`); }
