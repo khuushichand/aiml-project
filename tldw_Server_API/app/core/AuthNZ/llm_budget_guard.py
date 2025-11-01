@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
+from loguru import logger
 
 
 async def enforce_llm_budget(request: Request) -> None:
@@ -71,8 +72,27 @@ async def enforce_llm_budget(request: Request) -> None:
                     try:
                         request.state.api_key_id = key_id
                         request.state.user_id = row.get("user_id") if isinstance(row, dict) else row[1]
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Do not proceed silently with missing auth state; log with context and stop.
+                        user_id_value = row.get("user_id") if isinstance(row, dict) else row[1]
+                        path = getattr(getattr(request, "url", None), "path", None) or request.scope.get("path")
+                        logger.exception(
+                            "LLM guard: failed to set request.state attributes (path={path}, api_key_id={key_id}, user_id={user_id})",
+                            path=path,
+                            key_id=key_id,
+                            user_id=user_id_value,
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail={
+                                "error": "internal_state_error",
+                                "message": "Failed to attach authorization context to request state",
+                                "details": {
+                                    "path": path,
+                                    "attributes": ["api_key_id", "user_id"],
+                                },
+                            },
+                        ) from exc
                 elif _dbg:
                     from loguru import logger
                     logger.debug("LLM guard: no key_id found via hash lookup")

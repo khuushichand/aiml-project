@@ -219,9 +219,9 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                                 }, status_code=403)
                     except Exception as _e:
                         # If body cannot be parsed, skip enforcement rather than break requests
-                        logger.debug(f"LLM budget: model allowlist parse skipped/failed: {_e}")
+                        logger.debug("LLM budget: model allowlist parse skipped/failed: {}", _e)
         except Exception as e:
-            logger.debug(f"LLM budget: provider/model allowlist skipped/failed: {e}")
+            logger.debug("LLM budget: provider/model allowlist skipped/failed: {}", e)
 
         # Budget enforcement
         try:
@@ -245,6 +245,6 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     "details": result,
                 }, status_code=402)
         except Exception as e:
-            logger.debug(f"LLM budget: budget check skipped/failed: {e}")
+            logger.debug("LLM budget: budget check skipped/failed: {}", e)
 
         return await call_next(request)

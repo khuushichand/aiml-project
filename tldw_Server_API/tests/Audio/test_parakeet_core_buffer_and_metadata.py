@@ -91,21 +91,27 @@ def test_variant_decode_selection(monkeypatch):
     def _tx_parakeet(audio_np, sample_rate, variant="standard"):
         return f"nemo:{variant}"
     mod_nemo.transcribe_with_parakeet = _tx_parakeet
-    sys.modules[
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo"
-    ] = mod_nemo
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo",
+        mod_nemo,
+    )
 
     mod_onnx = types.ModuleType("Audio_Transcription_Parakeet_ONNX")
     mod_onnx.transcribe_with_parakeet_onnx = lambda audio_np, sample_rate: "onnx:ok"
-    sys.modules[
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX"
-    ] = mod_onnx
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX",
+        mod_onnx,
+    )
 
     mod_mlx = types.ModuleType("Audio_Transcription_Parakeet_MLX")
     mod_mlx.transcribe_with_parakeet_mlx = lambda audio_np, sample_rate: "mlx:ok"
-    sys.modules[
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX"
-    ] = mod_mlx
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX",
+        mod_mlx,
+    )
 
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber import (
         ParakeetCoreTranscriber,
