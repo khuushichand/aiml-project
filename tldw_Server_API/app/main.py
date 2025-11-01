@@ -201,7 +201,7 @@ def _unwrap_logger_add(func):
         if not next_candidate or next_candidate is candidate or next_candidate in seen:
             return candidate
         seen.add(candidate)
-        candidate = next_candidate
+    candidate = next_candidate
 
 # Ensure any subsequent logger.add calls wrap raw streams with SafeStreamWrapper
 _original_logger_add = logger.add
@@ -219,11 +219,26 @@ logger.add = _safe_logger_add  # type: ignore[assignment]
 setattr(logger.add, "_tldw_safe_original", _original_unwrapped_logger_add)
 setattr(logger.add, "__wrapped__", _original_unwrapped_logger_add)
 
+# Sink-level filter to guarantee presence of common extra fields
+def _ensure_log_extra_fields(record: dict) -> bool:
+    try:
+        extra = record.setdefault("extra", {})
+        # Provide defaults to avoid KeyError in format templates
+        extra.setdefault("trace_id", "")
+        extra.setdefault("span_id", "")
+        extra.setdefault("request_id", "")
+        extra.setdefault("session_id", "")
+    except Exception:
+        # Never block a log line due to filter errors
+        pass
+    return True
+
 logger.add(
     _SafeStreamWrapper(_sink),
     level=_log_level,
     format=_safe_log_format,
     colorize=_use_color,
+    filter=_ensure_log_extra_fields,
     enqueue=False,
 )
 logger = logger.patch(_trace_log_patcher)
@@ -546,7 +561,7 @@ try:
             serialize=True,
             backtrace=False,
             diagnose=False,
-            filter=None,
+            filter=_ensure_log_extra_fields,
             enqueue=True,
         )
         try:
